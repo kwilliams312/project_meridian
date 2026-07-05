@@ -1,0 +1,28 @@
+schema: meridian/npc@1
+id: core:npc.kobold_miner
+name: Kobold Miner
+level: { min: 3, max: 4 }
+creature_type: humanoid
+rank: normal
+faction: hostile
+stats:
+  health: 120
+  armor: 45
+  damage: { min: 6, max: 9 }
+  attack_speed_ms: 2000
+ai:
+  behavior: aggressive
+  aggro_radius_m: 18
+  leash_radius_m: 55
+  call_for_help_radius_m: 12
+  flee_at_health_pct: 15
+  abilities:
+    - ability: ability.pickaxe_slam
+      priority: 0
+      use_at_health_below_pct: 80
+loot:
+  table: loot.kobold_miner
+  money: { min: 12, max: 38 }
+visual:
+  model: core:art.char.kobold.miner
+  sound_set: core:sfx.char.kobold

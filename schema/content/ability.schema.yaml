@@ -1,0 +1,115 @@
+# meridian/ability@1 — spells & abilities for players AND mobs (CMB-01, CMB-04).
+# Authored in Codex under TLS-03 scope (sync decision D-08).
+# audio_visual hooks are the data-driven SFX contract with the Music track (music PRD §7).
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/ability.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, id, name, target, school, effects]
+properties:
+  schema: { const: "meridian/ability@1" }
+  id: { $ref: "#/$defs/contentId" }
+  name: { $ref: "#/$defs/displayName" }
+  description:
+    description: Tooltip text. Supports {amount} substitution from the first effect.
+    type: string
+    maxLength: 500
+  school: { $ref: "#/$defs/school" }
+  target:
+    enum: [self, enemy, friendly]
+  range_m:
+    description: Max cast range; melee abilities use 5.
+    type: number
+    minimum: 0
+    maximum: 60
+    default: 5
+  cast:
+    type: object
+    additionalProperties: false
+    properties:
+      time_ms:
+        description: 0 = instant.
+        type: integer
+        minimum: 0
+        maximum: 10000
+        default: 0
+      channel_ms: { type: integer, minimum: 0, maximum: 30000 }
+  cooldown_ms: { type: integer, minimum: 0, default: 0 }
+  triggers_gcd:
+    description: Client may start GCD presentation optimistically; server rollback per sync decision D-10.
+    type: boolean
+    default: true
+  resource:
+    type: object
+    additionalProperties: false
+    required: [type, amount]
+    properties:
+      type: { enum: [mana, rage, energy] }
+      amount: { type: integer, minimum: 0 }
+
+  effects:
+    type: array
+    minItems: 1
+    maxItems: 4
+    items:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [kind, amount]
+          properties:
+            kind: { const: damage }
+            amount: { $ref: "#/$defs/intRange" }
+            coefficient:
+              description: Fraction of caster spell/attack power added (0–2). Server-side formula, M2 tuning.
+              type: number
+              minimum: 0
+              maximum: 2
+        - type: object
+          additionalProperties: false
+          required: [kind, amount]
+          properties:
+            kind: { const: heal }
+            amount: { $ref: "#/$defs/intRange" }
+            coefficient: { type: number, minimum: 0, maximum: 2 }
+        - type: object
+          additionalProperties: false
+          required: [kind, duration_ms]
+          properties:
+            kind: { const: aura }
+            duration_ms: { type: integer, minimum: 100, maximum: 3600000 }
+            max_stacks: { type: integer, minimum: 1, maximum: 20, default: 1 }
+            periodic:
+              type: object
+              additionalProperties: false
+              required: [kind, amount, tick_ms]
+              properties:
+                kind: { enum: [damage, heal] }
+                amount: { $ref: "#/$defs/intRange" }
+                tick_ms: { type: integer, minimum: 500 }
+            stat_mods:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                required: [stat, amount]
+                properties:
+                  stat: { $ref: "#/$defs/statKey" }
+                  amount: { type: integer }
+        - type: object
+          additionalProperties: false
+          required: [kind, amount]
+          properties:
+            kind: { const: threat }
+            amount:
+              description: Flat threat added (taunts/detaunts use server-side special-casing later).
+              type: integer
+
+  audio_visual:
+    type: object
+    additionalProperties: false
+    properties:
+      cast_anim: { type: string, pattern: "^[a-z][a-z0-9_]*$" }
+      cast_vfx: { $ref: "#/$defs/artRef" }
+      cast_sfx: { $ref: "#/$defs/sfxRef" }
+      impact_vfx: { $ref: "#/$defs/artRef" }
+      impact_sfx: { $ref: "#/$defs/sfxRef" }

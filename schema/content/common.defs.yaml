@@ -1,0 +1,87 @@
+# Shared $defs merged into every type schema by validators (see README).
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/common.defs.yaml"
+$defs:
+  contentId:
+    description: Fully-qualified ID owned by this file (namespace required).
+    type: string
+    pattern: "^[a-z][a-z0-9_]{1,31}:(npc|item|quest|ability|loot|vendor|spawn|zone|pack)\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+
+  npcRef:
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?npc\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+  itemRef:
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?item\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+  questRef:
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?quest\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+  abilityRef:
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?ability\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+  lootRef:
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?loot\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+  vendorRef:
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?vendor\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+  zoneRef:
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?zone\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+
+  artRef:
+    description: Asset-registry ID for a visual asset (Baseline §5.3).
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?art\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+  musRef:
+    description: Asset-registry ID for a music asset.
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?mus\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+  sfxRef:
+    description: Asset-registry ID for a sound-effect asset.
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?sfx\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+
+  money:
+    description: "Integer copper. 100c = 1s, 10000c = 1g."
+    type: integer
+    minimum: 0
+
+  intRange:
+    description: Inclusive integer min/max.
+    type: object
+    additionalProperties: false
+    required: [min, max]
+    properties:
+      min: { type: integer, minimum: 0 }
+      max: { type: integer, minimum: 0 }
+
+  pct:
+    type: number
+    minimum: 0
+    maximum: 100
+
+  position:
+    description: World-space position in meters (zone-local origin until A-08 chunk contract lands).
+    type: object
+    additionalProperties: false
+    required: [x, y, z]
+    properties:
+      x: { type: number }
+      y: { type: number }
+      z: { type: number }
+
+  displayName:
+    type: string
+    minLength: 1
+    maxLength: 80
+
+  statKey:
+    description: v1 primary stats; secondary ratings arrive with ITM-03 (M2).
+    enum: [strength, agility, stamina, intellect, spirit]
+
+  school:
+    enum: [physical, fire, frost, nature, shadow, holy, arcane]
+
+  itemClass:
+    enum: [weapon, armor, consumable, quest, trade_good, container]

@@ -1,0 +1,115 @@
+# meridian/quest@1 — quests (QST-01). `script` is reserved for QST-02 scripted events (M2).
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/quest.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, id, name, summary, offer_text, completion_text, level, giver, objectives, rewards]
+properties:
+  schema: { const: "meridian/quest@1" }
+  id: { $ref: "#/$defs/contentId" }
+  name: { $ref: "#/$defs/displayName" }
+  summary:
+    description: Quest-log objective text.
+    type: string
+    maxLength: 500
+  offer_text:
+    description: Giver dialog when offering.
+    type: string
+    maxLength: 2000
+  completion_text:
+    type: string
+    maxLength: 2000
+  level:
+    description: Quest level — drives XP/reward budgets and log coloring.
+    type: integer
+    minimum: 1
+  required_level: { type: integer, minimum: 1, default: 1 }
+  zone: { $ref: "#/$defs/zoneRef" }
+  giver: { $ref: "#/$defs/npcRef" }
+  turn_in:
+    description: Defaults to giver.
+    $ref: "#/$defs/npcRef"
+  prerequisites:
+    type: object
+    additionalProperties: false
+    properties:
+      quests:
+        description: "All listed quests must be completed (chains: QST-02 lint walks these)."
+        type: array
+        minItems: 1
+        items: { $ref: "#/$defs/questRef" }
+
+  objectives:
+    type: array
+    minItems: 1
+    maxItems: 4
+    items:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [type, target, count]
+          properties:
+            type: { const: kill }
+            target: { $ref: "#/$defs/npcRef" }
+            count: { type: integer, minimum: 1, maximum: 200 }
+        - type: object
+          additionalProperties: false
+          required: [type, item, count]
+          properties:
+            type: { const: collect }
+            item:
+              description: Drop sources gate on this quest via loot-entry `quest:` fields (ITM-02).
+              $ref: "#/$defs/itemRef"
+            count: { type: integer, minimum: 1, maximum: 200 }
+        - type: object
+          additionalProperties: false
+          required: [type, item, to]
+          properties:
+            type: { const: deliver }
+            item:
+              description: Provided to the player on accept.
+              $ref: "#/$defs/itemRef"
+            to: { $ref: "#/$defs/npcRef" }
+        - type: object
+          additionalProperties: false
+          required: [type, zone, poi]
+          properties:
+            type: { const: explore }
+            zone: { $ref: "#/$defs/zoneRef" }
+            poi:
+              description: POI id local to the zone manifest (WLD-03).
+              type: string
+              pattern: "^[a-z][a-z0-9_]*$"
+
+  rewards:
+    type: object
+    additionalProperties: false
+    properties:
+      xp: { type: integer, minimum: 0 }
+      money: { $ref: "#/$defs/money" }
+      items:
+        description: Always granted.
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [item]
+          properties:
+            item: { $ref: "#/$defs/itemRef" }
+            count: { type: integer, minimum: 1, default: 1 }
+      choice_items:
+        description: Player picks exactly one.
+        type: array
+        minItems: 2
+        maxItems: 6
+        items:
+          type: object
+          additionalProperties: false
+          required: [item]
+          properties:
+            item: { $ref: "#/$defs/itemRef" }
+            count: { type: integer, minimum: 1, default: 1 }
+
+  script:
+    description: Reserved for QST-02 (M2) scripted events. Validators reject non-null values until then.
+    type: "null"

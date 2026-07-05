@@ -1,0 +1,26 @@
+# Zone-01. Working name pending the world design doc (action item A-01).
+schema: meridian/zone@1
+id: core:zone.zone01
+name: Emberfall Hollow
+level_range: { min: 1, max: 10 }
+start_zone: true
+chunk_manifest: null   # reserved — A-08 chunk-format contract (M0 exit)
+music:
+  explore: core:mus.zone01.explore
+  tension: core:mus.zone01.tension
+  combat: core:mus.zone01.combat
+ambience: core:sfx.amb.zone01.forest_day
+pois:
+  - id: emberfall_village
+    name: Emberfall Village
+    position: { x: 120.0, y: 8.5, z: -240.0 }
+    discovery_radius_m: 60
+    discovery_xp: 85
+  - id: cinderdeep_mine
+    name: Cinderdeep Mine
+    position: { x: -310.0, y: 22.0, z: 95.0 }
+    discovery_radius_m: 45
+    discovery_xp: 110
+graveyards:
+  - position: { x: 140.0, y: 9.0, z: -255.0 }
+    orientation_deg: 180

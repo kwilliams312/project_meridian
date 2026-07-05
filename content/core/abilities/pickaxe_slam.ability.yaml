@@ -1,0 +1,27 @@
+# Mob ability — exercises damage + bleed-aura effects and the data-driven AV hooks (music PRD §7).
+schema: meridian/ability@1
+id: core:ability.pickaxe_slam
+name: Pickaxe Slam
+description: Slams the target for {amount} physical damage and leaves them bleeding.
+school: physical
+target: enemy
+range_m: 5
+cast:
+  time_ms: 0
+cooldown_ms: 10000
+resource:
+  type: energy
+  amount: 20
+effects:
+  - kind: damage
+    amount: { min: 8, max: 13 }
+  - kind: aura
+    duration_ms: 9000
+    periodic:
+      kind: damage
+      amount: { min: 2, max: 3 }
+      tick_ms: 3000
+audio_visual:
+  cast_anim: attack_overhead
+  impact_vfx: core:art.vfx.impact.dust_small
+  impact_sfx: core:sfx.combat.impact.pickaxe

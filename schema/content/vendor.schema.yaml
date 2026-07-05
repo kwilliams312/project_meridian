@@ -1,0 +1,35 @@
+# meridian/vendor@1 — vendor inventories (ECO-01). Referenced from npc.interaction.vendor;
+# separate from NPCs so multiple NPCs can share an inventory.
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/vendor.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, id, items]
+properties:
+  schema: { const: "meridian/vendor@1" }
+  id: { $ref: "#/$defs/contentId" }
+  items:
+    type: array
+    minItems: 1
+    items:
+      type: object
+      additionalProperties: false
+      required: [item]
+      properties:
+        item:
+          description: Sold at the item's price.buy unless overridden. Lint L030 requires one or the other.
+          $ref: "#/$defs/itemRef"
+        price_override: { $ref: "#/$defs/money" }
+        limited:
+          description: Limited stock with restock timer; omit for unlimited.
+          type: object
+          additionalProperties: false
+          required: [count, restock_minutes]
+          properties:
+            count: { type: integer, minimum: 1 }
+            restock_minutes: { type: integer, minimum: 1 }
+  buys:
+    description: Item classes this vendor purchases from players. Omit = buys everything sellable.
+    type: array
+    minItems: 1
+    items: { $ref: "#/$defs/itemClass" }

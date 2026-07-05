@@ -1,0 +1,65 @@
+# meridian/loot@1 — loot tables (ITM-02).
+# `entries` roll independently; each `groups[]` picks exactly `pick` winners by weight (mutually exclusive drops).
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/loot.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, id]
+anyOf:
+  - required: [entries]
+  - required: [groups]
+  - required: [money]
+properties:
+  schema: { const: "meridian/loot@1" }
+  id: { $ref: "#/$defs/contentId" }
+  money: { $ref: "#/$defs/intRange" }
+
+  entries:
+    type: array
+    minItems: 1
+    items:
+      type: object
+      additionalProperties: false
+      required: [chance_pct]
+      oneOf:
+        - required: [item]
+        - required: [table]
+      properties:
+        item: { $ref: "#/$defs/itemRef" }
+        table:
+          description: Nested table, rolled if this entry hits. Max depth 3 (lint L020).
+          $ref: "#/$defs/lootRef"
+        chance_pct: { $ref: "#/$defs/pct" }
+        quantity: { $ref: "#/$defs/intRange" }
+        quest:
+          description: Entry only drops for players on this quest with the objective incomplete.
+          $ref: "#/$defs/questRef"
+
+  groups:
+    type: array
+    minItems: 1
+    items:
+      type: object
+      additionalProperties: false
+      required: [name, pick, entries]
+      properties:
+        name: { type: string, pattern: "^[a-z][a-z0-9_]*$" }
+        pick: { type: integer, minimum: 1, maximum: 5 }
+        chance_pct:
+          description: Chance the group rolls at all (default 100).
+          $ref: "#/$defs/pct"
+        entries:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [weight]
+            oneOf:
+              - required: [item]
+              - required: [table]
+            properties:
+              item: { $ref: "#/$defs/itemRef" }
+              table: { $ref: "#/$defs/lootRef" }
+              weight: { type: integer, minimum: 1 }
+              quantity: { $ref: "#/$defs/intRange" }

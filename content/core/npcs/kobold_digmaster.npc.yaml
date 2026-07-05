@@ -1,0 +1,28 @@
+schema: meridian/npc@1
+id: core:npc.kobold_digmaster
+name: Kobold Digmaster
+subtitle: Mining Supervisor
+level: { min: 5, max: 5 }
+creature_type: humanoid
+rank: elite
+faction: hostile
+stats:
+  health: 420
+  armor: 90
+  damage: { min: 11, max: 16 }
+  attack_speed_ms: 2200
+ai:
+  behavior: aggressive
+  aggro_radius_m: 22
+  leash_radius_m: 70
+  abilities:
+    - ability: ability.pickaxe_slam
+      priority: 0
+      cooldown_override_ms: 6000
+loot:
+  table: loot.kobold_miner
+  money: { min: 60, max: 140 }
+visual:
+  model: core:art.char.kobold.digmaster
+  scale: 1.15
+  sound_set: core:sfx.char.kobold

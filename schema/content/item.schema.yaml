@@ -1,0 +1,94 @@
+# meridian/item@1 — items (ITM-01). Stat-budget lint vs item_level lands with ITM-03 (M2).
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/item.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, id, name, item_class, rarity, visual]
+properties:
+  schema: { const: "meridian/item@1" }
+  id: { $ref: "#/$defs/contentId" }
+  name: { $ref: "#/$defs/displayName" }
+  flavor_text: { type: string, maxLength: 500 }
+  item_class: { $ref: "#/$defs/itemClass" }
+  subclass:
+    description: "weapon: sword_1h|sword_2h|axe_1h|axe_2h|mace_1h|mace_2h|dagger|staff|polearm|bow|wand|fist. armor: cloth|leather|mail|plate|shield. Free-form for other classes."
+    type: string
+    pattern: "^[a-z][a-z0-9_]*$"
+  slot:
+    enum: [head, shoulders, back, chest, wrist, hands, waist, legs, feet,
+           neck, finger, trinket, main_hand, off_hand, two_hand, ranged, bag]
+  rarity:
+    enum: [poor, common, uncommon, rare, epic, legendary]
+  required_level: { type: integer, minimum: 1, default: 1 }
+  item_level:
+    description: Drives stat-budget validation from M2 (ITM-03).
+    type: integer
+    minimum: 1
+    default: 1
+  unique: { type: boolean, default: false }
+  binding:
+    enum: [none, on_pickup, on_equip]
+    default: none
+  stack_size: { type: integer, minimum: 1, maximum: 1000, default: 1 }
+
+  stats:
+    type: array
+    maxItems: 8
+    items:
+      type: object
+      additionalProperties: false
+      required: [stat, amount]
+      properties:
+        stat: { $ref: "#/$defs/statKey" }
+        amount: { type: integer }
+
+  weapon:
+    type: object
+    additionalProperties: false
+    required: [damage, speed_ms]
+    properties:
+      damage: { $ref: "#/$defs/intRange" }
+      speed_ms: { type: integer, minimum: 1000, maximum: 5000 }
+      school: { $ref: "#/$defs/school", default: physical }
+
+  armor: { type: integer, minimum: 0 }
+
+  effects:
+    type: object
+    additionalProperties: false
+    properties:
+      on_use:
+        description: Ability cast when the item is used; consumables are consumed on use.
+        $ref: "#/$defs/abilityRef"
+      on_equip:
+        type: array
+        items: { $ref: "#/$defs/abilityRef" }
+
+  price:
+    type: object
+    additionalProperties: false
+    properties:
+      sell:
+        description: Vendor sell-back value in copper. Omit for unsellable.
+        $ref: "#/$defs/money"
+      buy:
+        description: Default vendor purchase price; vendors may override.
+        $ref: "#/$defs/money"
+
+  visual:
+    type: object
+    additionalProperties: false
+    required: [icon]
+    properties:
+      icon: { $ref: "#/$defs/artRef" }
+      model: { $ref: "#/$defs/artRef" }
+
+allOf:
+  - if:
+      properties: { item_class: { const: weapon } }
+    then:
+      required: [weapon, slot]
+  - if:
+      properties: { item_class: { const: armor } }
+    then:
+      required: [slot]

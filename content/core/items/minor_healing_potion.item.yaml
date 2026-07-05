@@ -1,0 +1,13 @@
+schema: meridian/item@1
+id: core:item.minor_healing_potion
+name: Minor Healing Potion
+item_class: consumable
+rarity: common
+stack_size: 5
+effects:
+  on_use: ability.minor_healing
+price:
+  buy: 150
+  sell: 38
+visual:
+  icon: core:art.icon.item.potion_red_small

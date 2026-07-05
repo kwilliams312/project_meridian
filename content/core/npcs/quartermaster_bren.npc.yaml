@@ -1,0 +1,21 @@
+schema: meridian/npc@1
+id: core:npc.quartermaster_bren
+name: Quartermaster Bren
+subtitle: Emberfall Supplies
+level: { min: 10, max: 10 }
+creature_type: humanoid
+faction: friendly
+stats:
+  health: 800
+  armor: 200
+  damage: { min: 15, max: 22 }
+  attack_speed_ms: 2000
+interaction:
+  gossip_text: >-
+    Mind the mine roads, traveler — the kobolds have gotten bold since the
+    foreman stopped coming back. If you're headed that way, I'll make it
+    worth your while.
+  vendor: vendor.bren_general_goods
+visual:
+  model: core:art.char.human.male.quartermaster
+  sound_set: core:sfx.char.human_male

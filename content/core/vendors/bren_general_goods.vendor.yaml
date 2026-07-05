@@ -1,0 +1,14 @@
+schema: meridian/vendor@1
+id: core:vendor.bren_general_goods
+items:
+  - item: item.minor_healing_potion
+  - item: item.rusty_pickaxe
+    price_override: 1700
+    limited:
+      count: 1
+      restock_minutes: 180
+buys:
+  - weapon
+  - armor
+  - consumable
+  - trade_good

@@ -1,0 +1,22 @@
+schema: meridian/item@1
+id: core:item.rusty_pickaxe
+name: Rusty Pickaxe
+flavor_text: Generations of kobold thumbs have worn the haft smooth.
+item_class: weapon
+subclass: mace_1h
+slot: main_hand
+rarity: uncommon
+required_level: 3
+item_level: 8
+binding: on_equip
+weapon:
+  damage: { min: 9, max: 14 }
+  speed_ms: 2600
+stats:
+  - stat: strength
+    amount: 2
+price:
+  sell: 425
+visual:
+  icon: core:art.icon.item.pickaxe_rusty
+  model: core:art.item.weapon.pickaxe_rusty

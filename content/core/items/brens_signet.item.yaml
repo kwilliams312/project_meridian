@@ -1,0 +1,20 @@
+schema: meridian/item@1
+id: core:item.brens_signet
+name: Bren's Signet
+flavor_text: The quartermaster's seal, good for a discount he'll deny offering.
+item_class: armor
+subclass: misc
+slot: finger
+rarity: uncommon
+required_level: 4
+item_level: 9
+binding: on_pickup
+stats:
+  - stat: spirit
+    amount: 2
+  - stat: intellect
+    amount: 2
+price:
+  sell: 380
+visual:
+  icon: core:art.icon.item.signet_bronze

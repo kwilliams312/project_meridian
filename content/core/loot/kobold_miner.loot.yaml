@@ -1,0 +1,20 @@
+# Shared by kobold_miner and kobold_digmaster (ITM-02).
+# Exercises: money range, quest-gated entry, independent rare drop, exclusive pick-group.
+schema: meridian/loot@1
+id: core:loot.kobold_miner
+money: { min: 5, max: 20 }
+entries:
+  - item: item.kobold_ear
+    chance_pct: 80
+    quest: quest.ears_for_evidence
+  - item: item.rusty_pickaxe
+    chance_pct: 3
+groups:
+  - name: common_drops
+    pick: 1
+    chance_pct: 40
+    entries:
+      - item: item.minor_healing_potion
+        weight: 30
+      - item: item.miners_lamp_charm
+        weight: 3

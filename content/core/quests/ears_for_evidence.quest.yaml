@@ -1,0 +1,29 @@
+# Collect quest (QST-01), chained via prerequisites; the ear only drops for players
+# on this quest (quest-gated loot entry in loot.kobold_miner) — exercises the ITM-02 link.
+schema: meridian/quest@1
+id: core:quest.ears_for_evidence
+name: Ears for Evidence
+summary: Collect 6 Kobold Ears for Quartermaster Bren.
+offer_text: >-
+  The village council thinks I exaggerate the kobold problem. Fine.
+  Bring me ears. Councilors respect ears.
+completion_text: >-
+  Six. Ha! Let's see the council call that "a modest infestation."
+level: 5
+required_level: 3
+zone: zone.zone01
+giver: npc.quartermaster_bren
+prerequisites:
+  quests:
+    - quest.culling_the_kobolds
+objectives:
+  - type: collect
+    item: item.kobold_ear
+    count: 6
+rewards:
+  xp: 420
+  money: 400
+  choice_items:
+    - item: item.miners_lamp_charm
+    - item: item.brens_signet
+script: null

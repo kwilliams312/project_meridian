@@ -1,0 +1,11 @@
+schema: meridian/pack@1
+namespace: core
+name: Meridian Core
+description: First-party content for Project Meridian. Zone-01 starter content.
+version: 0.1.0
+content_schema_version: 1
+engine:
+  godot: "4.6"
+authors:
+  - Meridian contributors
+license: Apache-2.0 (data) / CC-BY-4.0 (referenced original assets)

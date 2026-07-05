@@ -1,0 +1,45 @@
+# meridian/pack@1 — pack manifest (content/<namespace>/pack.yaml)
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/pack.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, namespace, name, version, content_schema_version, engine, license]
+properties:
+  schema: { const: "meridian/pack@1" }
+  namespace:
+    description: Owns every ID in this pack. "core" is reserved for first-party content.
+    type: string
+    pattern: "^[a-z][a-z0-9_]{1,31}$"
+  name: { $ref: "#/$defs/displayName" }
+  description: { type: string, maxLength: 2000 }
+  version:
+    description: Semver of this content pack.
+    type: string
+    pattern: "^\\d+\\.\\d+\\.\\d+$"
+  content_schema_version:
+    description: Major schema version this pack is authored against.
+    const: 1
+  engine:
+    description: Engine pin — .pck packs are validated against this Godot version (Tools PRD R8).
+    type: object
+    additionalProperties: false
+    required: [godot]
+    properties:
+      godot: { type: string, pattern: "^4\\.\\d+$" }
+  dependencies:
+    description: Other packs whose IDs this pack may reference.
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [namespace, version]
+      properties:
+        namespace: { type: string, pattern: "^[a-z][a-z0-9_]{1,31}$" }
+        version: { type: string, pattern: "^\\d+\\.\\d+\\.\\d+$" }
+  authors:
+    type: array
+    items: { type: string }
+  license:
+    description: Pack-level default; per-asset provenance sidecars still required for art/audio (TD-09).
+    type: string
+    minLength: 1

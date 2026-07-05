@@ -1,0 +1,26 @@
+# Kill quest (QST-01). First quest of the Zone-01 kobold chain.
+schema: meridian/quest@1
+id: core:quest.culling_the_kobolds
+name: Culling the Kobolds
+summary: Kill 8 Kobold Miners in Cinderdeep Mine for Quartermaster Bren.
+offer_text: >-
+  The kobolds crawled out of Cinderdeep like ants from a kicked hill, and
+  every wagon they hit is food that doesn't reach the village. Thin them
+  out for me — eight ought to make the rest reconsider.
+completion_text: >-
+  Eight fewer thieving hands in the hollow. You've earned this, and my thanks.
+level: 4
+required_level: 2
+zone: zone.zone01
+giver: npc.quartermaster_bren
+objectives:
+  - type: kill
+    target: npc.kobold_miner
+    count: 8
+rewards:
+  xp: 340
+  money: 250
+  items:
+    - item: item.minor_healing_potion
+      count: 3
+script: null

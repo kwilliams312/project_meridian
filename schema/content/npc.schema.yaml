@@ -1,0 +1,97 @@
+# meridian/npc@1 — NPCs and mobs (NPC-01, NPC-02, CMB-02)
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/npc.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, id, name, level, creature_type, faction, stats]
+properties:
+  schema: { const: "meridian/npc@1" }
+  id: { $ref: "#/$defs/contentId" }
+  name: { $ref: "#/$defs/displayName" }
+  subtitle:
+    description: Shown under the name plate, e.g. "Mining Supervisor".
+    type: string
+    maxLength: 80
+  level: { $ref: "#/$defs/intRange" }
+  creature_type:
+    enum: [humanoid, beast, undead, elemental, demon, dragonkin, mechanical, critter]
+  rank:
+    enum: [normal, elite, rare, boss]
+    default: normal
+  faction:
+    description: v1 disposition toward players. Real faction/reputation system is an M2 schema.
+    enum: [friendly, neutral, hostile]
+
+  stats:
+    description: Explicit v1 stats at level.min; server scales linearly to level.max. statprofile refs arrive M2.
+    type: object
+    additionalProperties: false
+    required: [health, damage, attack_speed_ms]
+    properties:
+      health: { type: integer, minimum: 1 }
+      mana: { type: integer, minimum: 0 }
+      armor: { type: integer, minimum: 0 }
+      damage: { $ref: "#/$defs/intRange" }
+      attack_speed_ms: { type: integer, minimum: 500 }
+
+  ai:
+    description: Server-side behavior parameters (CMB-02). Ignored for faction=friendly.
+    type: object
+    additionalProperties: false
+    properties:
+      behavior:
+        description: aggressive = attacks on aggro radius; defensive = retaliates only.
+        enum: [aggressive, defensive, passive]
+        default: defensive
+      aggro_radius_m: { type: number, minimum: 0, maximum: 100, default: 20 }
+      leash_radius_m: { type: number, minimum: 0, maximum: 500, default: 60 }
+      call_for_help_radius_m: { type: number, minimum: 0, maximum: 100, default: 0 }
+      flee_at_health_pct: { $ref: "#/$defs/pct" }
+      abilities:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [ability]
+          properties:
+            ability: { $ref: "#/$defs/abilityRef" }
+            priority:
+              description: Lower = considered first each AI tick.
+              type: integer
+              minimum: 0
+              default: 0
+            cooldown_override_ms: { type: integer, minimum: 0 }
+            use_at_health_below_pct: { $ref: "#/$defs/pct" }
+
+  movement:
+    type: object
+    additionalProperties: false
+    properties:
+      walk_speed_mps: { type: number, minimum: 0, default: 2.5 }
+      run_speed_mps: { type: number, minimum: 0, default: 7.0 }
+
+  interaction:
+    type: object
+    additionalProperties: false
+    properties:
+      gossip_text:
+        description: Single-page gossip for v1; gossip graphs are an M2 schema.
+        type: string
+        maxLength: 2000
+      vendor: { $ref: "#/$defs/vendorRef" }
+
+  loot:
+    type: object
+    additionalProperties: false
+    properties:
+      table: { $ref: "#/$defs/lootRef" }
+      money: { $ref: "#/$defs/intRange" }
+
+  visual:
+    type: object
+    additionalProperties: false
+    required: [model]
+    properties:
+      model: { $ref: "#/$defs/artRef" }
+      scale: { type: number, exclusiveMinimum: 0, maximum: 10, default: 1.0 }
+      sound_set: { $ref: "#/$defs/sfxRef" }

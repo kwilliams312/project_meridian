@@ -1,0 +1,60 @@
+# meridian/zone@1 — zone manifest (WLD-01, WLD-03, AUD-02).
+# Geometry lives in Forge-exported chunk data; `chunk_manifest` is reserved until the
+# A-08 chunk-format contract is signed (M0 exit). Music/ambience region OVERRIDES are
+# authored as Forge volumes and travel with chunk data; this manifest holds zone defaults.
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/zone.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, id, name, level_range]
+properties:
+  schema: { const: "meridian/zone@1" }
+  id: { $ref: "#/$defs/contentId" }
+  name: { $ref: "#/$defs/displayName" }
+  level_range: { $ref: "#/$defs/intRange" }
+  start_zone:
+    description: New characters may start here (spawn point = first graveyard).
+    type: boolean
+    default: false
+  chunk_manifest:
+    description: RESERVED (A-08). Will point at the Forge chunk-export manifest once the format is in /schema.
+    type: "null"
+
+  music:
+    description: Zone-default adaptive music set (AUD-02); explore layer is required if music is present.
+    type: object
+    additionalProperties: false
+    required: [explore]
+    properties:
+      explore: { $ref: "#/$defs/musRef" }
+      tension: { $ref: "#/$defs/musRef" }
+      combat: { $ref: "#/$defs/musRef" }
+  ambience:
+    description: Zone-default ambient bed (AUD-03).
+    $ref: "#/$defs/sfxRef"
+
+  pois:
+    description: Points of interest (WLD-03) — map markers, discovery XP, explore-objective targets.
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [id, name, position]
+      properties:
+        id: { type: string, pattern: "^[a-z][a-z0-9_]*$" }
+        name: { $ref: "#/$defs/displayName" }
+        position: { $ref: "#/$defs/position" }
+        discovery_radius_m: { type: number, minimum: 1, maximum: 200, default: 40 }
+        discovery_xp: { type: integer, minimum: 0, default: 0 }
+
+  graveyards:
+    description: Resurrection points (CMB-03). First entry is the zone default.
+    type: array
+    minItems: 1
+    items:
+      type: object
+      additionalProperties: false
+      required: [position]
+      properties:
+        position: { $ref: "#/$defs/position" }
+        orientation_deg: { type: number, minimum: 0, exclusiveMaximum: 360, default: 0 }

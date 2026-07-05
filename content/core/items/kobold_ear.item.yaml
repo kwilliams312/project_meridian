@@ -1,0 +1,10 @@
+schema: meridian/item@1
+id: core:item.kobold_ear
+name: Kobold Ear
+flavor_text: Proof of a culling. Bren doesn't ask how you got it.
+item_class: quest
+rarity: common
+binding: on_pickup
+stack_size: 20
+visual:
+  icon: core:art.icon.item.kobold_ear
