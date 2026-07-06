@@ -1,0 +1,6 @@
+# CMake build tree — never commit build artifacts.
+/build/
+build/
+
+# Generated compile database (lives in build/, but ignore stray copies too).
+compile_commands.json
