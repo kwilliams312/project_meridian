@@ -84,3 +84,44 @@ jobs:
           MERIDIAN_DB_PASS: ci
           MERIDIAN_DB_NAME: dbtest
         run: ./server/build/libs/db/meridian-db-test
+
+  # meridian-account CLI (#80, ACC-03): build + run its integration test against
+  # a real MariaDB service. Loads the auth schema (0001_init_auth.up.sql) so the
+  # `account` table exists, creates an account through the CLI's code path, then
+  # runs a full SRP-6a exchange proving the stored credential authenticates the
+  # correct password and rejects a wrong one. The plain `server` job's ctest
+  # skips this test (no MERIDIAN_DB_* env) — it is inert there.
+  account:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: ci
+          MARIADB_DATABASE: meridian_auth
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain + deps (incl. libmariadb-dev, libssl-dev, mariadb client)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++-13 flatbuffers-compiler libflatbuffers-dev libssl-dev libmariadb-dev mariadb-client
+      - name: Load auth schema (0001_init_auth.up.sql)
+        run: |
+          mariadb -h 127.0.0.1 -P 3306 -u root -pci meridian_auth < server/db/auth/migrations/0001_init_auth.up.sql
+      - name: Build meridian-account-test
+        run: |
+          cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
+          cmake --build server/build --target meridian-account meridian-account-test
+      - name: Run account-CLI integration test (MariaDB service)
+        env:
+          MERIDIAN_DB_HOST: 127.0.0.1
+          MERIDIAN_DB_PORT: 3306
+          MERIDIAN_DB_USER: root
+          MERIDIAN_DB_PASS: ci
+          MERIDIAN_DB_NAME: meridian_auth
+        run: ./server/build/tools/meridian-account/meridian-account-test
