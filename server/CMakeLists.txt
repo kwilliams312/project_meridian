@@ -69,10 +69,7 @@ add_subdirectory(worldd)
 # register an account into the auth DB `account` table (SAD §2.1, §4.1).
 add_subdirectory(tools/meridian-account)
 
-# Link libmeridian-proto into worldd (#67, deliverable 3) — codegen + linkage
-# proof: worldd does not USE the generated IF-2 tables yet (that arrives with the
-# real world path, SAD §7), but wiring the link keeps flatc codegen on the build
-# graph and proves the schema-generated edge compiles into the daemon.
-# authd now consumes auth.fbs for real via authd-login (#79), which links
-# meridian::proto itself — so no separate proto link is wired here for authd.
-target_link_libraries(worldd PRIVATE meridian::proto)
+# worldd now consumes world.fbs for real via world-dispatch (#82/#83), which
+# links meridian::proto (+ meridian::net) itself (worldd/CMakeLists.txt) — so no
+# separate proto link is wired here. authd likewise links meridian::proto via
+# authd-login (#79). Both edges keep flatc codegen on the build graph.

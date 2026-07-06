@@ -1,0 +1,234 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// worldd — IF-2 opcode dispatcher + world-process scaffold (issues #82, #83).
+//
+// CLEAN-ROOM: designed from the server SAD only — §2 / §2.5 (worldd component
+// decomposition: the single world/update thread + a map/IO worker pool, "no
+// synchronous DB calls from the update loop"), §5.2 (IF-2 framing + the u16
+// Opcode registry with reserved per-domain ranges), §6 (concurrency model:
+// world thread owns game state, map workers never touch sockets). The wire
+// contract is schema/net/world.fbs. No GPL source (CMaNGOS / TrinityCore or
+// otherwise) was consulted. See CONTRIBUTING.md.
+//
+// SCOPE (M0, this story): stand worldd up as a PROCESS that
+//   1. accepts a TLS connection (meridian::net) and reads IF-2 length-framed
+//      messages,
+//   2. decodes the leading u16 Opcode (world.fbs), verifies the FlatBuffer
+//      payload table, and dispatches to a handler in a dispatch table,
+//   3. carries the world-thread + map/IO worker-pool STRUCTURE (accept/IO on
+//      workers, game state owned by the world thread, a queue between them).
+//
+// DELIBERATELY NOT HERE (later stories): grant/session validation (#84),
+// movement simulation (#86), AoI (#87), the real 20 Hz tick body, the message
+// bus, AEAD session crypto. The M0 opcode handlers are STUBS that log/echo or
+// return a not-yet-implemented marker; the real bodies land in those stories.
+//
+// M0 TRANSPORT NOTE: the SAD §5.2 IF-2 frame is
+//   u32 LE length ‖ u16 opcode ‖ u64 seq ‖ AEAD(payload)
+// At M0 the transport is meridian::net's TLS 1.3 Session, which owns the
+// `u32 LE length` prefix (8 KiB cap). So the bytes we put INSIDE one net frame
+// are the IF-2 message header + payload MINUS the AEAD wrap (TLS provides
+// confidentiality/integrity at M0; per-session AEAD is #84):
+//   [ u16 opcode (LE) ‖ u64 seq (LE) ‖ FlatBuffer table ]
+// Encode/decode of this in-frame header lives in this file (encode_frame /
+// decode_frame) so #84 can swap the AEAD wrap in at exactly one seam.
+
+#pragma once
+
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "meridian/net/tls_listener.h"
+
+#include "world_generated.h"
+
+namespace meridian::worldd {
+
+using net::Bytes;
+
+// IF-2 in-frame header size: u16 opcode + u64 seq, little-endian, ahead of the
+// FlatBuffer payload (see the transport note above).
+inline constexpr std::size_t kFrameHeaderBytes = sizeof(std::uint16_t) + sizeof(std::uint64_t);
+
+// A decoded IF-2 frame: the opcode selector, the per-message sequence number,
+// and the FlatBuffer payload bytes (the table for that opcode). `payload` is a
+// view offset into the frame the caller still owns for the duration of the
+// handler call.
+struct Frame {
+    net::Opcode opcode{};
+    std::uint64_t seq = 0;
+    const std::uint8_t* payload = nullptr;  // -> first payload byte
+    std::size_t payload_len = 0;
+};
+
+// Encode an IF-2 frame body (header + payload) for Session::write_frame. The net
+// layer prepends the u32 LE length; this prepends the u16 opcode + u64 seq.
+Bytes encode_frame(net::Opcode opcode, std::uint64_t seq, const Bytes& payload);
+
+// Decode the IF-2 in-frame header from a net frame body. Returns nullopt when the
+// buffer is too short to even hold the header (a malformed/hostile frame) — the
+// caller treats that as a protocol error and disconnects.
+std::optional<Frame> decode_frame(const Bytes& frame);
+
+// Convenience: build a Disconnect{reason,message} frame body (opcode DISCONNECT,
+// seq echoed) ready for Session::write_frame. Used for the unknown/out-of-range
+// opcode path and any clean server-initiated close.
+Bytes make_disconnect(net::DisconnectReason reason, const std::string& message,
+                      std::uint64_t seq = 0);
+
+// Whether an opcode value falls in a range that is RESERVED (declared in
+// world.fbs but with no M0 tables — combat 0x3xxx, quest 0x4xxx, … hot-reload
+// 0xFxxx). Reserved opcodes are rejected cleanly (Disconnect), distinct from a
+// truly unknown value, so a client probing a not-yet-implemented domain gets a
+// defined answer rather than a crash.
+bool is_reserved_range(std::uint16_t opcode);
+
+// The outcome of dispatching one frame — drives the serve loop (keep the
+// connection open, or send a Disconnect and close).
+enum class DispatchOutcome {
+    kHandled,        // a handler ran; keep serving
+    kUnknownOpcode,  // opcode not in the table and not a known reserved range
+    kReservedOpcode, // opcode is in a reserved (not-yet-implemented) range
+    kBadPayload,     // opcode known but the FlatBuffer payload failed verify
+    kMalformedFrame, // frame too short to hold the IF-2 header
+};
+
+// A handler processes one verified frame for a given opcode. It receives the
+// session (to write replies) and the decoded frame. Returning normally means the
+// frame was handled; handlers throw meridian::net::TlsError only on a transport
+// failure (which the serve loop treats as connection loss).
+//
+// M0 STUBS: the registered handlers log the opcode and, where a natural echo
+// exists (ClockSync), reply; otherwise they emit a not-yet-implemented marker.
+// The real bodies (grant validation, movement, AoI) land in #84/#86/#87.
+using Handler = std::function<void(net::Session&, const Frame&)>;
+
+// The IF-2 opcode dispatcher: a table mapping u16 Opcode -> Handler. Decodes each
+// net frame's IF-2 header, verifies the payload table for the opcode, and routes
+// to the handler. Unknown / reserved / malformed / bad-payload frames do NOT
+// invoke a handler — they surface as the matching DispatchOutcome so the serve
+// loop can send a Disconnect and close (SAD §5.2: "wrong-state or undecodable
+// messages are dropped/rejected").
+//
+// Instances are cheap and own only the handler table; one is shared (read-only
+// after construction) across all connections.
+class Dispatcher {
+public:
+    // Build the dispatcher and register the M0 stub handlers.
+    Dispatcher();
+
+    // Register / override the handler for one opcode. Later stories replace the
+    // stubs by re-registering. Not thread-safe; call during setup only.
+    void on(net::Opcode opcode, Handler handler);
+
+    // Whether a handler is registered for `opcode`.
+    bool has_handler(net::Opcode opcode) const;
+
+    // Decode + verify + dispatch one net frame. On kHandled the handler already
+    // ran (and may have written replies). On any error outcome NO reply is sent
+    // here — the caller decides the Disconnect reason + message (so the serve
+    // loop owns the socket-closing policy). `last_opcode`/`last_seq` are set for
+    // the caller's logging + Disconnect echo even on the error paths (best
+    // effort; 0 when the frame was too short to read them).
+    DispatchOutcome dispatch(net::Session& sess, const Bytes& frame,
+                             std::uint16_t& last_opcode, std::uint64_t& last_seq) const;
+
+private:
+    void register_m0_stubs();
+
+    std::unordered_map<std::uint16_t, Handler> handlers_;
+};
+
+// ---------------------------------------------------------------------------
+// WorldServer — the M0 process scaffold (SAD §2.5, §6).
+//
+// This is the STRUCTURE the tick, maps, and bus land on later. It models the
+// three roles the SAD assigns worldd, without their real bodies yet:
+//   - the WORLD/UPDATE THREAD: owns game state + the tick loop. At M0 the loop
+//     is a placeholder that drains an inbound work queue at a fixed cadence and
+//     does nothing else (no maps to update). It is the ONLY thread that will
+//     touch game state, so the accept/IO path never does (SAD §6.1).
+//   - a MAP/IO WORKER POOL: a thread pool that runs accept + per-connection IO
+//     (framing) off the world thread. Workers own sockets, never game state
+//     (SAD §6.1 "map workers ... never touch sockets"; conversely the IO/accept
+//     work never touches game state). Decoded frames destined for the simulation
+//     are enqueued to the world thread over the queue below — no worker mutates
+//     game state directly.
+//   - a QUEUE between them: an MPSC-style inbound queue (many IO workers ->
+//     the one world thread). At M0 it carries a minimal WorldEvent; it is the
+//     seam the real per-map inbound drains replace.
+//
+// M0 handlers run inline on the IO worker (they only log/echo over the session).
+// The queue exists and is exercised so the structure is real, not aspirational:
+// a handler that needs the simulation enqueues a WorldEvent rather than touching
+// state, and the world thread drains it each tick.
+// ---------------------------------------------------------------------------
+
+// A unit of work handed from an IO worker to the world thread. At M0 it is a
+// decoded opcode + seq + a copy of the payload (the world thread outlives the
+// frame). Later stories give it a session id and typed, per-map routing.
+struct WorldEvent {
+    net::Opcode opcode{};
+    std::uint64_t seq = 0;
+    Bytes payload;  // owned copy — the frame buffer is gone by drain time
+};
+
+struct WorldServerConfig {
+    // Map/IO worker pool size. Defaults to a small pool; main() can size it from
+    // hardware_concurrency. The SAD's "M ≈ cores − 3" sizing is a later concern —
+    // at M0 the pool just needs to exist and run accept/IO off the world thread.
+    unsigned io_workers = 2;
+
+    // World-thread tick cadence placeholder. The real rate is 20 Hz / 50 ms
+    // (SAD §2.5); at M0 the loop just drains the inbound queue at this cadence.
+    unsigned tick_interval_ms = 50;
+};
+
+class WorldServer {
+public:
+    // Construct with the shared dispatcher and the pool/tick config. Does NOT
+    // start any threads — call run() (blocking) or start()/stop() for the test.
+    WorldServer(const Dispatcher& dispatcher, WorldServerConfig cfg);
+    ~WorldServer();
+
+    WorldServer(const WorldServer&) = delete;
+    WorldServer& operator=(const WorldServer&) = delete;
+
+    // Start the world/update thread (drains the inbound queue at the tick
+    // cadence). Idempotent. The IO/accept side is driven by serve_connection()
+    // per accepted Session (main() runs the accept loop + the pool).
+    void start();
+
+    // Stop the world thread and join it. Idempotent; also called by the dtor.
+    void stop();
+
+    // Serve one accepted connection to completion on the CALLING thread (an IO
+    // worker): read frames, dispatch each, and on an error outcome send a
+    // Disconnect and close. Returns when the peer closes cleanly, an error
+    // outcome closes the connection, or a transport failure is caught. Never
+    // touches game state — decoded simulation work is enqueued (enqueue()).
+    void serve_connection(net::Session sess);
+
+    // Enqueue a WorldEvent for the world thread (called from IO workers /
+    // handlers that need the simulation). Thread-safe (MPSC).
+    void enqueue(WorldEvent ev);
+
+    // Test/diagnostic: how many WorldEvents the world thread has drained. Lets a
+    // test assert the queue actually reached the world thread.
+    std::uint64_t drained_count() const;
+
+private:
+    void world_thread_main();
+
+    const Dispatcher& dispatcher_;
+    WorldServerConfig cfg_;
+
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+}  // namespace meridian::worldd
