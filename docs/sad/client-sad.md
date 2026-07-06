@@ -101,7 +101,7 @@ Dependency rule: GDScript never calls `net` directly and never reads entity scen
 
 ### 2.5 GDScript scene-tree architecture
 
-Autoload singletons (`Net`, `Sim`, `Datastore`, `EventBus`, `Settings`) wrap the GDExtension modules. Scene flow: `Boot` (pack mount, settings load, auto-benchmark on first run) → `Login` (IF-1, realm list) → `CharacterSelect` (D-11 stub at M0: name + class over one placeholder model) → `World` (streamed zone + HUD). Failure UX at every step is an M0 deliverable. `World` is re-entered on map change (instance portals, GRP-02) with a loading screen; in-zone streaming is seamless.
+Autoload singletons (`Net`, `Sim`, `Datastore`, `EventBus`, `Settings`) wrap the GDExtension modules. Scene flow: `Boot` (pack mount, settings load, auto-benchmark on first run) → `Login` (IF-1, realm list) → `CharacterSelect` (D-11 stub at M0: name + class over one placeholder model; **at M1 (A-03 / D-32) this becomes presets-first character create** — discrete preset choices for hair/face/skin + class/race options, plus an optional 1–2 continuous morphs if the art budget allows. The client sends the choice as, and reads it back as, a **versioned, extensible appearance record** (preset IDs + optional morph values behind a schema-version tag) that the server persists — so post-1.0 presets/morphs are additive with no breaking schema change) → `World` (streamed zone + HUD). Failure UX at every step is an M0 deliverable. `World` is re-entered on map change (instance portals, GRP-02) with a loading screen; in-zone streaming is seamless.
 
 ### 2.6 Entity presentation
 

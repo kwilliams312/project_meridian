@@ -1,7 +1,7 @@
 # Server Track PRD — Project Meridian
 
 **Track:** Server
-**Version:** 0.6 — 2026-07-05 (v0.6: **packaging & CD** per D-30 — GHCR autopublish on green main, compose-from-published-images, Kubernetes/Helm as a supported option, supply-chain posture; OPS-01 extension, no baseline change. v0.5: **OPS-05 telemetry & observability** per Baseline v0.6 / D-29 — OTel-compatible export, player-experience metrics, log pipeline, provisioned Grafana dashboards added to §6 and §9. v0.4: reviewed against Baseline v0.5 / D-28 (macOS client) — no server impact; the protocol and realm are client-platform-neutral. v0.3: fold-back of the Baseline v0.2 / D-04 additions this PRD's own v0.1 gap reports produced — **ACC-03** registration, **SOC-03** trade, **ECO-05** bank, **CHR-05** mounts now carried in §4 and §9; resolved open questions pruned into §10. v0.2: sharded-realm scale-up per D-23/Baseline v0.4 — OPS-04 revised to 3000+ CCU per realm, WLD-04 added, gateway/coordinator/services/shard-worker process model; architecture detail in the [Server SAD](../sad/server-sad.md))
+**Version:** 0.7 — 2026-07-06 (v0.7: **A-03 RESOLVED / D-32** — CHR-01 appearance is presets-first, and the server persists it as a **versioned, extensible appearance record** (preset IDs + optional morph values behind a schema-version tag), additive post-1.0 with no breaking character-record migration; §9 CHR-01 row and §10 open-question 2 updated (concrete column lands at M1 per Server SAD §4.2). v0.6: **packaging & CD** per D-30 — GHCR autopublish on green main, compose-from-published-images, Kubernetes/Helm as a supported option, supply-chain posture; OPS-01 extension, no baseline change. v0.5: **OPS-05 telemetry & observability** per Baseline v0.6 / D-29 — OTel-compatible export, player-experience metrics, log pipeline, provisioned Grafana dashboards added to §6 and §9. v0.4: reviewed against Baseline v0.5 / D-28 (macOS client) — no server impact; the protocol and realm are client-platform-neutral. v0.3: fold-back of the Baseline v0.2 / D-04 additions this PRD's own v0.1 gap reports produced — **ACC-03** registration, **SOC-03** trade, **ECO-05** bank, **CHR-05** mounts now carried in §4 and §9; resolved open questions pruned into §10. v0.2: sharded-realm scale-up per D-23/Baseline v0.4 — OPS-04 revised to 3000+ CCU per realm, WLD-04 added, gateway/coordinator/services/shard-worker process model; architecture detail in the [Server SAD](../sad/server-sad.md))
 **Status:** Draft for cross-track review
 **Baseline:** [Game Design Baseline v0.6](../00-GAME-DESIGN-BASELINE.md) — all feature IDs (ACC/CHR/WLD/CMB/NPC/QST/ITM/ECO/SOC/GRP/PVP/TLS/OPS), milestones (M0–M4), and technical decisions (TD-01..TD-12) referenced here are defined there and are binding.
 
@@ -267,7 +267,7 @@ Every feature where Server = ● in the Baseline matrix.
 | ACC-01 | `authd`: TLS + SRP6a auth, realm list, auth DB, bans | M0 |
 | ACC-02 | Session-grant handoff, world handshake, per-session keys | M0 |
 | ACC-03 | Account creation: CLI/admin tool (M0); rate-limited web-signup service writing SRP verifiers (M3) | M0 basic / M3 |
-| CHR-01 | Character CRUD + validation, characters DB schema (stub M0; race/class/appearance rules M1) | M0 stub / M1 |
+| CHR-01 | Character CRUD + validation, characters DB schema (stub M0; race/class/appearance rules M1). **Appearance is persisted as a versioned, extensible appearance record** (preset IDs + optional morph values behind a schema-version tag, A-03 / D-32) — additive post-1.0, no breaking character-record migration | M0 stub / M1 |
 | CHR-02 | Movement intake/validation, AoI replication, swim/fall (basic M0; full M1) | M0 basic / M1 |
 | CHR-03 | XP/leveling engine, class/level stat tables from world DB | M1 |
 | CHR-04 | Talent trees, point spend/reset, talent-driven spell/aura modifiers | M2 |
@@ -336,9 +336,9 @@ Every feature where Server = ● in the Baseline matrix.
 
 ### Open questions (flagged, not invented)
 1. **World-DB delivery to the server** at scale (TLS-08 packs are defined, but core content: does the compiler push SQL migrations, or full-DB image swap?). This PRD assumes nightly full world-DB rebuild + swap; fine until community servers want incremental updates. (Also server SAD §10(f).)
-2. **CHR-01 appearance data** — how much appearance customization the server validates/stores at M1 is undefined (matrix marks Art ● too); needs a client/art/server contract in the schema repo (**A-03**, due M0 exit).
+2. **CHR-01 appearance data** — **RESOLVED (A-03 / D-32, [Sync Decisions](../01-SYNC-DECISIONS.md) §7.2):** customization is presets-first (discrete preset IDs), plus an optional 1–2 continuous morphs if the Art min-spec budget allows. The server persists appearance as a **small, versioned, extensible appearance record** — a bounded typed set of preset IDs (+ optional morph values) with a schema-version field, **not** a fixed column set — so future presets/morphs are added post-1.0 **additively, without a breaking migration** to the character record. The concrete column/format lands when CHR-01 is built at M1 (character-DB schema, Server SAD §4.2); this decision fixes the shape, not the wire format.
 3. **A-14 — per-shard resource farming (owner: Server + Design, due M2).** Per-shard gathering nodes and rare spawns multiply availability by shard count; the WLD-04 transfer cooldown alone won't stop coordinated shard-hop farming. Mitigation candidates: node/rare tagging, zone-shared spawn state, diminishing returns. The SAD (§4.7) keeps node/rare state behind a location seam so any candidate lands without redesign; farm telemetry ships at M3 regardless.
 
 ---
 
-*End of Server PRD v0.4. Changes to feature scope or milestones must go through Baseline cross-track review (Baseline §0 status note).*
+*End of Server PRD v0.7. Changes to feature scope or milestones must go through Baseline cross-track review (Baseline §0 status note).*
