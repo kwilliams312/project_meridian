@@ -30,8 +30,8 @@ properties:
       tension: { $ref: "#/$defs/musRef" }
       combat: { $ref: "#/$defs/musRef" }
   ambience:
-    description: Zone-default ambient bed (AUD-03).
-    $ref: "#/$defs/sfxRef"
+    description: Zone-default ambient bed (AUD-03). amb.* asset ID per decision D-24.
+    $ref: "#/$defs/ambRef"
 
   pois:
     description: Points of interest (WLD-03) — map markers, discovery XP, explore-objective targets.

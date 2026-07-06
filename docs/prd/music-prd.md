@@ -2,8 +2,8 @@
 
 **Project:** Project Meridian (open-source WoW-style MMORPG)
 **Track:** Music & Audio
-**Version:** 0.2 — 2026-07-04 (revised for the v0.3 engine pivot UE5 → Godot 4.6: adaptive music re-platformed from MetaSounds onto `AudioStreamInteractive`/`AudioStreamSynchronized` per TD-11 v0.3; middleware fallback replaced by a custom GDExtension mixer; runtime format now Ogg Vorbis. All musical, mix, provenance, and scope decisions carry over unchanged.)
-**Baseline:** [Game Design Baseline v0.3](../00-GAME-DESIGN-BASELINE.md). All feature IDs (AUD-01/02/03, etc.), milestone names (M0–M4), and technical decisions (TD-01..TD-12) referenced here are defined there and are binding.
+**Version:** 0.5 — 2026-07-05 (v0.5: reviewed against Baseline v0.6 / D-29 (OPS-05 telemetry) — no audio deliverables. v0.4: reviewed against Baseline v0.5 / D-28 (macOS client) — no audio impact: the runtime is platform-neutral Godot audio; Ogg/WAV assets and the voice manager are identical on Metal-backend builds. v0.3: reviewed against Baseline v0.4 — CHR-05 mount audio added to §6/§9 (a Music ● since Baseline v0.2, never claimed); sharded-realm changes have no audio impact. v0.2: revised for the v0.3 engine pivot UE5 → Godot 4.6: adaptive music re-platformed from MetaSounds onto `AudioStreamInteractive`/`AudioStreamSynchronized` per TD-11 v0.3; middleware fallback replaced by a custom GDExtension mixer; runtime format now Ogg Vorbis.)
+**Baseline:** [Game Design Baseline v0.6](../00-GAME-DESIGN-BASELINE.md). All feature IDs (AUD-01/02/03, etc.), milestone names (M0–M4), and technical decisions (TD-01..TD-12) referenced here are defined there and are binding.
 **Primary owner features:** AUD-01 (SFX framework), AUD-02 (adaptive zone music), AUD-03 (ambient beds & emitters).
 
 ---
@@ -203,7 +203,7 @@ Counts are planning targets (±20%), not contractual.
 - **Zones 02–04 adaptive sets:** 3 zone sets (6–7 stems each) + stingers, day/night variants; beds + emitters for 3 zones (~25 emitter assets each); Dungeon-02 set.
 - **Battleground (PVP-02):** BG set with explore(staging)/tension(objective contested)/combat layers + score/flag stingers (~6).
 - **Character-select/login theme (CHR-01):** final main theme, full arrangement (~3 min) + 2 race motif themes on race-select.
-- **SFX: ~200 new** — 2 new classes (~60), race-specific foley/vocal variants (~20), new creature families ×~8 (~70), PvP/BG (~15), guild/social/LFG UI (SOC-02/GRP-03, ~10), zone interactables (~25).
+- **SFX: ~210 new** — 2 new classes (~60), race-specific foley/vocal variants (~20), new creature families ×~8 (~70), PvP/BG (~15), guild/social/LFG UI (SOC-02/GRP-03, ~10), zone interactables (~25), ground mounts (CHR-05: mount/dismount, gallop foley per surface, mount vocal set, ~12).
 - Cumulative at M3: ~5 zone-scale adaptive sets + 3 dungeon/BG sets, ~570 SFX, ~12 beds, ~110 emitter assets.
 
 ### M4 — direction only (per baseline)
@@ -248,7 +248,8 @@ Every feature where Music is ● in the baseline matrix (§4):
 | Feature ID | Audio deliverable(s) | Milestone |
 |------------|----------------------|-----------|
 | CHR-01 | Character-select/login theme (main theme v1 at M1, full arrangement + race motifs at M3); create-screen UI SFX | M0 stub / M1, final M3 |
-| WLD-01 | Music-region + ambience streaming behavior across zone streaming boundaries (regions load/crossfade with chunk-streaming cells, TD-01) | M1 |
+| CHR-05 | Ground-mount audio under the AUD-01 framework: mount/dismount SFX, mounted-locomotion foley per surface, mount vocal sets | M3 |
+| WLD-01 | Music-region + ambience streaming behavior across zone streaming boundaries (regions load/crossfade with chunk-streaming cells, WLD-01 chunk format IF-6) | M1 |
 | WLD-02 | Day/night bed slices + night music variants; weather ambience layers (rain/wind) | M2 |
 | WLD-03 | Discovery stinger + POI-scoped music sub-regions; map-open UI sound | M1 |
 | CMB-01 | Combat layer state switching (AUD-02); melee/cast/impact SFX per school | M1 |

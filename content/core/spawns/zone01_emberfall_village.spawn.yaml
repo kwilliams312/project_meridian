@@ -1,0 +1,10 @@
+# Emberfall Village — friendly NPCs. Quest givers/turn-ins must spawn somewhere (lint L035);
+# normally exported by Forge's spawn gizmos (TLS-02), hand-authored here like the kobold camp.
+schema: meridian/spawn@1
+id: core:spawn.zone01_emberfall_village
+zone: zone.zone01
+spawns:
+  - npc: npc.quartermaster_bren
+    position: { x: 126.0, y: 8.5, z: -244.0 }
+    orientation_deg: 200
+    respawn_seconds: { min: 60, max: 60 }

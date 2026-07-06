@@ -1,0 +1,21 @@
+# Git LFS patterns (TD-12: large art/audio binaries via LFS; text stays diffable in plain Git).
+# Patterns are extension-global — asset-tree location is pending the A-15 ruling
+# (see docs/01-SYNC-DECISIONS.md §7).
+
+# 3D interchange + DCC sources
+*.glb   filter=lfs diff=lfs merge=lfs -text
+*.gltf  filter=lfs diff=lfs merge=lfs -text
+*.blend filter=lfs diff=lfs merge=lfs -text
+*.spp   filter=lfs diff=lfs merge=lfs -text
+
+# Textures / images
+*.png   filter=lfs diff=lfs merge=lfs -text
+*.tga   filter=lfs diff=lfs merge=lfs -text
+*.psd   filter=lfs diff=lfs merge=lfs -text
+*.exr   filter=lfs diff=lfs merge=lfs -text
+
+# Audio masters
+*.wav   filter=lfs diff=lfs merge=lfs -text
+
+# Godot text resources, YAML content, schemas, and code stay in plain Git:
+# *.tscn *.tres *.gdshader *.import *.yaml *.md — diffable and mergeable by design.

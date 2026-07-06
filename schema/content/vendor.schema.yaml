@@ -17,7 +17,7 @@ properties:
       required: [item]
       properties:
         item:
-          description: Sold at the item's price.buy unless overridden. Lint L030 requires one or the other.
+          description: Sold at the item's price.buy unless overridden. Lint L062 requires one or the other.
           $ref: "#/$defs/itemRef"
         price_override: { $ref: "#/$defs/money" }
         limited:

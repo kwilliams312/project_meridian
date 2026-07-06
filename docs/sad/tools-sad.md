@@ -1,7 +1,7 @@
 # Tools Track — Software Architecture Document
 
-**Version:** 0.1 — 2026-07-04
-**Status:** Draft for cross-track review. §3 (IF-6) and §4 (IF-8) are contract DRAFTS that require sign-off before M0 exit (A-08).
+**Version:** 0.2 — 2026-07-04 (v0.2: IF-8 schema authored per A-12 — §4 updated to the as-landed `asset.schema.yaml`; §2.2 lint bands extended with the rules now implemented in the reference validator: L003/L004/L020/L034/L035/L052/L062; L040 folded into the spawn schema. v0.1: initial draft)
+**Status:** Draft for cross-track review. §3 (IF-6) is a contract DRAFT requiring sign-off before M0 exit (A-08); §4 (IF-8) is authored, with Art/Music sign-off pending (A-12) and the source-tree location split tracked as A-15.
 **Zooms into:** the Creator-machine containers of [02-ARCHITECTURE-OVERVIEW.md](../02-ARCHITECTURE-OVERVIEW.md) — `mcc`, Forge, Codex.
 **Reads with:** [Tools PRD](../prd/tools-prd.md) v0.2, [Sync Decisions](../01-SYNC-DECISIONS.md) (D-07/D-08/D-09/D-17, A-08/A-09), [Content Schema v1](../../schema/content/README.md).
 
@@ -78,14 +78,17 @@ Two layers, both producing structured diagnostics (`rule id, severity, entity id
 |------|-------|--------|
 | L001 | file suffix / envelope mismatch | absorbed from validate_content.py |
 | L002 | id namespace ≠ owning pack namespace | absorbed |
+| L003 | id type segment ≠ file's schema type (an `item.` id in an `.npc.yaml` would otherwise resolve as a valid itemRef to an NPC) | **implemented in validate_content.py** |
+| L004 | intRange `min` > `max` (inexpressible in JSON Schema) | **implemented in validate_content.py** |
 | L010 / L011 | duplicate id / unresolved content reference | absorbed |
 | L012 | reference to `deprecated: true` entity (warn) | new, M0 |
 | L015 | `idmap.lock` drift: unmapped id, mapped id with no entity, band violation | new, M0 (runs in link, reports here) |
-| L020 / L021 / L022 | asset ref not in IF-8 registry / registry `source` missing from LFS tree / missing license or provenance | new, M0 — **replaces the "pending asset registry" info line in validate_content.py** (TLS-07, §4.3) |
+| L020 / L021 / L022 | asset ref not in IF-8 registry / registry `source` missing from LFS tree / missing license or provenance | L020 **implemented in validate_content.py** (`--assets=warn` default, `error` at M0 exit); L021/L022 with `mcc` (LFS awareness) — replaces the old "pending asset registry" info line (TLS-07, §4.3) |
 | L030–L033 | orphan/unreachable quest; prerequisite cycle; kill/collect target spawns/drops nowhere; reward-XP outlier (warn) | M1 (graph walker shared with Codex §6.4) |
-| L040 / L041 | wander_radius+patrol both set (already cited by spawn.schema.yaml); spawn off-navmesh or outside zone bounds | M0 / M1 (L041 needs the §3 bake) |
-| L050 / L051 | loot probabilities invalid or empty group; orphan loot table (warn) | M1 |
-| L060 / L061 | vendor sells nonexistent/deprecated item; trainer teaches unknown ability | M1 |
+| L034 / L035 | explore objective references a POI absent from the zone manifest; quest giver/turn-in/deliver NPC has no spawn point (warn) | **implemented in validate_content.py** |
+| L040 / L041 | ~~wander_radius+patrol both set~~ (now enforced directly by `spawn.schema.yaml` via `not`); spawn off-navmesh or outside zone bounds | schema-enforced / M1 (L041 needs the §3 bake) |
+| L050 / L051 / L052 | loot probabilities invalid or empty group; orphan loot table (warn); loot nesting deeper than one level (Tools PRD §4.4) | M1 / M1 / **implemented in validate_content.py** |
+| L060 / L061 / L062 | vendor sells nonexistent/deprecated item; trainer teaches unknown ability; vendor item has neither `price.buy` nor `price_override` | M1 / M1 / **implemented in validate_content.py** |
 | L070 | placeholder text, missing localization keys (warn; error on release branches) | M1 |
 | L080 / L081 | ITM-03 stat-budget violation (warn M1 → error M2); chunk budget violation at export | M2 / M1 |
 
@@ -223,35 +226,34 @@ Two artifacts per chunk, split exactly on the client/server consumer line:
 
 ---
 
-## 4. IF-8 — Asset registry v1 **DRAFT**
+## 4. IF-8 — Asset registry v1 — **AUTHORED (A-12), sign-off pending**
 
-> **Status: DRAFT — requires Art and Music track sign-off** (they author the sidecars). Schema lands at `/schema/content/asset.schema.yaml` (`meridian/asset@1`), validated like any content type.
+> **Status: schema authored** at [`/schema/content/asset.schema.yaml`](../../schema/content/asset.schema.yaml) (`meridian/asset@1`) per the D-18 field union, validated like any content type and exercised by the example pack's 19 sidecars. **Art and Music track sign-off of the schema PR is the remaining A-12 step.** The source-file location split (this SAD's pack-local `content/<ns>/assets/**` vs. the Art SAD's repo-level `/assets/**` tree) is tracked as **A-15**.
 
 ### 4.1 Sidecar schema — `content/<ns>/assets/**/*.asset.yaml`
 
-One sidecar per asset ID (asset classes with multi-file sources list them all):
+One sidecar per asset ID (`extra_sources` lists additional files for multi-file assets). As-landed shape:
 
 ```yaml
 schema: meridian/asset@1
-id: core:art.char.kobold.miner            # same grammar as content ids (art|mus|sfx prefix)
-class: character_model                     # enum: character_model | kit_piece | texture_set |
-                                           #       icon | music | sfx | ambience_bed
-source: assets/art/char/kobold/miner.glb   # path relative to pack root, in the LFS tree
-license: CC0-1.0                           # SPDX expression — required (TD-09)
-provenance:                                # required (TD-09, A-07)
-  origin: polyhaven                        # original | polyhaven | ambientcg | kenney | ai | other
-  url: https://…                           # required unless origin=original
-  author: "…"
-  modified: true                           # derivative-work flag
-import:                                    # per-class hints, class-specific sub-schema
-  # character_model example:
-  lod_bias: 0
-  collision: none
-  # texture example: srgb: true, compress: bptc
-  # music example: loop: true, bpm: 96, bars: 8   (feeds AudioStreamInteractive)
+id: core:art.char.kobold.miner            # same grammar as content ids (art|mus|sfx|amb prefix, D-24)
+class: character_model                     # union enum: character_model | creature_model | weapon_model |
+                                           #   armor_model | kit_piece | prop | foliage | hero_landmark |
+                                           #   texture_set | icon | vfx | ui_art | music_stem |
+                                           #   music_stinger | sfx | ui_sound | ambience_bed | ambience_emitter
+source: assets/art/char/kobold/miner.glb   # path relative to pack root, in the LFS tree (A-15)
+license: CC0-1.0                           # SPDX — allowlist CC0-1.0 / CC-BY-4.0 (TD-09)
+provenance:                                # D-18 core shape; conditionals schema-enforced (TD-09, A-07)
+  source_tier: cc0                         # original | ai | cc0 | cc_by
+  origin_url: https://…                    # required unless source_tier=original
+  license_verified_on: 2026-07-04
+  authors: ["…"]
+import_hints:                              # art block (D-18): lod_policy, lightmap_uv2, occluder, multimesh_safe
+  lod_policy: authored
+music: { stem_set: mus.zone01, layer: L2, bpm: 96, time_signature: "4/4", length_bars: 96 }  # audio block, per class
 ```
 
-Deliberately *not* in the sidecar: display metadata (lives in content files) and numeric IDs (assets get IF-9 entries like any entity, in the `art./mus./sfx.` type spaces).
+Deliberately *not* in the sidecar: display metadata (lives in content files) and numeric IDs (assets get IF-9 entries like any entity, in the `art./mus./sfx./amb.` type spaces).
 
 ### 4.2 Resolution: asset ref → `.pck` resource
 

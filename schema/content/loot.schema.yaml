@@ -1,5 +1,6 @@
 # meridian/loot@1 — loot tables (ITM-02).
 # `entries` roll independently; each `groups[]` picks exactly `pick` winners by weight (mutually exclusive drops).
+# Money semantics (D-25): a table's `money` roll is ADDITIVE with the referencing NPC's `loot.money` roll.
 $schema: "https://json-schema.org/draft/2020-12/schema"
 $id: "meridian://schema/content/loot.schema.yaml"
 type: object
@@ -27,7 +28,9 @@ properties:
       properties:
         item: { $ref: "#/$defs/itemRef" }
         table:
-          description: Nested table, rolled if this entry hits. Max depth 3 (lint L020).
+          description: >-
+            Nested table, rolled if this entry hits. One level of nesting in v1 — a nested
+            table may not itself reference tables (lint L052; Tools PRD §4.4).
           $ref: "#/$defs/lootRef"
         chance_pct: { $ref: "#/$defs/pct" }
         quantity: { $ref: "#/$defs/intRange" }

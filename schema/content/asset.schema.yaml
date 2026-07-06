@@ -1,0 +1,171 @@
+# meridian/asset@1 — IF-8 asset-registry sidecar (discharges A-12).
+# Field set = the D-18 union: core envelope + art extension block + audio extension block.
+# One sidecar per asset ID, at content/<namespace>/assets/**/<name>.asset.yaml.
+# The source-file location split (repo /assets tree per Art SAD vs pack-local tree per
+# Tools SAD) is tracked as action item A-15; `source` is pack-root-relative until resolved.
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/asset.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, id, class, source, license, provenance]
+properties:
+  schema: { const: "meridian/asset@1" }
+  id: { $ref: "#/$defs/assetId" }
+  class:
+    description: >-
+      Drives import preset (art), encode tier (audio), and budget row selection.
+      Art classes map to the Art SAD §2.3 preset table; audio classes to Music SAD §4.2.
+    enum: [character_model, creature_model, weapon_model, armor_model, kit_piece,
+           prop, foliage, hero_landmark, texture_set, icon, vfx, ui_art,
+           music_stem, music_stinger, sfx, ui_sound, ambience_bed, ambience_emitter]
+  source:
+    description: LFS source file path relative to the pack root (A-15 pending for the repo-level tree).
+    type: string
+    pattern: "^assets/[A-Za-z0-9_./-]+$"
+  extra_sources:
+    description: Additional source files for multi-file assets (texture sets, stem sessions).
+    type: array
+    minItems: 1
+    items: { type: string, pattern: "^assets/[A-Za-z0-9_./-]+$" }
+  license:
+    description: SPDX expression; CI allowlist per TD-09.
+    enum: [CC0-1.0, CC-BY-4.0]
+
+  provenance:
+    description: TD-09 provenance record. Lint L022 requires completeness before pack/release builds.
+    type: object
+    additionalProperties: false
+    required: [source_tier, authors]
+    properties:
+      source_tier:
+        description: A original | B ai-assisted | C cc-library (cc0 / cc_by).
+        enum: [original, ai, cc0, cc_by]
+      origin_url:
+        description: License pinned to URL + date. Required unless source_tier is original.
+        type: string
+      authors:
+        type: array
+        minItems: 1
+        items: { type: string }
+      attribution:
+        description: Attribution string aggregated into CREDITS. Required when source_tier is cc_by.
+        type: string
+      license_verified_on:
+        type: string
+        pattern: "^\\d{4}-\\d{2}-\\d{2}$"
+      ai:
+        description: Required when source_tier is ai (PRD §3.2 prompt-hygiene rules apply).
+        type: object
+        additionalProperties: false
+        required: [tool, prompts_file]
+        properties:
+          tool: { type: string, minLength: 1 }
+          prompts_file: { type: string, minLength: 1 }
+      transform_notes:
+        description: Human transformation applied (restyle, re-cut, re-orchestration).
+        type: string
+        maxLength: 2000
+
+  # --- Art extension block (D-18; owned vocabulary: Art track) ---
+  import_hints:
+    type: object
+    additionalProperties: false
+    properties:
+      lod_policy: { enum: [authored, importer, single] }
+      lightmap_uv2: { type: boolean }
+      occluder: { type: boolean }
+      multimesh_safe: { type: boolean }
+  contract_envelope:
+    description: Greybox contract snapshot for 1:1 art-pass swaps (Art SAD §6); written at greybox merge.
+    type: object
+    additionalProperties: false
+    properties:
+      pivot: { $ref: "#/$defs/position" }
+      aabb_min: { $ref: "#/$defs/position" }
+      aabb_max: { $ref: "#/$defs/position" }
+      collision_hash: { type: string }
+  restyle_status:
+    description: Tiers ai/cc0/cc_by cannot merge as pending (Art SAD §3.2).
+    enum: [not_applicable, pending, done]
+  reviewed_by:
+    description: Style-gate sign-offs (two-reviewer rule); written by the review bot, not self-attested.
+    type: array
+    items: { type: string }
+  tags:
+    description: Forge palette/browser filter tags (TLS-02).
+    type: array
+    items: { type: string, pattern: "^[a-z][a-z0-9_]*$" }
+
+  # --- Audio extension block (D-18; owned vocabulary: Music track) ---
+  loudness:
+    type: object
+    additionalProperties: false
+    required: [lufs_integrated, true_peak_dbtp]
+    properties:
+      lufs_integrated: { type: number, maximum: 0 }
+      true_peak_dbtp: { type: number, maximum: 0 }
+  music:
+    description: Required for music_stem / music_stinger classes; feeds ZoneMusicPlayer stream metadata.
+    type: object
+    additionalProperties: false
+    required: [stem_set, layer, bpm, time_signature, length_bars]
+    properties:
+      stem_set: { $ref: "#/$defs/musRef" }
+      layer: { enum: [L1, L2, L3, L4, boss, stinger] }
+      bpm: { type: number, exclusiveMinimum: 0, maximum: 300 }
+      time_signature: { type: string, pattern: "^\\d{1,2}/\\d{1,2}$" }
+      length_bars: { type: integer, minimum: 1 }
+      key:
+        description: Drives stinger key-tag matching (Music SAD §2.3).
+        type: string
+        pattern: "^[a-g](_sharp|_flat)?_(major|minor|dorian|mixolydian|lydian|phrygian|aeolian)$"
+      loop: { type: boolean, default: true }
+  sfx:
+    description: Required for sfx / ui_sound / ambience_emitter classes.
+    type: object
+    additionalProperties: false
+    required: [category, attenuation]
+    properties:
+      category:
+        description: Maps to a concurrency group + bus (Music SAD §2.5).
+        type: string
+        pattern: "^[a-z][a-z0-9_.]*$"
+      variation_group:
+        description: Round-robin siblings share this group id.
+        $ref: "#/$defs/sfxRef"
+      attenuation: { enum: [small, medium, large, global, ui2d] }
+  encode:
+    type: object
+    additionalProperties: false
+    properties:
+      tier: { enum: [default, wav_passthrough], default: default }
+      preload: { type: boolean, default: false }
+
+allOf:
+  - if:
+      properties: { provenance: { properties: { source_tier: { const: ai } }, required: [source_tier] } }
+    then:
+      properties: { provenance: { required: [ai, origin_url] } }
+  - if:
+      properties: { provenance: { properties: { source_tier: { const: cc_by } }, required: [source_tier] } }
+    then:
+      properties: { provenance: { required: [origin_url, attribution, license_verified_on] } }
+  - if:
+      properties: { provenance: { properties: { source_tier: { const: cc0 } }, required: [source_tier] } }
+    then:
+      properties: { provenance: { required: [origin_url, license_verified_on] } }
+  - if:
+      properties: { class: { enum: [music_stem, music_stinger] } }
+      required: [class]
+    then:
+      required: [music, loudness]
+  - if:
+      properties: { class: { enum: [sfx, ui_sound, ambience_emitter] } }
+      required: [class]
+    then:
+      required: [sfx]
+  - if:
+      properties: { class: { const: ambience_bed } }
+      required: [class]
+    then:
+      required: [loudness]

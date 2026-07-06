@@ -143,26 +143,35 @@ Design call: **the TD-09 provenance record is a block inside the IF-8 sidecar**,
 
 ### 3.1 Required sidecar fields (art classes)
 
-Tools owns `asset.schema.yaml`; Art requires that it carry, for every `art.*` asset:
+Tools owns `asset.schema.yaml` — **authored as of Schema v1.1 ([asset.schema.yaml](../../schema/content/asset.schema.yaml), A-12)**; the art-required fields, as landed (note vs. this SAD's original draft: `license` is a top-level core field, and `restyle_status`/`reviewed_by`/`tags` sit in the top-level art block per the D-18 union, not inside `provenance`):
 
 ```yaml
-# inside <name>.asset.yaml — IF-8, art-required fields
-asset_class: env-kit            # enum drives import preset + budget row (§2.3, §4.2)
+# <name>.asset.yaml — IF-8 (meridian/asset@1), art fields as landed
+class: kit_piece                # enum drives import preset + budget row (§2.3, §4.2)
+license: "CC0-1.0"              # SPDX, top-level core field; CI allowlist = CC0-1.0, CC-BY-4.0
 provenance:
-  source_tier: cc0              # original | ai | cc0 | cc-by   (engine-locked: no enum value exists)
-  origin_url: "https://..."     # required for cc0/cc-by; license pinned to URL + date
-  license: "CC0-1.0"            # SPDX; CI allowlist = CC0-1.0, CC-BY-4.0
+  source_tier: cc0              # original | ai | cc0 | cc_by   (engine-locked: no enum value exists)
+  origin_url: "https://..."     # schema-required for ai/cc0/cc_by; license pinned to URL + date
   license_verified_on: 2026-09-14
   authors: ["github-handle"]
-  attribution: "Rock030 by ambientCG"   # required iff source_tier == cc-by → CREDITS generator (§3.3)
-  ai:                            # required iff source_tier == ai
+  attribution: "Rock030 by ambientCG"   # schema-required iff source_tier == cc_by → CREDITS generator (§3.3)
+  ai:                            # schema-required iff source_tier == ai
     tool: "toolname vX.Y"
     prompts_file: prompts/rock_cliff03.txt   # auditable; no franchise/artist terms (PRD §3.2)
-  restyle_status: done           # n/a (tier original) | pending | done — tiers ai/cc0/cc-by cannot merge as pending
-  reviewed_by: ["art-lead-handle", "deputy-handle"]   # two-reviewer style sign-off (PRD §7.2)
+import_hints:                    # art-defined vocabulary (D-18 art block)
+  lod_policy: authored           # authored | importer | single
+  lightmap_uv2: true
+  occluder: true
+  multimesh_safe: true
+contract_envelope:               # greybox snapshot for 1:1 art-pass swaps (§6.3)
+  pivot: { x: 0, y: 0, z: 0 }
+  aabb_min: { x: -1, y: 0, z: -1 }
+  aabb_max: { x: 1, y: 3, z: 1 }
+  collision_hash: "blake3:…"
+restyle_status: done             # not_applicable | pending | done — tiers ai/cc0/cc_by cannot merge as pending
+reviewed_by: ["art-lead-handle", "deputy-handle"]   # two-reviewer style sign-off (PRD §7.2)
+tags: [wall, town]               # Forge palette filters (§10 Q4)
 ```
-
-`import_hints` (also art-defined vocabulary, Tools-owned schema slot): `asset_class`, `lod_policy: authored|importer|single`, `lightmap_uv2: bool`, `occluder: bool`, `multimesh_safe: bool`.
 
 ### 3.2 Provenance CI lint
 
@@ -347,8 +356,8 @@ The gates are ordered so human attention is the last filter: CI (provenance, bud
 
 ### Open questions
 
-1. **IF-8 schema fields (to Tools):** confirm `asset.schema.yaml` includes, per §3.1: `asset_class`, the `provenance` block (`source_tier`, `origin_url`, `license`, `license_verified_on`, `authors`, `attribution`, `ai.tool`, `ai.prompts_file`, `restyle_status`, `reviewed_by`), `import_hints` (`lod_policy`, `lightmap_uv2`, `occluder`, `multimesh_safe`), and the `contract_envelope` snapshot (§6.3) — or a sanctioned extension slot where Art can own them.
-2. **PRD §3.3 amendment:** provenance record location moves from `/content/assets/provenance/` into the IF-8 sidecar (§3 design call) — needs PRD v0.3 edit + cross-track note.
+1. **IF-8 schema fields — RESOLVED (A-12):** `asset.schema.yaml` is authored and carries every §3.1 field (`class`, the `provenance` block, `import_hints`, `contract_envelope`, `restyle_status`, `reviewed_by`, `tags`); §3.1 shows the as-landed shape. Remaining: Art sign-off review of the schema PR, and **A-15** — the source-file location split (this SAD's repo-level `/assets/**` tree vs. the Tools SAD's pack-local `content/<ns>/assets/**` sidecars) needs a joint ruling.
+2. **PRD §3.3 amendment — RESOLVED:** Art PRD v0.3 §3.3 now specifies the in-sidecar provenance record.
 3. **Credits screen contract (to Client):** format/placement of `credits.json` in the pack and the render surface — agree by M1 so the generator (§3.3) isn't retrofitted.
 4. **Forge palette registration mechanism (to Tools):** does TLS-02 read category tags directly from IF-8 sidecars, or from a Forge-side index built by `mcc`? Art needs to know where kit `tags:` live — sidecar preferred (one file per asset, again).
 5. **Perf-harness ownership split (to Client):** bench script and `RenderingServer` capture code proposed as jointly owned under `/tools/perf-harness/`; confirm Client track staffing for the min-spec bench machine operation.

@@ -1,16 +1,16 @@
 # Client Software Architecture Document — Project Meridian
 
-**Track:** Client (Godot 4.6+ Windows x64 game client)
-**Version:** 0.1 — 2026-07-04
+**Track:** Client (Godot 4.6+ game client — Windows x64 + macOS Apple Silicon)
+**Version:** 0.3 — 2026-07-04 (v0.3: macOS per D-28/Baseline v0.5 — per-platform rendering backend, arm64 GDExtension builds, notarized distribution + dSYM pipeline, §9.6 platform decision row. v0.2: A-13 sharded-realm pass per D-23/Baseline v0.4 — IF-2 `0x8xxx` shard-message handling in `sim`, WLD-04 UX architecture §5.6, bot-fleet numbers updated. v0.1: initial draft)
 **Status:** Draft for cross-track review
 **Zooms into:** the Client container of the [System Architecture Overview](../02-ARCHITECTURE-OVERVIEW.md) §1.
-**Reads with:** [Client PRD v0.2](../prd/client-prd.md), [Sync Decisions v1.1](../01-SYNC-DECISIONS.md) (D-01..D-17), [Content Schema v1](../../schema/content/README.md).
+**Reads with:** [Client PRD v0.4](../prd/client-prd.md), [Sync Decisions v1.5](../01-SYNC-DECISIONS.md) (D-01..D-28), [Content Schema v1](../../schema/content/README.md).
 
 ---
 
 ## 1. Purpose & scope
 
-This SAD specifies the internal architecture of the Meridian game client: a Godot 4.6+ Forward+/D3D12 application (TD-02) whose hot path — networking, prediction, entity mirroring, zone streaming, content lookup — lives in C++ GDExtension modules, and whose UI/flow layer lives in GDScript behind an MVVM boundary (PRD §1.1). The client is a *predictor and presenter*: server is law (Principle 1); the client predicts only its own movement (CHR-02) and the GCD/cast start (D-10), and reconciles on correction.
+This SAD specifies the internal architecture of the Meridian game client: a Godot 4.6+ Forward+ application — D3D12 on Windows, native Metal on macOS Apple Silicon (TD-02, D-28) — whose hot path — networking, prediction, entity mirroring, zone streaming, content lookup — lives in C++ GDExtension modules (built per platform: win-x64, macos-arm64), and whose UI/flow layer lives in GDScript behind an MVVM boundary (PRD §1.1). The client is a *predictor and presenter*: server is law (Principle 1); the client predicts only its own movement (CHR-02) and the GCD/cast start (D-10), and reconciles on correction.
 
 In scope: all client-process components, the headless bot client (same binary, `--headless`), and the client side of every interface below. Out of scope: server internals (server SAD), the chunk *export* pipeline and pack *production* (tools SAD — the client only consumes), sound design and adaptive-music resources (music SAD — the client provides mount points only).
 
@@ -19,7 +19,7 @@ In scope: all client-process components, the headless bot client (same binary, `
 | IF | Role | Client obligation | Contract |
 |----|------|-------------------|----------|
 | IF-1 | **Implements client side** | TLS connection to `authd`, SRP6a-style credential exchange, realm list consumption, session grant receipt | `/schema/net/auth.fbs` |
-| IF-2 | **Implements client side** | `worldd` connection with session token, movement intents, entity/combat/chat/quest message consumption, clock sync | `/schema/net/world.fbs` |
+| IF-2 | **Implements client side** | Gateway connection with session token, movement intents, entity/combat/chat/quest message consumption, clock sync; shard-transfer + AoI-refresh + co-presence messages (`0x8xxx` range per D-23, §5.6) | `/schema/net/world.fbs` |
 | IF-5 | **Consumes** | Mounts `mcc`-built `.pck` packs at startup and on demand (community packs, TLS-08); verifies pack manifest (engine pin, content hash) against the realm; owns all mount UX per D-09 | `/schema/pck-layout.md` |
 | IF-6 | **Consumes** (runtime streamer side) | Streams Forge-exported chunk scenes per the zone grid manifest; §5.3 lists the requirements the client places on the format (feeds A-08) | `/schema/chunk/` |
 | IF-7 | **Consumes** | Joins and renders GM-authenticated preview maps on dev `worldd`; applies hot-reloaded content (D-07: Client owns joining/rendering; Server owns the channel; Tools owns the push loop) | server SAD §hot-reload |
@@ -86,6 +86,7 @@ Dependency rule: GDScript never calls `net` directly and never reads entity scen
 - **Prediction/reconciliation:** fixed-tick input sampling; kinematic movement controller (custom character-shape sweeps, *not* `CharacterBody3D`) applying the same movement constants the server validates, sourced from shared content data. Ring buffer of `(sequence, input, state)`; on server ack/correction: rewind to authoritative state, re-simulate unacked inputs; error offset decayed over ~100–200 ms, snap on large error.
 - **Interpolation clock:** filtered server-clock estimate (ping/offset); remote entities rendered at `server_time − interp_delay` (~2× server tick), hermite interpolation, extrapolation capped at ~250 ms then freeze/fade.
 - **Optimistic GCD/cast (D-10):** on ability use, `sim` starts a local GCD/cast timer immediately and records a pending-action entry; server accept confirms, rejection rolls back within one RTT (§3c). Outcomes (damage, resource spend) are never predicted.
+- **AoI-refresh brackets (WLD-04, M3):** between `AoIRefreshBegin`/`AoIRefreshEnd`, `sim` treats the destroy list + create burst as a *surroundings swap*: the own entity is never destroyed and its position/prediction state is preserved; remote-entity despawns are deferred to presentation-fade so the swap reads as a soft crowd change, not a world reload (§5.6).
 
 ### 2.3 `stream` — pack mount & chunk streamer (C++)
 
@@ -311,6 +312,15 @@ Client provides an editor-connected client mode (TLS-06, M2): joins a GM-authent
 
 Resolution table (asset ID → `res://` path) is compiler-generated into each pack; `datastore` merges tables across mounted packs by namespace. Misses yield typed placeholders + telemetry (hard rule: visible placeholder, never a crash or stream stall).
 
+### 5.6 IF-2 shard messages — WLD-04 client handling (M3, per D-23 / server SAD §5.2.1)
+
+- **`ShardTransferBegin {ticket, mask_hint_ms}`:** starts the transfer-masking presentation (brief screen treatment sized by `mask_hint_ms`, never a loading screen); `sim` suspends non-movement intent sends until `AoIRefreshEnd`.
+- **`AoIRefreshBegin/End {reason}` brackets:** handled in `sim` per §2.2 — surroundings swap with own-entity preservation. The same path serves worker-crash recovery (`reason: recovery`), so it is soak-tested by the bot fleet, not only by transfers.
+- **`ShardTransferDeny {reason, retry_after_ms}`:** typed feedback to the HUD (combat / loot roll / cooldown / capacity), with retry timing surfaced on join-friend UI.
+- **`ShardPresence {entries}`:** published onto the event bus as `SHARD_PRESENCE_CHANGED`; ViewModels for nameplates, party frames, and the friends/guild panels render same-shard indicators — no Control node reads it directly (§2.7 rule).
+- Transfer *requests* (`ShardTransferRequest`, join-friend / party-merge-accept) are player intents: HUD → `sim` → `net`, like any ability press.
+- Movement validation note: the server resets its sliding window on transfer (server SAD §5.5), so prediction/reconciliation state carries across a transfer unchanged — asserted in the deterministic replay tests.
+
 ---
 
 ## 6. Threading & performance architecture
@@ -350,10 +360,10 @@ No Nanite, no VSM (TD-02) — classic pipeline only. Budget ≤ ~2,000 draw call
 
 | Milestone | Client build delivers | Gate |
 |---|---|---|
-| **M0** | `net` v1 (IF-1 TLS + IF-2 token handoff, reconnect, schema-version check); Login/realm/error UX; CHR-01 stub per D-11; `sim` v1 (predicted walk/run/jump, remote interp, WoW-style camera) on the empty test map; `stream` v1 (core pack mount IF-5, no chunk streaming yet); **headless bot client** (same binary, `--headless`, scripted login/move); crash reporting live; IF-6 format signed (A-08); movement-controller spike locks shared constants | IT-M0: two real clients complete the full session flow, smooth mutual interp at ≤150 ms simulated latency, reconnect works, 30-min soak zero crashes |
-| **M1** | Chunk streamer live on Zone-01 (IF-6) with proxies + hitch gate; combat presentation (targeting, nameplates, cast bars, optimistic GCD per D-10, floating combat text); quest/loot/vendor/bags/chat/GM-console UI on the MVVM bus; `datastore` full (items/abilities/quests); audio hooks (AUD-01/02 basic); event-bus registry established as the future addon surface; bot gains quest verbs | IT-M1: fresh 1060-class install → level 5 quest chain with 50+ CCU at Low/30 FPS; budgets §6.3 hold |
+| **M0** | `net` v1 (IF-1 TLS + IF-2 token handoff, reconnect, schema-version check); Login/realm/error UX; CHR-01 stub per D-11; `sim` v1 (predicted walk/run/jump, remote interp, WoW-style camera) on the empty test map; `stream` v1 (core pack mount IF-5, no chunk streaming yet); **headless bot client** (same binary, `--headless`, scripted login/move); crash reporting live; IF-6 format signed (A-08); movement-controller spike locks shared constants; **macOS arm64 CI export + M1-Mac boot smoke (D-28 phase 1, A-16 — build health, not an IT gate)** | IT-M0: two real clients complete the full session flow, smooth mutual interp at ≤150 ms simulated latency, reconnect works, 30-min soak zero crashes |
+| **M1** | Chunk streamer live on Zone-01 (IF-6) with proxies + hitch gate; combat presentation (targeting, nameplates, cast bars, optimistic GCD per D-10, floating combat text); quest/loot/vendor/bags/chat/GM-console UI on the MVVM bus; `datastore` full (items/abilities/quests); audio hooks (AUD-01/02 basic); event-bus registry established as the future addon surface; bot gains quest verbs; **macOS supported test-realm status (D-28 phase 2): signed + notarized nightlies (A-17), M1 Mac joins the perf fleet + smoke matrix** | IT-M1: fresh 1060-class install → level 5 quest chain with 50+ CCU at Low/30 FPS; same path from a notarized build on an M1 Mac (8 GB); budgets §6.3 hold |
 | **M2** | Instance portal flow (GRP-02) + map-change loads ≤ 30 s Low; AH (server-paged), mail, crafting, trade, talents, bank UI; live-preview join (IF-7/TLS-06); first-party addon experiment proves the bus API; Lua VM choice locked (§9.3); day/night per-tier lighting; bot gains group/dungeon verbs | IT-M2: 5-player group clears Dungeon-01 + full economy loop entirely through shipped UI |
-| **M3** | Lua addon API v1 on the event bus (registration, read-only queries, curated widget set, saved variables, error-isolated loader, docs); community pack mount UX (IF-5/D-09, trust prompts, realm manifest gating); battleground UI (PVP-02: queue, scoreboard, CTF HUD); guild/friends/LFG; multi-map transfers; bot gains BG queue verbs and drives the 500-CCU fleet | IT-M3: community zone pack plays on unmodified client+server; full 10v10 BG completes; budgets hold at a 500-CCU hotspot |
+| **M3** | Lua addon API v1 on the event bus (registration, read-only queries, curated widget set, saved variables, error-isolated loader, docs); community pack mount UX (IF-5/D-09, trust prompts, realm manifest gating); battleground UI (PVP-02: queue, scoreboard, CTF HUD); guild/friends/LFG; multi-map transfers; **WLD-04 shard UX (§5.6): transfer masking, AoI-refresh smoothing, party-merge prompts, join-friend UI, co-presence indicators**; bot gains BG queue + transfer verbs and drives the 1500-CCU IT-M3 fleet | IT-M3: community zone pack plays on unmodified client+server; full 10v10 BG completes; budgets hold in the hottest shard hub at 1500 CCU; transfers present as smoothed surroundings swaps throughout |
 
 ---
 
@@ -365,13 +375,13 @@ No Nanite, no VSM (TD-02) — classic pipeline only. Budget ≤ ~2,000 draw call
 | Memory | Low tier: ≤ 6 GB VRAM, ≤ 12 GB system RAM; caps honored by quality reduction, never crash | Per-tier texture import settings, VRAM tracking in nightly perf run, streaming radius per tier |
 | Frame stability | §6.3 budgets; streaming hitch ≤ 50 ms | Canned-replay benchmark on physical tier machines; >10% regression pages the team |
 | Reconnect robustness | Transient drop ≤ reconnect window: session resumes without relog; IT-M0 gate | `net` state machine + token retry (§5.1); soak-tested from M0 via bot client |
-| Crash reporting | 100% of test-realm builds ship telemetry from M0 end | Crashpad in the GDExtension layer → project-hosted Sentry-compatible endpoint; missing-content placeholder events ride the same channel |
+| Crash reporting | 100% of test-realm builds ship telemetry from M0 end, both platforms | Crashpad in the GDExtension layer (Windows minidumps; macOS with dSYM upload in CI from M1, A-17) → project-hosted Sentry-compatible endpoint; missing-content placeholder events ride the same channel |
 | Content robustness | Missing/unresolvable content never crashes or blocks | Typed placeholders + telemetry (§2.4, §5.5) |
 | Update size | Testers never full-redownload after M1 | Bootstrap updater: manifest-hash delta pack downloads, verify, swap (embryo of the M4 patcher) |
 
 ### 8.1 Bot client architecture
 
-Same binary, same `net`/`sim` GDExtension modules, run under `--headless` (no renderer/audio) — no separate build flavor. A behavior layer (scripted login/move/cast/chat, extended each milestone with that milestone's verbs) drives `sim` intents exactly as the HUD would, through the same accessor/intent boundary. Owned by Client (it shares the protocol code); primary consumer is the Server track's 500-CCU load tests (OPS-04, IT-M3). Because the bot exercises the identical prediction/reconciliation path, it doubles as our desync soak harness; combined with network replay capture (record server streams, deterministic re-play into a rendering client), presentation bugs found at scale are reproducible on a dev box.
+Same binary, same `net`/`sim` GDExtension modules, run under `--headless` (no renderer/audio) — no separate build flavor. A behavior layer (scripted login/move/cast/chat, extended each milestone with that milestone's verbs) drives `sim` intents exactly as the HUD would, through the same accessor/intent boundary. Owned by Client (it shares the protocol code); primary consumer is the Server track's load tests (1500 CCU at IT-M3 across ≥ 3 zone shards; 3000+-CCU rating runs at M4 per OPS-04). Because the bot exercises the identical prediction/reconciliation path, it doubles as our desync soak harness; combined with network replay capture (record server streams, deterministic re-play into a rendering client), presentation bugs found at scale are reproducible on a dev box.
 
 ---
 
@@ -397,6 +407,16 @@ Godot has no World Partition; WLD-01 is ours by necessity (D-17). Godot's thread
 
 Forward+/D3D12 with buildable Vulkan diagnostic fallback (TD-02); FSR2 over vendor upscalers (TD-03 spirit); Crashpad-class out-of-process crash capture because Godot ships no reporter; doctest for C++ modules + GUT for GDScript + golden-fixture protocol conformance shared with the server track.
 
+### 9.6 macOS platform decisions (D-28)
+
+| Decision | Chosen | Rejected | Why |
+|---|---|---|---|
+| Mac rendering backend | **Native Metal** (Godot's Apple Silicon default since 4.4), MoltenVK/Vulkan buildable as diagnostic fallback | MoltenVK as primary | Mirrors the Windows pattern (platform-native default + Vulkan escape hatch); Metal backend gets first-party engine attention and MetalFX access; MoltenVK adds a translation layer as the *shipped* path |
+| Hardware floor | Apple Silicon only (M1 8 GB, macOS 13+) | Intel Macs via MoltenVK | Intel Macs exit Apple's support window before 1.0; dropping them deletes the AMD/Intel-GPU-on-Mac matrix and Rosetta concerns |
+| Upscaler on Mac | MetalFX temporal default, FSR2 neutral fallback | FSR2 only | MetalFX is the platform-tuned path on Apple GPUs (Godot 4.4+); FSR2 stays as the cross-platform constant for A/B and CI parity |
+| Binary shape | Per-platform GDExtension builds (win-x64 + macos-arm64 in one `.gdextension` manifest); engine-agnostic C++ cores unchanged | Universal2 (x86_64+arm64) Mac binaries | No Intel Macs in scope — universal binaries double artifact size for a platform we don't ship |
+| Content packs | One `.pck` set for both platforms | Per-platform packs | Apple Silicon Metal supports BC-class textures, so the compressed texture set is shared; keeps IF-5, `mcc` determinism, and the content-hash tie single-track (D-28 rule 4) |
+
 ---
 
 ## 10. Risks & open questions
@@ -412,6 +432,7 @@ Forward+/D3D12 with buildable Vulkan diagnostic fallback (TD-02); FSR2 over vend
 | R5 | Custom netcode: every desync bug is ours | Golden fixtures shared with server track; bot soak from M0; network replay repro |
 | R6 | Lua sandbox is a classic exploit surface (automation, protected actions) | Read-only API, no raw messages constructible from Lua, M2 security design review before implementation |
 | R7 | 50+ visible players stress animation + UI before art density does | Crowd LOD ladder, MultiMesh imposters, pooled UI are M1 deliverables, not polish |
+| R8 | Metal backend + MetalFX are younger engine code than the D3D12/Vulkan paths; arm64 quirks in the C++ modules (alignment, NEON paths in FlatBuffers/mbedTLS) | D-28 phasing (M0 build-health only, gates from M1); MoltenVK diagnostic fallback; per-platform screenshot baselines; the 1060 remains the authoritative gate so Mac issues never block Windows milestones |
 
 ### Open questions & interface gaps (existing IF/A numbers only — none invented)
 

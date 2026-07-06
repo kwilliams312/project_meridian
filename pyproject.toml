@@ -1,0 +1,24 @@
+[project]
+name = "meridian-tools"
+version = "0.1.0"
+description = "Content-pipeline tooling for Project Meridian (reference validator, doc-sync checks) — TLS-07 stopgap until mcc subsumes it"
+requires-python = ">=3.12"
+dependencies = [
+    "pyyaml>=6.0",
+    "jsonschema>=4.21",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: fast tests with no repo-tree dependency beyond the schemas",
+    "integration: tests that validate the real /content tree and docs",
+]
+
+[tool.uv]
+package = false

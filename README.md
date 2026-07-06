@@ -6,7 +6,7 @@ An open-source 3D MMORPG in the WoW themepark tradition: tab-target combat, zone
 
 | Component | Platform | Stack |
 |-----------|----------|-------|
-| Client | Windows x64, DX12 (no RTX required) | Godot 4.6+ (Forward+/D3D12) — C++ GDExtension + GDScript |
+| Client | Windows x64 (DX12) + macOS Apple Silicon (Metal) — no RTX required | Godot 4.6+ (Forward+; D3D12 on Windows, native Metal on macOS) — C++ GDExtension + GDScript |
 | Tools | Windows x64 | Godot editor plugins ("Forge") + standalone C#/Avalonia data editors ("Codex") |
 | Server | Linux (Ubuntu LTS) | C++20, MariaDB — CMaNGOS-inspired architecture, clean-room |
 
@@ -47,4 +47,4 @@ open-mmo/
 
 ## Licensing
 
-Code: Apache-2.0 (clean-room; CMaNGOS is an architectural reference only — no GPL code is copied). Engine: Godot, MIT. Original art/music: CC-BY 4.0. Third-party assets must be CC0/CC-BY — engine-locked marketplace content (Quixel/Fab, Unity Asset Store) is disallowed; AI-generated assets require recorded provenance. No Blizzard assets, names, or code — playstyle inspiration only.
+Code: [Apache-2.0](LICENSE) (clean-room; CMaNGOS is an architectural reference only — no GPL code is copied). Engine: Godot, MIT. Original art/music: CC-BY 4.0. Third-party assets must be CC0/CC-BY — engine-locked marketplace content (Quixel/Fab, Unity Asset Store) is disallowed; AI-generated assets require recorded provenance. No Blizzard assets, names, or code — playstyle inspiration only. See [CONTRIBUTING.md](CONTRIBUTING.md) for the binding clean-room and provenance policies.

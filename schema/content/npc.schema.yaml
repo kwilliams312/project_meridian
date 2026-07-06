@@ -85,7 +85,11 @@ properties:
     additionalProperties: false
     properties:
       table: { $ref: "#/$defs/lootRef" }
-      money: { $ref: "#/$defs/intRange" }
+      money:
+        description: >-
+          Copper dropped by this NPC. Additive with any `money` defined on the referenced
+          loot table (decision D-25) — both ranges are rolled and summed.
+        $ref: "#/$defs/intRange"
 
   visual:
     type: object

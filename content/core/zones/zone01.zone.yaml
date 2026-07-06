@@ -9,7 +9,7 @@ music:
   explore: core:mus.zone01.explore
   tension: core:mus.zone01.tension
   combat: core:mus.zone01.combat
-ambience: core:sfx.amb.zone01.forest_day
+ambience: core:amb.zone01.forest_day
 pois:
   - id: emberfall_village
     name: Emberfall Village

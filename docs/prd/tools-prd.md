@@ -2,8 +2,8 @@
 
 **Project:** Project Meridian (open-source WoW-style MMORPG)
 **Track:** Tools (highest priority — critical path for M1 per Baseline §3)
-**Version:** 0.2 — 2026-07-04 (revised for the engine pivot UE5 → Godot 4.6, Baseline v0.3; folds in sync decisions D-07/D-08/D-09)
-**Baseline:** [00-GAME-DESIGN-BASELINE.md](../00-GAME-DESIGN-BASELINE.md) v0.3 (binding; all feature IDs, milestones, and TD-xx decisions reference it)
+**Version:** 0.5 — 2026-07-05 (v0.5: reviewed against Baseline v0.6 / D-29 (OPS-05 telemetry) — no tools deliverables; the Client ●/Server ● split covers it. v0.4: reviewed against Baseline v0.5 / D-28 (macOS client) — no tools impact: Forge/Codex/Creator Kit remain **Windows-only per TD-08 and D-28 rule 5**; a Mac creator kit is a possible post-M3 revisit, not promised. v0.3: reviewed against Baseline v0.4 — CHR-05 mount data added to Codex scope §4.5/§12 (it carried a Tools ● since Baseline v0.2 but was never claimed); no other v0.4 impact on this track. v0.2: engine pivot UE5 → Godot 4.6, Baseline v0.3; folds in sync decisions D-07/D-08/D-09)
+**Baseline:** [00-GAME-DESIGN-BASELINE.md](../00-GAME-DESIGN-BASELINE.md) v0.6 (binding; all feature IDs, milestones, and TD-xx decisions reference it)
 **Platform (TD-08):** Windows native x64
 
 ---
@@ -186,6 +186,7 @@ Node/graph-based canvas (QST-01/QST-02):
 - **Crafting recipes (ECO-02) — M2:** recipe ID, profession + skill requirement, skill-up color thresholds, reagent list (item ref + count), product (item ref + count, proc-extra chance), craft time, source (trainer ref / drop / vendor). Gathering-node tables (herb/ore spawn data) reuse spawn tables + loot tables.
 - **Talent data (CHR-04) — M2:** per class: tree layout (tier/column grid), talent nodes (ID, max ranks, per-rank effects by ability/aura ref or stat mod), prerequisite edges, points-per-tier gating. Grid-canvas editor with the same graph validation approach as quests. Balancing rules stay in shared `/content/base/rules/` data with the Server track.
 - **Auction house (ECO-03) — M2:** Codex scope is limited to the AH category/search taxonomy data (item class/subclass mapping); runtime is Server/Client.
+- **Mount data (CHR-05) — M3:** ground-mount definitions under the TLS-03/TLS-04 umbrella (mount ability/item refs, mounted speed, model asset ID, mount/dismount restrictions) — same data-form pattern as abilities per D-08; no new editor surface.
 
 ---
 
@@ -348,6 +349,7 @@ Every feature ID where Tools is ● in the baseline matrix (Baseline §4):
 |-----------|----------------------|-----------|
 | CHR-03 | Level/stat/XP curve tables in Codex; NPC stat derivation (§4.1) | M1 |
 | CHR-04 | Talent tree editor (§4.5) | M2 |
+| CHR-05 | Mount data forms (speeds, model refs, restrictions) under the TLS-03/04 umbrella (§4.5) | M3 |
 | WLD-01 | Forge chunk grid presets, streaming-cell budgets & chunk export format (§2.4, §3.3) | M1 |
 | WLD-02 | Day/night & weather authoring in Forge (§3.3); spawn-table conditions (§4.5) | M2 |
 | WLD-03 | POI/discovery volumes in Forge; map-pin data compiled by `mcc` (§3.2) | M1 |

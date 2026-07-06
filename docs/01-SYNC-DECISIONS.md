@@ -1,6 +1,6 @@
 # Cross-Track Sync Decisions
 
-**Version:** 1.3 — 2026-07-04 (§6 added: sharded-realm scale-up. §5: SAD reconciliation. §4: engine pivot UE5 → Godot 4.6)
+**Version:** 1.7 — 2026-07-05 (§10 added: server packaging & CD, D-30 — no baseline change, OPS-01 extension. §9: telemetry & observability, D-29/Baseline v0.6. §8: macOS client, D-28/Baseline v0.5. §7: Content Schema v1.1 reconciliation — A-12 discharged, D-24..D-27, A-15 opened, A-13 done. §6: sharded-realm scale-up. §5: SAD reconciliation. §4: engine pivot UE5 → Godot 4.6)
 **Purpose:** Resolutions for the conflicts and gaps the five track PRDs raised against Baseline v0.1. Decisions marked **[baseline]** are already folded into Baseline v0.2; the rest are binding interpretations the PRDs should be read against. Remaining items are in §3.
 
 ---
@@ -105,3 +105,72 @@ Consequences for other tracks / registry:
 |---|------|-------|-----|
 | A-13 | Client PRD/SAD: add WLD-04 rows (transfer UX, AoI-refresh handling in `sim`, join-friend UI) | Client | next client-doc revision |
 | A-14 | Per-shard resource farming mitigation design (node/rare tagging vs shared spawns vs diminishing returns) | Server + Design | M2 |
+
+---
+
+## 7. Content Schema v1.1 reconciliation (2026-07-04, review pass)
+
+A full-repo consistency review surfaced contract drift between the schemas, the reference validator, and the track documents. Resolutions:
+
+| # | Raised by | Question | Decision |
+|---|-----------|----------|----------|
+| D-24 | Music vs schema | Music PRD/SAD use first-class `amb.*` asset IDs (`amb.zone01.bed.night`), but the ID grammar, `common.defs.yaml`, and the validator only knew `art/mus/sfx` — example content worked around it with `sfx.amb.*`. | **`amb.` is a first-class asset-ID prefix.** Added to the schema README grammar, `common.defs.yaml` (`ambRef`, `assetId`), the validator's asset regex, and `zone.ambience` (now `ambRef`). Example content migrated (`core:amb.zone01.forest_day`). |
+| D-25 | Review | `kobold_miner` defines a money range on the NPC (`loot.money`) *and* on its loot table — semantics were unspecified (override? additive?). | **Additive:** both ranges are rolled and summed. Documented in `npc.schema.yaml` and `loot.schema.yaml`. |
+| D-26 | Tools PRD vs loot schema | Tools PRD §4.4 says loot tables allow "one level of nesting v1"; `loot.schema.yaml` said "max depth 3" and cited lint **L020** — an ID the D-18 reconciliation reassigned to asset-registry checks. | **One level of nesting in v1** (a nested table may not itself reference tables), enforced by new lint **L052**. The vendor price rule similarly moves from the stale "L030" citation to **L062**. Schema comments corrected. |
+| D-27 | Review | Two validation holes: an id's *type segment* was never checked against the file's schema type (an `item.` id in an `.npc.yaml` resolves as a valid itemRef to an NPC), and `intRange` never enforced `min ≤ max`. | New lints **L003** (id type ↔ schema type) and **L004** (min ≤ max), implemented in `validate_content.py` and registered in the tools SAD §2.2 band table. The spawn `wander_radius_m`/`patrol` exclusivity (old L040) is now enforced directly in `spawn.schema.yaml`. |
+
+Action-item status changes:
+
+- **A-12 — DISCHARGED (authoring):** `schema/content/asset.schema.yaml` (`meridian/asset@1`) is authored per the D-18 union and exercised by 19 example sidecars in `content/core/assets/`; validator lint **L020** replaces the old "pending asset registry" info line (warn by default, `--assets=error` from M0 exit). Remaining: Art + Music sign-off of the schema PR.
+- **A-13 — DONE:** Client PRD v0.3 and Client SAD v0.2 carry WLD-04 rows (transfer masking, AoI-refresh handling in `sim` §5.6, join-friend UI, co-presence indicators) and the v0.4 CCU targets.
+- **A-15 — NEW (Tools + Art, due M0 IF-8 sign-off):** the Tools SAD places sidecars and sources in the pack tree (`content/<ns>/assets/**`), the Art SAD in a repo-level `/assets/<ns>/**` tree, and the Art PRD ships assets from `/client/art/` — three locations for the same files. `asset.schema.yaml` documents `source` as pack-root-relative until this is ruled on; the ruling must preserve `.mcpack` self-containment (TLS-08).
+- Fold-back completed for the **D-04** features: Server PRD v0.3 now carries ACC-03/CHR-05/SOC-03/ECO-05; Tools PRD v0.3 and Music PRD v0.3 now carry CHR-05. A CI check (`tools/check_traceability.py`) now enforces matrix-●-to-PRD traceability and baseline-version sync so this drift class cannot recur silently.
+
+---
+
+## 8. macOS client (2026-07-04, Baseline v0.5)
+
+**Decision D-28: the client ships on macOS.** Project-owner direction; Godot's cross-platform engine makes the marginal cost a platform matrix, not a port. Scope and rules:
+
+1. **Phasing:** CI builds a macOS client from **M0** (export + boot smoke only — no gate on IT-M0); **supported test-realm client from M1** (signed + notarized nightlies, Mac Low-tier validation in IT-M1's install path); **launch platform at 1.0**. Rationale: keeping a second platform green continuously is cheaper than a porting project, and prevents Windows-only assumptions baking into the GDExtension modules.
+2. **Hardware floor: Apple Silicon only (M1, 8 GB unified, macOS 13+).** Intel Macs are out of scope permanently — they exit Apple's own support window before any realistic 1.0, and dropping them deletes the MoltenVK/AMD/Intel-GPU test matrix. The M1 8 GB joins TD-03 as the second Low-tier reference; **the GTX 1060 bench machine remains the authoritative min-spec gate** (art budgets are ratified there; the Mac validates, it does not ratify).
+3. **Rendering:** Godot's **native Metal backend** (default on Apple Silicon since 4.4) mirrors the Windows D3D12 choice; Vulkan-via-MoltenVK stays buildable as the diagnostic fallback, same pattern as the Windows Vulkan fallback. **FSR2 remains the cross-vendor upscaler default; MetalFX temporal upscaling is a per-platform option** (Godot 4.4+), never required.
+4. **No content/pipeline change:** Apple Silicon Metal supports BC-class compressed textures, so **one `.pck` set serves both platforms** — IF-5, `mcc` determinism, and the pack manifest are untouched (engine pin already covers export-template versioning). Bot client runs `--headless` on macOS unchanged.
+5. **Tools stay Windows (TD-08 unchanged):** Forge/Codex/Creator Kit are not part of this decision. Codex (Avalonia) and Forge (Godot editor plugin) are cheap to bring later, but it is not promised — revisit after the M3 community release.
+6. **Distribution:** macOS nightlies are codesigned + notarized from M1 (Gatekeeper makes unsigned test builds a support tax); `.dmg`/notarized archive via the same bootstrap updater; the M4 launcher adds a macOS variant. Crash reporting: Crashpad supports macOS — same minidump pipeline, dSYM symbol upload added to CI.
+7. **Server, Art, Music, Tools tracks: no deliverable changes.** Art budgets stay GPU-tier-based and 1060-ratified (rule 2); audio runtime is platform-neutral Godot.
+
+| # | Item | Owner | Due |
+|---|------|-------|-----|
+| A-16 | Mac CI runner + M1 8 GB bench machine procurement; macOS export templates + signing in nightly CI | Client + Ops | M0 |
+| A-17 | Apple Developer ID + notarization pipeline (certs, `notarytool` in CI, dSYM upload) | Client | M1 (supported-status gate) |
+
+---
+
+## 9. Player-experience telemetry & observability (2026-07-05, Baseline v0.6)
+
+**Decision D-29: feature ID OPS-05 (Client ●, Server ●, M0→).** Project-owner direction: we must be able to understand the player experience (lag, errors) and operate on logs — captured **server-side wherever possible**, OpenTelemetry-compatible, with Grafana dashboards as first-class deliverables. Binding rules:
+
+1. **Server-side first.** The server is where UX is measured authoritatively: per-session action-RTT histograms (already in the SAD metric set), movement correction/snap-back rates, disconnect reasons + reconnect outcomes, per-opcode error/drop rates, tick health, DB/queue latencies. The client sends **nothing** routinely.
+2. **The client channel is exactly three things:** Crashpad minidumps (existing, M0), **ERROR/CRITICAL log events** (batched, rate-limited, with session/build/platform context), and the existing missing-content placeholder events — all on the one project-hosted, Sentry-compatible endpoint. **No behavioral analytics, no PII, ever**; a documented opt-out flag ships with the setting. This is both a privacy posture and an open-source-community trust posture.
+3. **OpenTelemetry compatibility via the collector pattern.** In-process instrumentation stays Prometheus-style (the server SAD §8.5 metric set is unchanged); an **OTel Collector** in the deploy stack scrapes `/metrics` and ingests OTLP logs/traces, making OTLP the export lingua franca — operators pipe to any backend without touching daemon code.
+4. **Reference observability stack ships in compose** (OPS-01 extension): otel-collector + Prometheus + Loki + Grafana with **provisioned dashboards** (`/server/ops/grafana`, versioned JSON — not screenshots) and alert rules. Dashboards v1: *Realm health* (tick p99, CCU, opcode rates), *Player experience* (RTT, corrections, disconnects/reconnects), *Errors* (server log error rates, client ERROR/CRITICAL ingest, crash rate by build).
+5. **Traces:** session-flow spans (auth → grant → world handshake → enter-world) from the start; the bus envelope reserves a trace-context field so cross-process spans light up at the M2 gateway split without a protocol change.
+6. **Community operators:** the stack is optional — daemons degrade gracefully to `/metrics` + local JSON logs when no collector is configured.
+7. **Phasing:** M0 = foundation (stack in compose, log pipeline, session spans, client channel, dashboards v1); M1 = UX depth (correction/lag instrumentation lands with movement/combat, alert thresholds tuned against IT-M1); M2+ = shard/gateway labels and bus spans (already anticipated in server SAD §8.5).
+
+Epic + stories tracked on GitHub under milestone M0 (OPS-05 epic). Server PRD and Client PRD carry the traceability rows as of v0.5 of each.
+
+---
+
+## 10. Server packaging & continuous delivery (2026-07-05)
+
+**Decision D-30: Docker-first delivery with an automatic packaging pipeline; Kubernetes as a supported option.** Project-owner direction. This extends **OPS-01** (deployment is already its charter) — no new feature ID, no baseline matrix change. Binding rules:
+
+1. **Autopackage on green main.** Every push to `main` that passes CI builds and publishes the `authd`/`worldd` (later `gatewayd`/`servicesd`/`coordd`) container images to **GHCR**, tagged with the commit SHA and `latest`; semver tags on releases. Image digests are recorded in the nightly build manifest so the test realm, operators, and the content-hash tie all reference immutable digests — CI is the only image producer (the single-funnel principle applied to binaries).
+2. **Docker/compose remains the reference deployment** and the contributor onboarding path (server PRD §6, unchanged). The compose file consumes *published* GHCR images by default (build-from-source stays one flag away).
+3. **Kubernetes is a supported option, not the reference:** a versioned **Helm chart** ships alongside the compose file — v0 covers the single-`worldd` realm (M0–M2 topology + the optional OPS-05 observability stack); the sharded-topology chart (gateway/coordinator/workers/services) lands with OPS-04 at M3, when community operators most need orchestration. Charts are config-only consumers of the same images and the same 12-factor env overrides — no K8s-specific code paths in the daemons.
+4. **Supply chain:** images are multi-stage, non-root, healthchecked; SBOM generation and signing (cosign-class) attach at publish so community operators can verify provenance — same trust posture as `.mcpack` signing (A-10), applied to binaries.
+5. **Releases:** a semver tag produces a GitHub Release with pinned image digests + checksums; the nightly test realm tracks `main`, public/community realms track releases.
+
+Phasing: publish workflow + compose-from-GHCR at M0; SBOM/signing + release workflow at M1; Helm v0 at M1–M2 (best-effort), sharded chart at M3 with OPS-04.
