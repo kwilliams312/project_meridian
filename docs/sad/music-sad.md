@@ -1,6 +1,6 @@
 # SAD — Music / Audio Track
 
-**Version:** 0.1 — 2026-07-04
+**Version:** 0.2 — 2026-07-04 (v0.2: §4.2 sidecar example aligned to the as-landed `asset.schema.yaml` (A-12); §3.1 load rig corrected — the 50-client canned-replay benchmark is an M1 artifact, so the **M0 gate runs on a 50-connection bot fleet on the flat bootstrap map**; the canned-replay scene becomes the regression rig from M1. v0.1: initial draft)
 **Status:** Draft for cross-track review. Zooms into the audio slice of the Client container plus the audio asset pipeline, per the [Architecture Overview](../02-ARCHITECTURE-OVERVIEW.md) SAD index.
 **Reads with:** [Music PRD v0.2](../prd/music-prd.md), [Client PRD §7](../prd/client-prd.md), [Sync Decisions](../01-SYNC-DECISIONS.md) (D-12/13/14/17, A-04/06/07/08), [Content Schema v1](../../schema/content/README.md).
 
@@ -171,7 +171,7 @@ The gate question: does `AudioStreamInteractive` + `AudioStreamSynchronized` hol
 - **Clock source:** sample position, not wall clock. Ground truth = `playback.get_playback_position() + AudioServer.get_time_since_last_mix() − AudioServer.get_output_latency()`, sampled per audio-mix step. Wall clock is recorded alongside only to correlate with frame hitches — it is never the pass/fail reference.
 - **Transition-accuracy probe:** on every state flip the harness records (a) the shadow bar clock's predicted boundary sample, (b) the sample position at which the interactive stream actually switched/faded (detected by a −60 dB→ramp edge on the per-stem gain telemetry). Error = (b) − (a) in samples, reported in ms and in beats at set BPM.
 - **Drift probe:** per-stem playback positions across the synchronized stack sampled every bar for a full 64–128-bar pass; drift = max pairwise delta, plus stack-vs-shadow-clock delta (catches whole-stack drift against the musical grid after repeated transitions).
-- **Load rig:** the shared 50-client canned-replay benchmark (client SAD) on the GTX 1060/16 GB reference machine, with chunk streaming active; state flips scripted every 4–16 bars for ≥30 min.
+- **Load rig:** at **M0 (the gate decision)** the canned-replay crowded-scene benchmark does not exist yet (it is an M1 artifact requiring Zone-01), so the rig is a **50-connection bot fleet (bot client v0) on the flat bootstrap test map**, on the GTX 1060/16 GB reference machine, with pack-streaming activity simulated; state flips scripted every 4–16 bars for ≥30 min. From **M1 onward** the shared 50-client canned-replay benchmark (client SAD) replaces it as the permanent per-milestone regression rig.
 - **Pass thresholds:** transition error ≤ ±10 ms from the intended boundary (well under the perceptual seam limit and under 1 beat at 110 BPM), *and* ≤ 1 bar worst case including queueing; stem lockstep drift ≤ 1 ms (≈48 samples) sustained; no monotonic drift trend over the full pass; zero audio-thread starvation events. Any threshold failed under load ⇒ fallback.
 - Harness output is the debug HUD (region/state/bar/voice count, PRD §8.1) plus a CSV artifact attached to the gate review. The harness ships permanently — it reruns each milestone as a regression gate.
 
@@ -208,35 +208,36 @@ Single funnel: only `mcc` produces the runtime artifacts; Forge, CI, and communi
 
 ### 4.2 Audio sidecar — the IF-8 fields this track requires
 
-IF-8 (`/schema/content/asset.schema.yaml`, Tools-owned, to design at M0) must carry these **audio-class** fields. This list is our formal input to that design:
+IF-8 (`/schema/content/asset.schema.yaml`) is **authored as of Schema v1.1 ([asset.schema.yaml](../../schema/content/asset.schema.yaml), A-12)** and carries the audio-class fields this SAD required. As-landed shape (differences vs. this SAD's original draft: class enum values are snake_case; provenance uses the D-18 core shape — `source_tier: original|ai|cc0|cc_by`, `authors[]`, top-level `license`):
 
 ```yaml
-# assets/audio/mus/zone01/explore_l2.asset.yaml (illustrative)
+# content/core/assets/mus/zone01_explore_l2.asset.yaml (illustrative)
 schema: meridian/asset@1
 id: core:mus.zone01.explore.layer2
-class: music-stem            # music-stem | music-stinger | sfx | ambience-bed | ambience-emitter | ui
-source: audio/mus/zone01/explore_l2.wav   # LFS path — the ONLY place a file path appears
+class: music_stem            # music_stem | music_stinger | sfx | ui_sound | ambience_bed | ambience_emitter
+source: assets/audio/mus/zone01/explore_l2.wav   # LFS path — the ONLY place a file path appears
+license: CC-BY-4.0           # SPDX, top-level core field
 loudness:
   lufs_integrated: -16.2     # measured, BS.1770-4 (target per class, §4.4)
   true_peak_dbtp: -1.1
 provenance:                  # TD-09 — build fails if absent
-  source: ai                 # original | ai | library
-  tool_or_library: <tool>
-  source_url: <url>
-  license: CC-BY-4.0
+  source_tier: ai            # original | ai | cc0 | cc_by
+  origin_url: <url>
+  authors: [<who>]
   attribution: "<string for CREDITS-AUDIO.md>"
-  author: <who>
+  ai:
+    tool: <tool + version>
+    prompts_file: prompts/zone01_explore.txt
   transform_notes: "re-cut to grid, stem split, re-orchestrated B section"
-  date: 2026-07-01
-music:                       # required when class is music-stem / music-stinger
+music:                       # schema-required when class is music_stem / music_stinger
   stem_set: core:mus.zone01  # set membership
-  layer: L2                  # L1..L4 | boss | stinger kind
+  layer: L2                  # L1..L4 | boss | stinger
   bpm: 96
   time_signature: "4/4"
   length_bars: 96            # stems: loop length; must match across the set
-  key: D_dorian              # drives stinger key-tag matching
+  key: d_dorian              # drives stinger key-tag matching
   loop: true
-sfx:                         # required when class is sfx / ui / ambience-emitter
+sfx:                         # schema-required when class is sfx / ui_sound / ambience_emitter
   category: combat.impact    # maps to concurrency group + bus
   variation_group: core:sfx.combat.impact.pickaxe   # round-robin siblings share this
   attenuation: medium        # small | medium | large | global | ui2d
@@ -360,7 +361,7 @@ Region evaluation is Client-owned (chunk streamer instantiates region volumes on
 
 ### 9.2 Risks & open questions (no new interface IDs invented)
 
-1. **IF-8 is "to design (M0)" and this SAD depends on it.** The §4.2 field list is our formal requirement to the Tools track for `asset.schema.yaml`: `class`, `loudness.*`, `provenance.*` (TD-09), `music.{stem_set, layer, bpm, time_signature, length_bars, key, loop}`, `sfx.{category, variation_group, attenuation}`, `encode.{tier, preload}`. If Tools ships IF-8 without these, the pipeline lints and the runtime manifest have no source. **Needs cross-track sign-off at the M0 IF-8 review.**
+1. **IF-8 — RESOLVED (A-12):** `asset.schema.yaml` is authored with every §4.2 audio field (`class`, `loudness.*`, `provenance.*`, `music.*`, `sfx.*`, `encode.*`); §4.2 shows the as-landed shape. Remaining: Music sign-off review of the schema PR at the M0 IF-8 review.
 2. **A-08 / IF-6 dependency:** music-region and ambience-volume data ride the chunk format. Until A-08 signs off, region overrides can't reach the client; M0 works on zone defaults only (acceptable — the gate map has one region).
 3. **A-06 unresolved:** the §2.7 bus contract is our proposal; Client must confirm slider→bus mapping and voice-tier binding by M1 settings UI.
 4. **Nesting behavior risk:** `AudioStreamInteractive` wrapping `AudioStreamSynchronized` stacks is exactly what the M0 gate stresses (clip-level transitions only, script-driven per-stem mix). Mitigated by §3 — measured, with a costed fallback.

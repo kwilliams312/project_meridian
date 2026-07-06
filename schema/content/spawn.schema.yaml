@@ -1,6 +1,6 @@
 # meridian/spawn@1 — spawn placements & patrols (NPC-01).
 # Normally written by Forge's spawn-placement gizmos (TLS-02/TLS-06); hand-editing is supported.
-# Positions are zone-local until the A-08 chunk-format contract fixes the world coordinate story.
+# Positions are zone-local coordinates, permanently (decision D-20 — zone transitions are teleports).
 $schema: "https://json-schema.org/draft/2020-12/schema"
 $id: "meridian://schema/content/spawn.schema.yaml"
 type: object
@@ -17,13 +17,16 @@ properties:
       type: object
       additionalProperties: false
       required: [npc, position, respawn_seconds]
+      not:
+        description: wander_radius_m and patrol are mutually exclusive (was lint L040; now schema-enforced).
+        required: [wander_radius_m, patrol]
       properties:
         npc: { $ref: "#/$defs/npcRef" }
         position: { $ref: "#/$defs/position" }
         orientation_deg: { type: number, minimum: 0, exclusiveMaximum: 360, default: 0 }
         respawn_seconds: { $ref: "#/$defs/intRange" }
         wander_radius_m:
-          description: Random wander around the spawn point. Mutually exclusive with patrol (lint L040).
+          description: Random wander around the spawn point. Mutually exclusive with patrol (schema-enforced).
           type: number
           minimum: 0
           maximum: 100

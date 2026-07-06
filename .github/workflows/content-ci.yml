@@ -1,0 +1,23 @@
+# Content CI (TLS-07 stopgap until mcc lands) — validates /content against /schema,
+# checks baseline↔PRD traceability sync, and runs the validator's test suite.
+name: content-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Validate content (schemas + lints)
+        run: uv run tools/validate_content.py
+      - name: Check baseline ↔ PRD traceability sync
+        run: uv run tools/check_traceability.py
+      - name: Run test suite
+        run: uv run pytest -q

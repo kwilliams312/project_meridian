@@ -16,7 +16,7 @@ myzone:quest.welcome_to_emberfall     ← community pack
 - `namespace` = the content pack that owns the entity (`[a-z][a-z0-9_]{1,31}`). `core` is reserved for first-party content. This is the mechanism behind community packs (TLS-08): every pack writes only inside its own namespace, and `mcc` maps namespaces to non-overlapping numeric ID bands in `idmap.lock`.
 - `type` prefix (`npc.`, `item.`, `quest.`, `ability.`, `loot.`, `vendor.`, `spawn.`, `zone.`) makes every reference type-checkable by pattern — an `item:` field cannot accept an NPC ID.
 - References inside a file may omit `<namespace>:`; they resolve to the file's own namespace. Cross-pack references must be fully qualified.
-- **Asset IDs** (art/music/SFX — Baseline §5.3) use the same grammar with `art.`, `mus.`, `sfx.` prefixes: `core:art.char.kobold.miner`. Content never references file paths.
+- **Asset IDs** (art/music/SFX/ambience — Baseline §5.3) use the same grammar with `art.`, `mus.`, `sfx.`, `amb.` prefixes: `core:art.char.kobold.miner`, `core:amb.zone01.forest_day` (`amb.` added per decision D-24). Content never references file paths. Every referenced asset ID must have an IF-8 sidecar (`meridian/asset@1`) — lint L020 (warn until first art drop, then error).
 - **Numeric IDs never appear in YAML.** `mcc` assigns and persists them in `idmap.lock` (committed); renaming an entity's string ID is a breaking change caught by CI.
 
 ## File conventions
@@ -39,6 +39,7 @@ myzone:quest.welcome_to_emberfall     ← community pack
     vendors/  *.vendor.yaml
     spawns/   *.spawn.yaml   # Forge-authored (hand-editable)
     zones/    *.zone.yaml
+    assets/   **/*.asset.yaml  # IF-8 sidecars (meridian/asset@1), one per asset ID
   ```
 - Units are always suffixed: `_ms`, `_m` (meters), `_mps`, `_pct`, `_deg`, `_seconds`. Money is always integer **copper** (100c = 1s, 10 000c = 1g).
 
@@ -55,6 +56,7 @@ myzone:quest.welcome_to_emberfall     ← community pack
 | `meridian/vendor@1` | [vendor.schema.yaml](vendor.schema.yaml) | ECO-01 |
 | `meridian/spawn@1` | [spawn.schema.yaml](spawn.schema.yaml) | Spawn points/patrols; written by Forge (NPC-01) |
 | `meridian/zone@1` | [zone.schema.yaml](zone.schema.yaml) | Zone manifest: level range, music, POIs; `chunk_manifest` reserved pending the A-08 chunk-format contract |
+| `meridian/asset@1` | [asset.schema.yaml](asset.schema.yaml) | IF-8 asset-registry sidecar (A-12): source file, license/provenance (TD-09), art import hints, audio stream metadata |
 
 Deferred to M2 (do not invent early): `statprofile` (class/level stat tables), `faction` (v1 uses a simple friendly/neutral/hostile enum on NPCs), `recipe` (ECO-02), `talent` (CHR-04), `gossip` graphs (v1 uses a single `gossip_text`).
 

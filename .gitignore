@@ -1,0 +1,8 @@
+# Python (validator tooling)
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# mcc build cache (tools SAD §2.8)
+.mcc-cache/

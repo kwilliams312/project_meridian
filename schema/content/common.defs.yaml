@@ -7,6 +7,11 @@ $defs:
     type: string
     pattern: "^[a-z][a-z0-9_]{1,31}:(npc|item|quest|ability|loot|vendor|spawn|zone|pack)\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
 
+  assetId:
+    description: Fully-qualified asset ID owned by an IF-8 sidecar (namespace required).
+    type: string
+    pattern: "^[a-z][a-z0-9_]{1,31}:(art|mus|sfx|amb)\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+
   npcRef:
     type: string
     pattern: "^([a-z][a-z0-9_]{1,31}:)?npc\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
@@ -41,6 +46,10 @@ $defs:
     description: Asset-registry ID for a sound-effect asset.
     type: string
     pattern: "^([a-z][a-z0-9_]{1,31}:)?sfx\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+  ambRef:
+    description: Asset-registry ID for an ambience bed/emitter asset (decision D-24).
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?amb\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
 
   money:
     description: "Integer copper. 100c = 1s, 10000c = 1g."
@@ -48,7 +57,7 @@ $defs:
     minimum: 0
 
   intRange:
-    description: Inclusive integer min/max.
+    description: Inclusive integer min/max. min ≤ max is enforced by lint L004 (JSON Schema cannot express it).
     type: object
     additionalProperties: false
     required: [min, max]
@@ -62,7 +71,9 @@ $defs:
     maximum: 100
 
   position:
-    description: World-space position in meters (zone-local origin until A-08 chunk contract lands).
+    description: >-
+      Position in meters, zone-local coordinates — permanent per D-20 (every zone is its own
+      map/origin; zone transitions are teleports). Godot axes: right-handed, Y-up, X east, −Z north.
     type: object
     additionalProperties: false
     required: [x, y, z]

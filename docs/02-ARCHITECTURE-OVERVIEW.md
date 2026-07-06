@@ -1,6 +1,6 @@
 # System Architecture Overview
 
-**Version:** 0.3 — 2026-07-04 (v0.3: sharded-realm scale-up per D-23 — gateway/coordinator/shard-worker topology, IF-2/IF-3 shard messages. v0.2: SAD reconciliation — IF-6/IF-8 drafts adopted per D-18/D-20, IF-10 registered per D-21)
+**Version:** 0.6 — 2026-07-05 (v0.6: packaging & CD per D-30 — §5 deployment view gains GHCR autopublish + Helm option. v0.5: macOS client per D-28/Baseline v0.5 — player-machine platform + client deploy row updated. v0.4: IF-8 schema authored per A-12 (`schema/content/asset.schema.yaml`, `amb.` prefix added per D-24); §4 mcc row corrected — Godot headless is used for resource *import* only, `mcc` assembles `.pck` containers itself (tools SAD §2.7). v0.3: sharded-realm scale-up per D-23 — gateway/coordinator/shard-worker topology, IF-2/IF-3 shard messages. v0.2: SAD reconciliation — IF-6/IF-8 drafts adopted per D-18/D-20, IF-10 registered per D-21)
 **Status:** Binding system-level view. Every track SAD (`docs/sad/`) zooms into one container of this diagram and MUST reference the interface IDs (IF-x) defined here. Interface changes require cross-track sign-off, same rule as Baseline §5.1.
 **Reads with:** [Game Design Baseline](00-GAME-DESIGN-BASELINE.md) (features/milestones), [Sync Decisions](01-SYNC-DECISIONS.md) (D-01..D-17), [Content Schema v1](../schema/content/README.md).
 
@@ -8,7 +8,7 @@
 
 ```mermaid
 flowchart LR
-    subgraph Player machine [Windows x64]
+    subgraph Player machine [Windows x64 / macOS arm64 — D-28]
         C[Client<br/>Godot 4.6 + GDExtension]
     end
     subgraph Creator machine [Windows x64]
@@ -56,7 +56,7 @@ Every SAD states which interfaces it **owns** (defines the contract), **implemen
 | IF-5 | Client data packs: `.pck` layout, resource naming by asset/content ID, pack manifest with engine pin + content hash | Tools | Client | `/schema/pck-layout.md` | to design (M0) |
 | IF-6 | Zone chunk format: Forge-exported chunk scenes + zone grid manifest (geometry for client streaming, cell metadata for server AoI/navmesh). Working baseline: 128 m chunks, zone-local coords, 1 m heightfield, 32 m Recast tiles (tools SAD §3, adopted per D-20) | Tools | Client, Server | `/schema/chunk/` | **draft — A-08 sign-off walk due M0 exit**; M0 itself uses a flat bootstrap map (D-19) |
 | IF-7 | Live-preview hot reload: GM-authenticated editor channel on worldd preview maps; `mcc --watch` push (D-07) | Server | Tools, Client | server SAD §hot-reload | to design (M1) |
-| IF-8 | Asset registry: per-pack `assets/*.asset.yaml` manifests mapping asset IDs → LFS source files + provenance (TD-09) + import hints; `mcc` resolves them when building IF-5 packs; TLS-07 validates existence (lint L020–L022). Field set = D-18 union (core envelope + art + audio extension blocks) | Tools | Art, Music, Client | `/schema/content/asset.schema.yaml` | **field union decided (D-18); schema authoring = A-12** |
+| IF-8 | Asset registry: per-pack `assets/*.asset.yaml` manifests mapping asset IDs → LFS source files + provenance (TD-09) + import hints; `mcc` resolves them when building IF-5 packs; TLS-07 validates existence (lint L020–L022). Field set = D-18 union (core envelope + art + audio extension blocks); `amb.` prefix per D-24 | Tools | Art, Music, Client | `/schema/content/asset.schema.yaml` | **schema v1 authored (A-12); Art/Music sign-off + A-15 source-location ruling pending** |
 | IF-9 | `idmap.lock`: committed string-ID → numeric-ID map with per-namespace ID bands (numeric id = band×2²⁰ + local index, core = band 0; tools SAD) | Tools | Server | tools SAD | draft (tools SAD) |
 | IF-10 | Dev-realm deploy channel: `mcc` pushes compiled world SQL to a dev/test-realm DB + signals worldd reload (distinct from IF-7 preview-map hot reload) | Tools (push) / Server (reload signal) | — | tools + server SADs | to design (M1, per D-21) |
 
@@ -73,11 +73,11 @@ Every SAD states which interfaces it **owns** (defines the contract), **implemen
 
 | Container | Language / runtime | Key deps | Deploy |
 |-----------|-------------------|----------|--------|
-| Client | Godot 4.6+ (GDScript UI, C++ GDExtension core) | FlatBuffers, custom net/prediction/streaming modules | Windows x64 installer + updater |
+| Client | Godot 4.6+ (GDScript UI, C++ GDExtension core) | FlatBuffers, custom net/prediction/streaming modules | Windows x64 installer + macOS arm64 notarized bundle (D-28), shared updater |
 | authd | C++20 | OpenSSL (TLS), FlatBuffers, MariaDB connector | Linux, Docker |
 | gateway / coordinator / realm services | C++20 (M2 gateway split, M3 full topology per D-23) | FlatBuffers, internal bus | Linux, Docker |
 | worldd (shard worker) | C++20 | FlatBuffers, MariaDB connector, Recast (navmesh runtime) | Linux, Docker |
-| mcc | C++20 CLI | yaml-cpp, FlatBuffers, Recast (navmesh bake), Godot headless (pck assembly) | Win + Linux |
+| mcc | C++20 CLI | yaml-cpp, FlatBuffers, Recast (navmesh bake), Godot headless (resource import only — `mcc` assembles `.pck` containers itself, tools SAD §2.7) | Win + Linux |
 | Forge | Godot editor plugin (GDScript + `forge_core` GDExtension) | Terrain3D (pending A-09 spike) | Creator Kit bundle |
 | Codex | C# / .NET 8, Avalonia 11 | YamlDotNet, node-graph control | Windows x64 |
 | Art pipeline | Blender + Python export addon, glTF 2.0 | Godot import presets, LFS | — |
@@ -85,7 +85,7 @@ Every SAD states which interfaces it **owns** (defines the contract), **implemen
 
 ## 5. Deployment view (test realm, M0+)
 
-Nightly CI: server build (Linux) + client export (Windows) + `mcc` compile of `/content` → deploy `authd`+`worldd`+MariaDB via Docker Compose to the test realm host; client installer + matching `.pck` published; content hash ties all three (IF-4/IF-5 manifests). Prometheus scrapes both daemons (OPS-01).
+Every green push to `main` autopublishes the daemon images to GHCR (SHA-tagged, digests in the build manifest — CI is the only image producer, D-30). Nightly CI: server build (Linux) + client export (Windows/macOS) + `mcc` compile of `/content` → deploy `authd`+`worldd`+MariaDB via Docker Compose (pulling the published images) to the test realm host; client installer + matching `.pck` published; content hash ties all three (IF-4/IF-5 manifests). A versioned Helm chart offers the same topology on Kubernetes (single-realm v0; sharded chart with OPS-04 at M3). Prometheus scrapes both daemons (OPS-01); the OTel collector re-exports per D-29.
 
 ## 6. SAD index
 

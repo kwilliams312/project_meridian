@@ -1,15 +1,15 @@
 # Client Track PRD — Project Meridian
 
-**Track:** Client (Godot 4.6 game client)
-**Version:** 0.2 — 2026-07-04 (engine pivot UE5 → Godot 4.6 per Baseline v0.3 / sync decision log §4; structure, feature IDs, and milestones unchanged from v0.1)
+**Track:** Client (Godot 4.6 game client — Windows x64 + macOS Apple Silicon)
+**Version:** 0.5 — 2026-07-05 (v0.5: **OPS-05 telemetry** per Baseline v0.6 / D-29 — client channel is exactly crashes + ERROR/CRITICAL logs + missing-content events, no behavioral analytics; §8 and §11 updated. v0.4: **macOS client** per Baseline v0.5 / D-28 — phased Apple-Silicon support (CI builds M0 → supported test-realm client M1 → launch platform 1.0), native Metal backend, MetalFX option, notarized distribution; Mac Low-tier reference added to §2.2/§9. v0.3: A-13 sharded-realm pass per Baseline v0.4 / D-23. v0.2: engine pivot UE5 → Godot 4.6)
 **Status:** Draft for cross-track review
-**Baseline:** [Game Design Baseline v0.3](../00-GAME-DESIGN-BASELINE.md). All feature IDs, milestone names (M0–M4), and technical decisions (TD-01..TD-12) referenced here are defined there and are binding.
+**Baseline:** [Game Design Baseline v0.6](../00-GAME-DESIGN-BASELINE.md). All feature IDs, milestone names (M0–M4), and technical decisions (TD-01..TD-12) referenced here are defined there and are binding.
 
 ---
 
 ## 1. Overview & goals
 
-The Client track delivers the Godot 4.6+ Windows-native x64 game client (TD-01): the player-facing presentation layer for a custom, authoritative Linux server. Two baseline pillars dominate every client decision:
+The Client track delivers the Godot 4.6+ game client for **Windows x64 and macOS Apple Silicon** (TD-01, D-28 — macOS phased: CI builds from M0, supported test-realm client from M1, launch platform at 1.0): the player-facing presentation layer for a custom, authoritative Linux server. Two baseline pillars dominate every client decision:
 
 - **"Runs on real hardware" (Pillar 2, TD-02/TD-03).** Every rendering feature we adopt must have a no-hardware-RT, GTX 1060-class story. We treat the 1060/16GB "Low @ 1080p/30" target as a hard gate in CI-adjacent perf testing, not an aspiration.
 - **"Server is law" (Pillar 3).** The client is a *predictor and presenter*, never an authority. The client renders what the server says exists, predicts only its own movement (CHR-02), and reconciles when corrected. No gameplay outcome (damage, loot, quest state, currency) is ever computed client-side; the client requests, presents, and animates.
@@ -30,7 +30,7 @@ Secondary goals:
 - **Moddable UI by design (UI-02).** The HUD is architected from M1 so that a Lua addon API can be layered on at M3 without a rewrite.
 - **Ship continuously.** Nightly client builds feed the persistent test realm from end of M0 (Baseline §6).
 
-Non-goals for 1.0 (Baseline §7): macOS/Linux/console clients, hardware ray tracing features, mobile companion.
+Non-goals for 1.0 (Baseline §7): Linux/console clients, Intel Macs (Apple Silicon only per D-28), hardware ray tracing features, mobile companion.
 
 ---
 
@@ -42,12 +42,12 @@ All choices are constrained by TD-02 (**Forward+ renderer on Direct3D 12** — t
 
 | Concern | Decision | Low-end story |
 |---|---|---|
-| **Renderer/backend** | Forward+ on D3D12 (TD-02). Vulkan backend kept buildable in CI as a diagnostic escape hatch for D3D12 driver bugs, never shipped as default. | Forward+ runs on GTX 1060-class D3D12 hardware; validated on a physical 1060 at M0. |
+| **Renderer/backend** | Forward+ on **D3D12 (Windows)** and the **native Metal backend (macOS Apple Silicon, engine default there since 4.4)** per TD-02/D-28. Vulkan (MoltenVK on macOS) kept buildable in CI as a diagnostic escape hatch for backend driver bugs on both platforms, never shipped as default. | Forward+ runs on GTX 1060-class D3D12 hardware and on M1-class Metal; validated on a physical 1060 at M0, M1 Mac from M1 (D-28 phasing). |
 | **Global illumination** | **SDFGI** at High/Epic tiers (dynamic GI, no RT hardware needed). | Low/Medium disable SDFGI and use **baked lightmaps (LightmapGI) + reflection probes** with a matched ambient rig so zones read correctly in both paths. Zone lighting workflow (with Art/Tools) bakes both representations from one source lighting setup — one rig, two outputs, validated per zone from M1. |
 | **Geometry density** | **No Nanite equivalent exists (TD-02): strict traditional LOD discipline is mandatory.** Every mesh ships an authored/generated LOD chain; visibility ranges and LOD bias are scalability knobs; occlusion culling enabled and tuned per zone; **MultiMesh/GPU instancing** for crowds, foliage, and repeated kit pieces. Art-track polycount budgets (Art PRD) are enforced at import time by a validation script. | Low tier applies an aggressive LOD bias and shorter visibility ranges. Draw-call and triangle budgets in §9 are the contract. |
 | **Shadows** | **No Virtual Shadow Maps: shadow atlas + CSM tuning is the whole story.** Directional CSM with per-tier cascade counts/distances; positional-light shadow atlas sized per tier. Art track is on notice (via zone review) that shadow-dependent readability must hold under Low-tier CSM. | Low: 2 cascades, reduced distance, smaller atlas. High: 4 cascades, larger atlas, contact-hardening options. |
 | **Zone streaming (WLD-01)** | **Godot has no World Partition; zone streaming is a custom chunk-streaming system** — see §2.4. | Smaller loaded chunk radius on Low; distant chunks represented by baked low-poly proxy meshes (our HLOD equivalent, produced by the Forge export pipeline). |
-| **Upscaling** | **FSR2** (built into Godot 4.x) as the default temporal upscaler; render-scale is a first-class scalability axis (Low = 1080p output at ~65–75% render scale if needed to hold 30 FPS). Vendor-specific upscalers (DLSS) never required (spirit of TD-03). | FSR2 is vendor-agnostic and runs on the 1060. |
+| **Upscaling** | **FSR2** (built into Godot 4.x) as the default cross-vendor temporal upscaler; render-scale is a first-class scalability axis (Low = 1080p output at ~65–75% render scale if needed to hold 30 FPS). On macOS, **MetalFX temporal upscaling** (Godot 4.4+) is the per-platform default with FSR2 as the neutral fallback (D-28). Vendor-specific upscalers (DLSS) never required (spirit of TD-03). | FSR2 is vendor-agnostic and runs on the 1060; MetalFX runs on all Apple Silicon. |
 | **Anti-aliasing** | High tier: TAA (or MSAA 2x where the scene is instancing-heavy and TAA ghosting hurts readability — per-zone call). Low: FXAA or FSR2's built-in AA. | — |
 | **Day/night (WLD-02)** | Dynamic sun/sky at Medium+ (SDFGI handles dynamic GI at High; Medium accepts probe-lit dynamic sun). Low tier uses time-of-day *blended baked* states (N baked lightmap snapshots interpolated) — cheaper, visually stable. Design cost: zones bake N snapshots; Tools/Art pipeline must support it by M2. | — |
 | **Not used** | Hardware RT of any kind; Godot high-level multiplayer (§3.1); VoxelGI (SDFGI covers the dynamic-GI tier); volumetric fog on Low. | — |
@@ -65,10 +65,12 @@ Presets ship as data-driven settings profiles with an auto-benchmark on first ru
 
 Every preset must be individually overridable (WoW-player expectation); presets are starting points, and the settings UI exposes the underlying knobs from M1.
 
+**macOS reference mapping (D-28):** Low = Apple M1 8 GB (MetalFX/FSR2 upscaled as needed); Medium = M2/M3 base; High = M2 Pro/M3 Pro class; Epic = Mx Max/Ultra. Same frame-time gates as the Windows tiers; the auto-benchmark picks the preset identically. Unified memory: on the 8 GB floor the client's *total* footprint budget is ≤ 6 GB (textures, meshes, and system share one pool — see §9).
+
 ### 2.3 Renderer validation cadence
 
-- **M0:** empty test map + 2 characters proves the Forward+/D3D12 baseline boots on a physical 1060 (and catches D3D12 driver edge cases early — §12 risk 1).
-- **M1:** greybox Zone-01 with 50+ characters is the first real perf gate (IT-M1 has 50+ concurrent players). SDFGI vs baked-GI tier boundaries are decided *per the physical-hardware numbers*, not taste.
+- **M0:** empty test map + 2 characters proves the Forward+/D3D12 baseline boots on a physical 1060 (and catches D3D12 driver edge cases early — §12 risk 1). The macOS export boots the same map on an M1 Mac in CI smoke (D-28 phase 1 — build health only, not a gate).
+- **M1:** greybox Zone-01 with 50+ characters is the first real perf gate (IT-M1 has 50+ concurrent players). SDFGI vs baked-GI tier boundaries are decided *per the physical-hardware numbers*, not taste. The M1 Mac joins the perf fleet as the second Low-tier reference (D-28 phase 2: supported test-realm status; the 1060 remains the authoritative gate).
 - **M2:** art-passed Zone-01 ("beautiful corner") re-validates everything at final visual density; this is where LOD-chain, shadow-atlas, and draw-call budgets get locked.
 
 ### 2.4 Custom zone streaming (WLD-01)
@@ -180,6 +182,7 @@ Failure UX at every step (bad password, realm down, handoff timeout, version mis
 | PVP-01 | Duel request/countdown/flag presentation, PvP-flag state on nameplates/unit frames, faction hostility coloring. |
 | PVP-02 | Battleground (10v10 CTF-style): queue UI, scoreboard, flag-carrier presentation, objective HUD, BG-specific map overlay. |
 | CHR-05 | Ground mount presentation: mount/dismount flow, mounted movement speeds matched to server validation, mount bar state. |
+| WLD-04 | Shard mechanics UX (per D-23/A-13): transfer masking — smoothed despawn/respawn of surroundings during the server's AoI refresh (own position preserved); party auto-merge prompts; "join friend" entry points in social/friends UI; shard co-presence indicators on nameplates and party/guild/friends panels from `ShardPresence` data; transfer-denied feedback (combat/cooldown/capacity reasons). |
 | UI-02 | Lua addon API v1 (§5.3). |
 | TLS-08 | Client loads community content `.pck` packs: **the Client track owns the mount UX per sync decision D-09** — pack signing/trust prompt, per-realm content-manifest validation so a community zone loads only when the realm serves matching data (IT-M3 requirement). |
 | WLD-01 (scale) | Multi-map/cross-instance transfer flows against the M3 multi-map server (transfer screens, seamless where server supports it). |
@@ -237,10 +240,11 @@ The Client track owns the **runtime hooks**; the Music track owns the sound desi
 
 ## 8. Distribution
 
-- **M0–M3 (test realm):** nightly client builds (Baseline §6) produced by Windows CI using **Godot export templates** (release export, `.pck`-chunked content) + a minimal **bootstrap updater** (delta-download changed packs by manifest hash, verify, swap). This is deliberately the embryo of the real patcher — testers stop doing full re-downloads from M1 on, and the patch pipeline gets ~2 years of hardening before launch. Because Godot's export is fast and deterministic relative to a UE cook, nightly build times are minutes, not hours — CI budget still tracked (§12).
+- **M0–M3 (test realm):** nightly client builds (Baseline §6) produced by CI using **Godot export templates** (release export, `.pck`-chunked content) for **Windows x64 and macOS arm64** (D-28; Mac CI runner + export templates are A-16) + a minimal **bootstrap updater** (delta-download changed packs by manifest hash, verify, swap — cross-platform by construction; one `.pck` set serves both platforms since Apple Silicon Metal supports BC-class textures, D-28 rule 4). macOS builds are **codesigned + notarized from M1** (A-17) — Gatekeeper makes unsigned test builds a support tax; M0 CI smokes may be ad-hoc signed. This is deliberately the embryo of the real patcher — testers stop doing full re-downloads from M1 on, and the patch pipeline gets ~2 years of hardening before launch. Because Godot's export is fast and deterministic relative to a UE cook, nightly build times are minutes, not hours — CI budget still tracked (§12).
 - **Bot client stays M0-cheap:** Godot's `--headless` mode runs the same client binary with no renderer/audio, which is exactly what the bot client (§10.2) needs — no special null-RHI build flavor to maintain.
-- **M4 (direction only, per Baseline M4):** a proper **launcher/patcher**: installer (MSI or NSIS), launcher app handling account news + realm status + patching (binary-delta pack updates, resumable, hash-verified, staged background download), and client build signing. Torrent/CDN distribution strategy, localization of the launcher, and accessibility review are M4-scoped decisions.
-- Crash reporting (Windows crash handler + minidump upload — e.g. Crashpad/Breakpad in the GDExtension layer, since Godot ships no crash reporter — to a project-hosted Sentry-compatible endpoint) ships with the first test-realm build at end of M0 — nightly builds without crash telemetry are wasted testing.
+- **M4 (direction only, per Baseline M4):** a proper **launcher/patcher**: installer (MSI or NSIS on Windows; notarized `.dmg` on macOS), launcher app handling account news + realm status + patching (binary-delta pack updates, resumable, hash-verified, staged background download), and client build signing on both platforms. Torrent/CDN distribution strategy, localization of the launcher, and accessibility review are M4-scoped decisions.
+- Crash reporting (Crashpad in the GDExtension layer — supports Windows minidumps *and* macOS, since Godot ships no crash reporter — uploading to a project-hosted Sentry-compatible endpoint) ships with the first test-realm build at end of M0; macOS dSYM symbol upload joins CI with the M1 supported-status gate (A-17). Nightly builds without crash telemetry are wasted testing.
+- **Client telemetry scope (OPS-05, D-29) — deliberately minimal:** the client's outbound telemetry is exactly three things on that one endpoint: Crashpad minidumps, **ERROR/CRITICAL log events** (a GDExtension log sink hooking Godot's logger; batched, rate-limited, carrying session/build/platform context), and the existing missing-content placeholder events. **No behavioral analytics and no PII, ever** — player-experience measurement (lag, corrections, disconnects) is server-side by design. A documented opt-out toggle ships in settings. Everything else observability-related lives on the server (server PRD §6).
 
 ---
 
@@ -258,6 +262,7 @@ Sub-budgets (all tiers, main thread): networking decode + apply ≤ 1.5 ms; enti
 
 ### Memory
 - Low tier: client fits in **6 GB VRAM** and ≤ 12 GB system RAM (16 GB machines with OS + background apps, TD-03). Texture budget enforced per tier via import settings + VRAM tracking in the nightly perf run; hard cap honored via quality reduction, never via crash.
+- macOS Low tier (M1 8 GB unified, D-28): the VRAM and system-RAM budgets collapse into one pool — **total client footprint ≤ 6 GB**, tracked as a distinct gate on the Mac bench from M1. The same quality-reduction ladder honors it; the 6 GB discrete-VRAM budget on Windows means the texture set already fits.
 
 ### Streaming (WLD-01)
 - No hitch > 50 ms during in-zone chunk streaming at run speed on the Low tier (SATA SSD is the Low-tier storage floor per TD-03; HDDs unsupported). Chunk instancing is time-sliced (§2.4) to meet this.
@@ -277,10 +282,10 @@ Budgets are tracked with Godot's built-in profiler + `RenderingServer` statistic
 ### 10.1 Automated
 - **Unit/functional:** C++ **doctest** suites inside the GDExtension modules for the hot path — network module (framing, reconnect, schema-version mismatch), prediction/reconciliation math (deterministic replays of input+correction sequences), asset-ID resolution and placeholder fallback. **GUT (Godot Unit Test)** for GDScript-side logic: UI model layer, screen flows, settings.
 - **Protocol conformance:** golden-message tests generated from `/schema` fixtures — client decode/encode round-trips validated against the same fixtures the server track uses (shared in the schema repo).
-- **Screenshot/smoke:** nightly exported-build smoke on both tier machines — boot → login (against test realm) → enter world → run a fixed path → screenshot diff (tolerance-based) + perf capture (§9).
+- **Screenshot/smoke:** nightly exported-build smoke on both Windows tier machines and (from M1) the M1 Mac — boot → login (against test realm) → enter world → run a fixed path → screenshot diff (tolerance-based) + perf capture (§9). Screenshot baselines are per-platform (Metal vs D3D12 output differs within tolerance).
 
 ### 10.2 Replay & bot client
-- **Headless bot client** built from the same network module, run via Godot `--headless` (no renderer/audio; same binary, same protocol code): scriptable login/move/cast/chat behaviors. Primary consumer is the Server track's load testing (500 CCU for IT-M3 / OPS-04), but the Client track owns building and maintaining it because it shares the protocol code. Deliverable at end of M0 (basic move bot), extended each milestone with that milestone's verbs (quest at M1, group/dungeon at M2, BG queue at M3).
+- **Headless bot client** built from the same network module, run via Godot `--headless` (no renderer/audio; same binary, same protocol code): scriptable login/move/cast/chat behaviors. Primary consumer is the Server track's load testing (the 1500-CCU IT-M3 fleet; 3000+-CCU full-rating runs at M4 per OPS-04), but the Client track owns building and maintaining it because it shares the protocol code. Deliverable at end of M0 (basic move bot), extended each milestone with that milestone's verbs (quest at M1, group/dungeon at M2, BG queue at M3).
 - **Network replay:** record server message streams in the client; replay them deterministically into a client build for repro of presentation bugs and for the perf benchmark (the crowded scene in §9 is a canned replay, so it's identical run-to-run).
 
 ### 10.3 Integration test contributions & done-criteria
@@ -288,9 +293,9 @@ Budgets are tracked with Godot's built-in profiler + `RenderingServer` statistic
 | IT | Client contribution | Client "done" means |
 |---|---|---|
 | **IT-M0** | Login UI → `authd` TLS → realm select → `worldd` handoff → character stub (D-11 scope) → empty map; predicted local movement; remote client interpolation. Bot client v0 available as the "other connected client". | Two real clients on two machines: both complete the full session flow; each sees the other move smoothly (interp, no teleporting) at ≤ 150 ms simulated latency; disconnect/reconnect works; zero crashes across a 30-min soak. |
-| **IT-M1** | Everything in §4-M1: install (nightly build + bootstrap updater), character create, complete the 10-quest chain to level 5 in Zone-01 with 50+ concurrent players. | A fresh Windows machine (1060-class) installs the client, patches, creates a character, and finishes the quest chain with no client-side blocker; crowded-scene budget (§9) holds at Low/30 FPS during the 50-player gathering; all quest/combat/loot/vendor/chat UI flows complete without workaround. |
+| **IT-M1** | Everything in §4-M1: install (nightly build + bootstrap updater), character create, complete the 10-quest chain to level 5 in Zone-01 with 50+ concurrent players. macOS reaches supported test-realm status (D-28 phase 2). | A fresh Windows machine (1060-class) installs the client, patches, creates a character, and finishes the quest chain with no client-side blocker; a fresh M1 Mac (8 GB) completes the same install → quest-chain path from a notarized build at Low/30 FPS; crowded-scene budget (§9) holds at Low/30 FPS during the 50-player gathering on both references; all quest/combat/loot/vendor/chat UI flows complete without workaround. |
 | **IT-M2** | Group formation UI, Dungeon-01 instancing flow, group loot rolls; crafting/AH/mail UIs for the economy loop (gather → craft → auction → mail). | A 5-player group forms, enters, clears Dungeon-01, and rolls loot entirely through shipped UI; one tester completes the full economy loop end-to-end in-client; instance map-change load within budget; no desync requiring relog. |
-| **IT-M3** | 500-CCU alpha client stability; BG queue/scoreboard (PVP-02); guild/friends/LFG UI (SOC-02, GRP-03); community content pack loading (TLS-08). Bot fleet drives the CCU load. | Client remains within perf/memory budgets in a 500-CCU realm hotspot; a community-made zone pack loads and plays on an unmodified client against an unmodified server; LFG-formed group completes a dungeon; a full 10v10 BG match completes with correct scoreboard. |
+| **IT-M3** | 1500-CCU alpha client stability across ≥ 3 zone shards; WLD-04 transfer UX (party auto-merge, join-friend) exercised throughout; BG queue/scoreboard (PVP-02); guild/friends/LFG UI (SOC-02, GRP-03); community content pack loading (TLS-08). Bot fleet drives the CCU load. | Client remains within perf/memory budgets in the hottest zone-shard hub of a 1500-CCU realm; shard transfers present as a smoothed surroundings swap (no self-teleport, no loading screen) at p95 < 500 ms server budget; a community-made zone pack loads and plays on an unmodified client against an unmodified server; LFG-formed group completes a dungeon; a full 10v10 BG match completes with correct scoreboard. |
 
 ---
 
@@ -310,6 +315,7 @@ Every feature where Client = ● in the baseline matrix (§4). Milestones are th
 | WLD-01 | Custom chunk-streaming module over Forge chunk exports (§2.4), streaming budgets, multi-map transfer flows (M3) | M1 |
 | WLD-02 | Day/night lighting per tier strategy, weather VFX/audio states | M2 |
 | WLD-03 | Minimap, world map, POI discovery presentation | M1 |
+| WLD-04 | Shard transfer masking (AoI-refresh smoothing), party-merge prompts, join-friend UI, shard co-presence indicators (nameplates/social panels) | M3 |
 | CMB-01 | Targeting, nameplates, cast bars, GCD optimistic-start feedback (D-10), floating combat text, range/facing feedback | M1 |
 | CMB-03 | Death/ghost/corpse-run/resurrect presentation | M1 |
 | CMB-04 | Buff/debuff bars (M1); full aura presentation, dispel types (M2) | M1 basic / M2 |
@@ -340,6 +346,7 @@ Every feature where Client = ● in the baseline matrix (§4). Milestones are th
 | TLS-06 | Editor-connected client mode for live spawn/patrol preview | M2 |
 | TLS-08 | Community `.pck` loading (mount UX Client-owned per D-09), trust prompts, realm manifest validation | M3 |
 | OPS-02 | GM command console entry, GM presentation flags | M1 basic |
+| OPS-05 | ERROR/CRITICAL log capture + batched shipping (session/build/platform context), unified with the Crashpad + missing-content channel; opt-out toggle; no behavioral analytics/PII (D-29) | M0→ |
 
 (Consulted-only ○ rows — CMB-02, ITM-03, NPC-01, TLS-01, OPS-03, OPS-04 — appear above only where the client has presentation obligations.)
 
@@ -356,6 +363,7 @@ Every feature where Client = ● in the baseline matrix (§4). Milestones are th
 6. **Custom kinematic movement controller** (§3.3) must match server simulation exactly across slopes, stairs, and swim transitions — feel/edge-case regressions are on us. Spike scheduled in M0 to lock the shared-constants approach and the physics-query method.
 7. **Lua sandbox security (UI-02):** addon APIs are a classic exploit surface (automation, protected actions). Mitigation: read-only state API, no raw network access, protected-action design review at M2 before any implementation.
 8. **50+ visible players in one greybox area (IT-M1)** stresses skeletal animation and nameplate/UI cost long before art density does — and without Nanite the crowd's draw calls compete with the world's. Mitigation: crowd LOD ladder + MultiMesh imposters + pooled UI are M1 deliverables, not polish.
+9. **Metal backend maturity (D-28).** Godot's native Metal backend is younger than the Vulkan path (4.4+) — shader/driver edge cases and MetalFX integration quirks are likelier than on long-soaked backends, and every GDExtension module must build and behave on arm64. Mitigation: phased plan (M0 = build health only, no gate); MoltenVK/Vulkan diagnostic fallback mirrors the Windows Vulkan fallback; engine-agnostic C++ cores already CI on Linux arm-neutral paths; crash telemetry + per-platform screenshot baselines from the first Mac nightly; the 1060 stays the authoritative min-spec gate so Mac issues never block Windows milestones.
 
 ### Resolved since v0.1 (now decisions, not questions)
 - **Serialization:** FlatBuffers, decided baseline v0.2 (TD-07); links cleanly into the GDExtension net module (§1.1, §3.1).
@@ -365,7 +373,7 @@ Every feature where Client = ● in the baseline matrix (§4). Milestones are th
 - **TLS-08 mount UX:** Client-owned per sync decision **D-09** (§6, §4-M3).
 
 ### Open questions (baseline gaps — flagged, not invented around)
-1. **Interrupted-session/queue UX at scale:** baseline defines 500+ CCU (OPS-04) but no login-queue feature ID. If world servers cap, the client needs a queue screen — where does that live (ACC-01 extension?) and which milestone?
+1. **Interrupted-session/queue UX at scale:** baseline rates a realm at 3000+ CCU (OPS-04, v0.4) but no login-queue feature ID exists (D-06 deferred it to M4 planning). If realms cap, the client needs a queue screen — where does that live (ACC-01 extension?) and which milestone?
 2. **Localization:** M4 mentions localization as direction-only, but string externalization must start at M1 to be retrofittable. Client will externalize all strings from M1 (Godot translation resources); no feature ID exists for localization infrastructure — flag for a baseline amendment.
 3. **Voice chat / ping systems:** now explicitly deferred to M4 planning in Baseline §7 — client assumes zero 1.0 scope; confirm no BG (PVP-02) design dependency on ping chat.
 4. **TLS-06 client/editor boundary:** "live server preview" implies a client session connected to a dev `worldd` from inside the Forge editor plugin. Which track owns the connection UX inside the Godot editor plugin — Client or Tools? Proposed: Client owns the runtime module, Tools owns the editor UI; needs sign-off.

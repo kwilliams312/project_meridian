@@ -1,8 +1,8 @@
 # Art Track PRD — Project Meridian
 
 **Track:** Art
-**Version:** 0.2 — 2026-07-04 (engine pivot UE5 → Godot 4.6 per baseline v0.3; no-Nanite LOD budgets, sourcing tiers revised, glTF pipeline)
-**Baseline:** [Game Design Baseline v0.3](../00-GAME-DESIGN-BASELINE.md) (binding). All feature IDs, milestone names (M0–M4), and technical decisions (TD-01..TD-12) referenced here are defined there and are not redefined in this document.
+**Version:** 0.5 — 2026-07-05 (v0.5: reviewed against Baseline v0.6 / D-29 (OPS-05 telemetry) — no art deliverables. v0.4: reviewed against Baseline v0.5 / D-28 (macOS client) — no art-scope change: budgets stay GPU-tier-based and the **GTX 1060 bench remains the authoritative min-spec gate** (D-28 rule 2); the M1 Mac is a second Low-tier reference operated by the Client track. v0.3: reviewed against Baseline v0.4 — sharded-realm changes carry no Art deliverables; §3.3 amended per the Art SAD design call: provenance records live inside the IF-8 sidecar (`meridian/asset@1`), not a separate tree; terrain-decision date aligned to the A-09 M0-exit gate. v0.2: engine pivot UE5 → Godot 4.6 per baseline v0.3; no-Nanite LOD budgets, sourcing tiers revised, glTF pipeline)
+**Baseline:** [Game Design Baseline v0.6](../00-GAME-DESIGN-BASELINE.md) (binding). All feature IDs, milestone names (M0–M4), and technical decisions (TD-01..TD-12) referenced here are defined there and are not redefined in this document.
 **Owner:** Art track lead (TBD)
 **Reviewers:** Client track (rendering budgets), Tools track (TLS-02 kit contracts), Server track (consulted only)
 
@@ -142,30 +142,26 @@ Everything sourced under tier C is engine-agnostic and redistributable, so the e
 
 ### 3.3 Provenance record format (TD-09)
 
-One YAML sidecar per source asset in `/content/assets/provenance/`, keyed by asset ID (Baseline §5.3):
+**The provenance record is a block inside the asset's IF-8 sidecar** (`meridian/asset@1`, [asset.schema.yaml](../../schema/content/asset.schema.yaml)) — one file per asset carrying source path, import hints, and provenance together, so nothing can drift between two YAML trees (design call in the Art SAD §3; supersedes this PRD's earlier `/content/assets/provenance/` sketch):
 
 ```yaml
-asset_id: art.env.zone01.rock.cliff03
-title: "Zone-01 cliff rock 03"
-authors: ["contributor-github-handle"]
-created: 2026-09-14
-source_tier: C                # A original | B ai-assisted | C cc-library
-origin:
-  name: "ambientCG — Rock030 PBR set"
-  url: "https://..."
-  license: "CC0-1.0"
+# content/<ns>/assets/art/env_zone01_rock_cliff03.asset.yaml (meridian/asset@1)
+schema: meridian/asset@1
+id: core:art.env.zone01.rock.cliff03
+class: prop
+source: assets/art/env/zone01/rock_cliff03.glb
+license: CC0-1.0                # SPDX; CI allowlist = CC0-1.0, CC-BY-4.0
+provenance:
+  source_tier: cc0              # original | ai | cc0 | cc_by
+  origin_url: "https://..."     # license pinned to URL + date
   license_verified_on: 2026-09-14
-ai:                           # required if tier B, else omit
-  tool: "toolname vX.Y"
-  prompts_file: prompts/rock.cliff03.txt
-  cleanup: "retopo + LOD chain, re-UV, 60% repaint"
-derivatives_license: "CC-BY-4.0" # or CC0
-attribution_required: false
-modifications: "restyled to painterly standard; recolored to Zone-01 palette; LOD0-3 authored"
-approved_by: ["art-lead-handle"]
+  authors: ["contributor-github-handle"]
+  transform_notes: "restyled to painterly standard; recolored to Zone-01 palette; LOD0-3 authored"
+restyle_status: done            # tiers ai/cc0/cc_by cannot merge as pending
+reviewed_by: ["art-lead-handle", "deputy-handle"]
 ```
 
-The content compiler (TLS-01) tooling gains a lint (with Tools track, TLS-07): every asset ID referenced by content must have a provenance record; any record whose license is not CC0/CC-BY (or original CC-BY) **fails CI outright** — there is no longer a tolerated engine-locked tier to tag.
+The content compiler (TLS-01) tooling enforces this via TLS-07 lints L020–L022: every asset ID referenced by content must have a sidecar; any record whose license is not CC0/CC-BY **fails CI outright** — there is no longer a tolerated engine-locked tier to tag. AI-tier assets additionally require the `provenance.ai` block (tool + auditable prompts file), schema-enforced.
 
 ### 3.4 Restyling pipeline — "kitbash to style"
 
@@ -417,4 +413,4 @@ Every feature ID with Art marked ● in the baseline matrix (§4):
 6. **Character-select/login screen art ownership** — ACC-01 marks Art ○ (consulted); this PRD budgets only dressing support. Confirm Client track owns the screen itself.
 7. **UI-02 Lua addon API skinning:** whether community addons may reuse UI-01 art atlases (CC-BY makes it possible; needs an explicit policy line in the baseline or Client PRD).
 8. **Baseline has no named art review authority** for the cross-track "definition of done"; this PRD assumes the art lead sign-off (§4.4) satisfies it — should be ratified at cross-track review.
-9. **Godot terrain solution is undecided** (heightmap plugin vs. mesh-kit terrain vs. custom, no UE Landscape equivalent ships with the engine). The terrain material budget (§2.3) and 8-layer assumption need a Client/Tools decision by early M1 — Zone-01 greybox terrain depends on it.
+9. **Godot terrain solution is undecided** (heightmap plugin vs. mesh-kit terrain vs. custom, no UE Landscape equivalent ships with the engine). The decision gate is the **A-09 Terrain3D spike at M0 exit** (Tools track owns it; Art co-signs the evaluation criteria per Tools PRD §13 Q4). The terrain material budget (§2.3) and 8-layer assumption feed those criteria — Zone-01 greybox terrain depends on the outcome.

@@ -1,9 +1,9 @@
 # Server Track PRD — Project Meridian
 
 **Track:** Server
-**Version:** 0.2 — 2026-07-04 (v0.2: sharded-realm scale-up per D-23/Baseline v0.4 — OPS-04 revised to 3000+ CCU per realm, WLD-04 added, gateway/coordinator/services/shard-worker process model; architecture detail in the [Server SAD](../sad/server-sad.md))
+**Version:** 0.6 — 2026-07-05 (v0.6: **packaging & CD** per D-30 — GHCR autopublish on green main, compose-from-published-images, Kubernetes/Helm as a supported option, supply-chain posture; OPS-01 extension, no baseline change. v0.5: **OPS-05 telemetry & observability** per Baseline v0.6 / D-29 — OTel-compatible export, player-experience metrics, log pipeline, provisioned Grafana dashboards added to §6 and §9. v0.4: reviewed against Baseline v0.5 / D-28 (macOS client) — no server impact; the protocol and realm are client-platform-neutral. v0.3: fold-back of the Baseline v0.2 / D-04 additions this PRD's own v0.1 gap reports produced — **ACC-03** registration, **SOC-03** trade, **ECO-05** bank, **CHR-05** mounts now carried in §4 and §9; resolved open questions pruned into §10. v0.2: sharded-realm scale-up per D-23/Baseline v0.4 — OPS-04 revised to 3000+ CCU per realm, WLD-04 added, gateway/coordinator/services/shard-worker process model; architecture detail in the [Server SAD](../sad/server-sad.md))
 **Status:** Draft for cross-track review
-**Baseline:** [Game Design Baseline v0.4](../00-GAME-DESIGN-BASELINE.md) — all feature IDs (ACC/CHR/WLD/CMB/NPC/QST/ITM/ECO/SOC/GRP/PVP/TLS/OPS), milestones (M0–M4), and technical decisions (TD-01..TD-12) referenced here are defined there and are binding.
+**Baseline:** [Game Design Baseline v0.6](../00-GAME-DESIGN-BASELINE.md) — all feature IDs (ACC/CHR/WLD/CMB/NPC/QST/ITM/ECO/SOC/GRP/PVP/TLS/OPS), milestones (M0–M4), and technical decisions (TD-01..TD-12) referenced here are defined there and are binding.
 
 ---
 
@@ -136,6 +136,7 @@ All messages are schema-defined in `/schema` (TD-07); client, server, and tools 
 
 ### M0 — Foundation
 - **ACC-01 / ACC-02:** `authd` SRP6a auth + realm list; session grant handoff into `worldd`.
+- **ACC-03 (basic):** account creation via a CLI/admin tool (`meridian-account create`) writing SRP verifier+salt to the auth DB — the test-realm onboarding path; public web signup is the M3 half.
 - **CHR-01 (stub):** character create/select with fixed race/class list; characters DB schema v1.
 - **CHR-02 (basic):** movement intake, validation v0 (speed + bounds), AoI relay so two clients see each other move — the substance of **IT-M0**.
 - **TLS-01 (consume):** `worldd` boots from compiler-produced world DB; content-hash logged and reported to clients on connect.
@@ -165,6 +166,8 @@ All messages are schema-defined in `/schema` (TD-07); client, server, and tools 
 - **QST-02:** quest chains/prerequisites, class/level/reputation conditions, scripted event objectives (escort, use-object) via data-driven event scripts (TLS-05).
 - **ECO-02 Crafting/gathering:** profession skill tracking, gathering nodes as respawning world objects, recipes with material consumption — transactional (all-or-nothing inventory ops).
 - **ECO-03 Auction house:** listing/bid/buyout with escrow, deposit/cut sinks, expiry sweeps; delivery via mail. **ECO-04 Mail:** attachments (items/money), COD, expiry and return-to-sender; both are coordinator-scoped managers (see 2.6) and DB-transactional — the IT-M2 economy loop (gather → craft → auction → mail) must survive a `worldd` crash mid-flow without item duplication or loss.
+- **SOC-03 Trade window:** player-to-player trade sessions — server-side dual-accept lockstep state machine, escrowed item/gold swap committed as a single characters-DB transaction (same integrity bar as mail/AH; the IT-M2 forced-crash test covers a mid-trade kill).
+- **ECO-05 Bank storage:** per-character bank slots/tabs, slot-purchase money sink, deposit/withdraw as server-validated inventory ops (shares the ITM-01 validation path).
 - **WLD-02:** server world-clock authority for day/night phase and weather state broadcast per zone (weather patterns from content data) — realm-global authority in `servicesd`, identical across shards of a zone.
 - **OPS-04 (phase 1):** gateway split (`gatewayd` owns client connections + session crypto; IF-3 gateway-scoped) and `servicesd` extraction; `save_epoch` ownership fence on character writes lands here (see 2.6).
 - **TLS-06 (serve):** live-preview hot reload — see §5.
@@ -173,6 +176,8 @@ All messages are schema-defined in `/schema` (TD-07); client, server, and tools 
 ### M3 — Alpha World
 - **OPS-04 (full):** sharded realm live — realm coordinator, 5–6 shard workers, dynamic zone-shard spin-up/drain, coordinator warm-standby failover; architecture rated 3000+ CCU per realm, IT-M3 proves 1500 CCU across ≥ 3 zone shards; see 2.6 and §7.
 - **WLD-04:** player-visible shard mechanics — party auto-merge to leader's shard, "join friend" same-zone transfer, transfer eligibility/cooldown enforcement, AoI-refresh protocol, shard co-presence data for the client's social UI (client owns the UX per D-23/A-13).
+- **CHR-05 Ground mounts:** mount/dismount state machine (cast time, combat/indoor restrictions from content data), mounted movement as a validated move mode in the §3.2 envelope, mount ownership from item/spell data in the world DB.
+- **ACC-03 (full):** public registration path — a rate-limited web-signup service writing SRP verifiers to the auth DB (email verification, IP throttles), replacing the M0 CLI-only flow for public realms.
 - **SOC-02:** friends/ignore lists, guilds (roster, ranks/permissions, guild chat via coordinator, MOTD).
 - **GRP-03 LFG:** role-based queue (tank/heal/dps), cross-map group formation, teleport-to-dungeon.
 - **PVP-01:** duel flow (flag, arena-less bounds circle, no-death finish), PvP flagging rules (toggle, guard/zone rules, flag timers), server-resolved player-vs-player combat legality.
@@ -198,8 +203,10 @@ Hardening, raid-scale encounter support (larger groups, boss scripting depth), m
 
 - **Config (OPS-01):** layered — compiled defaults ← `/etc/meridian/*.toml` ← env-var overrides (12-factor for containers). Every knob in this PRD (tick rate, AoI radius, rate limits, map-process assignment) is config, hot-reloadable where safe (`SIGHUP` / GM command).
 - **Docker:** official images for `authd` and `worldd` (Ubuntu LTS base, multi-stage build); `docker compose up` gives a full local realm (both daemons + MariaDB + migrations job) in one command — this is also the contributor onboarding path and the Tools track's local preview server.
+- **Packaging & CD (D-30):** every push to `main` that passes CI **autopublishes** the daemon images to GHCR (SHA + `latest` tags; semver on releases), with digests recorded in the nightly build manifest — CI is the only image producer. Compose consumes published images by default (build-from-source one flag away). Images are multi-stage, non-root, healthchecked, with SBOM + signing at publish (M1). **Kubernetes is a supported option, not the reference:** a versioned Helm chart mirrors compose (single-realm v0; the sharded-topology chart lands with OPS-04 at M3); charts are config-only consumers of the same images and 12-factor env overrides — no K8s-specific code in the daemons. Semver tags produce GitHub Releases with pinned digests; the nightly test realm tracks `main`, community realms track releases.
 - **Logging:** structured JSON logs (spdlog) with category levels; separate append-only audit streams for GM actions, economy transactions, and anti-cheat flags.
 - **Metrics:** Prometheus `/metrics` on both daemons — tick duration histogram per map, CCU, sessions by state, opcode rates, DB queue depth/latency, AoI entity counts, active grids/instances, memory. Reference Grafana dashboards live in `/server/ops/grafana`. Alert rules: tick p99 over budget, DB queue depth, CCU saturation.
+- **Telemetry & observability (OPS-05, D-29):** player experience is measured **server-side first** — per-session action-RTT histograms, movement correction/snap-back rates, disconnect reasons + reconnect outcomes, per-opcode error/drop rates. Export is **OpenTelemetry-compatible via the collector pattern**: in-process instrumentation stays Prometheus-style; an OTel Collector in the compose stack scrapes `/metrics` and ingests OTLP logs/traces, so operators pipe to any backend without daemon changes. The reference stack (otel-collector + Prometheus + Loki + Grafana) ships in compose with **provisioned dashboards** (Realm health / Player experience / Errors — versioned JSON in `/server/ops/grafana`) and alert rules. Session-flow trace spans (auth → grant → handshake → enter-world) from M0; the bus envelope reserves trace context for cross-process spans at the M2 gateway split. Daemons degrade gracefully with no collector configured (metrics endpoint + local JSON logs only).
 - **Test realm (Baseline §6):** stands up at end of M0; **nightly redeploy** from `main` — CI builds server, pulls latest compiled content (post TLS-07 validation) and latest client build, runs DB migrations, redeploys via compose/systemd, then runs the smoke suite (login → enter world → move → kill mob → complete quest, via headless bot). Characters DB persists across redeploys; world DB is replaced wholesale each night. A failed smoke test rolls back to the previous image and pages the on-call track owner.
 - **GM/moderation (OPS-02):** GM level model (player < helper < GM < admin), all commands permission-gated and audit-logged; account/character/IP bans enforced in `authd` and `worldd`; chat moderation (mute) at the chat router.
 
@@ -259,10 +266,12 @@ Every feature where Server = ● in the Baseline matrix.
 |-----------|------------------------|-----------|
 | ACC-01 | `authd`: TLS + SRP6a auth, realm list, auth DB, bans | M0 |
 | ACC-02 | Session-grant handoff, world handshake, per-session keys | M0 |
+| ACC-03 | Account creation: CLI/admin tool (M0); rate-limited web-signup service writing SRP verifiers (M3) | M0 basic / M3 |
 | CHR-01 | Character CRUD + validation, characters DB schema (stub M0; race/class/appearance rules M1) | M0 stub / M1 |
 | CHR-02 | Movement intake/validation, AoI replication, swim/fall (basic M0; full M1) | M0 basic / M1 |
 | CHR-03 | XP/leveling engine, class/level stat tables from world DB | M1 |
 | CHR-04 | Talent trees, point spend/reset, talent-driven spell/aura modifiers | M2 |
+| CHR-05 | Mount/dismount state machine, mounted-speed movement validation, mount data from world DB | M3 |
 | WLD-01 | Zone/area tables, grid activation, area-trigger volumes | M1 |
 | WLD-02 | World-clock authority, per-zone weather state machine + broadcast | M2 |
 | WLD-03 | POI/discovery triggers, discovery XP, map data service | M1 |
@@ -282,8 +291,10 @@ Every feature where Server = ● in the Baseline matrix.
 | ECO-02 | Professions, gathering nodes, transactional crafting | M2 |
 | ECO-03 | Auction manager: escrow, bids/buyout, sinks, expiry | M2 |
 | ECO-04 | Mail manager: attachments, COD, expiry/return | M2 |
+| ECO-05 | Bank storage: slots/tabs, purchase sink, validated deposit/withdraw | M2 |
 | SOC-01 | Chat router: say/yell/whisper/general, moderation hooks | M1 |
 | SOC-02 | Friends/ignore, guild manager (roster/ranks/chat) | M3 |
+| SOC-03 | Trade sessions: dual-accept lockstep, transactional escrowed item/gold swap | M2 |
 | GRP-01 | Party manager, group loot rolls, XP split | M2 |
 | GRP-02 | InstanceMap lifecycle, group binding, resets, instance threat/boss state | M2 |
 | GRP-03 | Role-based LFG queue, group formation, dungeon teleport | M3 |
@@ -296,10 +307,11 @@ Every feature where Server = ● in the Baseline matrix.
 | TLS-06 | GM-authenticated editor channel, live content-delta hot reload on preview maps | M2 |
 | TLS-07 | `meridian-validate` semantic validation library/binary for content CI | M1 |
 | TLS-08 | Community pack loader: namespaced IDs, signed manifests, merged validation | M3 |
-| OPS-01 | Config system, Docker images/compose, logging, Prometheus metrics, nightly redeploy pipeline | M0→ |
+| OPS-01 | Config system, Docker images/compose, logging, Prometheus metrics, nightly redeploy pipeline; GHCR autopublish on green main + release workflow + Helm chart option (D-30) | M0→ |
 | OPS-02 | GM levels, command set, audit logging (basic M1; moderation-at-scale M3) | M1 basic |
 | OPS-03 | Movement validation, rate limits, server-side rule enforcement, anomaly detection, audit trails | M1→ |
 | OPS-04 | Sharded realm: gateway + realm coordinator + shard workers + realm-global services, dynamic zone-shard spin-up/drain, 3000+ CCU per realm rating (1500 CCU IT-M3 proof; 3000+ at M4) | M2 gateway / M3 full |
+| OPS-05 | OTel-compatible telemetry (collector in compose), player-experience metrics (RTT, corrections, disconnects, errors), structured-log pipeline (Loki), session trace spans, provisioned Grafana dashboards + alert rules, client ERROR/CRITICAL ingest endpoint | M0→ |
 
 ---
 
@@ -314,19 +326,19 @@ Every feature where Server = ● in the Baseline matrix.
 6. **OPS-04 retrofit risk.** If M0–M2 code bypasses the message bus for cross-map effects, the M3 process split becomes a rewrite. Mitigation: bus-only rule enforced by architecture tests (no direct cross-map pointers) from M0.
 7. **Nightly redeploy churn.** World-DB replacement each night requires strict separation of player state (characters DB) from world state; any feature that writes player progress into world-DB-adjacent state breaks. Enforced in schema review.
 
-### Open questions (gaps found in the Baseline — flagged, not invented)
-1. **FlatBuffers vs protobuf (TD-07)** is unresolved. Server preference: FlatBuffers (zero-copy reads in the tick path). Needs schema-repo sign-off in M0 week 2.
-2. **UDP for movement** — TD-07 says "not before M2" but no feature ID or milestone commits to it. Decision input: IT-M1 latency-injection results. Which milestone owns the decision?
-3. **Player-to-player direct trade** has no feature ID (ECO-01..04 cover vendors/crafting/AH/mail only). Groups + economy at M2 strongly imply trade windows. Needs a Baseline feature ID or explicit out-of-scope ruling.
-4. **Item durability/repair:** ECO-01 (M1) lists "repair" but the itemization model including durability is ITM-03 (M2). This PRD assumes repair becomes functional with ITM-03 at M2 and is a vendor no-op at M1 — needs Baseline confirmation.
-5. **Banks/player storage** — no feature ID. Common expectation alongside mail/AH at M2.
-6. **Account registration flow** — ACC-01 covers auth, but nothing defines how accounts are created (web signup? in-client? CLI for test realm?). Server will ship a CLI/admin-API creation path for M0; the public path is unowned.
-7. **Navmesh generation ownership** — server consumes navmesh artifacts, but no TLS feature ID covers generating them from zone geometry. Assumed to fold into TLS-01/TLS-02 output; Tools track must confirm.
-8. **World-DB delivery to the server** at scale (TLS-08 packs are defined, but core content: does the compiler push SQL migrations, or full-DB image swap?). This PRD assumes nightly full world-DB rebuild + swap; fine until community servers want incremental updates.
-9. **CHR-01 appearance data** — how much appearance customization the server validates/stores at M1 is undefined (matrix marks Art ● too); needs a client/art/server contract in the schema repo.
-10. **GM tooling UI** — OPS-02 marks Client and Tools ● as well; the split between in-game GM commands (server), GM client UI (client), and external moderation dashboards (tools?) is not delineated for M3+.
-11. **A-14 — per-shard resource farming (owner: Server + Design, due M2).** Per-shard gathering nodes and rare spawns multiply availability by shard count; the WLD-04 transfer cooldown alone won't stop coordinated shard-hop farming. Mitigation candidates: node/rare tagging, zone-shared spawn state, diminishing returns. The SAD (§4.7) keeps node/rare state behind a location seam so any candidate lands without redesign; farm telemetry ships at M3 regardless.
+### Resolved since v0.1 (via [Sync Decisions](../01-SYNC-DECISIONS.md) — folded into this revision)
+- **FlatBuffers vs protobuf (TD-07):** FlatBuffers, decided Baseline v0.2 (**D-01**).
+- **UDP for movement:** Server track owns the go/no-go gate at end of M2, driven by IT-M2 latency data (**D-03**).
+- **Trade, banks, registration, mounts:** added as **SOC-03** (M2), **ECO-05** (M2), **ACC-03** (M0 basic / M3), **CHR-05** (M3) in Baseline v0.2 (**D-04**) — carried in §4 and §9 as of this revision.
+- **Durability/repair timing:** repair moves to M2 with ITM-03; ECO-01 at M1 is currency + buy/sell only (**D-02**).
+- **Navmesh generation ownership:** a TLS-02 deliverable — Forge exports, server consumes (**D-15**).
+- **GM tooling UI split:** Client owns the in-game GM UI, Server owns execution/permissions, Codex owns offline moderation/data-inspection tooling (**D-16**).
+
+### Open questions (flagged, not invented)
+1. **World-DB delivery to the server** at scale (TLS-08 packs are defined, but core content: does the compiler push SQL migrations, or full-DB image swap?). This PRD assumes nightly full world-DB rebuild + swap; fine until community servers want incremental updates. (Also server SAD §10(f).)
+2. **CHR-01 appearance data** — how much appearance customization the server validates/stores at M1 is undefined (matrix marks Art ● too); needs a client/art/server contract in the schema repo (**A-03**, due M0 exit).
+3. **A-14 — per-shard resource farming (owner: Server + Design, due M2).** Per-shard gathering nodes and rare spawns multiply availability by shard count; the WLD-04 transfer cooldown alone won't stop coordinated shard-hop farming. Mitigation candidates: node/rare tagging, zone-shared spawn state, diminishing returns. The SAD (§4.7) keeps node/rare state behind a location seam so any candidate lands without redesign; farm telemetry ships at M3 regardless.
 
 ---
 
-*End of Server PRD v0.1. Changes to feature scope or milestones must go through Baseline cross-track review (Baseline §0 status note).*
+*End of Server PRD v0.4. Changes to feature scope or milestones must go through Baseline cross-track review (Baseline §0 status note).*

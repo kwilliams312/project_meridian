@@ -4,7 +4,7 @@
 **Version:** 0.2 — 2026-07-04 (v0.2: sharded-realm architecture per D-23 — gateway/coordinator/services/shard-worker decomposition, transfer protocol, save-ownership fencing, coordinator failover design. v0.1: initial draft)
 **Status:** Draft for cross-track review
 **Zooms into:** `authd`, `gatewayd`, `coordd`, `servicesd`, `worldd` (shard worker), DB schemas — per the [Architecture Overview](../02-ARCHITECTURE-OVERVIEW.md) SAD index.
-**Reads with:** [Server PRD](../prd/server-prd.md), [Sync Decisions](../01-SYNC-DECISIONS.md) (D-01, D-03, D-07, D-10, D-16, D-19, D-22, **D-23**, §4–§6), [Baseline v0.4](../00-GAME-DESIGN-BASELINE.md) (OPS-04, WLD-04), [Content Schema v1](../../schema/content/README.md).
+**Reads with:** [Server PRD](../prd/server-prd.md), [Sync Decisions](../01-SYNC-DECISIONS.md) (D-01, D-03, D-07, D-10, D-16, D-19, D-22, **D-23**, §4–§6), [Baseline v0.5](../00-GAME-DESIGN-BASELINE.md) (OPS-04, WLD-04; D-28 macOS client has no server impact), [Content Schema v1](../../schema/content/README.md).
 
 ---
 

@@ -1,7 +1,7 @@
 # Game Design Baseline (GDB)
 
 **Project:** Open-source 3D MMORPG (working title: **Project Meridian**)
-**Version:** 0.4 — 2026-07-04 (v0.4: **sharded-realm scale-up** — OPS-04 revised to 3000+ CCU per realm via zone sharding, WLD-04 added for player shard transfer; see docs/01-SYNC-DECISIONS.md §6. v0.3: engine pivot UE5 → Godot 4.6 — TD-01/02/08/09/11 revised, Quixel/Fab sourcing disallowed. v0.2: post-PRD reconciliation — TD-07 FlatBuffers decided, SSD added to TD-03, repair moved M1→M2, feature IDs ACC-03/CHR-05/SOC-03/ECO-05 added)
+**Version:** 0.6 — 2026-07-05 (v0.6: **OPS-05 player-experience telemetry & observability** added per D-29 — server-side-first UX capture, OpenTelemetry-compatible export, client ERROR/CRITICAL log channel, Grafana dashboards as versioned deliverables. v0.5: **macOS client added** per D-28 — TD-01/02/03 revised for a phased Apple-Silicon client (CI builds M0, supported test-realm client M1, launch platform 1.0, native Metal backend); §7 out-of-scope updated; tools remain Windows-only (TD-08 unchanged). v0.4: **sharded-realm scale-up** — OPS-04 revised to 3000+ CCU per realm via zone sharding, WLD-04 added for player shard transfer; see docs/01-SYNC-DECISIONS.md §6. v0.3: engine pivot UE5 → Godot 4.6 — TD-01/02/08/09/11 revised, Quixel/Fab sourcing disallowed. v0.2: post-PRD reconciliation — TD-07 FlatBuffers decided, SSD added to TD-03, repair moved M1→M2, feature IDs ACC-03/CHR-05/SOC-03/ECO-05 added)
 **Status:** Foundation document. Every track PRD (Art, Music, Client, Tools, Server) MUST reference this document by feature ID and milestone. Changes to this document require a cross-track review.
 
 ---
@@ -23,9 +23,9 @@ A free, open-source, WoW-style themepark MMORPG: tab-target combat with action e
 
 | ID | Decision |
 |----|----------|
-| TD-01 | Client: **Godot 4.6+**, Windows native x64 only at launch. Engine is MIT-licensed — full stack (editor included) is open source and redistributable. Perf-critical client code (netcode, prediction, streaming) in C++ via GDExtension; UI/glue in GDScript. |
-| TD-02 | Rendering: Godot **Forward+ renderer on Direct3D 12** (the default Windows backend since Godot 4.6). No hardware RT dependency — SDFGI on higher tiers, baked lightmaps + reflection probes on low end. No Nanite equivalent exists: strict traditional LOD/occlusion discipline is mandatory (budgets in Art PRD). |
-| TD-03 | Scalability: playable at 30 FPS / 1080p Low on GTX 1060 6GB / 16GB RAM class; 60 FPS / 1440p High on RTX 3070 class (RT features still unused). Min-spec storage assumption: SATA SSD (HDDs unsupported). |
+| TD-01 | Client: **Godot 4.6+**, Windows native x64 **and macOS Apple Silicon (arm64)** at launch (D-28; macOS phased: CI builds M0 → supported test-realm client M1 → launch platform 1.0). Engine is MIT-licensed — full stack (editor included) is open source and redistributable. Perf-critical client code (netcode, prediction, streaming) in C++ via GDExtension (universal per-platform builds); UI/glue in GDScript. |
+| TD-02 | Rendering: Godot **Forward+ renderer** — **Direct3D 12** on Windows (default backend since Godot 4.6), **native Metal** on macOS Apple Silicon (default there since 4.4); Vulkan (MoltenVK on macOS) kept buildable as a diagnostic fallback on both. No hardware RT dependency — SDFGI on higher tiers, baked lightmaps + reflection probes on low end. No Nanite equivalent exists: strict traditional LOD/occlusion discipline is mandatory (budgets in Art PRD). |
+| TD-03 | Scalability: playable at 30 FPS / 1080p Low on GTX 1060 6GB / 16GB RAM class **and Apple M1 8 GB unified** (D-28); 60 FPS / 1440p High on RTX 3070 class / M2 Pro-class (RT features still unused). Min-spec storage assumption: SATA SSD (HDDs unsupported; all Apple Silicon Macs qualify). The 1060 bench machine remains the authoritative min-spec gate; the M1 is the second Low-tier reference from M1. |
 | TD-04 | Server: Linux (Ubuntu LTS primary target), C++20, CMake. Two daemons minimum: `authd` (login/realm list) and `worldd` (game simulation), CMaNGOS-style. |
 | TD-05 | Database: MariaDB/MySQL for server runtime (auth DB, characters DB, world DB). |
 | TD-06 | Content pipeline: human-editable source-of-truth content files (YAML/JSON, Git-friendly) compiled by tooling into (a) world-DB SQL for the server and (b) client data paks. One compiler, two outputs. |
@@ -44,7 +44,7 @@ Every PRD must organize deliverables under these milestone names. The **exit cri
 
 ### M0 — Foundation (months 0–4)
 Goal: everything boots and talks.
-- Repo, CI (Linux server builds, Windows client/tools builds), shared network schema v1.
+- Repo, CI (Linux server builds; Windows client/tools builds; macOS client export, boot-smoke only per D-28), shared network schema v1.
 - Server: `authd` login, `worldd` accepts a connection, character stub, echo world state.
 - Client: Godot project, login screen → server session → character loads into an empty test map, basic movement replicated.
 - Tools: content-compiler v0 (YAML → SQL + client pak), NPC/item editors alpha.
@@ -55,6 +55,7 @@ Goal: everything boots and talks.
 ### M1 — Greybox Vertical Slice (months 4–9)
 Goal: the full gameplay loop, ugly on purpose. **Tools track is the critical path.**
 - One greybox zone (Zone-01) built entirely with the zone tools.
+- macOS client reaches **supported test-realm status** (signed + notarized nightly builds, M1-Mac Low-tier validation) per D-28.
 - 1 playable race, 2 classes (1 melee, 1 caster), levels 1–10.
 - Tab-target combat vs. mobs (aggro, leash, respawn), death/resurrect.
 - 3 quest types working end-to-end (kill, collect, deliver), quest tracker UI.
@@ -143,6 +144,7 @@ Feature IDs are permanent. PRDs reference them in a traceability table: `feature
 | OPS-02 | GM commands & moderation | ● | ● | ● | | | M1 basic |
 | OPS-03 | Anti-cheat: server validation, rate limits | ○ | ● | | | | M1→ |
 | OPS-04 | Scale: sharded realm architecture — 3000+ CCU per realm (gateway + coordinator + shard workers + realm-global services); dynamic zone-shard spin-up/down | ○ | ● | | | | M2 gateway / M3 |
+| OPS-05 | Player-experience telemetry & observability (D-29): server-side UX capture (RTT, corrections, disconnects, errors), OpenTelemetry-compatible export, client ERROR/CRITICAL log channel, provisioned Grafana dashboards + alerts | ● | ● | | | | M0→ |
 
 ---
 
@@ -162,4 +164,4 @@ Feature IDs are permanent. PRDs reference them in a traceability table: `feature
 
 ## 7. Out of scope for 1.0
 
-macOS/Linux/console clients, hardware ray tracing features, player housing, flying mounts, cross-realm tech, cash shop/monetization, mobile companion app. Deferred to M4 planning: voice-over, localization infrastructure, login queue, voice/ping chat.
+Linux/console clients (macOS is in scope per D-28; Intel Macs are not — Apple Silicon only), hardware ray tracing features, player housing, flying mounts, cross-realm tech, cash shop/monetization, mobile companion app. Deferred to M4 planning: voice-over, localization infrastructure, login queue, voice/ping chat.
