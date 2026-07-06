@@ -1,0 +1,41 @@
+#!/usr/bin/env python
+# Project Meridian — client GDExtension build (SCons path).
+#
+# This is the canonical godot-cpp build path (matches upstream docs). A
+# CMake path is also provided (client/CMakeLists.txt) for CI/environments
+# without SCons; both build the same sources into client/project/bin/.
+#
+# godot-cpp is vendored as a submodule at client/godot-cpp, pinned to the
+# 4.6-stable sync commit (client/ENGINE_VERSION: GODOT_CPP_COMMIT). Run
+# `git submodule update --init --recursive` first, then e.g.:
+#   scons platform=windows target=template_debug
+#   scons platform=macos arch=arm64 target=template_debug
+# See client/README.md for full Win + macOS-arm64 instructions.
+
+import os
+
+# Pull in the vendored godot-cpp SConstruct (defines the env, options, and the
+# godot-cpp static lib the extension links against).
+env = SConscript("godot-cpp/SConstruct")
+
+# Bootstrap scope (#158): placeholder MeridianClient only. Later issues add the
+# net / sim / stream / datastore modules (Client SAD §2).
+env.Append(CPPPATH=["gdextension/meridian/src/"])
+sources = Glob("gdextension/meridian/src/*.cpp")
+
+if env["platform"] == "macos":
+    # arm64-only .framework per D-28 / SAD §9.6 (no universal2).
+    library = env.SharedLibrary(
+        "project/bin/libmeridian.{}.{}.framework/libmeridian.{}.{}".format(
+            env["platform"], env["target"], env["platform"], env["target"]
+        ),
+        source=sources,
+    )
+else:
+    library = env.SharedLibrary(
+        "project/bin/libmeridian{}{}".format(env["suffix"], env["SHLIBSUFFIX"]),
+        source=sources,
+    )
+
+env.NoCache(library)
+Default(library)

@@ -1,0 +1,3 @@
+# Build output drop dir for the Meridian GDExtension (libmeridian.*).
+# Contents are gitignored artifacts; this .gitkeep keeps the dir tracked so
+# meridian.gdextension has a valid res://bin/ target before the first build.

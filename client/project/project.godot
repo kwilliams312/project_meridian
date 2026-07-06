@@ -1,0 +1,17 @@
+; Meridian client — Godot project (bootstrap skeleton, issue #158).
+; Engine pinned to 4.6-stable (client/ENGINE_VERSION). Filled out by later
+; milestone work (scenes/ui/net/sim/stream/datastore per Client SAD §2). This
+; bootstrap project exists so the placeholder GDExtension can be loaded and its
+; MeridianClient.get_version() verified from the editor / --headless.
+
+config_version=5
+
+[application]
+
+config/name="Project Meridian (client bootstrap)"
+config/features=PackedStringArray("4.6", "Forward Plus")
+
+[rendering]
+
+; Forward+ per TD-02: D3D12 on Windows, native Metal on macOS Apple Silicon.
+renderer/rendering_method="forward_plus"

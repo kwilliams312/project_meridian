@@ -1,0 +1,28 @@
+; Meridian client GDExtension manifest.
+;
+; One manifest carries both target platforms per D-28 (win-x64 + macos-arm64) —
+; universal2 Mac binaries are deliberately NOT used (no Intel Macs in scope,
+; Client SAD §9.6). Paths point at where the CMake/SCons build drops the
+; compiled library (client/project/bin/). Those binaries are build artifacts and
+; are gitignored; run the build (see client/README.md) before opening the project.
+
+[configuration]
+entry_symbol = "meridian_library_init"
+; Minimum engine this extension targets — must match the pinned engine
+; (client/ENGINE_VERSION: GODOT_VERSION=4.6-stable).
+compatibility_minimum = "4.6"
+reloadable = true
+
+[libraries]
+; Windows x86_64 (Forward+ / D3D12 per TD-02)
+windows.debug.x86_64   = "res://bin/libmeridian.windows.template_debug.x86_64.dll"
+windows.release.x86_64 = "res://bin/libmeridian.windows.template_release.x86_64.dll"
+
+; macOS Apple Silicon (Forward+ / native Metal per D-28). Godot loads the
+; .framework produced by the macos build; arm64 only (no universal2, SAD §9.6).
+macos.debug   = "res://bin/libmeridian.macos.template_debug.framework"
+macos.release = "res://bin/libmeridian.macos.template_release.framework"
+
+; Editor host builds (used when running from the editor on a dev box).
+windows.debug.editor.x86_64 = "res://bin/libmeridian.windows.editor.x86_64.dll"
+macos.debug.editor          = "res://bin/libmeridian.macos.editor.framework"
