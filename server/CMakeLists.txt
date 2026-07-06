@@ -63,6 +63,12 @@ add_subdirectory(libs/net)
 add_subdirectory(authd)
 add_subdirectory(worldd)
 
+# --- Tools. -------------------------------------------------------------------
+# meridian-account (#80): the M0 account-creation CLI (ACC-03). Composes
+# meridian-srp (make_verifier) + meridian-db (prepared-statement INSERT) to
+# register an account into the auth DB `account` table (SAD §2.1, §4.1).
+add_subdirectory(tools/meridian-account)
+
 # Link libmeridian-proto into the daemons (#67, deliverable 3) — codegen +
 # linkage proof only: authd/worldd do not USE the generated IF-1/IF-2 tables
 # yet (that arrives with the real auth/world paths, SAD §7). Wiring the link
