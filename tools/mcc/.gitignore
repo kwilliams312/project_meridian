@@ -1,0 +1,5 @@
+# CMake configure/build tree (CMakePresets.json points `default` here).
+/build/
+
+# Content-addressable build cache (Tools SAD §2.8), created at runtime.
+/.mcc-cache/
