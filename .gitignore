@@ -6,3 +6,27 @@ __pycache__/
 
 # mcc build cache (tools SAD §2.8)
 .mcc-cache/
+
+# --- Client GDExtension build artifacts (issue #158) ---
+# Godot editor cache
+.godot/
+# Pinned engine binaries fetched by scripts/fetch-deps.sh (never committed)
+client/.godot-bin/
+# CMake / SCons build trees
+client/build/
+client/.sconsign.dblite
+# Compiled GDExtension output (dropped into client/project/bin/ by the build)
+client/project/bin/libmeridian.*
+# Object / intermediate files
+*.o
+*.obj
+*.os
+*.lo
+*.a
+*.dll
+*.dylib
+*.so
+*.pdb
+*.exp
+*.ilk
+*.gen.cpp
