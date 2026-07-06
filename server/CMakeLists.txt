@@ -53,6 +53,8 @@ add_subdirectory(libs/core)
 add_subdirectory(libs/proto)
 # srp: SRP-6a authentication (#78) — clean-room from RFC 5054; needs OpenSSL.
 add_subdirectory(libs/srp)
+# db: MariaDB access (#75) — synchronous connection + prepared statements.
+add_subdirectory(libs/db)
 
 # --- Daemons (server/README.md process table; SAD §2.1 / §2.5). --------------
 add_subdirectory(authd)
