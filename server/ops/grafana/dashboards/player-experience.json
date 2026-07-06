@@ -1,0 +1,89 @@
+{
+  "uid": "meridian-player-experience",
+  "title": "Player experience",
+  "tags": ["meridian", "ops-05", "v1"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "realm",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+        "query": "label_values(meridian_ccu, realm)",
+        "includeAll": true,
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Action RTT p95 (budget < 150ms)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 0.15 } ] }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, action) (rate(meridian_action_rtt_seconds_bucket{realm=~\"$realm\"}[5m])))",
+          "legendFormat": "{{action}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Movement corrections / snap-back rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "description": "Populates at M1 when correction instrumentation lands (D-29 phasing).",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (zone) (rate(meridian_movement_corrections_total{realm=~\"$realm\"}[5m]))",
+          "legendFormat": "{{zone}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Disconnects by reason",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (rate(meridian_disconnects_total{realm=~\"$realm\"}[5m]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Reconnect outcomes",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(meridian_reconnects_total{realm=~\"$realm\"}[5m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    }
+  ]
+}

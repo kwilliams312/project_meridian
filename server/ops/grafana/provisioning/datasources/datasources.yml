@@ -1,0 +1,23 @@
+# Grafana datasources — provisioned as code (D-29 §9 rule 4).
+# Prometheus (metrics) + Loki (logs). A trace datasource is added when the
+# operator wires an OTLP trace backend (M1+).
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    uid: meridian-prometheus
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 15s
+
+  - name: Loki
+    type: loki
+    access: proxy
+    uid: meridian-loki
+    url: http://loki:3100
+    jsonData:
+      maxLines: 1000

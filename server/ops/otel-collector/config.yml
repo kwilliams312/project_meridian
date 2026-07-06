@@ -1,0 +1,109 @@
+# OTel Collector config — the D-29 collector pattern (§9 rule 3).
+#
+# Receivers:
+#   · prometheus  — SCRAPES daemon /metrics endpoints (in-process Prometheus-
+#                   style instrumentation stays unchanged; the collector reads
+#                   it). Add real daemon targets under scrape_configs below.
+#   · otlp        — RECEIVES OTLP logs + traces pushed by daemons.
+# Exporters:
+#   · prometheusremotewrite → Prometheus  (metrics)
+#   · loki                  → Loki        (logs)
+#   · otlp/traces           → operator's trace backend (metrics/traces 30d per
+#                             telemetry-privacy.md §4; disabled by default —
+#                             uncomment + point at a backend to enable)
+#
+# OTLP is the export lingua franca: swap any exporter to pipe to a different
+# backend without touching daemon code.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  prometheus:
+    config:
+      scrape_configs:
+        # The collector's own health/self-telemetry.
+        - job_name: otel-collector
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["localhost:8888"]
+
+        # Meridian daemons. These resolve on the shared `meridian` network by
+        # service name; they are placeholders until the server stack is up.
+        # /metrics port is the per-daemon Prometheus endpoint (SAD §8.5).
+        - job_name: meridian-daemons
+          scrape_interval: 15s
+          metrics_path: /metrics
+          static_configs:
+            - targets:
+                - "authd:9464"
+                - "worldd:9464"
+              labels:
+                realm: reference
+          # M2+: add gatewayd:9464, servicesd:9464, coordd:9464 targets here.
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: reference
+        action: upsert
+  # Privacy discipline (telemetry-privacy.md §3): drop any attribute that could
+  # carry a personal identifier before it leaves the collector. Belt-and-braces —
+  # daemons are not supposed to emit these in the first place.
+  attributes/scrub-pii:
+    actions:
+      - key: client.ip
+        action: delete
+      - key: enduser.id
+        action: delete
+      - key: user.email
+        action: delete
+
+exporters:
+  prometheusremotewrite:
+    endpoint: http://prometheus:9090/api/v1/write
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+
+  # Traces: operator points this at their OTLP trace backend (Tempo, Jaeger,
+  # a hosted APM, ...). Left commented so a default `up` needs no trace backend;
+  # the pipeline below references it, so uncomment BOTH to enable traces.
+  # otlp/traces:
+  #   endpoint: tempo:4317
+  #   tls:
+  #     insecure: true
+
+  debug:
+    verbosity: normal
+
+service:
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8888
+  pipelines:
+    metrics:
+      receivers: [prometheus, otlp]
+      processors: [resource, attributes/scrub-pii, batch]
+      exporters: [prometheusremotewrite]
+    logs:
+      receivers: [otlp]
+      processors: [resource, attributes/scrub-pii, batch]
+      exporters: [loki]
+    # Traces pipeline — M0 wires the path end-to-end; real session-flow spans
+    # land at M1 (D-29 §9 rule 5). Exports to debug by default; add otlp/traces
+    # (uncommented above) to forward to a trace backend.
+    traces:
+      receivers: [otlp]
+      processors: [resource, attributes/scrub-pii, batch]
+      exporters: [debug]

@@ -1,0 +1,18 @@
+# Grafana dashboard provider — loads versioned JSON dashboards from disk
+# (dashboards-as-code, D-29 §9 rule 4). The three v1 dashboards live in
+# ../../dashboards and are mounted read-only at /var/lib/grafana/dashboards.
+
+apiVersion: 1
+
+providers:
+  - name: meridian-v1
+    orgId: 1
+    folder: Meridian
+    type: file
+    disableDeletion: true
+    editable: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

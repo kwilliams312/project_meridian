@@ -1,0 +1,118 @@
+# OPS-05 reference observability stack (D-29 §9 rule 4).
+#
+# otel-collector + Prometheus + Loki + Grafana, with all config provisioned as
+# code (see ./otel-collector/, ./prometheus/, ./loki/, ./grafana/).
+#
+# This is an OPS-01 extension and is OPTIONAL: Meridian daemons degrade
+# gracefully to /metrics + local JSON logs when no collector is running
+# (D-29 §9 rule 6). Bring it up as an overlay alongside the server compose:
+#
+#     docker compose \
+#       -f server/ops/docker-compose.yml \
+#       -f server/ops/docker-compose.observability.yml \
+#       up -d
+#
+# or standalone (collector will simply have no daemon targets to scrape until
+# the server stack is on the same network):
+#
+#     docker compose -f server/ops/docker-compose.observability.yml up -d
+#
+# Retention windows are the telemetry-privacy.md §4 proposed defaults
+# (metrics/logs 30d; traces 30d via the operator's OTLP backend; crashes 90d
+# live at the client sink, not here). They are ceilings — shorten freely.
+#
+# Grafana: http://localhost:3000  (admin / admin on first boot — change it).
+
+name: meridian-observability
+
+networks:
+  # Joins the server stack's network so the collector can scrape daemon
+  # /metrics endpoints by service name. `external: true` means this overlay
+  # attaches to a network the server compose already created; when running
+  # this file standalone, create it first: `docker network create meridian`.
+  meridian:
+    external: true
+    name: meridian
+  observability:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  loki-data:
+  grafana-data:
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.104.0
+    container_name: meridian-otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yml"]
+    volumes:
+      - ./otel-collector/config.yml:/etc/otelcol/config.yml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC (logs + traces from daemons)
+      - "4318:4318"   # OTLP HTTP
+      - "8889:8889"   # collector's own Prometheus exporter (self-telemetry)
+    networks:
+      - meridian
+      - observability
+    depends_on:
+      - prometheus
+      - loki
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: meridian-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      # Retention: 30d metrics ceiling (telemetry-privacy.md §4).
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-remote-write-receiver"   # accept remotewrite from the collector
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - meridian
+      - observability
+
+  loki:
+    image: grafana/loki:3.1.0
+    container_name: meridian-loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+    networks:
+      - observability
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: meridian-grafana
+    restart: unless-stopped
+    environment:
+      # First-boot admin creds — CHANGE on any non-local deployment.
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Dashboards-as-code: provisioning is read-only from the mounted files.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/realm-health.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - observability
+    depends_on:
+      - prometheus
+      - loki

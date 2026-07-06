@@ -1,0 +1,87 @@
+{
+  "uid": "meridian-errors",
+  "title": "Errors",
+  "tags": ["meridian", "ops-05", "v1"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "realm",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+        "query": "label_values(meridian_ccu, realm)",
+        "includeAll": true,
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Server log error rate (Loki)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "loki", "uid": "meridian-loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (process) (rate({realm=~\"$realm\"} | json | level=~\"ERROR|CRITICAL\" [5m]))",
+          "legendFormat": "{{process}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Opcode error / drop rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (opcode) (rate(meridian_opcode_errors_total{realm=~\"$realm\"}[5m]))",
+          "legendFormat": "err {{opcode}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (opcode, reason) (rate(meridian_opcode_dropped_total{realm=~\"$realm\"}[5m]))",
+          "legendFormat": "drop {{opcode}}/{{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Client ERROR/CRITICAL ingest (count only, no payload)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "description": "Server-side count of client-reported ERROR/CRITICAL events. No PII, no chat, no payload (telemetry-privacy.md §2a/§3).",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (severity, build, platform) (rate(meridian_client_log_ingest_total{realm=~\"$realm\"}[5m]))",
+          "legendFormat": "{{severity}} {{build}}/{{platform}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Crash rate by build",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (build, platform) (rate(meridian_client_crash_total{realm=~\"$realm\"}[15m]))",
+          "legendFormat": "{{build}}/{{platform}}"
+        }
+      ]
+    }
+  ]
+}

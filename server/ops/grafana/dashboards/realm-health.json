@@ -1,0 +1,88 @@
+{
+  "uid": "meridian-realm-health",
+  "title": "Realm health",
+  "tags": ["meridian", "ops-05", "v1"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "realm",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+        "query": "label_values(meridian_ccu, realm)",
+        "includeAll": true,
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Tick p99 (per map)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le, zone, shard) (rate(meridian_tick_duration_seconds_bucket{realm=~\"$realm\"}[5m])))",
+          "legendFormat": "{{zone}}/{{shard}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "CCU",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (realm) (meridian_ccu{realm=~\"$realm\"})",
+          "legendFormat": "{{realm}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Opcode rate (top 10)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(10, sum by (opcode) (rate(meridian_opcode_total{realm=~\"$realm\"}[5m])))",
+          "legendFormat": "{{opcode}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "DB latency p99 + queue depth",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le, db) (rate(meridian_db_latency_seconds_bucket{realm=~\"$realm\"}[5m])))",
+          "legendFormat": "latency {{db}}"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (db) (meridian_db_queue_depth{realm=~\"$realm\"})",
+          "legendFormat": "queue {{db}}"
+        }
+      ]
+    }
+  ]
+}
