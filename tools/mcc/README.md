@@ -35,6 +35,20 @@ structural lints; `mcc build` runs `check` first and aborts if it fails.
 `mcc check` and `validate_content.py` produce **identical** messages on these rules
 (verified message-for-message on schema-valid fixtures).
 
+**fmt** (Tools PRD §2.1 / SAD §6.2) — the canonical YAML formatter. `mcc fmt`
+rewrites a content file (or a whole tree) into one canonical form so diffs are
+semantic, not cosmetic; `mcc fmt --check` is the pre-merge / pre-commit gate
+(exit non-zero on drift, writes nothing). Two property-tested guarantees:
+**idempotent** (`fmt(fmt(x)) == fmt(x)`) and **semantics-preserving**
+(`parse(fmt(x))` node-identical to `parse(x)`, resolved scalar types included).
+Canonical rules — envelope-first key order, two-space block indent, preserved
+flow style for leaf collections, explicit-quote preservation, comment
+preservation, single trailing newline — are documented in
+[FORMAT.md](FORMAT.md).
+
+- `mcc fmt [path]` — format in place (default `./content`).
+- `mcc fmt --check [path]` — report drift, exit `1` if any file is non-canonical.
+
 **Deferred to later M0 tasks** (reported as stubs / not yet run): full JSON Schema 2020-12
 validation, L004 intRange, L020 asset-sidecar existence, the semantic lints
 (L034/L035/L052/L062), and the `link → bake → emit-sql / emit-pck` stages. Because JSON
@@ -54,6 +68,8 @@ expose the same `yaml-cpp::yaml-cpp` target. Zero other new dependencies.
 
 ```sh
 cmake --preset default        # configure into tools/mcc/build/
-cmake --build build           # -> tools/mcc/build/mcc
+cmake --build build           # -> tools/mcc/build/mcc (+ mcc-tests)
 ./build/mcc check ../../content
+./build/mcc fmt --check ../../content   # canonical-form gate
+ctest --test-dir build --output-on-failure   # unit tests (fmt guarantees)
 ```
