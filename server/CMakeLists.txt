@@ -41,9 +41,22 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# --- Shared libraries (SAD §2). Only core exists at M0. ----------------------
+# --- Shared libraries (SAD §2). -----------------------------------------------
+# core: logging/config/version. proto: FlatBuffers codegen from /schema/net
+# (libmeridian-proto, #67 — flatc runs at build time; needs flatc + the runtime,
+# see server/libs/proto/CMakeLists.txt for the find-first / fetch-fallback).
 add_subdirectory(libs/core)
+add_subdirectory(libs/proto)
 
 # --- Daemons (server/README.md process table; SAD §2.1 / §2.5). --------------
 add_subdirectory(authd)
 add_subdirectory(worldd)
+
+# Link libmeridian-proto into the daemons (#67, deliverable 3) — codegen +
+# linkage proof only: authd/worldd do not USE the generated IF-1/IF-2 tables
+# yet (that arrives with the real auth/world paths, SAD §7). Wiring the link
+# here (rather than in each daemon's own CMakeLists) proves the schema-generated
+# edge compiles into every daemon and keeps flatc codegen on the build graph.
+# INTERFACE link → the header-only generated headers + flatbuffers runtime.
+target_link_libraries(authd  PRIVATE meridian::proto)
+target_link_libraries(worldd PRIVATE meridian::proto)

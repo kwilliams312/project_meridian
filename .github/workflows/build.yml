@@ -14,10 +14,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install toolchain (cmake, ninja, g++-13)
+      # flatbuffers-compiler (flatc) + libflatbuffers-dev (header-only runtime)
+      # provide libmeridian-proto's build-time codegen + runtime on the runner
+      # (#67). find_package(FlatBuffers) picks these up; if they were ever
+      # absent, libs/proto falls back to a pinned FetchContent build.
+      - name: Install toolchain (cmake, ninja, g++-13, flatc)
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build g++-13
+          sudo apt-get install -y cmake ninja-build g++-13 flatbuffers-compiler libflatbuffers-dev
       - name: Configure
         run: cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
       - name: Build
