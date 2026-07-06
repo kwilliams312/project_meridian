@@ -14,14 +14,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # flatbuffers-compiler (flatc) + libflatbuffers-dev (header-only runtime)
-      # provide libmeridian-proto's build-time codegen + runtime on the runner
-      # (#67). find_package(FlatBuffers) picks these up; if they were ever
-      # absent, libs/proto falls back to a pinned FetchContent build.
-      - name: Install toolchain (cmake, ninja, g++-13, flatc)
+      # flatc + runtime for libmeridian-proto (#67); libssl-dev for the OpenSSL
+      # BIGNUM/EVP used by libmeridian-srp (#78). find_package picks these up.
+      - name: Install toolchain (cmake, ninja, g++-13, flatc, openssl)
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build g++-13 flatbuffers-compiler libflatbuffers-dev
+          sudo apt-get install -y cmake ninja-build g++-13 flatbuffers-compiler libflatbuffers-dev libssl-dev
       - name: Configure
         run: cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
       - name: Build
@@ -30,6 +28,9 @@ jobs:
         run: ./server/build/authd/authd --version
       - name: Smoke-run worldd
         run: ./server/build/worldd/worldd --version
+      # SRP-6a crypto correctness: RFC 5054 Appendix B vectors + round-trip (#78).
+      - name: Test SRP-6a (RFC 5054 vectors)
+        run: ctest --test-dir server/build --output-on-failure
 
   mcc:
     runs-on: ubuntu-latest
