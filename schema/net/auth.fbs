@@ -1,0 +1,129 @@
+// IF-1 — auth protocol (Server owns; Client consumes).
+// Contract: docs/sad/server-sad.md §5.1, docs/02-ARCHITECTURE-OVERVIEW.md §2 (IF-1).
+//
+// Transport:  TLS 1.3 over TCP, default port 7100.
+// Framing:    u32 LE length ‖ FlatBuffer root table. Length excludes itself, max 8 KiB.
+// Lifecycle:  connect → ClientHello/ServerHello → SRP → RealmList → SessionGrant → server closes.
+//             No long-lived auth connections; reconnect = full re-auth.
+// Versioning: proto_ver (u16) checked at ClientHello. FlatBuffers additive-field evolution
+//             within a major version; majors are incompatible (hard reject).
+//
+// One root table per message. Opcode/dispatch for IF-1 is implicit in the message table type
+// (a tiny, strictly-sequenced handshake) — the numbered opcode enum lives in world.fbs for IF-2.
+// See schema/net/README.md for framing + evolution rules.
+
+namespace meridian.net;
+
+// ---------------------------------------------------------------------------
+// Shared error surface
+// ---------------------------------------------------------------------------
+
+/// Auth-domain failure codes. Extend additively (append only).
+enum AuthErrorCode : uint16 {
+  UNKNOWN            = 0,
+  PROTOCOL_MISMATCH  = 1,   // proto_ver rejected at ClientHello
+  BUILD_REJECTED     = 2,   // client build outside realm's build_min..build_max
+  BAD_CREDENTIALS    = 3,   // SRP proof (M1) did not verify
+  ACCOUNT_LOCKED     = 4,
+  ACCOUNT_BANNED     = 5,
+  REALM_UNAVAILABLE  = 6,   // selected realm offline / draining
+  REALM_FULL         = 7,   // realm at population cap
+  RATE_LIMITED       = 8,
+  INTERNAL           = 9,
+}
+
+/// Generic error payload. Sent in place of an expected reply; `code` is machine-readable,
+/// `message` is human-readable (localized client-side by code, message is a fallback).
+table Error {
+  code:AuthErrorCode = UNKNOWN;
+  message:string;
+}
+
+// ---------------------------------------------------------------------------
+// Handshake
+// ---------------------------------------------------------------------------
+
+/// C→S. First frame on the connection.
+table ClientHello {
+  build:uint32;       // client build number
+  proto_ver:uint16;   // IF-1/IF-2 protocol major.minor packed; checked here
+}
+
+/// S→C. Server acknowledges the hello and advertises its own build/proto.
+table ServerHello {
+  build:uint32;
+  proto_ver:uint16;
+}
+
+// ---------------------------------------------------------------------------
+// SRP6a-style verifier exchange (server SAD §5.1)
+// ---------------------------------------------------------------------------
+
+/// C→S. Begins the SRP exchange for a named account.
+table SrpStart {
+  account:string;     // login identity
+}
+
+/// S→C. Server salt and public ephemeral B.
+table SrpChallenge {
+  salt:[ubyte];       // per-account salt
+  b:[ubyte];          // server public ephemeral value B
+}
+
+/// C→S. Client public ephemeral A and proof M1.
+table SrpProof {
+  a:[ubyte];          // client public ephemeral value A
+  m1:[ubyte];         // client proof M1
+}
+
+/// S→C. Outcome of the SRP exchange.
+/// On success `m2` (server proof) is populated so the client authenticates the server.
+/// On failure `error` is populated and `m2` is empty.
+table AuthResult {
+  success:bool = false;
+  m2:[ubyte];         // server proof M2 (present iff success)
+  error:Error;        // failure detail (present iff !success)
+}
+
+// ---------------------------------------------------------------------------
+// Realm list & selection
+// ---------------------------------------------------------------------------
+
+/// One row in the realm list. `address:port` points at gatewayd from M2
+/// (shard workers are never internet-reachable — server SAD §5.1).
+table RealmRow {
+  id:uint32;
+  name:string;
+  address:string;     // hostname or IP of gatewayd (M2+) / worldd monolith (M0)
+  port:uint16;
+  population:uint16;   // coarse load indicator (e.g. 0=low..N=full), display-only
+  build_min:uint32;    // minimum client build this realm accepts
+  build_max:uint32;    // maximum client build this realm accepts
+  flags:uint32;        // bitfield: pvp / preview / editor / locked / new-players etc.
+}
+
+/// C→S. Request the realm list (post-auth).
+table RealmListRequest {}
+
+/// S→C. Full realm list.
+table RealmList {
+  realms:[RealmRow];
+}
+
+/// C→S. Select a realm to receive a session grant for.
+table RealmSelect {
+  realm_id:uint32;
+}
+
+/// S→C. The session grant handed to IF-2 (presented in WorldHello, world.fbs).
+/// Single-use, atomic-consume, ~30 s expiry, bound to {account, realm, client_build} (IF-3).
+///
+/// reconnect_window_ms — ISSUE #66. The reconnect window length is server-owned; the client
+/// needs it surfaced here (client SAD §5.1 / §10 flag). Within this window after a transient
+/// IF-2 loss the client may re-present the same grant to reconnect; past it, the grant is
+/// presumed expired and the client must re-login through IF-1.
+table SessionGrant {
+  grant_id:uint64;             // opaque single-use grant id (IF-3 token)
+  session_key:[ubyte];         // key material; HKDF root for IF-2 AEAD (world.fbs)
+  reconnect_window_ms:uint32;  // ISSUE #66 — server-owned reconnect window
+}
