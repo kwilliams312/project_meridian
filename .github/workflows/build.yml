@@ -125,3 +125,47 @@ jobs:
           MERIDIAN_DB_PASS: ci
           MERIDIAN_DB_NAME: meridian_auth
         run: ./server/build/tools/meridian-account/meridian-account-test
+
+  # authd IF-1 login flow (#79): the capstone end-to-end auth path. Builds + runs
+  # the login integration test against a real MariaDB service with the auth schema
+  # loaded. It stands the REAL meridian-net TLS 1.3 listener + the login state
+  # machine on an ephemeral port, drives a full IF-1 login over TLS 1.3 with a real
+  # SRP-6a client (meridian-srp testing::client_side), and asserts: a full login
+  # succeeds (ClientHello -> ServerHello -> SRP -> AuthResult(M2) -> RealmList ->
+  # SessionGrant), the session_grant is written + single-use (atomic consume: 1 row
+  # then 0), and a wrong password is rejected with NO grant. The plain `server`
+  # job's ctest skips this test (no MERIDIAN_DB_* env) — it is inert there.
+  authd:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: ci
+          MARIADB_DATABASE: meridian_auth
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain + deps (flatc, libssl-dev, libmariadb-dev, mariadb client)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++-13 flatbuffers-compiler libflatbuffers-dev libssl-dev libmariadb-dev mariadb-client
+      - name: Load auth schema (0001_init_auth.up.sql)
+        run: |
+          mariadb -h 127.0.0.1 -P 3306 -u root -pci meridian_auth < server/db/auth/migrations/0001_init_auth.up.sql
+      - name: Build authd-login-test
+        run: |
+          cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
+          cmake --build server/build --target authd authd-login-test
+      - name: Run authd end-to-end login test (MariaDB service)
+        env:
+          MERIDIAN_DB_HOST: 127.0.0.1
+          MERIDIAN_DB_PORT: 3306
+          MERIDIAN_DB_USER: root
+          MERIDIAN_DB_PASS: ci
+          MERIDIAN_DB_NAME: meridian_auth
+        run: ./server/build/authd/authd-login-test
