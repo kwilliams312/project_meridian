@@ -1,0 +1,43 @@
+# Meridian editor conventions. https://editorconfig.org
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+# C++ (server, mcc, GDExtension) — 4 spaces
+[*.{h,hpp,c,cc,cpp,cxx}]
+indent_size = 4
+
+# C# (Codex)
+[*.{cs,csproj}]
+indent_size = 4
+
+# CMake
+[{CMakeLists.txt,*.cmake}]
+indent_size = 2
+
+# Python (tools)
+[*.py]
+indent_size = 4
+
+# GDScript / Godot resources — Godot uses tabs
+[*.{gd,tscn,tres,gdshader}]
+indent_style = tab
+
+# Data + config
+[*.{yaml,yml,json,fbs}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.sql]
+indent_size = 2
+
+# Godot / generated files that are not hand-authored
+[*.godot]
+insert_final_newline = false
