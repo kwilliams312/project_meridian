@@ -1,0 +1,190 @@
+// IF-2 — world protocol skeleton (Server owns; Client consumes).
+// Contract: docs/sad/server-sad.md §5.2 (+ §5.2.1 shard range), client SAD §5.1,
+//           docs/02-ARCHITECTURE-OVERVIEW.md §2 (IF-2).
+//
+// Transport:  TCP, default port 7200. Terminates at gatewayd from M2. Not TLS at M0 —
+//             confidentiality/integrity come from per-session AEAD (see README §AEAD).
+// Framing:    u32 LE length ‖ u16 opcode ‖ u64 seq ‖ AEAD(payload)
+//             where payload is the FlatBuffer table for that opcode.
+//             Length max 64 KiB client→server / 256 KiB server→client.
+// Dispatch:   one FlatBuffer table per message; the u16 opcode (Opcode enum below) selects
+//             the payload table. Reserved ranges per domain — see Opcode enum + README.
+//
+// M0 scope: session/system, movement, entity-state, and clock-sync tables only. Later ranges
+// are reserved in the Opcode enum and documented as commented placeholders naming the future
+// issue / SAD section. Do NOT define those tables until their milestone.
+//
+// Versioning: proto_ver + content hash at handshake (WorldHello/HandshakeOk). Additive-field
+//             FlatBuffers evolution within a major; majors are incompatible. See README.
+
+namespace meridian.net;
+
+// ===========================================================================
+// Opcode registry — u16, reserved ranges per domain (server SAD §5.2).
+// Values are stable wire identifiers; append within a range, never renumber.
+// Only opcodes for M0 tables defined below are listed with concrete values;
+// later ranges are documented as commented placeholders (see per-range notes).
+// ===========================================================================
+enum Opcode : uint16 {
+  // --- 0x0xxx  session / system  (M0) ---
+  WORLD_HELLO    = 0x0001,   // C→S  present session grant (IF-3)
+  HANDSHAKE_OK   = 0x0002,   // S→C  realm proof + content hash
+  DISCONNECT     = 0x0003,   // S→C  server-initiated close with reason
+  CLOCK_SYNC     = 0x0004,   // C↔S  ISSUE #65 — clock offset/ping sample (client SAD §5.1)
+
+  // --- 0x1xxx  movement  (M0) ---
+  MOVEMENT_INTENT = 0x1001,  // C→S  client movement intent (validated OPS-03)
+  MOVEMENT_STATE  = 0x1002,  // S→C  authoritative movement state broadcast
+
+  // --- 0x2xxx  entity state  (M0) ---
+  ENTITY_ENTER   = 0x2001,   // S→C  full state — entity enters AoI
+  ENTITY_UPDATE  = 0x2002,   // S→C  delta update for an in-AoI entity
+  ENTITY_LEAVE   = 0x2003,   // S→C  entity leaves AoI
+
+  // --- 0x3xxx  combat            (reserved — see placeholder below) ---
+  // --- 0x4xxx  quest / gossip    (reserved — see placeholder below) ---
+  // --- 0x5xxx  inventory/economy (reserved — see placeholder below) ---
+  // --- 0x6xxx  chat / social     (reserved — see placeholder below) ---
+  // --- 0x7xxx  group / instance  (reserved — see placeholder below) ---
+  // --- 0x8xxx  shard / transfer  (reserved — see placeholder below) ---
+  // --- 0xExxx  GM                (reserved — see placeholder below) ---
+  // --- 0xFxxx  hot-reload        (reserved — see placeholder below) ---
+}
+
+// ===========================================================================
+// 0x0xxx — session / system  (M0)
+// ===========================================================================
+
+/// C→S. Session-token presentation to the world/gateway (IF-3, server SAD §5.2).
+/// proof = HMAC-SHA256(session_key, client_build ‖ nonce) — see README.
+table WorldHello {
+  grant_id:uint64;     // grant issued by IF-1 SessionGrant (auth.fbs)
+  client_build:uint32;
+  nonce:[ubyte];       // client nonce (16 B); binds this handshake
+  proof:[ubyte];       // HMAC over build ‖ nonce with session_key
+}
+
+/// S→C. Gateway/realm proof + loaded content hash. server_proof is over
+/// (nonce ‖ content_hash) so the client authenticates the realm too (server SAD §5.2).
+table HandshakeOk {
+  content_hash:[ubyte];  // hash of loaded world content (IF-4); compat check
+  server_proof:[ubyte];  // HMAC over nonce ‖ content_hash with session_key
+}
+
+/// S→C. Server-initiated disconnect with a machine-readable reason.
+enum DisconnectReason : uint16 {
+  UNKNOWN            = 0,
+  PROTOCOL_MISMATCH  = 1,   // proto_ver rejected at handshake
+  CONTENT_MISMATCH   = 2,   // content-hash mismatch (reject on M1+ test realm)
+  GRANT_INVALID      = 3,   // grant expired / already consumed / not found
+  KICKED             = 4,   // GM / anti-cheat kick
+  SHUTDOWN           = 5,   // realm shutting down / draining
+  TIMEOUT            = 6,   // heartbeat / idle timeout
+  INTERNAL           = 7,
+}
+
+table Disconnect {
+  reason:DisconnectReason = UNKNOWN;
+  message:string;          // optional human-readable detail
+}
+
+/// C↔S. ISSUE #65 — clock synchronization (client SAD §5.1).
+/// Client sends with client_time_ms set (server_time_ms = 0); server echoes with both
+/// timestamps filled. Client filters offset samples into a server-clock estimate that keys
+/// all snapshot buffering and interpolation delay.
+table ClockSync {
+  client_time_ms:uint64;   // client monotonic ms at send (echoed by server)
+  server_time_ms:uint64;   // server monotonic ms at reply (0 on the client→server ping)
+}
+
+// ===========================================================================
+// 0x1xxx — movement  (M0)
+// ===========================================================================
+
+/// C→S. Client movement intent — the only client input the server trusts, and only after
+/// validation (server SAD §5.5, OPS-03: speed / teleport / bounds / flag-legality). Rate
+/// limited (≤ 10/s/client + state changes).
+table MovementIntent {
+  seq:uint32;              // per-client monotonic sequence (ack / reconciliation)
+  state_flags:uint32;      // bitfield: forward/back/strafe/jump/swim/sit/… (movement mode)
+  x:float;
+  y:float;
+  z:float;
+  orientation:float;       // facing, radians
+  client_time_ms:uint64;   // client clock at capture (keyed to ClockSync estimate)
+}
+
+/// S→C. Authoritative movement state the server broadcasts to observers (and the mover, for
+/// reconciliation / snap-back). `entity_guid` + `ack_seq` let the mover reconcile its prediction.
+table MovementState {
+  entity_guid:uint64;      // subject entity
+  ack_seq:uint32;          // last MovementIntent.seq the server processed for this entity
+  state_flags:uint32;
+  x:float;
+  y:float;
+  z:float;
+  orientation:float;
+  server_time_ms:uint64;   // authoritative timestamp (client SAD clock-sync keyed)
+}
+
+// ===========================================================================
+// 0x2xxx — entity state  (M0)
+// ===========================================================================
+
+/// A single named/typed attribute delta. Minimal M0 shape: a key + a scalar value.
+/// Richer typed component encoding is deferred; extend additively.
+table AttrDelta {
+  key:uint16;              // attribute id (stat/flag component index)
+  value:int64;             // scalar value (interpret per key)
+}
+
+/// S→C. Full state snapshot when an entity enters the client's area of interest.
+table EntityEnter {
+  entity_guid:uint64;
+  type_id:uint32;          // entity/template kind
+  x:float;
+  y:float;
+  z:float;
+  orientation:float;
+  attrs:[AttrDelta];       // full attribute set at entry
+}
+
+/// S→C. Delta update for an entity already in AoI. Only changed fields are present;
+/// position fields are optional so movement-only vs attribute-only deltas both fit.
+table EntityUpdate {
+  entity_guid:uint64;
+  x:float = null;          // optional — present only if moved
+  y:float = null;
+  z:float = null;
+  orientation:float = null;
+  attrs:[AttrDelta];       // changed attributes only
+}
+
+/// S→C. Entity leaves the client's area of interest (culled / despawned / out of range).
+enum LeaveReason : uint16 {
+  OUT_OF_RANGE = 0,
+  DESPAWNED    = 1,
+  DIED         = 2,
+}
+
+table EntityLeave {
+  entity_guid:uint64;
+  reason:LeaveReason = OUT_OF_RANGE;
+}
+
+// ===========================================================================
+// RESERVED RANGES — commented placeholders only (do NOT define tables until milestone).
+// Each names its opcode range and the owning future issue / SAD section.
+// ===========================================================================
+//
+// 0x3xxx  combat            — ability cast / GCD prediction (server SAD §3.3, D-10). Future issue.
+// 0x4xxx  quest / gossip    — quest state, gossip menus (content schemas: quest.*, gossip). Future issue.
+// 0x5xxx  inventory/economy — inventory, loot rolls, vendor/economy (loot.*, vendor.*). Future issue.
+// 0x6xxx  chat / social     — chat channels, whisper, social lists (cross-shard, server SAD §3.8). Future issue.
+// 0x7xxx  group / instance  — party/raid, instance lifecycle. Future issue.
+// 0x8xxx  shard / transfer  — ShardTransferRequest/Deny/Begin, AoIRefreshBegin/End, ShardPresence
+//                             (server SAD §5.2.1, D-23; client handling A-13). M3. Future issue.
+// 0xExxx  GM                — GM commands / audit surface. Future issue.
+// 0xFxxx  hot-reload        — IF-7 editor channel: EditorHello/AuthOk, PushDelta, ApplyResult,
+//                             RespawnRequest, TeleportPreview, SubscribeLog/LogEvent
+//                             (server SAD §5.4). M1. Future issue.
