@@ -6,9 +6,9 @@
 # server SAD §2). M0 build skeleton: one shared static library
 # (libmeridian-core) linked into two stub daemons (authd, worldd).
 #
-# ZERO external dependencies at M0 — no OpenSSL/Asio/MariaDB/FlatBuffers. Those
-# arrive with the real subsystems they belong to (SAD §7 build plan). This keeps
-# a fresh checkout buildable with only a C++20 compiler + CMake + a generator.
+# Dependencies arrive with the real subsystems they belong to (SAD §7 build
+# plan): FlatBuffers with libmeridian-proto (#67), OpenSSL with libmeridian-srp
+# (#78). libmeridian-core stays dependency-free.
 #
 # Clean-room (CONTRIBUTING.md): architecturally inspired by CMaNGOS/TrinityCore,
 # but implemented from the written specs in /docs. No GPL source consulted.
@@ -41,12 +41,18 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# Enable CTest at the root so `ctest --test-dir server/build` aggregates tests
+# registered in subdirectories (e.g. libs/srp's RFC 5054 vector test, #78).
+enable_testing()
+
 # --- Shared libraries (SAD §2). -----------------------------------------------
 # core: logging/config/version. proto: FlatBuffers codegen from /schema/net
 # (libmeridian-proto, #67 — flatc runs at build time; needs flatc + the runtime,
 # see server/libs/proto/CMakeLists.txt for the find-first / fetch-fallback).
 add_subdirectory(libs/core)
 add_subdirectory(libs/proto)
+# srp: SRP-6a authentication (#78) — clean-room from RFC 5054; needs OpenSSL.
+add_subdirectory(libs/srp)
 
 # --- Daemons (server/README.md process table; SAD §2.1 / §2.5). --------------
 add_subdirectory(authd)
