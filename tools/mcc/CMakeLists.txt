@@ -1,9 +1,10 @@
-# tools/mcc/CMakeLists.txt — Meridian Content Compiler (TLS-01), v0 skeleton.
+# tools/mcc/CMakeLists.txt — Meridian Content Compiler (TLS-01).
 #
-# Self-contained, ZERO external dependencies. yaml-cpp, FlatBuffers, vendored
-# Recast/Detour, BLAKE3, libvorbis/libogg and the MariaDB client all arrive with
-# the real stages in later M0 tasks (Tools SAD §2). This build produces only the
-# `mcc` CLI shell: a subcommand dispatcher over stubbed pipeline stages.
+# This build produces the `mcc` CLI plus the first real pipeline stages:
+# discover/parse (yaml-cpp) and the structural lint engine (L001-L011). The only
+# external dependency so far is yaml-cpp (Tools SAD §2). FlatBuffers, vendored
+# Recast/Detour, BLAKE3, libvorbis/libogg and the MariaDB client arrive with the
+# link/bake/emit stages in later M0 tasks.
 #
 # Contract: docs/sad/tools-sad.md §2 · docs/prd/tools-prd.md §2.2
 
@@ -11,7 +12,7 @@ cmake_minimum_required(VERSION 3.24)
 
 project(mcc
     VERSION 0.0.0
-    DESCRIPTION "Meridian Content Compiler — CLI skeleton"
+    DESCRIPTION "Meridian Content Compiler"
     LANGUAGES CXX)
 
 # ---- Language standard (Tools SAD §2: C++20, static CLI) --------------------
@@ -25,11 +26,41 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
+# ---- yaml-cpp (Tools SAD §2 parse stage) -----------------------------------
+# Prefer the system package (Homebrew / distro / vcpkg all ship a yaml-cpp CMake
+# config). Fall back to a pinned FetchContent build so CI runners without the
+# system library still build hermetically. Either path exposes the same
+# `yaml-cpp::yaml-cpp` target.
+find_package(yaml-cpp QUIET)
+if(NOT yaml-cpp_FOUND)
+    message(STATUS "mcc: system yaml-cpp not found — building it via FetchContent")
+    include(FetchContent)
+    set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
+    # yaml-cpp 0.8.0 ships `cmake_minimum_required(VERSION 3.4)`, which CMake 4.x
+    # refuses. Grant it a modern policy baseline so the fallback builds on newer
+    # CMake (harmless on older CMake, which ignores the unknown-but-valid value).
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
+    FetchContent_Declare(yaml-cpp
+        GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+        GIT_TAG 0.8.0)  # pinned for determinism
+    FetchContent_MakeAvailable(yaml-cpp)
+else()
+    message(STATUS "mcc: using system yaml-cpp ${yaml-cpp_VERSION}")
+endif()
+
 # ---- The single `mcc` executable -------------------------------------------
 add_executable(mcc
-    src/main.cpp)
+    src/main.cpp
+    src/stages/diagnostics.cpp
+    src/stages/discover.cpp
+    src/stages/parse.cpp
+    src/stages/validate.cpp
+    src/stages/check.cpp)
 
 target_include_directories(mcc PRIVATE src)
+target_link_libraries(mcc PRIVATE yaml-cpp::yaml-cpp)
 
 # Version string surfaced by `mcc --version`, sourced from the project version
 # so there is one place to bump it.

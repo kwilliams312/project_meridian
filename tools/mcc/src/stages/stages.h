@@ -7,10 +7,12 @@
 //                                          |  \-> emit-pck
 //                                          \----> emit-sql (bake feeds sql too)
 //
-// Each stage is separately testable and cacheable. In this skeleton every stage
-// is a no-op that reports its role; real logic (typed content model, JSON
-// Schema + lint engine, IF-9 idmap, Recast bake, IF-4 SQL / IF-5 .pck emit)
-// lands in later M0 tasks. Kept header-only and dependency-free on purpose.
+// Each stage is separately testable and cacheable. discover/parse and the
+// structural-lint layer of validate are now real (see discover/parse/validate/
+// check under this directory, driven by `mcc check`); the Link/Bake/EmitSql/
+// EmitPck stages below remain no-op stubs that report their role until later
+// M0 tasks land IF-9 idmap, Recast bake, and IF-4 SQL / IF-5 .pck emit. This
+// header stays dependency-free — the stub runner is used only for those four.
 
 #ifndef MCC_STAGES_STAGES_H
 #define MCC_STAGES_STAGES_H
