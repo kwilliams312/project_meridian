@@ -55,6 +55,9 @@ add_subdirectory(libs/proto)
 add_subdirectory(libs/srp)
 # db: MariaDB access (#75) — synchronous connection + prepared statements.
 add_subdirectory(libs/db)
+# net: TLS 1.3 listener + IF-1 length framing for authd (#77) — clean-room from
+# SAD §5.1/§2.1; needs OpenSSL (BSD sockets, no Asio at M0).
+add_subdirectory(libs/net)
 
 # --- Daemons (server/README.md process table; SAD §2.1 / §2.5). --------------
 add_subdirectory(authd)
