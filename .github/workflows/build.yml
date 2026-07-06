@@ -48,3 +48,38 @@ jobs:
         run: ./tools/mcc/build/mcc --version
       - name: Smoke-run mcc --help
         run: ./tools/mcc/build/mcc --help
+
+  # libmeridian-db (#75): build + run its integration test against a real
+  # MariaDB service — proves the connection + prepared-statement layer works,
+  # including injection safety (a quote-bearing value round-trips verbatim).
+  db:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: ci
+          MARIADB_DATABASE: dbtest
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain + deps (incl. libmariadb-dev)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++-13 flatbuffers-compiler libflatbuffers-dev libssl-dev libmariadb-dev
+      - name: Build meridian-db-test
+        run: |
+          cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
+          cmake --build server/build --target meridian-db-test
+      - name: Run DB integration test (MariaDB service)
+        env:
+          MERIDIAN_DB_HOST: 127.0.0.1
+          MERIDIAN_DB_PORT: 3306
+          MERIDIAN_DB_USER: root
+          MERIDIAN_DB_PASS: ci
+          MERIDIAN_DB_NAME: dbtest
+        run: ./server/build/libs/db/meridian-db-test
