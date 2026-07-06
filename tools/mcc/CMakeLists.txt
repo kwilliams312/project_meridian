@@ -50,17 +50,24 @@ else()
     message(STATUS "mcc: using system yaml-cpp ${yaml-cpp_VERSION}")
 endif()
 
-# ---- The single `mcc` executable -------------------------------------------
-add_executable(mcc
-    src/main.cpp
+# ---- Pipeline stages as a small static lib ---------------------------------
+# The stage sources are shared between the `mcc` CLI and the unit-test binary,
+# so they live in an OBJECT/STATIC library rather than being compiled twice.
+add_library(mcc_stages STATIC
     src/stages/diagnostics.cpp
     src/stages/discover.cpp
     src/stages/parse.cpp
     src/stages/validate.cpp
-    src/stages/check.cpp)
+    src/stages/check.cpp
+    src/stages/format.cpp)
 
-target_include_directories(mcc PRIVATE src)
-target_link_libraries(mcc PRIVATE yaml-cpp::yaml-cpp)
+target_include_directories(mcc_stages PUBLIC src)
+target_link_libraries(mcc_stages PUBLIC yaml-cpp::yaml-cpp)
+
+# ---- The single `mcc` executable -------------------------------------------
+add_executable(mcc src/main.cpp)
+
+target_link_libraries(mcc PRIVATE mcc_stages)
 
 # Version string surfaced by `mcc --version`, sourced from the project version
 # so there is one place to bump it.
@@ -68,9 +75,30 @@ target_compile_definitions(mcc PRIVATE
     MCC_VERSION="${PROJECT_VERSION}")
 
 if(MSVC)
+    target_compile_options(mcc_stages PRIVATE /W4 /permissive-)
     target_compile_options(mcc PRIVATE /W4 /permissive-)
 else()
+    target_compile_options(mcc_stages PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(mcc PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 install(TARGETS mcc RUNTIME DESTINATION bin)
+
+# ---- Unit tests (mcc-tests) ------------------------------------------------
+# A dependency-light, self-contained test binary (no GoogleTest — keeps the
+# hermetic build's dependency surface at just yaml-cpp). Registered with CTest
+# so `ctest --test-dir build` runs it; CI can invoke it the same way it runs the
+# server's ctest suite. Proves the fmt guarantees: idempotency, semantic
+# preservation, --check drift detection, and ugly->canonical golden fixtures.
+enable_testing()
+
+add_executable(mcc-tests
+    tests/test_format.cpp)
+target_link_libraries(mcc-tests PRIVATE mcc_stages)
+if(MSVC)
+    target_compile_options(mcc-tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(mcc-tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_test(NAME mcc-fmt-unit COMMAND mcc-tests)

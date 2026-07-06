@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "stages/check.h"
+#include "stages/format.h"
 #include "stages/stages.h"
 
 #ifndef MCC_VERSION
@@ -119,10 +120,30 @@ int cmd_check(const std::vector<std::string>& args) {
     return mcc::stages::check(content_dir, format, std::cout, std::cerr);
 }
 
-int cmd_fmt(const std::vector<std::string>&) {
-    std::cout << "stub: fmt — canonically re-serialize /content YAML"
-                 " (stable key order, envelope-first) for diff-friendly authoring\n";
-    return 0;
+// mcc fmt [--check] [path] — canonically re-serialize /content YAML.
+//   --check : do not write; exit non-zero if any file is not canonical (CI /
+//             pre-commit). Otherwise files are rewritten in place when they
+//             differ. `path` is a single file or a directory (default ./content).
+int cmd_fmt(const std::vector<std::string>& args) {
+    bool check_only = false;
+    std::string path;
+    bool have_path = false;
+    for (const auto& a : args) {
+        if (a == "--check") {
+            check_only = true;
+        } else if (!a.empty() && a[0] == '-') {
+            std::cerr << kProg << " fmt: unknown flag '" << a << "'\n";
+            return 2;
+        } else if (!have_path) {
+            path = a;
+            have_path = true;
+        } else {
+            std::cerr << kProg << " fmt: unexpected extra argument '" << a << "'\n";
+            return 2;
+        }
+    }
+    if (!have_path) path = std::string(kDefaultContentDir);
+    return mcc::stages::fmt(path, check_only, std::cout, std::cerr);
 }
 
 int cmd_diff(const std::vector<std::string>& args) {
@@ -195,7 +216,7 @@ int cmd_idmap(const std::vector<std::string>& args) {
 const Command kCommands[] = {
     {"build",     "check then compile /content -> IF-4 SQL + IF-5 .pck (--full, --watch)", cmd_build},
     {"check",     "validate /content: structural lints (L001-L011); --diag-format=json", cmd_check},
-    {"fmt",       "canonically re-serialize /content YAML for clean diffs",            cmd_fmt},
+    {"fmt",       "canonically format /content YAML; --check for CI/pre-commit",       cmd_fmt},
     {"diff",      "compare two builds: diff <buildA> <buildB>",                        cmd_diff},
     {"pack",      "build a signed .mcpack community pack + content hash",              cmd_pack},
     {"install",   "install a .mcpack into a realm: install <pack>",                    cmd_install},
@@ -230,6 +251,9 @@ void print_help() {
            "  [dir]                content root to scan (default: ./content)\n"
            "  --diag-format=text   human-readable diagnostics (default)\n"
            "  --diag-format=json   structured diagnostics for Codex/Forge/CI\n\n"
+           "FMT OPTIONS:\n"
+           "  [path]               file or dir to format (default: ./content)\n"
+           "  --check              report drift and exit non-zero; do not write\n\n"
            "NOTE: discover/parse and the structural lints (L001-L011) are\n"
            "implemented; JSON Schema validation, semantic lints, link/bake/emit\n"
            "land in later M0 tasks (they report as stubs).\n";
