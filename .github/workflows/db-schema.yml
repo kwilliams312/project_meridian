@@ -1,0 +1,71 @@
+# Execute the SQL schemas against a real MariaDB service (#187). sqlglot in
+# content-ci proves syntax; this proves the DDL actually LOADS — FK-resolution
+# order, composite keys, reserved words, engine specifics the parser can't catch
+# — and that the reversible migrations reverse cleanly at the DB level.
+name: db-schema
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'schema/sql/**'
+      - 'server/db/**'
+      - '.github/workflows/db-schema.yml'
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=12
+    env:
+      MYSQL: mysql -h127.0.0.1 -uroot -pci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install client
+        run: sudo apt-get update && sudo apt-get install -y mariadb-client
+
+      - name: Create databases
+        run: $MYSQL -e "CREATE DATABASE world; CREATE DATABASE auth; CREATE DATABASE \`characters\`;"
+
+      # world DB (IF-4) — all files in ONE session so the 00/90 FOREIGN_KEY_CHECKS
+      # guard spanning files stays in effect across the cross-file forward refs.
+      - name: Load world-DB DDL (IF-4)
+        run: cat schema/sql/world/*.sql | $MYSQL world
+
+      - name: Load auth-DB migrations (up)
+        run: |
+          $MYSQL auth < server/db/auth/migrations/0001_init_auth.up.sql
+          $MYSQL auth < server/db/auth/migrations/0002_realm_control.up.sql
+
+      - name: Load characters-DB migrations (up)
+        run: $MYSQL characters < server/db/characters/migrations/0001_init_characters.up.sql
+
+      - name: Verify table counts
+        run: |
+          count() { $MYSQL -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$1'"; }
+          w=$(count world); a=$(count auth); c=$(count characters)
+          echo "tables — world:$w auth:$a characters:$c"
+          [ "$w" -ge 25 ] || { echo "world DDL loaded too few tables"; exit 1; }
+          [ "$a" -ge 5 ]  || { echo "auth DDL loaded too few tables"; exit 1; }
+          [ "$c" -ge 7 ]  || { echo "characters DDL loaded too few tables"; exit 1; }
+
+      # Execution-level reversibility: applying the down migrations in reverse
+      # order must drop every table cleanly (no dangling FK, no leftover).
+      - name: Verify migrations reverse cleanly (down)
+        run: |
+          $MYSQL auth < server/db/auth/migrations/0002_realm_control.down.sql
+          $MYSQL auth < server/db/auth/migrations/0001_init_auth.down.sql
+          $MYSQL characters < server/db/characters/migrations/0001_init_characters.down.sql
+          left() { $MYSQL -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$1'"; }
+          a=$(left auth); c=$(left characters)
+          echo "after down — auth:$a characters:$c (expect 0/0)"
+          [ "$a" -eq 0 ] && [ "$c" -eq 0 ] || { echo "down migration left tables behind"; exit 1; }
