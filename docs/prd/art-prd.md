@@ -1,7 +1,7 @@
 # Art Track PRD — Project Meridian
 
 **Track:** Art
-**Version:** 0.5 — 2026-07-05 (v0.5: reviewed against Baseline v0.6 / D-29 (OPS-05 telemetry) — no art deliverables. v0.4: reviewed against Baseline v0.5 / D-28 (macOS client) — no art-scope change: budgets stay GPU-tier-based and the **GTX 1060 bench remains the authoritative min-spec gate** (D-28 rule 2); the M1 Mac is a second Low-tier reference operated by the Client track. v0.3: reviewed against Baseline v0.4 — sharded-realm changes carry no Art deliverables; §3.3 amended per the Art SAD design call: provenance records live inside the IF-8 sidecar (`meridian/asset@1`), not a separate tree; terrain-decision date aligned to the A-09 M0-exit gate. v0.2: engine pivot UE5 → Godot 4.6 per baseline v0.3; no-Nanite LOD budgets, sourcing tiers revised, glTF pipeline)
+**Version:** 0.6 — 2026-07-06 (v0.6: A-15 RESOLVED / D-31 — hand-authored source + IF-8 sidecars live pack-local at `content/<ns>/assets/**`; §3.3/§4.3 clarify that `/client/art` (`res://art/...`) is the *imported* `mcc` output, not a source location. v0.5: reviewed against Baseline v0.6 / D-29 (OPS-05 telemetry) — no art deliverables. v0.4: reviewed against Baseline v0.5 / D-28 (macOS client) — no art-scope change: budgets stay GPU-tier-based and the **GTX 1060 bench remains the authoritative min-spec gate** (D-28 rule 2); the M1 Mac is a second Low-tier reference operated by the Client track. v0.3: reviewed against Baseline v0.4 — sharded-realm changes carry no Art deliverables; §3.3 amended per the Art SAD design call: provenance records live inside the IF-8 sidecar (`meridian/asset@1`), not a separate tree; terrain-decision date aligned to the A-09 M0-exit gate. v0.2: engine pivot UE5 → Godot 4.6 per baseline v0.3; no-Nanite LOD budgets, sourcing tiers revised, glTF pipeline)
 **Baseline:** [Game Design Baseline v0.6](../00-GAME-DESIGN-BASELINE.md) (binding). All feature IDs, milestone names (M0–M4), and technical decisions (TD-01..TD-12) referenced here are defined there and are not redefined in this document.
 **Owner:** Art track lead (TBD)
 **Reviewers:** Client track (rendering budgets), Tools track (TLS-02 kit contracts), Server track (consulted only)
@@ -142,14 +142,14 @@ Everything sourced under tier C is engine-agnostic and redistributable, so the e
 
 ### 3.3 Provenance record format (TD-09)
 
-**The provenance record is a block inside the asset's IF-8 sidecar** (`meridian/asset@1`, [asset.schema.yaml](../../schema/content/asset.schema.yaml)) — one file per asset carrying source path, import hints, and provenance together, so nothing can drift between two YAML trees (design call in the Art SAD §3; supersedes this PRD's earlier `/content/assets/provenance/` sketch):
+**The provenance record is a block inside the asset's IF-8 sidecar** (`meridian/asset@1`, [asset.schema.yaml](../../schema/content/asset.schema.yaml)) — one file per asset carrying source path, import hints, and provenance together, so nothing can drift between two YAML trees (design call in the Art SAD §3; supersedes this PRD's earlier `/content/assets/provenance/` sketch). The sidecar and its hand-authored source file live **pack-local at `content/<ns>/assets/**`** (A-15 / D-31, Sync Decisions §7.1), and `source:` is pack-root-relative:
 
 ```yaml
 # content/<ns>/assets/art/env_zone01_rock_cliff03.asset.yaml (meridian/asset@1)
 schema: meridian/asset@1
 id: core:art.env.zone01.rock.cliff03
 class: prop
-source: assets/art/env/zone01/rock_cliff03.glb
+source: assets/art/env/zone01/rock_cliff03.glb   # pack-root-relative; hand-authored source
 license: CC0-1.0                # SPDX; CI allowlist = CC0-1.0, CC-BY-4.0
 provenance:
   source_tier: cc0              # original | ai | cc0 | cc_by
@@ -197,8 +197,11 @@ Every Tier B/C asset passes through a fixed restyle checklist before review: (1)
 ### 4.3 Asset IDs, folders, Git LFS
 
 - Asset IDs per Baseline §5.3: `art.<category>.<zone|race|set>.<name>.<variant>` — e.g. `art.char.human.male.base`, `art.env.zone01.kit.wall_stone_a`, `art.vfx.cmb.fireball.impact`, `art.ui.hud.frame.party`. Content files reference IDs, never file paths.
-- Mapping ID→resource path lives in a generated manifest consumed by the content compiler (TLS-01); folder layout mirrors the ID (`/client/art/env/zone01/kit/...`, i.e. `res://art/env/zone01/kit/...`).
-- Git LFS (TD-12) for all binaries: `.glb .gltf .blend .png .tga .psd .exr .wav`. Godot text resources (`.tscn`, `.tres`, `.gdshader`, `.import`) stay plain-text in Git — diffable and mergeable, a pivot win. Source `.blend`/`.spp` files live in `/content/art-source/`, shipped assets in `/client/art/`. LFS locking enabled for `.blend` rig/skeleton sources and other binary shared files.
+- **Two distinct trees, not to be confused (A-15 / D-31):**
+  1. **Hand-authored source lives pack-local** at `content/<ns>/assets/**` — the `.glb`/`.png` shipped source and its IF-8 sidecar, one subtree per pack for `.mcpack` self-containment (TLS-08). This is what artists commit and what the IF-8 `source:` field points at.
+  2. **`/client/art/` (`res://art/...`) is the *imported* Godot resource output** — the `.scn`/`.ctex`/etc. that `mcc` generates from the source into the `.pck` (Tools SAD §2.7), laid out by asset ID (`res://art/env/zone01/kit/...`). It is a build artifact, **not** a source location; artists never author there.
+- Mapping ID→resource path lives in a generated manifest consumed by the content compiler (TLS-01); the imported resource layout mirrors the ID.
+- Git LFS (TD-12) for all binaries: `.glb .gltf .blend .png .tga .psd .exr .wav`. Godot text resources (`.tscn`, `.tres`, `.gdshader`, `.import`) stay plain-text in Git — diffable and mergeable, a pivot win. Shipped source `.glb`/`.png` and sidecars live pack-local under `content/<ns>/assets/**`; working `.blend`/`.spp` DCC sources live in a never-packed `<ns>-art-source/` tree. LFS locking enabled for `.blend` rig/skeleton sources and other binary shared files.
 
 ### 4.4 Review & approval flow
 

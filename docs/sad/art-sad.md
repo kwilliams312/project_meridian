@@ -1,7 +1,7 @@
 # Art Track SAD — Asset Pipeline Architecture
 
 **Track:** Art
-**Version:** 0.1 — 2026-07-04
+**Version:** 0.2 — 2026-07-06 (A-15 RESOLVED / D-31: asset source + IF-8 sidecars are pack-local at `content/<ns>/assets/**`, not the earlier repo-level `/assets/**`; §1, §2, §3.2, §7, §10 corrected. v0.1: initial draft)
 **Status:** Draft for cross-track review
 **Zooms into:** the "Art pipeline" container of the [Architecture Overview](../02-ARCHITECTURE-OVERVIEW.md) §4 — DCC→glTF→Godot pipeline, IF-8 art usage, LOD/validation tooling.
 **Reads with:** [Art PRD v0.2](../prd/art-prd.md) (budgets, sourcing tiers, kit contract — binding requirements), [Content Schema v1](../../schema/content/README.md) (asset ID grammar), Tools SAD (IF-8 schema owner).
@@ -12,7 +12,7 @@ This is a **pipeline architecture document**. It describes the systems that move
 
 ## 1. Purpose & scope
 
-The art pipeline turns contributor work (Tier A/B/C sources per PRD §3.1) into deterministic, budget-compliant, license-clean Godot resources that `mcc` can pack into IF-5 client data. Everything between "artist saves a `.blend`" and "mesh appears in a `.pck`" is in scope: the Blender export addon, the `/assets` LFS tree, IF-8 sidecar authoring, Godot import presets, validators, CI gates, and review tooling. Runtime rendering (scalability tiers, streaming) is Client track; `mcc` itself and the IF-8 schema are Tools track.
+The art pipeline turns contributor work (Tier A/B/C sources per PRD §3.1) into deterministic, budget-compliant, license-clean Godot resources that `mcc` can pack into IF-5 client data. Everything between "artist saves a `.blend`" and "mesh appears in a `.pck`" is in scope: the Blender export addon, the pack-local asset LFS tree (`content/<ns>/assets/**`, A-15), IF-8 sidecar authoring, Godot import presets, validators, CI gates, and review tooling. Runtime rendering (scalability tiers, streaming) is Client track; `mcc` itself and the IF-8 schema are Tools track.
 
 ### 1.1 Interface table
 
@@ -39,9 +39,9 @@ flowchart LR
         S["Substance / Krita<br/>texture authoring"]
     end
     subgraph Repo [Git + LFS]
-        SRC["/assets/art-source/<br/>.blend .spp .psd (LFS)"]
-        GLB["/assets/art/<br/>.glb .png (LFS)"]
-        SC["assets/*.asset.yaml<br/>IF-8 sidecars (plain text)"]
+        SRC["<ns>-art-source/<br/>.blend .spp .psd (LFS)"]
+        GLB["content/<ns>/assets/art/<br/>.glb .png (LFS)"]
+        SC["content/<ns>/assets/**/*.asset.yaml<br/>IF-8 sidecars (plain text)"]
         IP["/client/import-presets/<br/>per-class .import templates"]
     end
     subgraph CI [Content CI]
@@ -86,28 +86,30 @@ Responsibilities:
 
 The addon is versioned; the exported `.glb` embeds `meridian:addon_version` in asset extras, and CI rejects exports from addon versions older than the repo's minimum (guards against stale local checks).
 
-### 2.2 `/assets` directory layout
+### 2.2 Pack-local asset directory layout (`content/<ns>/assets/**`, A-15)
 
-The tree mirrors asset-ID namespaces so path↔ID mapping is mechanical (PRD §4.3), one directory per asset holding the shipped files and the IF-8 sidecar next to them:
+Asset source and IF-8 sidecars live **pack-local** under each pack's `content/<namespace>/assets/**` tree (A-15 / D-31, §7.1 of the Sync Decisions), so a `.mcpack` is one self-contained subtree — the TLS-08 self-containment constraint. The tree mirrors asset-ID namespaces so path↔ID mapping is mechanical (PRD §4.3), one directory per asset holding the shipped files and the IF-8 sidecar next to them:
 
 ```
-assets/
-  core/                                  ← namespace (content-schema grammar)
-    art/
-      char/human/male/base/
-        sk_char_human_male_base.glb        (LFS)
-        t_char_human_male_base_bc.png      (LFS)
-        base.asset.yaml                    ← IF-8 sidecar (plain text, diffable)
-      env/zone01/kit/wall_stone_a/
-        sm_env_zone01_kit_wall_stone_a.glb
-        wall_stone_a.asset.yaml
-  art-source/                            ← never packed; .blend/.spp/.psd (LFS, lock-enabled)
-    core/art/char/human/male/base/...
+content/
+  core/                                  ← namespace = pack root (content-schema grammar)
+    pack.yaml
+    assets/
+      art/
+        char/human/male/base/
+          sk_char_human_male_base.glb        (LFS)
+          t_char_human_male_base_bc.png      (LFS)
+          base.asset.yaml                    ← IF-8 sidecar (plain text, diffable)
+        env/zone01/kit/wall_stone_a/
+          sm_env_zone01_kit_wall_stone_a.glb
+          wall_stone_a.asset.yaml
+  core-art-source/                       ← never packed; .blend/.spp/.psd (LFS, lock-enabled)
+    char/human/male/base/...
 ```
 
-- `core:art.env.zone01.kit.wall_stone_a` ⇔ `assets/core/art/env/zone01/kit/wall_stone_a/` — the manifest generator that `mcc` consumes derives one from the other; a CI check fails on any divergence.
-- **LFS patterns** (`.gitattributes`): `*.glb *.gltf *.blend *.png *.tga *.psd *.exr` under `/assets/**`. Text stays in plain Git: `*.asset.yaml`, `*.gdshader`, `*.tres`, `*.tscn`, `*.import`, import presets. LFS locking enabled for `art-source/**/*.blend` shared rigs/skeletons.
-- Community packs (TLS-08, M3) follow the identical layout under their own namespace directory; the pipeline tooling is namespace-agnostic.
+- `core:art.env.zone01.kit.wall_stone_a` ⇔ `content/core/assets/art/env/zone01/kit/wall_stone_a/` — the manifest generator that `mcc` consumes derives one from the other; a CI check fails on any divergence. The IF-8 `source` field is pack-root-relative (`assets/art/...`).
+- **LFS patterns** (`.gitattributes`): `*.glb *.gltf *.blend *.png *.tga *.psd *.exr` are extension-global, so they cover `content/**/assets/**` binaries without a path clause. Text stays in plain Git: `*.asset.yaml`, `*.gdshader`, `*.tres`, `*.tscn`, `*.import`, import presets. LFS locking enabled for shared rig/skeleton `.blend` sources.
+- Community packs (TLS-08, M3) follow the identical layout under their own namespace directory; the pipeline tooling is namespace-agnostic — this is exactly the property pack-local layout guarantees.
 
 ### 2.3 Godot import-preset system
 
@@ -175,9 +177,9 @@ tags: [wall, town]               # Forge palette filters (§10 Q4)
 
 ### 3.2 Provenance CI lint
 
-A stage in content CI (shared implementation with TLS-07), run on every PR touching `/assets/**`:
+A stage in content CI (shared implementation with TLS-07), run on every PR touching `content/**/assets/**`:
 
-1. Every shipped binary under `/assets/**` is listed in exactly one sidecar; every sidecar file exists in LFS. (Existence — TLS-07.)
+1. Every shipped binary under `content/<ns>/assets/**` is listed in exactly one sidecar; every sidecar file exists in LFS. (Existence — TLS-07.)
 2. `license` ∈ {CC0-1.0, CC-BY-4.0}; anything else **fails outright** — there is no tolerated engine-locked tier (PRD §3.3). A denylist of known engine-locked origins (quixel.com, fab.com, unrealengine.com/marketplace, assetstore.unity.com URLs) fails even if the license field claims CC0.
 3. Conditional-field completeness: `cc-by` ⇒ `attribution` + `origin_url`; `ai` ⇒ `ai.tool` + `ai.prompts_file` (and the prompts file exists and passes a franchise-term denylist grep); tier ≠ original ⇒ `restyle_status: done`.
 4. `reviewed_by` has ≥ 2 entries before merge to main (populated by the review bot on approval, §8.3 — contributors don't self-attest).
@@ -263,7 +265,7 @@ sequenceDiagram
     participant CI as Content CI
     participant Rev as Blind style review
 
-    C->>R: intake PR — raw CC0 source to /assets/art-source, sidecar with source_tier cc0, origin_url, license_verified_on, restyle_status pending
+    C->>R: intake PR — raw CC0 source to <ns>-art-source, sidecar with source_tier cc0, origin_url, license_verified_on, restyle_status pending
     CI-->>C: lint passes intake but blocks merge (restyle pending)
     C->>C: restyle pass — master-material rebase, repaint, silhouette, LOD chain (PRD 3.4)
     C->>R: push restyled .glb + set restyle_status done
@@ -305,10 +307,10 @@ The PRD §6.1 contract (50 cm grid, category pivots, seam-free tiling at every L
 
 | Milestone | Pipeline deliverables | Proof |
 |---|---|---|
-| **M0** | `meridian_export` v0 (naming/scale/pivot/LOD checks, sidecar scaffolding); import presets v1 (all six classes); provenance lint in CI; `budgets.json` v1; `/assets` layout + LFS config landed | 1 character (`core:art.char.human.male.base`) + 1 env kit (~15 Zone-01 pieces) through the **full** pipe: Blender → addon export → sidecar → CI green → preset import → `mcc` pack → visible in client (IT-M0) |
+| **M0** | `meridian_export` v0 (naming/scale/pivot/LOD checks, sidecar scaffolding); import presets v1 (all six classes); provenance lint in CI; `budgets.json` v1; `content/<ns>/assets/**` layout + LFS config landed | 1 character (`core:art.char.human.male.base`) + 1 env kit (~15 Zone-01 pieces) through the **full** pipe: Blender → addon export → sidecar → CI green → preset import → `mcc` pack → visible in client (IT-M0) |
 | **M1** | LOD tooling (draft-decimate operator, border-propagate operator, imposter baker); budget validator as blocking CI; perf harness v1 + weekly bench; Forge palette registration (asset ID + tags → TLS-02 browser); credits generator v1; contract-envelope snapshotting for greybox kits | Zone-01 greybox kit (~80 pieces) authored and placed entirely via the pipeline; 50-player bench scene inside §2.5 budgets |
 | **M2** | Art-pass swap tooling at scale: envelope-diff validator, batch swap reports (which greybox IDs remain), assembly-room capture scenes per kit; per-zone VRAM roll-up in the harness | Zone-01 art pass replaces ~150 greybox pieces 1:1 with zero Forge rework; beautiful-corner bench.json published as the budget template |
-| **M3** | Community submission flow: namespaced `/assets/<pack>/` support end-to-end, contributor kit (addon + presets + review map + templates), deputy-review tooling (blind queue), provenance lint hardened for third-party packs | Community-built zone from released kits passes style + perf gates on an unmodified pipeline (IT-M3); 100% shipped-asset provenance coverage |
+| **M3** | Community submission flow: namespaced `content/<pack>/assets/` support end-to-end, contributor kit (addon + presets + review map + templates), deputy-review tooling (blind queue), provenance lint hardened for third-party packs | Community-built zone from released kits passes style + perf gates on an unmodified pipeline (IT-M3); 100% shipped-asset provenance coverage |
 
 ---
 
@@ -356,7 +358,7 @@ The gates are ordered so human attention is the last filter: CI (provenance, bud
 
 ### Open questions
 
-1. **IF-8 schema fields — RESOLVED (A-12):** `asset.schema.yaml` is authored and carries every §3.1 field (`class`, the `provenance` block, `import_hints`, `contract_envelope`, `restyle_status`, `reviewed_by`, `tags`); §3.1 shows the as-landed shape. Remaining: Art sign-off review of the schema PR, and **A-15** — the source-file location split (this SAD's repo-level `/assets/**` tree vs. the Tools SAD's pack-local `content/<ns>/assets/**` sidecars) needs a joint ruling.
+1. **IF-8 schema fields — RESOLVED (A-12):** `asset.schema.yaml` is authored and carries every §3.1 field (`class`, the `provenance` block, `import_hints`, `contract_envelope`, `restyle_status`, `reviewed_by`, `tags`); §3.1 shows the as-landed shape. Remaining: Art sign-off review of the schema PR. **The source-file location split (A-15) is RESOLVED (D-31):** asset source + sidecars live **pack-local at `content/<ns>/assets/**`** — the Tools SAD's location, not this SAD's earlier repo-level `/assets/**` tree; §1 and §2.2 are corrected to match, and it ratifies the existing `core` layout. Pack-local was chosen because it makes `.mcpack` self-containment (TLS-08) automatic.
 2. **PRD §3.3 amendment — RESOLVED:** Art PRD v0.3 §3.3 now specifies the in-sidecar provenance record.
 3. **Credits screen contract (to Client):** format/placement of `credits.json` in the pack and the render surface — agree by M1 so the generator (§3.3) isn't retrofitted.
 4. **Forge palette registration mechanism (to Tools):** does TLS-02 read category tags directly from IF-8 sidecars, or from a Forge-side index built by `mcc`? Art needs to know where kit `tags:` live — sidecar preferred (one file per asset, again).
