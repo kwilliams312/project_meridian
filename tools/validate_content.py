@@ -14,14 +14,25 @@ Validates every YAML file under /content against the JSON Schemas in
   L020   every asset reference (art./mus./sfx./amb.) resolves to an IF-8 sidecar
          (severity via --assets: warn [default] | error | ignore — interim posture
          per Tools SAD §4.3 until the first art drop)
+  L021   asset sidecar provenance is complete + internally consistent (TD-09;
+         Art PRD §3, Art SAD §3.2) — always a hard error
+  L022   asset sidecar license is on the CI allowlist and its origin is not an
+         engine-locked marketplace (TD-09; Art PRD §3, "fails CI outright") —
+         always a hard error
+  L070   declared LOD0 tri count is within the Art PRD §2.1 class ceiling — error
+  L071   declared texture dimension is within the Art PRD §2.3 class cap — error
+  L072   declared material-set count is within the Art PRD §2.3/§2.4 cap — error
   L034   explore objectives reference a POI defined in the zone manifest
   L035   quest giver / turn-in / deliver NPCs have a spawn point (warn)
   L052   loot-table nesting exceeds one level (Tools PRD §4.4)
   L062   vendor item has neither item price.buy nor a price_override
 
-L021/L022 (sidecar source existence in LFS, provenance completeness on release
-branches) arrive with `mcc`; the asset schema already enforces the conditional
-provenance fields where JSON Schema can.
+L021/L022 provenance completeness + license/origin policy and L070-072 budget
+caps are enforced here now (TD-09 / Art PRD §3, §2.1/§2.3/§2.4; issue #142). The
+asset schema still enforces the conditional provenance fields where JSON Schema
+can — these lints add the semantic policy (allowlist, engine-locked-origin
+denylist, per-class budget rows) and named rule ids on top. Sidecar-source
+existence in LFS (the remaining L021 scope) still arrives with `mcc`.
 
 This is the stopgap CI gate until `mcc` (C++) subsumes it; keep rule ids stable
 (they match the Tools SAD §2.2 lint bands).
@@ -42,6 +53,91 @@ from jsonschema import Draft202012Validator
 
 CONTENT_TYPES = ("npc", "item", "quest", "ability", "loot", "vendor", "spawn", "zone")
 ASSET_PREFIXES = ("art", "mus", "sfx", "amb")
+
+# --- Provenance / license policy (TD-09; Art PRD §3, Art SAD §3.2) ------------
+# License allowlist: original art is CC-BY-4.0, third-party must be CC0 or CC-BY.
+# Anything else "fails CI outright" (Art PRD §3, line 164). Matches the schema
+# `license` enum, restated here so L022 is a lint in its own right and does not
+# depend on the schema enum staying tight.
+PERMITTED_LICENSES = ("CC0-1.0", "CC-BY-4.0")
+
+# Engine-locked marketplace origins are disallowed regardless of the license tag:
+# their terms bind assets to a specific engine and are incompatible with the open,
+# redistributable Godot stack (TD-09; Art PRD §3 / §3.1, D-18 §60). Matched as a
+# case-insensitive substring against provenance.origin_url.
+ENGINE_LOCKED_ORIGINS = (
+    "quixel.com",
+    "megascans",
+    "fab.com",
+    "unrealengine.com",
+    "unreal marketplace",
+    "assetstore.unity.com",
+    "unity asset store",
+)
+
+# source_tier -> extra provenance fields required beyond {source_tier, authors}.
+# Mirrors the schema's conditional allOf (asset.schema.yaml) so the lint gives a
+# named rule id + human message rather than a raw JSON-Schema failure, and so the
+# requirement survives even if the schema is loosened. (Art SAD §3.1 field table.)
+PROVENANCE_TIER_REQUIRES = {
+    "original": (),
+    "ai": ("origin_url", "ai"),
+    "cc0": ("origin_url", "license_verified_on"),
+    "cc_by": ("origin_url", "attribution", "license_verified_on"),
+}
+
+# --- Per-asset budget table (Art PRD §2.1 geometry, §2.3 texture, §2.4 material).
+# Keyed by the sidecar `class` enum. Each row: the hard ceiling for a declared
+# budget field, with the PRD cite. Ranges in the PRD ("45-60k") take the TOP of the
+# band as the LOD0 ceiling; classes with an explicit upper cap use it. Classes not
+# listed for a metric are unconstrained for that metric (no PRD row -> no check).
+# Every number is a direct PRD figure — see the cite string on each row.
+ASSET_BUDGETS: dict[str, dict[str, tuple[int, str]]] = {
+    # class:            metric        (ceiling, PRD cite)
+    "character_model": {
+        "lod0_tris": (60_000, "Art PRD §2.1 player character body 45-60k"),
+        "texture_max_px": (2048, "Art PRD §2.3 player character body 2048² set"),
+        "vram_mb": (24, "Art PRD §2.3 player character body ≤ 24 MB"),
+    },
+    "armor_model": {
+        "lod0_tris": (8_000, "Art PRD §2.1 armor set piece 3-8k per slot"),
+        "texture_max_px": (2048, "Art PRD §2.3 armor set shared 2048²"),
+        "vram_mb": (32, "Art PRD §2.3 armor set (8 slots) ≤ 32 MB"),
+    },
+    "kit_piece": {
+        "lod0_tris": (
+            20_000,
+            "Art PRD §2.1 environment kit piece ≤ 20k large set pieces",
+        ),
+        "texture_max_px": (2048, "Art PRD §2.3 environment kit tiling 2048² materials"),
+        "material_sets": (12, "Art PRD §2.3/§2.4 ≤ 12 unique material sets per kit"),
+        "vram_mb": (224, "Art PRD §2.3 environment kit ≤ 224 MB per kit resident"),
+    },
+    "weapon_model": {
+        "lod0_tris": (
+            15_000,
+            "Art PRD §2.1 weapon 6-12k; 2-hander/legendary up to 15k",
+        ),
+        "texture_max_px": (2048, "Art PRD §2.3 weapon 1024² (2048² for legendary)"),
+        "vram_mb": (6, "Art PRD §2.3 weapon ≤ 6 MB"),
+    },
+    "creature_model": {
+        "lod0_tris": (90_000, "Art PRD §2.1 large creature/boss 60-90k"),
+        "texture_max_px": (4096, "Art PRD §2.3 boss 4096² allowed"),
+        "vram_mb": (64, "Art PRD §2.3 boss ≤ 64 MB"),
+    },
+    "prop": {
+        "lod0_tris": (3_000, "Art PRD §2.1 prop, small 0.5-3k"),
+        "texture_max_px": (1024, "Art PRD §2.3 prop 512²-1024²"),
+        "vram_mb": (4, "Art PRD §2.3 prop ≤ 4 MB"),
+    },
+    "foliage": {
+        "lod0_tris": (20_000, "Art PRD §2.1 foliage: tree 10-20k"),
+    },
+    "hero_landmark": {
+        "lod0_tris": (80_000, "Art PRD §2.1 hero landmark / POI piece 40-80k"),
+    },
+}
 REF_RE = re.compile(
     r"^(?:([a-z][a-z0-9_]{1,31}):)?"
     r"((npc|item|quest|ability|loot|vendor|spawn|zone)\.[a-z0-9_]+(?:\.[a-z0-9_]+)*)$"
@@ -115,6 +211,110 @@ def walk_ranges(node, path="$"):
 
 def _resolve(ref: str, namespace: str) -> str:
     return ref if ":" in ref else f"{namespace}:{ref}"
+
+
+def check_provenance(doc: dict, rel_path: Path) -> list[str]:
+    """L021/L022 — provenance completeness/consistency + license/origin policy.
+
+    Hard errors, independent of the schema's structural checks (TD-09; Art PRD §3,
+    Art SAD §3.2). Assumes `doc` already passed schema validation, so the core
+    shape (license, provenance{source_tier, authors}) is present; this layer adds
+    the semantic policy the schema cannot fully express and gives named rule ids.
+    """
+    errors: list[str] = []
+    prov = doc.get("provenance", {})
+
+    # L022 — license allowlist. Original art is CC-BY-4.0; third-party must be
+    # CC0/CC-BY. Anything else fails CI outright (Art PRD §3).
+    license_id = doc.get("license")
+    if license_id not in PERMITTED_LICENSES:
+        errors.append(
+            f"L022 {rel_path}: license '{license_id}' is not on the CI allowlist "
+            f"({', '.join(PERMITTED_LICENSES)}) — TD-09 / Art PRD §3"
+        )
+
+    # L022 — engine-locked marketplace origins are disallowed regardless of license.
+    origin = str(prov.get("origin_url", "")).lower()
+    for marker in ENGINE_LOCKED_ORIGINS:
+        if marker in origin:
+            errors.append(
+                f"L022 {rel_path}: origin_url names an engine-locked marketplace "
+                f"('{marker}') — engine-locked content is disallowed (TD-09 / Art PRD §3.1)"
+            )
+            break
+
+    # L021 — provenance completeness per source tier.
+    tier = prov.get("source_tier")
+    required = PROVENANCE_TIER_REQUIRES.get(tier)
+    if required is None:
+        # source_tier absent/unknown (schema should have caught it) — flag anyway.
+        errors.append(
+            f"L021 {rel_path}: provenance.source_tier '{tier}' is missing or unknown "
+            f"(expected one of {', '.join(PROVENANCE_TIER_REQUIRES)}) — TD-09"
+        )
+    else:
+        for field_name in required:
+            if not prov.get(field_name):
+                errors.append(
+                    f"L021 {rel_path}: provenance is incomplete for source_tier "
+                    f"'{tier}': missing '{field_name}' (Art SAD §3.1 / TD-09)"
+                )
+        if tier == "ai":
+            ai = prov.get("ai") or {}
+            for ai_field in ("tool", "prompts_file"):
+                if not ai.get(ai_field):
+                    errors.append(
+                        f"L021 {rel_path}: AI-tier provenance missing 'ai.{ai_field}' "
+                        f"(prompt hygiene, Art PRD §3.2)"
+                    )
+
+    # L021 — authors must be non-empty (schema enforces minItems:1, restated so a
+    # loosened schema still fails here).
+    if not prov.get("authors"):
+        errors.append(
+            f"L021 {rel_path}: provenance.authors is empty — every asset names an "
+            f"author (TD-09)"
+        )
+
+    return errors
+
+
+def check_budget(doc: dict, rel_path: Path) -> list[str]:
+    """L070/L071/L072 — declared budget figures vs the Art PRD class ceilings.
+
+    Only checks fields the sidecar actually declares (the `budget` block is
+    optional until the LFS source drop, Art SAD §4.2). Every threshold is a direct
+    Art PRD §2.1/§2.3/§2.4 number, carried in ASSET_BUDGETS with its cite.
+    """
+    errors: list[str] = []
+    budget = doc.get("budget")
+    if not budget:
+        return errors
+
+    asset_class = doc.get("class")
+    caps = ASSET_BUDGETS.get(asset_class, {})
+
+    checks = (
+        ("lod0_tris", "L070", "tri"),
+        ("texture_max_px", "L071", "px"),
+        ("material_sets", "L072", "material set"),
+        ("vram_mb", "L071", "MB VRAM"),
+    )
+    for metric, rule, unit in checks:
+        declared = budget.get(metric)
+        if declared is None:
+            continue
+        cap_row = caps.get(metric)
+        if cap_row is None:
+            continue  # no PRD ceiling for this class/metric -> unconstrained
+        ceiling, cite = cap_row
+        if declared > ceiling:
+            errors.append(
+                f"{rule} {rel_path}: {metric} {declared} {unit} exceeds the "
+                f"{ceiling} ceiling for class '{asset_class}' ({cite})"
+            )
+
+    return errors
 
 
 def validate(content_dir: Path, schema_dir: Path, assets_mode: str = "warn") -> Result:
@@ -214,6 +414,9 @@ def validate(content_dir: Path, schema_dir: Path, assets_mode: str = "warn") -> 
 
         if ftype == "asset":
             asset_ids.add(doc_id)
+            # L021/L022 provenance + license/origin policy, L070-072 budget caps.
+            res.errors.extend(check_provenance(doc, rel(path)))
+            res.errors.extend(check_budget(doc, rel(path)))
             continue  # sidecar-internal refs (stem_set, variation_group) are metadata, not L011/L020 refs
 
         content_ids.add(doc_id)

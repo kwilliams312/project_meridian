@@ -67,6 +67,34 @@ properties:
         maxLength: 2000
 
   # --- Art extension block (D-18; owned vocabulary: Art track) ---
+  budget:
+    description: >-
+      Declared per-asset budget figures, checked against the Art PRD §2.1/§2.3/§2.4
+      class caps by lints L070-L072 (validate_content.py). Optional: until the LFS
+      source drop, sidecars may omit it and only the schema/provenance gates apply;
+      once declared, every field is enforced against the PRD row for `class`. The
+      binary-parsing budget validator (Art SAD §4.2, tools/validate_asset_budgets.py,
+      pygltflib) supersedes these declarations once .glb sources land — these fields
+      are the authoring-time declaration the sidecar carries in the meantime.
+    type: object
+    additionalProperties: false
+    properties:
+      lod0_tris:
+        description: LOD0 triangle count; checked vs the Art PRD §2.1 class ceiling.
+        type: integer
+        minimum: 0
+      texture_max_px:
+        description: Largest authored texture dimension in px; vs the Art PRD §2.3 class cap.
+        type: integer
+        minimum: 0
+      material_sets:
+        description: Unique material sets (per-kit aggregate); vs the Art PRD §2.3/§2.4 cap.
+        type: integer
+        minimum: 0
+      vram_mb:
+        description: Estimated resident VRAM in MB; vs the Art PRD §2.3 class VRAM budget.
+        type: number
+        minimum: 0
   import_hints:
     type: object
     additionalProperties: false

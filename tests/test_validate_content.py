@@ -75,6 +75,18 @@ spawns:
     respawn_seconds: { min: 60, max: 60 }
 """
 
+# A fully-valid original-tier character sidecar; individual tests mutate one field.
+ASSET = """\
+schema: meridian/asset@1
+id: tp:art.char.hero
+class: character_model
+source: assets/art/char/hero.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: original
+  authors: [tester]
+"""
+
 
 def build(tmp_path: Path, files: dict[str, str], with_base: bool = True) -> Path:
     """Write a content tree under tmp_path/content/t and return the content dir."""
@@ -403,6 +415,145 @@ class TestSchemaConstraints:
         assert "SCHEMA" in codes(
             res.errors
         )  # provenance.ai block required for source_tier: ai
+
+
+@pytest.mark.unit
+class TestProvenanceLint:
+    """L021/L022 — provenance completeness + license/origin policy (TD-09)."""
+
+    def test_valid_sidecar_passes(self, tmp_path):
+        res = run(tmp_path, {"tp/assets/art/hero.asset.yaml": ASSET})
+        assert res.errors == []
+        assert res.warnings == []
+
+    def test_l021_missing_provenance_field_errors(self, tmp_path):
+        # cc0 tier requires origin_url + license_verified_on. Exercise the lint
+        # directly: the schema's conditional allOf would reject this shape first,
+        # so a full-tree run never reaches L021 for schema-expressible gaps — the
+        # lint is the layer that survives a loosened schema (Art SAD §3.2).
+        from validate_content import check_provenance  # noqa: E402
+
+        doc = {
+            "license": "CC0-1.0",
+            "provenance": {"source_tier": "cc0", "authors": ["t"]},
+        }
+        errors = check_provenance(doc, Path("x.asset.yaml"))
+        assert any(e.startswith("L021") and "origin_url" in e for e in errors)
+
+    def test_l021_ai_tier_missing_ai_block_errors(self, tmp_path):
+        from validate_content import check_provenance  # noqa: E402
+
+        doc = {
+            "license": "CC-BY-4.0",
+            "provenance": {
+                "source_tier": "ai",
+                "authors": ["t"],
+                "origin_url": "https://example.com",
+            },
+        }
+        errors = check_provenance(doc, Path("x.asset.yaml"))
+        assert any(e.startswith("L021") and "ai." in e for e in errors)
+
+    def test_l022_disallowed_license_errors(self, tmp_path):
+        # A schema-legal-but-policy-banned license: bypass the schema enum by
+        # asserting the lint fires on a permissive license the allowlist rejects.
+        sidecar = ASSET.replace("license: CC-BY-4.0", "license: MIT")
+        res = run(tmp_path, {"tp/assets/art/hero.asset.yaml": sidecar})
+        # Schema enum also rejects MIT; both surface as errors — assert the policy
+        # message is present regardless of ordering.
+        assert any(e.startswith("L022") or "license" in e for e in res.errors)
+
+    def test_l022_disallowed_license_via_lint_directly(self, tmp_path):
+        from validate_content import check_provenance  # noqa: E402
+
+        doc = {
+            "license": "MIT",
+            "provenance": {"source_tier": "original", "authors": ["t"]},
+        }
+        errors = check_provenance(doc, Path("x.asset.yaml"))
+        assert any(e.startswith("L022") and "allowlist" in e for e in errors)
+
+    def test_l022_engine_locked_origin_errors(self, tmp_path):
+        from validate_content import check_provenance  # noqa: E402
+
+        doc = {
+            "license": "CC0-1.0",
+            "provenance": {
+                "source_tier": "cc0",
+                "authors": ["t"],
+                "origin_url": "https://quixel.com/megascans/rock01",
+                "license_verified_on": "2026-01-01",
+            },
+        }
+        errors = check_provenance(doc, Path("x.asset.yaml"))
+        assert any(e.startswith("L022") and "engine-locked" in e for e in errors)
+
+    def test_l022_engine_locked_origin_fails_full_tree(self, tmp_path):
+        # Schema-valid cc0 sidecar (complete provenance) but the origin is an
+        # engine-locked marketplace — only L022 catches this; proves it fires
+        # through the full validate() path, not just the unit helper.
+        sidecar = """\
+        schema: meridian/asset@1
+        id: tp:art.prop.rock
+        class: prop
+        source: assets/art/prop/rock.glb
+        license: CC0-1.0
+        provenance:
+          source_tier: cc0
+          authors: [tester]
+          origin_url: https://quixel.com/megascans/rock01
+          license_verified_on: "2026-01-01"
+        """
+        res = run(tmp_path, {"tp/assets/art/rock.asset.yaml": sidecar})
+        assert "L022" in codes(res.errors)
+        assert any("engine-locked" in e for e in res.errors)
+
+
+@pytest.mark.unit
+class TestBudgetLint:
+    """L070/L071/L072 — declared budget vs Art PRD §2.1/§2.3/§2.4 class caps."""
+
+    def test_within_budget_passes(self, tmp_path):
+        sidecar = ASSET + "budget:\n  lod0_tris: 55000\n  texture_max_px: 2048\n"
+        res = run(tmp_path, {"tp/assets/art/hero.asset.yaml": sidecar})
+        assert res.errors == []
+
+    def test_l070_over_tri_budget_errors(self, tmp_path):
+        # character_model LOD0 ceiling is 60k (Art PRD §2.1); declare 80k.
+        sidecar = ASSET + "budget:\n  lod0_tris: 80000\n"
+        res = run(tmp_path, {"tp/assets/art/hero.asset.yaml": sidecar})
+        assert "L070" in codes(res.errors)
+
+    def test_l071_over_texture_budget_errors(self, tmp_path):
+        # prop texture cap is 1024² (Art PRD §2.3); declare 4096 on a prop.
+        sidecar = (
+            ASSET.replace("class: character_model", "class: prop")
+            .replace("id: tp:art.char.hero", "id: tp:art.prop.rock")
+            .replace(
+                "source: assets/art/char/hero.glb", "source: assets/art/prop/rock.glb"
+            )
+            + "budget:\n  texture_max_px: 4096\n"
+        )
+        res = run(tmp_path, {"tp/assets/art/rock.asset.yaml": sidecar})
+        assert "L071" in codes(res.errors)
+
+    def test_l072_over_material_set_budget_errors(self, tmp_path):
+        # kit_piece cap is 12 material sets (Art PRD §2.3/§2.4); declare 20.
+        sidecar = (
+            ASSET.replace("class: character_model", "class: kit_piece")
+            .replace("id: tp:art.char.hero", "id: tp:art.kit.wall")
+            .replace(
+                "source: assets/art/char/hero.glb", "source: assets/art/kit/wall.glb"
+            )
+            + "budget:\n  material_sets: 20\n"
+        )
+        res = run(tmp_path, {"tp/assets/art/wall.asset.yaml": sidecar})
+        assert "L072" in codes(res.errors)
+
+    def test_no_budget_block_is_inert(self, tmp_path):
+        # Real content declares no budget block yet — must still pass.
+        res = run(tmp_path, {"tp/assets/art/hero.asset.yaml": ASSET})
+        assert res.errors == []
 
 
 @pytest.mark.integration
