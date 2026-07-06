@@ -21,3 +21,70 @@ jobs:
         run: uv run tools/check_traceability.py
       - name: Run test suite
         run: uv run pytest -q
+
+  # Builds the mcc C++ compiler and runs `mcc check` (its structural lint layer,
+  # L001-L011/PARSE), then cross-checks it against the Python reference validator.
+  # This is the parity gate that lets mcc gradually subsume validate_content.py:
+  # the job fails if the two tools disagree on the content's clean/dirty verdict.
+  mcc-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # C++20 toolchain for mcc. yaml-cpp is NOT installed system-wide on purpose:
+      # mcc's CMake falls back to a pinned FetchContent build (yaml-cpp 0.8.0), so
+      # this also exercises the hermetic build path CI runners rely on.
+      - name: Install C++ toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++-13
+
+      - name: Build mcc (Release, g++-13)
+        run: |
+          cmake -S tools/mcc -B tools/mcc/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
+          cmake --build tools/mcc/build
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      # Parity assertion. Both tools validate ./content from the repo root and print
+      # a "Validated <files> files: <entities> entities, <assets> asset sidecars,
+      # <content_refs> content refs[, ...]." banner. We assert:
+      #   1. mcc check exits 0 (structural lints clean),
+      #   2. validate_content.py exits 0 (schema + full lints clean), and
+      #   3. the four counts both tools report — files / entities / asset sidecars /
+      #      content refs — are identical. (The Python validator additionally reports
+      #      asset refs, an mcc-deferred layer, so that field is not compared.)
+      # If either exit code is non-zero, or the shared counts diverge, the job fails —
+      # that is the cross-check that mcc and the reference validator agree.
+      - name: mcc check + parity vs Python validator
+        run: |
+          set -euo pipefail
+
+          echo "== mcc check =="
+          ./tools/mcc/build/mcc check | tee mcc.out
+          echo "== validate_content.py =="
+          uv run tools/validate_content.py | tee py.out
+
+          # Extract "files entities assets content_refs" from each banner.
+          extract() {
+            grep -Eo 'Validated [0-9]+ files: [0-9]+ entities, [0-9]+ asset sidecars, [0-9]+ content refs' "$1" \
+              | grep -Eo '[0-9]+' | paste -sd' ' -
+          }
+          mcc_counts="$(extract mcc.out)"
+          py_counts="$(extract py.out)"
+
+          echo "mcc counts (files entities assets content_refs): ${mcc_counts:-<none>}"
+          echo "py  counts (files entities assets content_refs): ${py_counts:-<none>}"
+
+          if [ -z "$mcc_counts" ] || [ -z "$py_counts" ]; then
+            echo "PARITY FAIL: could not parse a stats banner from one of the tools." >&2
+            exit 1
+          fi
+          if [ "$mcc_counts" != "$py_counts" ]; then
+            echo "PARITY FAIL: mcc and validate_content.py disagree on the content corpus." >&2
+            exit 1
+          fi
+          echo "PARITY OK: both tools exit 0 and agree on files/entities/assets/content refs."
