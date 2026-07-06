@@ -18,6 +18,7 @@
 #include <string_view>
 #include <vector>
 
+#include "stages/check.h"
 #include "stages/stages.h"
 
 #ifndef MCC_VERSION
@@ -38,6 +39,41 @@ struct Command {
 // Emit a stub notice for a stage of the pipeline this subcommand would drive.
 void emit_stage(mcc::stages::Stage s) { mcc::stages::run(s, std::cout); }
 
+// Default content root when none is given on the command line. `mcc` is run
+// from the repo root in CI and by editors, so ./content is the convention.
+constexpr std::string_view kDefaultContentDir = "./content";
+
+// Shared parse of the check/build diagnostics flags: `--diag-format=text|json`
+// and an optional positional content directory. Returns false on a bad flag
+// (with a message on stderr); on success fills `content_dir` and `format`.
+bool parse_check_flags(std::string_view prog_sub, const std::vector<std::string>& args,
+                       std::string& content_dir, mcc::stages::DiagFormat& format) {
+    content_dir = std::string(kDefaultContentDir);
+    format = mcc::stages::DiagFormat::Text;
+    bool have_dir = false;
+    for (const auto& a : args) {
+        if (a == "--diag-format=json") {
+            format = mcc::stages::DiagFormat::Json;
+        } else if (a == "--diag-format=text") {
+            format = mcc::stages::DiagFormat::Text;
+        } else if (a.rfind("--diag-format=", 0) == 0) {
+            std::cerr << kProg << " " << prog_sub << ": unknown --diag-format value '"
+                      << a.substr(std::strlen("--diag-format=")) << "' (expected text | json)\n";
+            return false;
+        } else if (!a.empty() && a[0] == '-') {
+            std::cerr << kProg << " " << prog_sub << ": unknown flag '" << a << "'\n";
+            return false;
+        } else if (!have_dir) {
+            content_dir = a;
+            have_dir = true;
+        } else {
+            std::cerr << kProg << " " << prog_sub << ": unexpected extra argument '" << a << "'\n";
+            return false;
+        }
+    }
+    return true;
+}
+
 // ---- Subcommand handlers ---------------------------------------------------
 // Each prints "stub: <role per the SAD>" and returns 0. Flags that the real
 // implementation will honor are parsed now so the CLI surface is stable.
@@ -45,20 +81,30 @@ void emit_stage(mcc::stages::Stage s) { mcc::stages::run(s, std::cout); }
 int cmd_build(const std::vector<std::string>& args) {
     bool full = false;
     bool watch = false;
+    std::vector<std::string> check_args;  // non-build flags forwarded to check
     for (const auto& a : args) {
         if (a == "--full") full = true;
         else if (a == "--watch") watch = true;
-        else {
-            std::cerr << kProg << " build: unknown flag '" << a << "'\n";
-            return 2;
-        }
+        else check_args.push_back(a);  // e.g. --diag-format=json, content dir
     }
-    std::cout << "stub: build — run the discover->validate->link->bake->emit DAG"
-                 " (Tools SAD §2), producing IF-4 SQL + IF-5 .pck\n";
+
+    // build runs check first (Tools SAD §2.2: validate gates the DAG). A failing
+    // check aborts the build — nothing downstream is emitted from bad content.
+    std::string content_dir;
+    mcc::stages::DiagFormat format;
+    if (!parse_check_flags("build", check_args, content_dir, format)) return 2;
+    const int check_rc = mcc::stages::check(content_dir, format, std::cout, std::cerr);
+    if (check_rc != 0) {
+        std::cerr << kProg << " build: check failed — aborting build\n";
+        return check_rc;
+    }
+
+    std::cout << "stub: build — run the link->bake->emit DAG (Tools SAD §2),"
+                 " producing IF-4 SQL + IF-5 .pck\n";
     std::cout << "  mode: " << (full ? "full rebuild" : "incremental")
               << (watch ? ", watching for changes" : "") << '\n';
-    emit_stage(mcc::stages::Stage::DiscoverParse);
-    emit_stage(mcc::stages::Stage::Validate);
+    // discover/parse/validate are now real (via check above); the rest remain
+    // stubs until later M0 tasks.
     emit_stage(mcc::stages::Stage::Link);
     emit_stage(mcc::stages::Stage::Bake);
     emit_stage(mcc::stages::Stage::EmitSql);
@@ -66,12 +112,11 @@ int cmd_build(const std::vector<std::string>& args) {
     return 0;
 }
 
-int cmd_check(const std::vector<std::string>&) {
-    std::cout << "stub: check — validate /content against Content Schema v1 and"
-                 " run the lint engine (L001..L081, Tools SAD §2.2)\n";
-    emit_stage(mcc::stages::Stage::DiscoverParse);
-    emit_stage(mcc::stages::Stage::Validate);
-    return 0;
+int cmd_check(const std::vector<std::string>& args) {
+    std::string content_dir;
+    mcc::stages::DiagFormat format;
+    if (!parse_check_flags("check", args, content_dir, format)) return 2;
+    return mcc::stages::check(content_dir, format, std::cout, std::cerr);
 }
 
 int cmd_fmt(const std::vector<std::string>&) {
@@ -148,8 +193,8 @@ int cmd_idmap(const std::vector<std::string>& args) {
 // ---- Command table ---------------------------------------------------------
 
 const Command kCommands[] = {
-    {"build",     "compile /content -> IF-4 SQL + IF-5 .pck (flags: --full, --watch)", cmd_build},
-    {"check",     "validate /content: Content Schema v1 + lint engine",                cmd_check},
+    {"build",     "check then compile /content -> IF-4 SQL + IF-5 .pck (--full, --watch)", cmd_build},
+    {"check",     "validate /content: structural lints (L001-L011); --diag-format=json", cmd_check},
     {"fmt",       "canonically re-serialize /content YAML for clean diffs",            cmd_fmt},
     {"diff",      "compare two builds: diff <buildA> <buildB>",                        cmd_diff},
     {"pack",      "build a signed .mcpack community pack + content hash",              cmd_pack},
@@ -181,8 +226,13 @@ void print_help() {
         << "\nGLOBAL OPTIONS:\n"
            "  --version    print the mcc version and exit\n"
            "  --help, -h   print this help and exit\n\n"
-           "NOTE: this is the v0 skeleton — every command is a stub that reports\n"
-           "its role and exits 0. Real compilation lands in later M0 tasks.\n";
+           "CHECK/BUILD OPTIONS:\n"
+           "  [dir]                content root to scan (default: ./content)\n"
+           "  --diag-format=text   human-readable diagnostics (default)\n"
+           "  --diag-format=json   structured diagnostics for Codex/Forge/CI\n\n"
+           "NOTE: discover/parse and the structural lints (L001-L011) are\n"
+           "implemented; JSON Schema validation, semantic lints, link/bake/emit\n"
+           "land in later M0 tasks (they report as stubs).\n";
 }
 
 }  // namespace
