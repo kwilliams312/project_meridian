@@ -1,6 +1,6 @@
 # Cross-Track Sync Decisions
 
-**Version:** 1.8 — 2026-07-06 (§7: A-15 RESOLVED — asset source + IF-8 sidecars live pack-local at `content/<ns>/assets/**` (D-31), ratifying the existing `core` layout. §10 added: server packaging & CD, D-30 — no baseline change, OPS-01 extension. §9: telemetry & observability, D-29/Baseline v0.6. §8: macOS client, D-28/Baseline v0.5. §7: Content Schema v1.1 reconciliation — A-12 discharged, D-24..D-27, A-15 opened, A-13 done. §6: sharded-realm scale-up. §5: SAD reconciliation. §4: engine pivot UE5 → Godot 4.6)
+**Version:** 1.9 — 2026-07-06 (§11 added: A-09 terrain decision — Terrain3D fork-and-vendor, no baseline change. §7: A-15 RESOLVED — asset source + IF-8 sidecars live pack-local at `content/<ns>/assets/**` (D-31), ratifying the existing `core` layout. §10 added: server packaging & CD, D-30 — no baseline change, OPS-01 extension. §9: telemetry & observability, D-29/Baseline v0.6. §8: macOS client, D-28/Baseline v0.5. §7: Content Schema v1.1 reconciliation — A-12 discharged, D-24..D-27, A-15 opened, A-13 done. §6: sharded-realm scale-up. §5: SAD reconciliation. §4: engine pivot UE5 → Godot 4.6)
 **Purpose:** Resolutions for the conflicts and gaps the five track PRDs raised against Baseline v0.1. Decisions marked **[baseline]** are already folded into Baseline v0.2; the rest are binding interpretations the PRDs should be read against. Remaining items are in §3.
 
 ---
@@ -46,7 +46,7 @@
 | A-06 | Audio options UI (channel volumes, voice-count tiers) ownership — proposed: Client owns UI, Music defines the mix buses | Client + Music | M1 |
 | A-07 | Community content pack provenance enforcement for audio/art inside packs (TLS-08 × TD-09) | Tools | M3 |
 | A-08 | Chunk export format v1 sign-off in `/schema` (Forge owns format; Client owns streamer; Server consumes cell metadata) + versioning/migration policy (re-export vs loader back-compat) | Tools + Client | Format: M0 exit; policy: M1 start |
-| A-09 | Terrain spike: evaluate Terrain3D (MIT) — adopt/fork-and-vendor vs build our own terrain GDExtension | Tools | M0 |
+| A-09 | Terrain spike: evaluate Terrain3D (MIT) — adopt/fork-and-vendor vs build our own terrain GDExtension | Tools | **RESOLVED — §11 (fork-and-vendor Terrain3D)** |
 
 ---
 
@@ -185,3 +185,20 @@ Epic + stories tracked on GitHub under milestone M0 (OPS-05 epic). Server PRD an
 5. **Releases:** a semver tag produces a GitHub Release with pinned image digests + checksums; the nightly test realm tracks `main`, public/community realms track releases.
 
 Phasing: publish workflow + compose-from-GHCR at M0; SBOM/signing + release workflow at M1; Helm v0 at M1–M2 (best-effort), sharded chart at M3 with OPS-04.
+
+---
+
+## 11. Terrain decision — A-09 resolved (2026-07-06, no baseline change)
+
+**Decision: fork-and-vendor Terrain3D.** Resolves action item **A-09** (Tools, M0). Full evaluation with sources and per-criterion verdicts in [docs/terrain-eval.md](terrain-eval.md) (which also records the co-signed criteria, discharging #131). No baseline matrix change — this is the M0-exit terrain gate under TLS-02 (Tools PRD §3.1, §9; Tools SAD §5.2), not a new feature.
+
+Terrain3D (MIT, GDExtension) was scored against the four co-signed criteria (Tools PRD open question #4). All four **PASS**, none is a blocker:
+
+1. **128 m region alignment — PASS (exact):** `region_size = SIZE_128` is a native enum value; a Terrain3D region becomes exactly one Meridian 128 m chunk (129×129 vertices at 1 m).
+2. **Clipmap LOD on min-spec — PASS (empirical residual):** Witcher-3-style geomorphing geoclipmap, 7 tunable LODs; terrain draw-call cost is negligible against the ≤ 2,500 Low ceiling. The 30 FPS/1060 number is confirmed architecturally; a bench measurement folds into the M0 EditorPlugin-skeleton spike.
+3. **Paint-layer count — PASS (headroom):** 32 texture layers vs. the ~8-per-zone / ≤ 4-blended-per-chunk budget (Art PRD §2.3) — 4× margin.
+4. **Heightfield extraction — PASS (native):** float32 is Terrain3D's native height storage; the region-image API or `get_height` sampling yields the exact `f32[129×129]` per-chunk grid the server needs (SAD §3.2/§5.2).
+
+**Rationale for fork-and-vendor over adopt-as-is or build-our-own:** no blocking gap justifies building from scratch (Tools PRD R1/R3 flag that as an M1-critical-path schedule risk); vendoring a pinned fork lets upstream/GDExtension churn (PRD R1/R7) not break M1, freezes the terrain feature set at M0 exit, and allows small Meridian-specific patches (e.g. a `forge_core` heightfield-export entry point) — all unencumbered under MIT. The **`ITerrainBackend` seam (Tools SAD §5.2, firmed up in that revision)** keeps the choice reversible: an in-house GDExtension remains a drop-in second implementation with no caller changes.
+
+Residuals to close before the M0-exit feature freeze: the C2 bench measurement, vendoring mechanics (upstream commit pin + Godot-version pin into the Creator Kit engine pin per PRD R7/R8), and confirming the `export_heightfield` path against the vendored build. Tracked under the existing M0 terrain gate; no new action item.

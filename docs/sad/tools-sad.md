@@ -1,6 +1,6 @@
 # Tools Track — Software Architecture Document
 
-**Version:** 0.2 — 2026-07-04 (v0.2: IF-8 schema authored per A-12 — §4 updated to the as-landed `asset.schema.yaml`; §2.2 lint bands extended with the rules now implemented in the reference validator: L003/L004/L020/L034/L035/L052/L062; L040 folded into the spawn schema. v0.1: initial draft)
+**Version:** 0.3 — 2026-07-06 (v0.3: §5.2 `ITerrainBackend` firmed up per the A-09 decision — full operation set + inheritance for both Terrain3D-adopt and build-our-own paths, C++ header sketch; see [terrain-eval.md](../terrain-eval.md) and Sync Decisions §11. v0.2: IF-8 schema authored per A-12 — §4 updated to the as-landed `asset.schema.yaml`; §2.2 lint bands extended with the rules now implemented in the reference validator: L003/L004/L020/L034/L035/L052/L062; L040 folded into the spawn schema. v0.1: initial draft)
 **Status:** Draft for cross-track review. §3 (IF-6) is a contract DRAFT requiring sign-off before M0 exit (A-08); §4 (IF-8) is authored, with Art/Music sign-off pending (A-12) and the source-tree location split tracked as A-15.
 **Zooms into:** the Creator-machine containers of [02-ARCHITECTURE-OVERVIEW.md](../02-ARCHITECTURE-OVERVIEW.md) — `mcc`, Forge, Codex.
 **Reads with:** [Tools PRD](../prd/tools-prd.md) v0.2, [Sync Decisions](../01-SYNC-DECISIONS.md) (D-07/D-08/D-09/D-17, A-08/A-09), [Content Schema v1](../../schema/content/README.md).
@@ -288,7 +288,60 @@ gdextension: forge_core/              # C++: chunk export, Recast bake, terrain 
 
 ### 5.2 Terrain behind an interface (A-09 swap seam)
 
-All Forge terrain interaction goes through `ITerrainBackend` (a `forge_core`-defined interface): `sculpt/paint ops`, `paint layer ↔ art.* terrain-set binding`, `region alignment query (must tile on the 128 m grid)`, `export_heightfield(chunk) → f32[129×129]`, `collision-relevant geometry enumeration for navmesh input`. Terrain3D (adopted or forked, per the A-09 gate at M0 exit) and a potential in-house GDExtension are both implementations of this seam; docks, chunk exporter, and navmesh bake never touch the terrain plugin's API directly. The A-09 evaluation explicitly scores Terrain3D on: 128 m region alignment, clipmap LOD on min-spec, paint-layer count, heightfield extraction fidelity.
+All Forge terrain interaction goes through `ITerrainBackend` (a `forge_core`-defined interface). Forge's docks, chunk exporter (§5.4), and Recast navmesh bake (§3.2 / PRD §3.2) **never touch the terrain plugin's API directly** — they call only this interface. Two implementations satisfy it: `Terrain3DBackend` (the vendored Terrain3D fork — the chosen path per **A-09 → Sync Decisions §11**, [terrain-eval.md](../terrain-eval.md)) and a potential in-house `MeridianTerrainBackend` GDExtension. Because every caller is on the interface, the second path is a drop-in swap with no caller changes — this is what makes the A-09 choice reversible.
+
+The A-09 evaluation scored Terrain3D on the four co-signed criteria and all passed (128 m region alignment, clipmap LOD on min-spec, paint-layer count, heightfield extraction fidelity — terrain-eval.md). The interface below is the contract *both* paths implement; the mapping from each operation to Terrain3D's API (validated in the evaluation) is noted in comments.
+
+**Operation set (both paths implement identically):**
+
+1. **Sculpt / paint ops** — height edits (raise/lower/smooth/flatten/set) and layer paint (paint/erase a bound layer) over a brush region, plus undo/redo hooks that plug into Forge's editor undo stack. Edits are addressed in world space and clamped to authored zone bounds.
+2. **Paint-layer ↔ `art.*` terrain-set binding** — bind a paint slot to an Art-track terrain-set asset ID (`art.terrain.*`), resolving the layer's albedo/ORM/normal set from the asset registry (IF-8). Enforces the Art PRD §2.3 budget at authoring time: ~8 layers per zone, ≤ 4 blended per chunk (a warn→error lint). Backends expose ≥ the budget (Terrain3D: 32 slots).
+3. **Region-alignment query** — report the backend's region size and assert it tiles on the **128 m** chunk grid (§3.2); reject a backend/config that cannot align. For Terrain3D this pins `region_size = SIZE_128` so a region == one chunk exactly.
+4. **`export_heightfield(chunk) → f32[129×129]`** — the server-consumed heightfield for a single chunk: a 129×129 row-major float32 grid at 1 m spacing (128 m span + shared edge), in zone-local metres. Holes / un-sculpted cells surface as a sentinel the exporter lints on rather than silently zeroing. (Terrain3D: native float32 height; region-image read or `get_height` lattice sampling — terrain-eval.md C4.)
+5. **Collision-relevant geometry enumeration** — enumerate the terrain surface as navmesh-bake input for the shared Recast pipeline (`forge_core`/`mcc`/`worldd`, PRD §3.2 / R4): a heightfield or triangle stream over a chunk/AABB, tagged terrain-walkable, that Recast rasterises alongside kit collision geometry. Decoupled from `export_heightfield` because Recast may want a different (coarser) sampling than the server's movement grid.
+
+**C++ header sketch (interface DESIGN — illustrative; not added to the `forge_core` build):**
+
+```cpp
+// forge_core/terrain/i_terrain_backend.h  — DESIGN SKETCH, not compiled.
+// Both Terrain3DBackend (vendored fork) and a future MeridianTerrainBackend implement this.
+namespace forge::terrain {
+
+struct ChunkCoord { int32_t cx, cz; };          // §3.2 chunk indices (may be negative)
+struct BrushOp    { Vector3 center; float radius, strength; int op; };
+
+// Fixed per-chunk heightfield: 129*129 row-major float32, zone-local metres, 1 m spacing.
+struct HeightField { static constexpr int SIDE = 129; std::array<float, SIDE * SIDE> h; };
+
+class ITerrainBackend {
+public:
+    virtual ~ITerrainBackend() = default;
+
+    // (1) sculpt / paint
+    virtual void  sculpt(const BrushOp& op) = 0;               // raise/lower/smooth/flatten/set
+    virtual void  paint (const BrushOp& op, int layer_slot) = 0;
+    virtual void  undo() = 0;                                  // bridges Forge editor undo stack
+    virtual void  redo() = 0;
+
+    // (2) paint-layer <-> art.* terrain-set binding  (IF-8 asset IDs; Art PRD §2.3 budget)
+    virtual int   bind_layer(std::string_view art_terrain_set_id) = 0; // -> slot; -1 if over budget
+    virtual void  unbind_layer(int layer_slot) = 0;
+    virtual int   layer_capacity() const = 0;                  // >= 8; Terrain3D == 32
+
+    // (3) 128 m region-alignment query
+    virtual float region_size_m() const = 0;                   // Terrain3D SIZE_128 -> 128.0
+    virtual bool  aligns_to_chunk_grid() const = 0;            // region_size_m() tiles 128 m
+
+    // (4) server heightfield extraction  (terrain-eval.md C4)
+    virtual HeightField export_heightfield(ChunkCoord chunk) const = 0;
+
+    // (5) collision-relevant geometry for the shared Recast bake (PRD §3.2 / R4)
+    virtual void  enumerate_collision_geometry(ChunkCoord chunk,
+                                               IGeometrySink& out) const = 0;
+};
+
+} // namespace forge::terrain
+```
 
 ### 5.3 YAML round-trip without destroying hand-edits
 
