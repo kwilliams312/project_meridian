@@ -485,6 +485,8 @@ Fan-out budget at 3000 CCU: hottest zone ≈ 1,000 members across shards; slow-m
 | `character_social` | friends/ignore | M3; owner: `servicesd` |
 | `instance_bind` / `instance_state` | group↔instance binding, boss state | M2 |
 
+**CHR-01 appearance (A-03 / D-32, design intent — column lands at M1):** the `character` table above carries no appearance column yet because customization ships at M1, not M0. When it lands, appearance is persisted as a **small, versioned, extensible appearance record** — a bounded typed set of preset IDs (hair/face/skin + class/race options) plus optional 1–2 morph values, carrying a **schema-version field** — *not* a fixed set of hardcoded columns. This keeps post-1.0 customization depth **additive**: new presets/morphs are added behind the version tag (+ the existing settings-style migration shim pattern) without a breaking migration to the `character` row. Presets-first bounds the payload; the versioned wrapper (a typed blob or a small side table keyed by `char_id`, decided at CHR-01 build time) keeps it forward-compatible.
+
 **Write patterns** unchanged and binding: dirty-flag batch flush every 30 s + forced flush on logout, zone transfer, **shard transfer (freeze step)**, and trade; economy operations are never batched — single characters-DB transactions (mail send, AH list/bid/buyout, craft, trade commit), which is what keeps the IT-M2 kill-mid-loop test passing. New rule: **every character-state UPDATE carries `AND save_epoch = ?`** (§4.7) — a 0-row result is a fencing event: logged, alerted, write discarded (the writer no longer owns the character).
 
 ### 4.3 world DB — read-only mcc artifact (IF-4)

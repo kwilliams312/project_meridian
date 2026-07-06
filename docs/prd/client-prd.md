@@ -1,7 +1,7 @@
 # Client Track PRD — Project Meridian
 
 **Track:** Client (Godot 4.6 game client — Windows x64 + macOS Apple Silicon)
-**Version:** 0.5 — 2026-07-05 (v0.5: **OPS-05 telemetry** per Baseline v0.6 / D-29 — client channel is exactly crashes + ERROR/CRITICAL logs + missing-content events, no behavioral analytics; §8 and §11 updated. v0.4: **macOS client** per Baseline v0.5 / D-28 — phased Apple-Silicon support (CI builds M0 → supported test-realm client M1 → launch platform 1.0), native Metal backend, MetalFX option, notarized distribution; Mac Low-tier reference added to §2.2/§9. v0.3: A-13 sharded-realm pass per Baseline v0.4 / D-23. v0.2: engine pivot UE5 → Godot 4.6)
+**Version:** 0.6 — 2026-07-06 (v0.6: **A-03 RESOLVED / D-32** — CHR-01 M1 appearance is presets-first (discrete preset IDs) + an optional 1–2 morphs if the art budget allows; the appearance is sent to and persisted by the server as a **versioned, extensible appearance record**, so post-1.0 depth is additive with no breaking schema change; §4-M1, §11 CHR-01 row, §12 updated. v0.5: **OPS-05 telemetry** per Baseline v0.6 / D-29 — client channel is exactly crashes + ERROR/CRITICAL logs + missing-content events, no behavioral analytics; §8 and §11 updated. v0.4: **macOS client** per Baseline v0.5 / D-28 — phased Apple-Silicon support (CI builds M0 → supported test-realm client M1 → launch platform 1.0), native Metal backend, MetalFX option, notarized distribution; Mac Low-tier reference added to §2.2/§9. v0.3: A-13 sharded-realm pass per Baseline v0.4 / D-23. v0.2: engine pivot UE5 → Godot 4.6)
 **Status:** Draft for cross-track review
 **Baseline:** [Game Design Baseline v0.6](../00-GAME-DESIGN-BASELINE.md). All feature IDs, milestone names (M0–M4), and technical decisions (TD-01..TD-12) referenced here are defined there and are binding.
 
@@ -137,7 +137,7 @@ Failure UX at every step (bad password, realm down, handoff timeout, version mis
 ### M1 — Greybox Vertical Slice
 | Feature | Client deliverable |
 |---|---|
-| CHR-01 | Full character create: 1 race, 2 classes (melee + caster), appearance options from art's M1 set; character select with server character list, delete/confirm. |
+| CHR-01 | Full character create: 1 race, 2 classes (melee + caster), **presets-first appearance** — discrete preset options (hair/face/skin + class/race options) from art's M1 set, plus an optional 1–2 continuous morphs if the art budget allows (A-03 / D-32); character select with server character list, delete/confirm. The chosen appearance is sent to and persisted by the server as a **versioned, extensible appearance record** (preset IDs + optional morph values behind a schema-version tag), and read back to assemble the character — so post-1.0 customization depth is additive without a breaking schema change. |
 | CHR-02 | Swim volumes, fall damage presentation, movement polish (turn-in-place, slope handling) matched to server validation. |
 | CHR-03 | XP bar, level-up presentation (VFX/SFX hook via AUD-01), character sheet with server-provided stats. |
 | WLD-01 | Zone-01 streamed via the custom chunk-streaming system (§2.4) from compiled `.pck` packs; seamless in-zone streaming, loading screen only on map change. |
@@ -307,7 +307,7 @@ Every feature where Client = ● in the baseline matrix (§4). Milestones are th
 |---|---|---|
 | ACC-01 | Login UI, TLS `authd` client, realm list UI, error states | M0 |
 | ACC-02 | Session token handoff to `worldd`, reconnect | M0 |
-| CHR-01 | Character stub select — name + class over one placeholder model per D-11 (M0); full create/select, 1 race 2 classes, appearance | M0 stub / M1 |
+| CHR-01 | Character stub select — name + class over one placeholder model per D-11 (M0); full create/select, 1 race 2 classes, **presets-first appearance** (discrete preset IDs + optional 1–2 morphs, A-03 / D-32) sent to the server as a versioned, extensible appearance record | M0 stub / M1 |
 | CHR-02 | Predicted movement + reconciliation (GDExtension), remote interp, camera (M0); swim, polish (M1) | M0 basic / M1 |
 | CHR-03 | XP bar, level-up presentation, character sheet | M1 |
 | CHR-04 | Talent/spec UI, respec flow | M2 |
@@ -369,6 +369,7 @@ Every feature where Client = ● in the baseline matrix (§4). Milestones are th
 - **Serialization:** FlatBuffers, decided baseline v0.2 (TD-07); links cleanly into the GDExtension net module (§1.1, §3.1).
 - **Low-tier storage:** SATA SSD floor added to TD-03 (baseline v0.2); §9 streaming budgets assume it.
 - **CHR-01 M0 stub scope:** resolved per sync decision **D-11** — name entry + class selection over one shared placeholder model (§4-M0).
+- **CHR-01 M1 appearance depth + data contract:** resolved per sync decision **A-03 / D-32** (Sync Decisions §7.2) — presets-first (discrete preset IDs: hair/face/skin + class/race options), plus an optional 1–2 continuous morphs if the art blend-shape budget allows; deep morph customization deferred post-1.0. The appearance data contract is a **versioned, extensible appearance record** persisted by the server (§4-M1, §11 CHR-01 row) — scalable to more options later with no breaking schema change.
 - **GCD prediction (CMB-01):** resolved per sync decision **D-10** — optimistic client start with server rollback (§3.3, §4-M1).
 - **TLS-08 mount UX:** Client-owned per sync decision **D-09** (§6, §4-M3).
 
