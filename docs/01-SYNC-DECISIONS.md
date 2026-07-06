@@ -1,6 +1,6 @@
 # Cross-Track Sync Decisions
 
-**Version:** 1.7 — 2026-07-05 (§10 added: server packaging & CD, D-30 — no baseline change, OPS-01 extension. §9: telemetry & observability, D-29/Baseline v0.6. §8: macOS client, D-28/Baseline v0.5. §7: Content Schema v1.1 reconciliation — A-12 discharged, D-24..D-27, A-15 opened, A-13 done. §6: sharded-realm scale-up. §5: SAD reconciliation. §4: engine pivot UE5 → Godot 4.6)
+**Version:** 1.8 — 2026-07-06 (§7: A-15 RESOLVED — asset source + IF-8 sidecars live pack-local at `content/<ns>/assets/**` (D-31), ratifying the existing `core` layout. §10 added: server packaging & CD, D-30 — no baseline change, OPS-01 extension. §9: telemetry & observability, D-29/Baseline v0.6. §8: macOS client, D-28/Baseline v0.5. §7: Content Schema v1.1 reconciliation — A-12 discharged, D-24..D-27, A-15 opened, A-13 done. §6: sharded-realm scale-up. §5: SAD reconciliation. §4: engine pivot UE5 → Godot 4.6)
 **Purpose:** Resolutions for the conflicts and gaps the five track PRDs raised against Baseline v0.1. Decisions marked **[baseline]** are already folded into Baseline v0.2; the rest are binding interpretations the PRDs should be read against. Remaining items are in §3.
 
 ---
@@ -123,8 +123,19 @@ Action-item status changes:
 
 - **A-12 — DISCHARGED (authoring):** `schema/content/asset.schema.yaml` (`meridian/asset@1`) is authored per the D-18 union and exercised by 19 example sidecars in `content/core/assets/`; validator lint **L020** replaces the old "pending asset registry" info line (warn by default, `--assets=error` from M0 exit). Remaining: Art + Music sign-off of the schema PR.
 - **A-13 — DONE:** Client PRD v0.3 and Client SAD v0.2 carry WLD-04 rows (transfer masking, AoI-refresh handling in `sim` §5.6, join-friend UI, co-presence indicators) and the v0.4 CCU targets.
-- **A-15 — NEW (Tools + Art, due M0 IF-8 sign-off):** the Tools SAD places sidecars and sources in the pack tree (`content/<ns>/assets/**`), the Art SAD in a repo-level `/assets/<ns>/**` tree, and the Art PRD ships assets from `/client/art/` — three locations for the same files. `asset.schema.yaml` documents `source` as pack-root-relative until this is ruled on; the ruling must preserve `.mcpack` self-containment (TLS-08).
+- **A-15 — RESOLVED (D-31, §7.1):** asset source files and their IF-8 `.asset.yaml` sidecars live **pack-local at `content/<ns>/assets/**`**. This ratifies what the repo already does (the `core` pack's 19 sidecars are already there); the Art SAD's repo-level `/assets/<ns>/**` and the Art PRD's `/client/art/` are corrected. `asset.schema.yaml` `source` is now definitively pack-root-relative.
 - Fold-back completed for the **D-04** features: Server PRD v0.3 now carries ACC-03/CHR-05/SOC-03/ECO-05; Tools PRD v0.3 and Music PRD v0.3 now carry CHR-05. A CI check (`tools/check_traceability.py`) now enforces matrix-●-to-PRD traceability and baseline-version sync so this drift class cannot recur silently.
+
+### 7.1 Asset source location — A-15 ruled (2026-07-06)
+
+**Decision D-31 (project owner):** asset source files and their IF-8 `.asset.yaml` sidecars live **pack-local at `content/<namespace>/assets/**`**. The two competing locations are rejected:
+
+- The **Art SAD**'s repo-level `/assets/**` (`/assets/<ns>/**`) tree — rejected; it splits a pack's files across the repo and breaks self-containment.
+- The **Art PRD**'s `/client/art/` (`res://art/...`) — this is not a source location at all: it is the *imported* Godot resource output that `mcc` generates into the `.pck` (Tools SAD §2.7), a different artifact from hand-authored source.
+
+**Rationale:** pack-local source makes `.mcpack` community-pack self-containment automatic — a pack is one directory subtree (`content/<ns>/`) carrying everything it needs (`pack.yaml`, `idmap.lock`, content YAML, and now assets + sidecars). That self-containment is the enabling constraint for **TLS-08**. The ruling **ratifies the existing layout**: the example `core` pack's 19 sidecars already sit at `content/core/assets/` (`art/`, `sfx/`, `mus/`, `amb/`), matching the Tools SAD §4 contract.
+
+Fold-back: Tools SAD §4 already stated pack-local (no change beyond dropping the A-15 pending note). Corrected: Art SAD §2.2/§3/§10 (repo-level `/assets` → `content/<ns>/assets`), Art PRD §3.3/§4.3 (source is pack-local; `/client/art` clarified as imported output), `schema/content/asset.schema.yaml` (`source` comment de-pended), `.gitattributes` (comment noting the location; the extension-global LFS patterns already cover `content/**/assets/**` binaries).
 
 ---
 

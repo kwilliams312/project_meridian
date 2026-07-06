@@ -1,6 +1,7 @@
 # Git LFS patterns (TD-12: large art/audio binaries via LFS; text stays diffable in plain Git).
-# Patterns are extension-global — asset-tree location is pending the A-15 ruling
-# (see docs/01-SYNC-DECISIONS.md §7).
+# Patterns are extension-global, so they already cover asset-source binaries under
+# content/<ns>/assets/** — asset source lives pack-local there per A-15 / D-31
+# (see docs/01-SYNC-DECISIONS.md §7.1). No path clause needed.
 
 # 3D interchange + DCC sources
 *.glb   filter=lfs diff=lfs merge=lfs -text

@@ -1,8 +1,8 @@
 # meridian/asset@1 — IF-8 asset-registry sidecar (discharges A-12).
 # Field set = the D-18 union: core envelope + art extension block + audio extension block.
 # One sidecar per asset ID, at content/<namespace>/assets/**/<name>.asset.yaml.
-# The source-file location split (repo /assets tree per Art SAD vs pack-local tree per
-# Tools SAD) is tracked as action item A-15; `source` is pack-root-relative until resolved.
+# Asset source + sidecars live pack-local under content/<ns>/assets/** (A-15 RESOLVED / D-31,
+# Sync Decisions §7.1) — a self-contained .mcpack subtree (TLS-08); `source` is pack-root-relative.
 $schema: "https://json-schema.org/draft/2020-12/schema"
 $id: "meridian://schema/content/asset.schema.yaml"
 type: object
@@ -19,7 +19,7 @@ properties:
            prop, foliage, hero_landmark, texture_set, icon, vfx, ui_art,
            music_stem, music_stinger, sfx, ui_sound, ambience_bed, ambience_emitter]
   source:
-    description: LFS source file path relative to the pack root (A-15 pending for the repo-level tree).
+    description: LFS source file path, pack-root-relative under assets/ (pack-local per A-15 / D-31).
     type: string
     pattern: "^assets/[A-Za-z0-9_./-]+$"
   extra_sources:
