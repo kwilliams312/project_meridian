@@ -1,0 +1,78 @@
+# Alert rules — Server SAD §8.5.
+#
+# M0 ships the tick/DB/CCU/error alerts (metrics that exist at M0). Sharding
+# and coordinator alerts (transfer p99, bus lane, journal lag, fence rejection,
+# shard flap) are present but fire only once their metrics exist at M2/M3.
+# Thresholds are placeholders tuned against IT-M1 per D-29 §9 rule 7.
+
+groups:
+  - name: meridian-realm-health
+    rules:
+      - alert: TickOverBudget
+        expr: histogram_quantile(0.99, sum by (le, realm, zone, shard) (rate(meridian_tick_duration_seconds_bucket[5m]))) > 0.05
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Tick p99 over budget on {{ $labels.realm }}/{{ $labels.zone }}"
+
+      - alert: DBQueueBacklog
+        expr: max by (realm, db) (meridian_db_queue_depth) > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DB queue depth high on {{ $labels.realm }} ({{ $labels.db }})"
+
+      - alert: CCUSaturation
+        expr: max by (realm) (meridian_ccu) > 2800
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CCU approaching realm cap on {{ $labels.realm }}"
+
+  - name: meridian-errors
+    rules:
+      - alert: OpcodeErrorRate
+        expr: sum by (realm, opcode) (rate(meridian_opcode_errors_total[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Opcode error rate elevated: {{ $labels.opcode }} on {{ $labels.realm }}"
+
+  - name: meridian-sharding
+    rules:
+      # Any nonzero save-fence rejection is page-worthy (SAD §8.5).
+      - alert: SaveFenceRejection
+        expr: increase(meridian_save_fence_rejections_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: "Save-ownership fence rejection on {{ $labels.realm }} — investigate immediately"
+
+      - alert: TransferLatencyHigh
+        expr: histogram_quantile(0.99, sum by (le, realm) (rate(meridian_transfer_duration_seconds_bucket[5m]))) > 1
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Shard-transfer p99 > 1s on {{ $labels.realm }}"
+
+      - alert: BusLaneSaturation
+        expr: max by (realm, link, lane) (meridian_bus_lane_depth) > 0.6
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bus lane {{ $labels.lane }} > 60% sustained on {{ $labels.link }}"
+
+      - alert: JournalLagHigh
+        expr: max by (realm) (meridian_journal_lag_seconds) > 5
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Standby journal lag > 5s on {{ $labels.realm }}"

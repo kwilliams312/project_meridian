@@ -1,0 +1,25 @@
+# Prometheus config for the reference stack.
+#
+# The OTel Collector is the primary metrics path (it scrapes daemon /metrics
+# and remote-writes here). Prometheus also scrapes the collector's own exporter
+# directly as a health backstop. Retention (30d) is set as a command flag in
+# docker-compose.observability.yml per telemetry-privacy.md §4.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: meridian-reference
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Collector self-telemetry + the metrics it re-exports.
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]
