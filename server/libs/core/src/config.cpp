@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// libmeridian-core — layered configuration implementation (M0 stub).
+// libmeridian-core — layered configuration store implementation.
+// The four-source loader that fills it lives in config_loader.cpp (issue #90).
 // Clean-room per CONTRIBUTING.md.
 
 #include "meridian/core/config.hpp"
