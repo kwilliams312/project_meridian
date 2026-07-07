@@ -142,6 +142,49 @@ jobs:
           MERIDIAN_DB_NAME: meridian_auth
         run: ./server/build/tools/meridian-account/meridian-account-test
 
+  # meridian-characters CRUD (#85, CHR-01 stub / D-11): build + run its
+  # integration test against a real MariaDB service. Loads the characters schema
+  # (0001_init_characters.up.sql) so the `character` table exists, then drives the
+  # list/create/delete handlers — create->list, duplicate-name/invalid-race/
+  # invalid-class rejection, ownership-scoped delete, and the >INT64_MAX
+  # account_id BIGINT-UNSIGNED round-trip. DB name is meridian_characters (matches
+  # scripts/dev/_db.sh); the test reads MERIDIAN_DB_NAME. The plain `server` job's
+  # ctest skips this test (no MERIDIAN_DB_* env) — it is inert there.
+  characters:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: ci
+          MARIADB_DATABASE: meridian_characters
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain + deps (incl. libmariadb-dev, libssl-dev, mariadb client)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++-13 flatbuffers-compiler libflatbuffers-dev libssl-dev libmariadb-dev mariadb-client
+      - name: Load characters schema (0001_init_characters.up.sql)
+        run: |
+          mariadb -h 127.0.0.1 -P 3306 -u root -pci meridian_characters < server/db/characters/migrations/0001_init_characters.up.sql
+      - name: Build meridian-characters-test
+        run: |
+          cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
+          cmake --build server/build --target meridian-characters-test
+      - name: Run characters CRUD integration test (MariaDB service)
+        env:
+          MERIDIAN_DB_HOST: 127.0.0.1
+          MERIDIAN_DB_PORT: 3306
+          MERIDIAN_DB_USER: root
+          MERIDIAN_DB_PASS: ci
+          MERIDIAN_DB_NAME: meridian_characters
+        run: ./server/build/characters/meridian-characters-test
+
   # authd IF-1 login flow (#79): the capstone end-to-end auth path. Builds + runs
   # the login integration test against a real MariaDB service with the auth schema
   # loaded. It stands the REAL meridian-net TLS 1.3 listener + the login state
