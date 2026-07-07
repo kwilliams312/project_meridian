@@ -76,3 +76,93 @@ else()
 endif()
 
 add_test(NAME pack-manifest-core COMMAND pack-manifest-core-test)
+
+# --- IF-1/IF-2 client login core (#99) ---
+# The engine-free client login core (login_core.*, srp_client_core.*): the CLIENT
+# side of the IF-1 login state machine authd drives (#79) + the IF-2 WorldHello
+# kickoff (#84). Unlike the pure-C++17 cores above, this one takes REAL deps — the
+# SAME crypto/wire stack the server uses so the two interoperate exactly:
+#   - OpenSSL      : SRP-6a BIGNUM/EVP + HMAC + (TLS transport, compiled here).
+#   - FlatBuffers  : auth.fbs / world.fbs codegen (via flatc) + the runtime.
+#   - meridian-srp : the SERVER-side ServerSession, so the mock server in the test
+#                    runs a genuine SRP exchange against the core's client side.
+# This mirrors the server login_flow_test discipline (a real SRP handshake), but
+# WITHOUT a database — the wire interop over a live authd is the separate
+# integration test (client/test/authd_login_it, gated on MERIDIAN_DB_*).
+find_package(OpenSSL)
+find_package(FlatBuffers CONFIG QUIET)
+
+# Resolve the repo root (client/gdextension/meridian/test -> repo root is 5 up).
+get_filename_component(MERIDIAN_REPO_ROOT
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." ABSOLUTE)
+set(MERIDIAN_SCHEMA_NET_DIR "${MERIDIAN_REPO_ROOT}/schema/net")
+set(MERIDIAN_SRP_SRC "${MERIDIAN_REPO_ROOT}/server/libs/srp")
+
+# The login-core test needs OpenSSL + a `flatc` (system or fetched). If neither
+# OpenSSL nor flatc is available, skip THIS target only (the pure cores above
+# still build) — honest degradation on a bare toolchain.
+find_program(MERIDIAN_FLATC_EXE flatc)
+if(NOT TARGET flatbuffers::flatc AND MERIDIAN_FLATC_EXE)
+  add_executable(flatbuffers::flatc IMPORTED GLOBAL)
+  set_target_properties(flatbuffers::flatc PROPERTIES
+    IMPORTED_LOCATION "${MERIDIAN_FLATC_EXE}")
+endif()
+if(TARGET flatbuffers::flatc)
+  set(MERIDIAN_FLATC flatbuffers::flatc)
+elseif(MERIDIAN_FLATC_EXE)
+  set(MERIDIAN_FLATC "${MERIDIAN_FLATC_EXE}")
+endif()
+
+if(OpenSSL_FOUND AND DEFINED MERIDIAN_FLATC)
+  # flatc --cpp on schema/net/{auth,world}.fbs -> *_generated.h in the build tree.
+  set(MERIDIAN_LOGIN_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+  file(MAKE_DIRECTORY "${MERIDIAN_LOGIN_GEN_DIR}")
+  set(MERIDIAN_LOGIN_GENERATED
+    "${MERIDIAN_LOGIN_GEN_DIR}/auth_generated.h"
+    "${MERIDIAN_LOGIN_GEN_DIR}/world_generated.h")
+  add_custom_command(
+    OUTPUT ${MERIDIAN_LOGIN_GENERATED}
+    COMMAND ${MERIDIAN_FLATC} --cpp --scoped-enums -o "${MERIDIAN_LOGIN_GEN_DIR}"
+            "${MERIDIAN_SCHEMA_NET_DIR}/auth.fbs"
+            "${MERIDIAN_SCHEMA_NET_DIR}/world.fbs"
+    DEPENDS "${MERIDIAN_SCHEMA_NET_DIR}/auth.fbs"
+            "${MERIDIAN_SCHEMA_NET_DIR}/world.fbs"
+    COMMENT "login-core-test: flatc --cpp on schema/net/{auth,world}.fbs"
+    VERBATIM)
+  add_custom_target(login-core-codegen DEPENDS ${MERIDIAN_LOGIN_GENERATED})
+
+  add_executable(login-core-test
+    login_core_test.cpp
+    "${SRC}/login_core.cpp"
+    "${SRC}/srp_client_core.cpp"
+    "${SRC}/login_transport.cpp"      # compiled for coverage (not run: no live socket)
+    "${MERIDIAN_SRP_SRC}/src/srp.cpp" # server-side ServerSession for the mock
+  )
+  add_dependencies(login-core-test login-core-codegen)
+  target_include_directories(login-core-test PRIVATE
+    "${SRC}"
+    "${MERIDIAN_LOGIN_GEN_DIR}"
+    "${MERIDIAN_SRP_SRC}/include")
+
+  # The flatbuffers runtime headers: prefer the CONFIG package; else assume the
+  # system include path already has <flatbuffers/flatbuffers.h> (Homebrew/apt).
+  if(TARGET flatbuffers::flatbuffers)
+    target_link_libraries(login-core-test PRIVATE flatbuffers::flatbuffers)
+  endif()
+  target_link_libraries(login-core-test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+
+  set_target_properties(login-core-test PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF)
+  if(MSVC)
+    target_compile_options(login-core-test PRIVATE /W4)
+  else()
+    target_compile_options(login-core-test PRIVATE -Wall -Wextra)
+  endif()
+
+  add_test(NAME login-core COMMAND login-core-test)
+else()
+  message(STATUS
+    "login-core-test SKIPPED: needs OpenSSL + flatc (OpenSSL_FOUND=${OpenSSL_FOUND}).")
+endif()
