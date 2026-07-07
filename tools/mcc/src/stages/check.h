@@ -21,6 +21,17 @@ enum class DiagFormat { Text, Json };
 int check(const std::string& content_dir, DiagFormat format, std::ostream& out,
           std::ostream& err);
 
+// Run discover+parse+validate+link over `content_dir` (Tools SAD §2.1-2.4):
+// the full front half of the compiler DAG. On top of `check`, this resolves the
+// reference graph, builds backlinks, and allocates IF-9 numeric ids per pack via
+// idmap.lock. `allocate_ids` controls the idmap.lock write policy (SAD §2.3):
+// true (editor-invoked builds) writes updated locks; false (CI) runs read-only
+// and fails on L015 drift. When `report` is true, a human-readable idmap summary
+// (allocated ids per namespace) is printed after the diagnostics. Returns 0 on
+// no errors, 1 on any error, 2 when `content_dir` cannot be scanned.
+int link_content(const std::string& content_dir, DiagFormat format, bool allocate_ids,
+                 bool report, std::ostream& out, std::ostream& err);
+
 // Fast single-file / incremental validation path (Tools SAD §6.3, TLS-06): run
 // classify + parse + the single-file lints over exactly ONE content file, with
 // cross-file rules (L002/L010/L011) degraded to deferred `Info` notes rather

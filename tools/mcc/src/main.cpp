@@ -112,35 +112,65 @@ bool parse_check_flags(std::string_view prog_sub, const std::vector<std::string>
 int cmd_build(const std::vector<std::string>& args) {
     bool full = false;
     bool watch = false;
+    // Editor-invoked builds allocate ids by default (write idmap.lock); CI opts
+    // out with --no-allocate-ids to run link read-only and fail on L015 drift
+    // (Tools SAD §2.3). --allocate-ids is accepted explicitly for symmetry.
+    bool allocate_ids = true;
     std::vector<std::string> check_args;  // non-build flags forwarded to check
     for (const auto& a : args) {
         if (a == "--full") full = true;
         else if (a == "--watch") watch = true;
+        else if (a == "--allocate-ids") allocate_ids = true;
+        else if (a == "--no-allocate-ids") allocate_ids = false;
         else check_args.push_back(a);  // e.g. --diag-format=json, content dir
     }
 
-    // build runs check first (Tools SAD §2.2: validate gates the DAG). A failing
-    // check aborts the build — nothing downstream is emitted from bad content.
+    // build runs discover/parse/validate then the real link stage (Tools SAD
+    // §2.2-2.4: validate gates the DAG; link resolves refs + allocates IF-9 ids).
+    // A failing front half aborts the build — nothing downstream is emitted from
+    // bad content.
     std::string content_dir;
     mcc::stages::DiagFormat format;
     if (!parse_check_flags("build", check_args, content_dir, format)) return 2;
-    const int check_rc = mcc::stages::check(content_dir, format, std::cout, std::cerr);
-    if (check_rc != 0) {
-        std::cerr << kProg << " build: check failed — aborting build\n";
-        return check_rc;
+    const int link_rc = mcc::stages::link_content(content_dir, format, allocate_ids,
+                                                  /*report=*/false, std::cout, std::cerr);
+    if (link_rc != 0) {
+        std::cerr << kProg << " build: check/link failed — aborting build\n";
+        return link_rc;
     }
 
-    std::cout << "stub: build — run the link->bake->emit DAG (Tools SAD §2),"
+    std::cout << "stub: build — bake + emit (Tools SAD §2),"
                  " producing IF-4 SQL + IF-5 .pck\n";
     std::cout << "  mode: " << (full ? "full rebuild" : "incremental")
               << (watch ? ", watching for changes" : "") << '\n';
-    // discover/parse/validate are now real (via check above); the rest remain
-    // stubs until later M0 tasks.
-    emit_stage(mcc::stages::Stage::Link);
+    // discover/parse/validate/link are now real; bake/emit remain stubs until
+    // later M0 tasks (#120 emit-sql, #121 emit-pck).
     emit_stage(mcc::stages::Stage::Bake);
     emit_stage(mcc::stages::Stage::EmitSql);
     emit_stage(mcc::stages::Stage::EmitPck);
     return 0;
+}
+
+// mcc link [dir] [--diag-format=...] [--allocate-ids|--no-allocate-ids] [--report]
+//   Resolve the reference graph, build backlinks, and allocate IF-9 numeric ids
+//   (Tools SAD §2.3/§2.4). --report prints the allocated idmap per namespace.
+//   Default allocates ids (writes idmap.lock); --no-allocate-ids runs read-only
+//   (the CI contract, fails on L015 idmap drift).
+int cmd_link(const std::vector<std::string>& args) {
+    bool allocate_ids = true;
+    bool report = false;
+    std::vector<std::string> check_args;
+    for (const auto& a : args) {
+        if (a == "--allocate-ids") allocate_ids = true;
+        else if (a == "--no-allocate-ids") allocate_ids = false;
+        else if (a == "--report") report = true;
+        else check_args.push_back(a);
+    }
+    std::string content_dir;
+    mcc::stages::DiagFormat format;
+    if (!parse_check_flags("link", check_args, content_dir, format)) return 2;
+    return mcc::stages::link_content(content_dir, format, allocate_ids, report,
+                                     std::cout, std::cerr);
 }
 
 int cmd_check(const std::vector<std::string>& args) {
@@ -274,6 +304,7 @@ int cmd_idmap(const std::vector<std::string>& args) {
 const Command kCommands[] = {
     {"build",     "check then compile /content -> IF-4 SQL + IF-5 .pck (--full, --watch)", cmd_build},
     {"check",     "validate /content (or --file <p>): structural lints (L001-L011)", cmd_check},
+    {"link",      "resolve refs + backlinks + allocate IF-9 ids (--report, --no-allocate-ids)", cmd_link},
     {"fmt",       "canonically format /content YAML; --check for CI/pre-commit",       cmd_fmt},
     {"diff",      "compare two builds: diff <buildA> <buildB>",                        cmd_diff},
     {"pack",      "build a signed .mcpack community pack + content hash",              cmd_pack},
@@ -320,9 +351,16 @@ void print_help() {
            "FMT OPTIONS:\n"
            "  [path]               file or dir to format (default: ./content)\n"
            "  --check              report drift and exit non-zero; do not write\n\n"
-           "NOTE: discover/parse and the structural lints (L001-L011) are\n"
-           "implemented; JSON Schema validation, semantic lints, link/bake/emit\n"
-           "land in later M0 tasks (they report as stubs).\n";
+           "LINK OPTIONS (SAD §2.3/§2.4):\n"
+           "  [dir]                content root to link (default: ./content)\n"
+           "  --report             print the allocated IF-9 idmap per namespace\n"
+           "  --no-allocate-ids    read-only: never write idmap.lock; fail on L015\n"
+           "                       drift (the CI contract). Default allocates +\n"
+           "                       writes idmap.lock (editor-invoked builds).\n\n"
+           "NOTE: discover/parse, the structural lints (L001-L011), and the link\n"
+           "stage (reference graph + backlinks + IF-9 idmap) are implemented; JSON\n"
+           "Schema validation, semantic lints, and bake/emit land in later M0 tasks\n"
+           "(they report as stubs).\n";
 }
 
 }  // namespace

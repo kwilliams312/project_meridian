@@ -11,6 +11,8 @@
 
 #include "stages/diagnostics.h"
 #include "stages/discover.h"
+#include "stages/idmap.h"
+#include "stages/link.h"
 #include "stages/model.h"
 #include "stages/parse.h"
 #include "stages/validate.h"
@@ -42,6 +44,56 @@ int check(const std::string& content_dir, DiagFormat format, std::ostream& out,
                             " asset sidecars, " + std::to_string(model.content_ref_count) +
                             " content refs.";
         diag::render_text(diags, stats, out);
+    }
+
+    return diags.ok() ? 0 : 1;
+}
+
+int link_content(const std::string& content_dir, DiagFormat format, bool allocate_ids,
+                 bool report, std::ostream& out, std::ostream& err) {
+    model::ContentModel model;
+    if (!discover(content_dir, model)) {
+        err << "mcc link: content directory not found: " << content_dir << '\n';
+        return 2;
+    }
+
+    diag::Diagnostics diags;
+    parse(model, diags);
+    validate(model, diags);
+    // Only link when the model is structurally sound — a validate error means the
+    // id universe / refs can't be trusted (SAD §2: validate gates the DAG). We
+    // still run link so any *additional* link-only errors surface in one pass,
+    // but idmap writes are suppressed unless validation passed.
+    const bool validate_ok = diags.ok();
+    // validate already emitted L011 for the corpus; link suppresses its own to
+    // avoid a duplicate (emit_dangling=false), still counting danglers + keeping
+    // them out of the graph. Link's unique output is the graph + backlinks + idmap.
+    const LinkResult linked =
+        link(model, content_dir, /*allocate=*/allocate_ids && validate_ok, diags,
+             /*emit_dangling=*/false);
+
+    if (format == DiagFormat::Json) {
+        diag::render_json(diags, out);
+    } else {
+        std::string stats = "Linked " + std::to_string(model.file_count) +
+                            " files: " + std::to_string(model.entity_count) +
+                            " entities, " + std::to_string(model.asset_count) +
+                            " asset sidecars, " + std::to_string(linked.edges.size()) +
+                            " resolved refs, " + std::to_string(linked.dangling_count) +
+                            " dangling.";
+        diag::render_text(diags, stats, out);
+
+        if (report) {
+            for (const auto& [ns, m] : linked.idmaps) {
+                out << "\nidmap [" << ns << "] band " << m.band << " — "
+                    << m.map.size() << " ids (numeric = band*" << idmap::kBandStride
+                    << "+index), " << m.retired.size() << " retired:\n";
+                for (const auto& [id, idx] : m.map) {
+                    out << "  " << id << " -> #" << idmap::numeric_id(m.band, idx)
+                        << " (index " << idx << ")\n";
+                }
+            }
+        }
     }
 
     return diags.ok() ? 0 : 1;
