@@ -1,0 +1,15 @@
+; meridian import preset — character (Art SAD §2.3)
+; Applies to IF-8 classes: character_model, armor_model, creature_model (sk_char_*, sk_npc_*).
+; Skinned meshes: skeleton retained + BoneMap rebound to the shared per-race/sex rig,
+; blend shapes carried (CHR-01 presets-first morphs, PRD §4.2), importer LOD generation
+; OFF (LOD chains are hand-authored, PRD §2.1). Stamped by meridian_import; validated by
+; tools/validate_imports.py against presets.json -> presets.character.
+[params]
+
+meshes/lightmap_texel_size=0.2
+meshes/generate_lods=false
+meshes/create_shadow_meshes=true
+meshes/ensure_tangents=true
+skins/use_named_skins=true
+import_script/path=""
+_subresources={}

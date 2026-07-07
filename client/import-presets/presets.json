@@ -1,0 +1,151 @@
+{
+  "_comment": "Canonical Godot import presets per asset class (Art SAD §2.3). Single source of truth for both the meridian_import editor plugin (stamps these into .import files) and the CI import validator (tools/validate_imports.py). Grounded in Art PRD §2.3 (VRAM budgets, mipmaps, sizes), §2.1/§2.2 (LOD import), §2.4/§6.1 (lightmap UV2, occluder, collision), and the client min-spec/arm64+Metal / D3D12 constraints (TD-02/TD-03, D-28). Texture size caps mirror budgets.json (Art PRD §2.3) but govern the IMPORTED resource, not the source. Compression mode ints match Godot's ResourceImporterTexture: 0=lossless, 1=lossy, 2=VRAM Compressed, 3=uncompressed.",
+  "version": "1.0.0",
+  "importer_defaults": {
+    "texture": {
+      "compress_mode_vram": 2,
+      "compress_mode_lossless": 0
+    }
+  },
+  "presets": {
+    "character": {
+      "importer": "scene",
+      "classes": ["character_model", "armor_model", "creature_model"],
+      "source_ext": [".glb", ".gltf"],
+      "settings": {
+        "importer_lods": false,
+        "retain_skeleton": true,
+        "bonemap_shared_rig": true,
+        "blend_shapes": true,
+        "lightmap_uv2": false,
+        "generate_occluder": false,
+        "generate_collision": false
+      },
+      "lod_policy": ["authored"],
+      "cite": "Art SAD §2.3 character preset — skeleton + BoneMap to shared rig; blend shapes on; no importer LOD generation (hand-authored, PRD §2.1)"
+    },
+    "env-kit": {
+      "importer": "scene",
+      "classes": ["kit_piece", "hero_landmark"],
+      "source_ext": [".glb", ".gltf"],
+      "settings": {
+        "importer_lods": false,
+        "retain_skeleton": false,
+        "bonemap_shared_rig": false,
+        "blend_shapes": false,
+        "lightmap_uv2": true,
+        "generate_occluder": true,
+        "generate_collision": true
+      },
+      "lod_policy": ["authored"],
+      "cite": "Art SAD §2.3 env-kit preset — lightmap UV2 unwrap, occluder node conversion, static collision from col_*, importer LODs OFF (hand-authored chains, PRD §2.1/§2.2)"
+    },
+    "weapon": {
+      "importer": "scene",
+      "classes": ["weapon_model"],
+      "source_ext": [".glb", ".gltf"],
+      "settings": {
+        "importer_lods": false,
+        "retain_skeleton": false,
+        "bonemap_shared_rig": false,
+        "blend_shapes": false,
+        "lightmap_uv2": false,
+        "generate_occluder": false,
+        "generate_collision": false
+      },
+      "lod_policy": ["authored"],
+      "cite": "Art PRD §2.1 weapon — static mesh attached to a bone attachment (dynamic, not a lightmapped static), hand-authored LOD0-2; no importer LODs, no lightmap UV2 (moves with the character), no occluder/collision"
+    },
+    "prop": {
+      "importer": "scene",
+      "classes": ["prop"],
+      "source_ext": [".glb", ".gltf"],
+      "settings": {
+        "importer_lods": true,
+        "retain_skeleton": false,
+        "bonemap_shared_rig": false,
+        "blend_shapes": false,
+        "lightmap_uv2": true,
+        "generate_occluder": false,
+        "generate_collision": false
+      },
+      "lod_policy": ["importer", "authored"],
+      "cite": "Art SAD §2.3 prop preset — importer-generated LODs ALLOWED (PRD §2.1), UV2 on, shadow-mesh simplification on"
+    },
+    "foliage": {
+      "importer": "scene",
+      "classes": ["foliage"],
+      "source_ext": [".glb", ".gltf"],
+      "settings": {
+        "importer_lods": false,
+        "retain_skeleton": false,
+        "bonemap_shared_rig": false,
+        "blend_shapes": false,
+        "lightmap_uv2": false,
+        "generate_occluder": false,
+        "generate_collision": false,
+        "multimesh_safe": true
+      },
+      "lod_policy": ["authored", "single"],
+      "cite": "Art SAD §2.3 foliage preset — no UV2 (unlit-shadow path), MultiMesh-safe flags, billboard LOD slot honored; grass single LOD (PRD §2.1)"
+    },
+    "texture-std": {
+      "importer": "texture",
+      "classes": ["texture_set", "icon"],
+      "source_ext": [".png", ".tga", ".exr"],
+      "settings": {
+        "compress_mode": 2,
+        "mipmaps": true
+      },
+      "icon_settings": {
+        "compress_mode": 0,
+        "mipmaps": false
+      },
+      "size_caps_px": {
+        "character_model": 2048,
+        "armor_model": 2048,
+        "creature_model": 4096,
+        "weapon_model": 2048,
+        "kit_piece": 2048,
+        "prop": 1024,
+        "texture_set": 2048,
+        "icon": 256
+      },
+      "colorspace_by_suffix": {
+        "_bc": "srgb",
+        "_orm": "linear",
+        "_n": "linear",
+        "_normal": "linear",
+        "_rough": "linear",
+        "_metal": "linear"
+      },
+      "cite": "Art SAD §2.3 texture-std preset — BC-class VRAM compression, mipmaps on, source at 2× target (PRD §2.3); UI icons lossless + no mipmaps (screen-space)"
+    },
+    "vfx-texture": {
+      "importer": "texture",
+      "classes": ["vfx"],
+      "source_ext": [".png", ".tga", ".exr", ".tscn", ".scn"],
+      "settings": {
+        "compress_mode": 2,
+        "mipmaps": false
+      },
+      "colorspace_by_suffix": {
+        "_bc": "srgb",
+        "_orm": "linear",
+        "_n": "linear"
+      },
+      "scene_ext": [".tscn", ".scn"],
+      "cite": "Art SAD §2.3 vfx-texture preset — no mipmap-streaming assumptions, VRAM-compress per channel packing, sRGB/linear per suffix (_bc sRGB, _orm/_n linear). VFX systems shipped as scenes (.tscn) are honored as-is."
+    },
+    "audio": {
+      "importer": "wav",
+      "classes": ["sfx", "ui_sound", "music_stem", "music_stinger", "ambience_bed", "ambience_emitter"],
+      "source_ext": [".wav", ".ogg"],
+      "settings": {
+        "wav_compress_mode": 0,
+        "force_mono_positional": true
+      },
+      "cite": "Art SAD §2.3 (audio adjunct) / Music SAD §4.2 — .wav kept as PCM for short SFX/UI (low latency); positional 3D sources force-mono. Music streams may be Ogg Vorbis."
+    }
+  }
+}

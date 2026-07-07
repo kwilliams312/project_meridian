@@ -22,6 +22,13 @@ Validates every YAML file under /content against the JSON Schemas in
   L070   declared LOD0 tri count is within the Art PRD §2.1 class ceiling — error
   L071   declared texture dimension is within the Art PRD §2.3 class cap — error
   L072   declared material-set count is within the Art PRD §2.3/§2.4 cap — error
+  I001-  Godot import-settings conformance vs the per-class import presets in
+  I010/  client/import-presets/ (Art SAD §2.3/§4.2, issue #138). Distinct from the
+  IPRESET  budget lints above: these check IMPORT SETTINGS — compression mode,
+         mipmaps, colorspace, size caps, model LOD-import flags, lightmap-UV2 /
+         occluder policy, and committed .import drift. Delegated to
+         validate_imports.py; severity via --imports (error [default] | warn |
+         ignore). See that module's header for the full I-rule table.
   L034   explore objectives reference a POI defined in the zone manifest
   L035   quest giver / turn-in / deliver NPCs have a spawn point (warn)
   L052   loot-table nesting exceeds one level (Tools PRD §4.4)
@@ -50,6 +57,8 @@ from pathlib import Path
 
 import yaml
 from jsonschema import Draft202012Validator
+
+import validate_imports
 
 CONTENT_TYPES = ("npc", "item", "quest", "ability", "loot", "vendor", "spawn", "zone")
 ASSET_PREFIXES = ("art", "mus", "sfx", "amb")
@@ -317,7 +326,13 @@ def check_budget(doc: dict, rel_path: Path) -> list[str]:
     return errors
 
 
-def validate(content_dir: Path, schema_dir: Path, assets_mode: str = "warn") -> Result:
+def validate(
+    content_dir: Path,
+    schema_dir: Path,
+    assets_mode: str = "warn",
+    imports_mode: str = "error",
+    presets_path: Path | None = None,
+) -> Result:
     validators = load_schemas(schema_dir)
     res = Result()
     root = content_dir.parent
@@ -549,6 +564,17 @@ def validate(content_dir: Path, schema_dir: Path, assets_mode: str = "warn") -> 
                         f"has no price.buy and the vendor sets no price_override"
                     )
 
+    # Import-preset conformance (Art SAD §2.3/§4.2, #138) — runs under the same
+    # invocation so the existing content-CI validate_content.py step covers it with
+    # no workflow edit. Delegated to validate_imports.py; results merged in. Skipped
+    # when the preset file is absent (e.g. an isolated content tree in a unit test
+    # with no /client dir) — the real repo always ships it at DEFAULT_PRESETS.
+    presets = presets_path or (root / validate_imports.DEFAULT_PRESETS)
+    if imports_mode != "ignore" and presets.exists():
+        imp = validate_imports.validate(content_dir, presets, imports_mode)
+        res.errors.extend(imp.errors)
+        res.warnings.extend(imp.warnings)
+
     res.stats = {
         "files": len(files),
         "entities": len(content_ids),
@@ -570,9 +596,20 @@ def main() -> int:
         default="warn",
         help="severity for L020 asset-sidecar checks (default: warn)",
     )
+    parser.add_argument(
+        "--imports",
+        choices=("warn", "error", "ignore"),
+        default="error",
+        help="severity for I0xx import-preset checks (default: error, #138)",
+    )
     args = parser.parse_args()
 
-    res = validate(args.root / "content", args.root / "schema" / "content", args.assets)
+    res = validate(
+        args.root / "content",
+        args.root / "schema" / "content",
+        args.assets,
+        args.imports,
+    )
 
     s = res.stats
     print(

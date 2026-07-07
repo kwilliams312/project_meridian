@@ -1,0 +1,11 @@
+; meridian import preset — vfx-texture (Art SAD §2.3)
+; Applies to IF-8 class: vfx (t_fx_* flipbooks/particle textures; systems ship as .tscn).
+; VRAM-compress per channel packing, NO mipmaps (no mipmap-streaming assumptions — VFX
+; flipbook frames must not bleed across mip levels). sRGB/linear per suffix as texture-std.
+[params]
+
+compress/mode=2
+compress/high_quality=false
+mipmaps/generate=false
+process/hdr_as_srgb=false
+_srgb_note="_bc => flags/srgb=1 (enabled); _orm/_n => flags/srgb=2 (disabled)"

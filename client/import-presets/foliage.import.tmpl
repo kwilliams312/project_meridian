@@ -1,0 +1,13 @@
+; meridian import preset — foliage (Art SAD §2.3)
+; Applies to IF-8 class: foliage (sm_fol_*).
+; No UV2 (foliage uses the unlit-shadow path, not lightmaps), MultiMesh-safe flags,
+; custom AABB margin for shader wind, billboard LOD slot honored. Importer LODs OFF —
+; leaf-card LODs + billboard imposter are hand-authored/baked (PRD §2.1). Grass = single LOD.
+[params]
+
+meshes/lightmap_texel_size=0.4
+meshes/generate_lods=false
+meshes/create_shadow_meshes=false
+meshes/ensure_tangents=true
+meshes/light_baking=0
+_subresources={}
