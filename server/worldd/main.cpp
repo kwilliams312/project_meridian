@@ -40,6 +40,7 @@
 #include "meridian/db/connection.h"
 #include "meridian/metrics/catalog.h"
 #include "meridian/metrics/exposer.h"
+#include "meridian/metrics/rss_sampler.h"
 #include "meridian/net/tls_listener.h"
 #include "meridian/trace/exporter.h"
 
@@ -336,9 +337,13 @@ int main(int argc, char** argv) {
     // --- OPS-05 metrics endpoint ------------------------------------------------
     // Start the plain-HTTP /metrics exposer BEFORE serving so the OTel collector
     // can scrape immediately. A bind failure is logged + the daemon continues
-    // WITHOUT metrics (graceful degradation, D-29 §9 rule 6). Seed the RSS gauge
-    // label so the series exists before any sampler runs.
+    // WITHOUT metrics (graceful degradation, D-29 §9 rule 6). A periodic
+    // RssSampler (#297) stamps meridian_rss_bytes{realm,process=worldd} so the
+    // process-memory / RSS-growth alerts + dashboard panels have live data
+    // (previously the gauge only held a startup 0). Owned for the process lifetime
+    // alongside the exposer.
     std::optional<meridian::metrics::Exposer> exposer;
+    std::optional<meridian::metrics::RssSampler> rss_sampler;
     if (cfg.metrics_port != 0) {
         meridian::metrics::ExposerConfig ec;
         ec.port = cfg.metrics_port;
@@ -346,9 +351,9 @@ int main(int argc, char** argv) {
         try {
             exposer.emplace(ec, meridian::metrics::default_registry());
             exposer->start();
-            meridian::metrics::catalog::rss_bytes()
-                .with({cfg.world.labels.realm, kDaemonName})
-                .set(0.0);
+            rss_sampler.emplace(meridian::metrics::catalog::rss_bytes().with(
+                {cfg.world.labels.realm, kDaemonName}));
+            rss_sampler->start();
             meridian::core::log::info(
                 kDaemonName, "metrics /metrics on http://" + cfg.metrics_bind + ":" +
                                  std::to_string(exposer->port()));
@@ -356,6 +361,7 @@ int main(int argc, char** argv) {
             meridian::core::log::warn(
                 kDaemonName, std::string("metrics endpoint disabled: ") + e.what());
             exposer.reset();
+            rss_sampler.reset();
         }
     }
 
@@ -415,6 +421,17 @@ int main(int argc, char** argv) {
         std::deque<meridian::net::Session> pending;
         std::atomic<bool> shutting_down{false};
 
+        // OPS-05 IO-worker saturation signal (#278/#297): pool size is a constant
+        // for the run; busy is incremented while a worker serves a connection.
+        // busy/pool = utilization — the real signal the worldd dashboard charts
+        // (max concurrent CCU per worldd ≈ io_workers). process="worldd".
+        auto& io_workers_gauge =
+            meridian::metrics::catalog::io_workers().with({cfg.world.labels.realm, kDaemonName});
+        auto& io_workers_busy_gauge = meridian::metrics::catalog::io_workers_busy().with(
+            {cfg.world.labels.realm, kDaemonName});
+        io_workers_gauge.set(static_cast<double>(cfg.world.io_workers));
+        io_workers_busy_gauge.set(0.0);
+
         std::vector<std::thread> pool;
         pool.reserve(cfg.world.io_workers);
         for (unsigned w = 0; w < cfg.world.io_workers; ++w) {
@@ -428,7 +445,10 @@ int main(int argc, char** argv) {
                         job.emplace(std::move(pending.front()));
                         pending.pop_front();
                     }
+                    // In-flight for the duration of the (blocking) connection serve.
+                    io_workers_busy_gauge.inc();
                     world.serve_connection(std::move(*job));
+                    io_workers_busy_gauge.dec();
                 }
             });
         }

@@ -120,14 +120,14 @@
     },
     {
       "id": 7,
-      "title": "CCU per shard (io-worker saturation proxy)",
+      "title": "IO-worker utilization (busy / pool)",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
       "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
-      "description": "At M0 worldd uses one blocking IO worker per connection (pool = cores−3, or --io-workers N). Max concurrent CCU per worldd ≈ io_workers (#278). No io-worker count/utilization metric exists yet (GAP) — CCU is the closest saturation signal. Rising CCU approaching the configured --io-workers ceiling means connections will start waiting in the accept backlog.",
-      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "description": "worldd serves each connection start-to-finish on one blocking IO worker; the pool auto-sizes to cores−3 (override --io-workers N). busy/pool ≈ 1 means every worker is in-flight and new connections wait in the accept backlog. Emitted live from meridian_io_workers_busy / meridian_io_workers (#278/#297).",
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 0.9 } ] } }, "overrides": [] },
       "targets": [
-        { "refId": "A", "expr": "sum by (zone, shard) (meridian_ccu{realm=~\"$realm\"})", "legendFormat": "CCU {{zone}}/{{shard}}" }
+        { "refId": "A", "expr": "max by (process) (meridian_io_workers_busy{realm=~\"$realm\", process=\"worldd\"} / meridian_io_workers{realm=~\"$realm\", process=\"worldd\"})", "legendFormat": "utilization" }
       ]
     },
     {
@@ -145,19 +145,34 @@
     },
     {
       "id": 9,
-      "title": "IO-worker utilization — instrumentation gap (#278)",
-      "type": "text",
-      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 36 },
-      "options": {
-        "mode": "markdown",
-        "content": "### IO-worker utilization is not yet a metric (gap — #278)\n\nAt **M0**, worldd serves each connection start-to-finish on **one blocking IO worker**; the pool auto-sizes to `hardware_concurrency − 3` (override with `--io-workers N`). Therefore **max concurrent CCU per worldd ≈ io_workers** — on small hosts the `cores−3` default silently starves connections (they wait in the accept backlog until their session grants expire; this bit the 10-bot soak on a 2-vCPU runner, PR #275).\n\n**No `meridian_io_workers` / worker-busy gauge is emitted today**, so utilization cannot be charted directly. Use the **CCU per shard** panel above as the saturation proxy and compare it against the realm's configured `--io-workers`. Operators MUST set `--io-workers ≥ expected concurrent players` per realm (do not rely on the `cores−3` auto-default for capacity — #278).\n\n_To close this gap: add an `meridian_io_workers{realm,process}` gauge (pool size) + `meridian_io_workers_busy` gauge (in-flight) to `server/libs/metrics` catalog and stamp them from the worldd accept loop; this panel can then chart `busy / pool`._"
-      }
+      "title": "IO-workers: busy vs pool size (#278)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "description": "Raw in-flight worker count vs configured pool size. When 'busy' meets 'pool size' the pool is saturated (new connections queue in the accept backlog). Operators MUST set --io-workers ≥ expected concurrent players (do not rely on the cores−3 auto-default for capacity — #278).",
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (process) (meridian_io_workers_busy{realm=~\"$realm\", process=\"worldd\"})", "legendFormat": "busy" },
+        { "refId": "B", "expr": "max by (process) (meridian_io_workers{realm=~\"$realm\", process=\"worldd\"})", "legendFormat": "pool size" }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "CCU per shard (load context)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "description": "Concurrent connected users per zone/shard. At M0 max concurrent CCU per worldd ≈ io_workers, so read this alongside the IO-worker utilization panel above.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (zone, shard) (meridian_ccu{realm=~\"$realm\"})", "legendFormat": "CCU {{zone}}/{{shard}}" }
+      ]
     },
     {
       "id": 10,
       "title": "DB latency p99 + RSS",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 43 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 44 },
       "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
       "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [ { "matcher": { "id": "byFrameRefID", "options": "B" }, "properties": [ { "id": "unit", "value": "bytes" } ] } ] },
       "targets": [

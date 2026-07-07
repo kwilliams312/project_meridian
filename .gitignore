@@ -28,6 +28,13 @@ client/build-*/
 client/.sconsign.dblite
 # Compiled GDExtension output (dropped into client/project/bin/ by the build)
 client/project/bin/libmeridian.*
+# --- Forge forge_core GDExtension build artifacts (issue #134) ---
+# CMake build trees + compiled output (dropped into forge/project/bin/ by the build)
+client/gdextension/forge_core/build/
+client/gdextension/forge_core/build-*/
+client/forge/project/bin/libforge_core.*
+# Godot editor cache for the Forge tool project
+client/forge/project/.godot/
 # Object / intermediate files
 *.o
 *.obj

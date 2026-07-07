@@ -71,17 +71,13 @@
     },
     {
       "id": 4,
-      "title": "Crash rate by build",
-      "type": "timeseries",
+      "title": "Crash rate by build — future (blocked on client crashpad #109)",
+      "type": "text",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
-      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (build, platform) (rate(meridian_client_crash_total{realm=~\"$realm\"}[15m]))",
-          "legendFormat": "{{build}}/{{platform}}"
-        }
-      ]
+      "options": {
+        "mode": "markdown",
+        "content": "### Client crash rate — not charted at M0 (#297)\n\nThe client crash-count metric is a **name reservation** in the metrics catalog but has **no emit path** yet: it is blocked on the client crash handler (**crashpad, #109**). Until the client captures and ships crash reports there is nothing to count.\n\nPer `telemetry-privacy.md §4` the crash **sink** is a Sentry-compatible endpoint, **not** this Prometheus stack — this counter is only the server-side *received-count* once #109 lands. This panel becomes a real crash-rate timeseries then."
+      }
     }
   ]
 }

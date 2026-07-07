@@ -73,6 +73,15 @@ var _last_server_tick: int = 0
 var _conn_text: String = "offline"
 var _client_ms: int = 0                     # monotonic client clock for the sim
 
+# Local-movement diagnostic (#303). OFF by default; the OWNER enables it with the
+# MERIDIAN_MOVE_DEBUG env var (any non-empty value) before launching the client to
+# get a once-per-second line proving whether WASD input is even being read (rules
+# out window focus) and whether the mover's render position advances (rules out the
+# mover) vs. a server correction pulling the capsule back to spawn. Throttled to ~1
+# Hz off the sim clock so it never floods the log; the read is a couple of atomics.
+var _move_debug: bool = false
+var _last_move_debug_ms: int = -100000
+
 
 func configure(session: Dictionary, character: Dictionary = {}) -> void:
 	_session = session if session != null else {}
@@ -80,6 +89,9 @@ func configure(session: Dictionary, character: Dictionary = {}) -> void:
 
 
 func _ready() -> void:
+	_move_debug = not OS.get_environment("MERIDIAN_MOVE_DEBUG").is_empty()
+	if _move_debug:
+		print("[world.move] MERIDIAN_MOVE_DEBUG on — logging local-player input/render once per second")
 	_build_environment()
 	_build_ground()
 	_build_player_and_camera()
@@ -146,6 +158,11 @@ func _physics_process(delta: float) -> void:
 	# 2. Local player: sample input, predict, send the intent to worldd.
 	if _net != null and _net.is_in_world():
 		_tick_local_player()
+	elif _move_debug:
+		# The local-player tick is GATED until HandshakeOk — if the owner sees only
+		# these lines (never a [world.move] input line), WASD "not working" is really
+		# "not in world yet", not an input/mover bug.
+		_move_debug_gate()
 
 	# 3. Remote players: sample the interpolator and write each node's position.
 	_update_remotes()
@@ -161,12 +178,16 @@ func _physics_process(delta: float) -> void:
 
 func _tick_local_player() -> void:
 	# WASD relative to the camera yaw (physical keys so no input-map dependency).
+	var key_w := Input.is_physical_key_pressed(KEY_W)
+	var key_s := Input.is_physical_key_pressed(KEY_S)
+	var key_d := Input.is_physical_key_pressed(KEY_D)
+	var key_a := Input.is_physical_key_pressed(KEY_A)
 	var fwd := 0.0
 	var strafe := 0.0
-	if Input.is_physical_key_pressed(KEY_W): fwd += 1.0
-	if Input.is_physical_key_pressed(KEY_S): fwd -= 1.0
-	if Input.is_physical_key_pressed(KEY_D): strafe += 1.0
-	if Input.is_physical_key_pressed(KEY_A): strafe -= 1.0
+	if key_w: fwd += 1.0
+	if key_s: fwd -= 1.0
+	if key_d: strafe += 1.0
+	if key_a: strafe -= 1.0
 
 	var yaw := 0.0
 	if _camera != null:
@@ -184,6 +205,43 @@ func _tick_local_player() -> void:
 		var frame: PackedByteArray = _net.build_movement_intent_frame(intent)
 		if frame.size() > 0:
 			_net.send_movement_intent(frame)
+
+	if _move_debug:
+		_emit_move_debug(key_w, key_a, key_s, key_d, move, yaw)
+
+
+# --- Local-movement diagnostic (#303) ----------------------------------------
+# One throttled line per second while in world. It pins, for the OWNER's next run,
+# the two things a headless test cannot: (1) whether the keystrokes actually reach
+# the window — the W/A/S/D bools go true only if the OS delivered the key to a
+# focused client; (2) whether the mover's RENDER position (what the capsule draws
+# at) advances with input — and how it compares to the raw predicted SIM and the
+# last reconcile error, so a server that never advances the authoritative position
+# (render creeps out, then a correction pulls it back) is visible as a large,
+# recurring last_err instead of steady outward motion.
+func _emit_move_debug(key_w: bool, key_a: bool, key_s: bool, key_d: bool,
+		move: Vector3, yaw: float) -> void:
+	if _client_ms - _last_move_debug_ms < 1000:
+		return
+	_last_move_debug_ms = _client_ms
+	var render: Vector3 = _mover.get_render_position()
+	var pred: Vector3 = _mover.get_predicted_position()
+	print("[world.move] W=%s A=%s S=%s D=%s yaw=%.3f move=(%.2f,%.2f,%.2f) render=(%.2f,%.2f,%.2f) pred=(%.2f,%.2f,%.2f) last_err=%.3f srv_tick=%d"
+		% [key_w, key_a, key_s, key_d, yaw,
+			move.x, move.y, move.z,
+			render.x, render.y, render.z,
+			pred.x, pred.y, pred.z,
+			_mover.last_error_magnitude(), _last_server_tick])
+
+
+# Throttled note while the local-player tick is still gated behind HandshakeOk.
+func _move_debug_gate() -> void:
+	if _client_ms - _last_move_debug_ms < 1000:
+		return
+	_last_move_debug_ms = _client_ms
+	var in_world: bool = _net != null and _net.is_in_world()
+	print("[world.move] local-player tick GATED (net=%s in_world=%s conn=%s) — WASD is inert until in world"
+		% [str(_net != null), str(in_world), _conn_text])
 
 
 func _update_remotes() -> void:

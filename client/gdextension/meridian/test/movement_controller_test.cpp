@@ -295,6 +295,91 @@ int main() {
 		       mv::kStateFlagsModeMask) == 0u);
 	}
 
+	// =======================================================================
+	// 5. RENDER-POSITION ADVANCE ON INPUT (#303) — the on-screen WASD path.
+	// =======================================================================
+	// The decisive regression for #303 "WASD does not move the local player": the
+	// networked world scene (scenes/world/world.gd) renders the local capsule from
+	// get_render_position() == visible_state().position — NOT get_predicted_position().
+	// Every prior case starts at the ORIGIN and mostly asserts predicted_state();
+	// none pins that a BARE predict() (no server reconcile) from a NON-ORIGIN spawn
+	// advances the VISIBLE position the capsule is actually drawn at. This mirrors
+	// world.gd exactly: reset(SPAWN) -> per tick build the world-space move from
+	// WASD + camera yaw -> predict() -> advance_smoothing() -> get_render_position().
+	std::printf("[5] render position advances on input (#303 WASD path)\n");
+	{
+		// world.gd SPAWN = Godot (x=64, y=0, z=64), grounded on the y=0 flat map.
+		const mv::Vec3 spawn{64.0f, 0.0f, 64.0f};
+		mv::FlatWorldQuery world(0.0f);
+		mv::MovementSnapshot start;
+		start.position = spawn;
+		start.grounded = true;
+		mv::PredictionReconciler rec(world, start);
+
+		// With no predict/reconcile yet, the RENDER position IS the spawn.
+		const mv::MovementSnapshot v0 = rec.visible_state();
+		check("render position starts at spawn (x)", near(v0.position.x, spawn.x));
+		check("render position starts at spawn (z)", near(v0.position.z, spawn.z));
+
+		// world.gd input->world-move mapping (yaw=0 => forward is -Z; Godot/WoW).
+		// Press W: fwd=+1, strafe=0, yaw=0 -> move=(0,0,-1).
+		const float yaw = 0.0f;
+		const float sin_y = std::sin(yaw), cos_y = std::cos(yaw);
+		const float fwd = 1.0f, strafe = 0.0f;
+		mv::MovementInput press_w;
+		press_w.move_x = strafe * cos_y - (-fwd) * sin_y;   // == 0
+		press_w.move_z = strafe * sin_y + (-fwd) * cos_y;   // == -1
+		press_w.orientation = yaw;
+
+		// ONE W tick: predict, then advance_smoothing (world.gd step 4) — with no
+		// server reconcile pending the smoothing pass is a no-op and MUST NOT undo
+		// the predicted advance.
+		rec.predict(press_w, /*client_time_ms=*/50);
+		rec.advance_smoothing(16);   // ~one 60 fps render frame
+		const mv::MovementSnapshot v1 = rec.visible_state();
+
+		const float dz = v1.position.z - spawn.z;
+		const float disp1 = std::sqrt(
+		    (v1.position.x - spawn.x) * (v1.position.x - spawn.x) +
+		    (v1.position.z - spawn.z) * (v1.position.z - spawn.z));
+		check("one W tick moves the RENDER position away from spawn (nonzero)",
+		      disp1 > 1e-3f);
+		check("W moves the render position toward -Z (Godot forward)", dz < 0.0f);
+		check("render position tracks the predicted sim with no reconcile",
+		      near(v1.position.x, rec.predicted_state().position.x) &&
+		          near(v1.position.z, rec.predicted_state().position.z));
+
+		// Holding W advances the render position monotonically away from spawn over
+		// many ticks — the sustained on-screen motion #303 reports as missing.
+		float prev_dist = disp1;
+		bool monotonic_away = true;
+		for (int i = 2; i <= 20; ++i) {
+			rec.predict(press_w, static_cast<uint64_t>(i) * 50);
+			rec.advance_smoothing(16);
+			const mv::MovementSnapshot v = rec.visible_state();
+			const float d = std::sqrt(
+			    (v.position.x - spawn.x) * (v.position.x - spawn.x) +
+			    (v.position.z - spawn.z) * (v.position.z - spawn.z));
+			if (d <= prev_dist) monotonic_away = false;
+			prev_dist = d;
+		}
+		check("holding W keeps advancing the render position away from spawn",
+		      monotonic_away && prev_dist > disp1);
+
+		// A different key moves the render position on the OTHER axis: press D
+		// (strafe right) from a fresh spawn -> render x increases.
+		mv::PredictionReconciler recd(world, start);
+		mv::MovementInput press_d;
+		press_d.move_x = 1.0f * cos_y - 0.0f * sin_y;   // strafe=+1 -> world_x == 1
+		press_d.move_z = 1.0f * sin_y + 0.0f * cos_y;   // == 0
+		press_d.orientation = yaw;
+		recd.predict(press_d, 50);
+		recd.advance_smoothing(16);
+		const mv::MovementSnapshot vd = recd.visible_state();
+		check("D moves the render position toward +X (nonzero)",
+		      (vd.position.x - spawn.x) > 1e-3f);
+	}
+
 	std::printf(g_fail == 0 ? "\nALL MOVEMENT CONTROLLER TESTS PASSED\n"
 	                        : "\n%d MOVEMENT CONTROLLER TEST(S) FAILED\n", g_fail);
 	return g_fail == 0 ? 0 : 1;

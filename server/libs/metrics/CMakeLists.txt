@@ -11,6 +11,8 @@ find_package(Threads REQUIRED)
 add_library(meridian-metrics STATIC
   src/registry.cpp
   src/exposer.cpp
+  src/process_stats.cpp
+  src/rss_sampler.cpp
 )
 add_library(meridian::metrics ALIAS meridian-metrics)
 
@@ -41,5 +43,15 @@ add_executable(meridian-metrics-exposer-test test/exposer_test.cpp)
 target_link_libraries(meridian-metrics-exposer-test PRIVATE meridian::metrics Threads::Threads)
 set_target_properties(meridian-metrics-exposer-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME metrics-exposer COMMAND meridian-metrics-exposer-test)
+
+# --- Unit test: RSS sampler + portable RSS read (#297). -----------------------
+# Asserts read_process_rss_bytes() returns a plausible non-zero RSS on this host
+# (macOS + Linux), and that RssSampler drives a Gauge to that non-zero value —
+# i.e. meridian_rss_bytes is a LIVE series, not the startup 0 placeholder. Pure
+# (no DB, no socket), runs in the plain server ctest.
+add_executable(meridian-metrics-rss-test test/rss_sampler_test.cpp)
+target_link_libraries(meridian-metrics-rss-test PRIVATE meridian::metrics Threads::Threads)
+set_target_properties(meridian-metrics-rss-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME metrics-rss-sampler COMMAND meridian-metrics-rss-test)
 
 enable_testing()
