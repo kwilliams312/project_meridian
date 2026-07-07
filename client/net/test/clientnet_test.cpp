@@ -19,9 +19,27 @@
 //   5. FULL CLIENT STACK COMPOSITION — build a MovementIntent payload, wrap it in
 //      the IF-2 frame, length-prefix it, deframe with FrameReader, decode the frame,
 //      decode the payload — every field survives the whole client send/recv path.
+//
+// #100 GAP-FILLING EDGE CASES (added on top of the #95/#274/#302 coverage above):
+//   6. FRAMING EDGE CASES — max-size (accept side of the cap), zero-length frames
+//      back-to-back and interleaved, length_is_valid boundaries, buffered()/compact()
+//      accounting under a 500-frame stress, post-error / zero-length feed no-ops.
+//   7. WIRE-FRAME EDGE CASES — seq/opcode extremes (0, UINT64_MAX, 0xFFFF), every
+//      defined opcode, the 9-vs-10 byte header boundary, empty buffer, large payload.
+//   8. AEAD EDGE CASES — empty-key/over-length-key not-ok + refuse seal/open, next_seq
+//      accounting, empty-plaintext round-trip, s2c round-trip, too-short ciphertext,
+//      tampered-TAG + truncated-ciphertext rejection, stateless-open (replay) contract,
+//      different-key negative interop.
+//   9. MALFORMED-FRAME REJECTION (verifier) + VERSION FIELDS — empty + truncated +
+//      garbage rejected by every decoder; ClientHello build/proto_ver extremes and
+//      extreme finite floats survive round-trip; a version-reject Disconnect round-trips.
+//  10. TRANSPORT ERROR / RECONNECT PATHS — offline TcpTransport not-ok + failing I/O,
+//      and a socket-free MockTransport exercising the ITransport seam: send/recv order,
+//      oversize refusal, EOF→nullopt (the reconnect signal), the default recv_frame_nb.
 
 #include "meridian/clientnet/codec.h"
 #include "meridian/clientnet/framing.h"
+#include "meridian/clientnet/tcp_transport.h"
 #include "meridian/clientnet/tls_client.h"
 #include "meridian/clientnet/transport.h"
 #include "meridian/clientnet/wire_frame.h"
@@ -51,6 +69,31 @@ void check(bool cond, const char* what, int line) {
 #define CHECK(cond) check((cond), #cond, __LINE__)
 
 Bytes bytes_of(std::initializer_list<std::uint8_t> l) { return Bytes(l); }
+
+// A socket-free ITransport used to exercise the transport SEAM contract (the
+// send/recv frame API and the DEFAULT recv_frame_nb behaviour) with no live server.
+// send_frame appends to `sent`; recv_frame pops the next queued inbound frame, or
+// returns std::nullopt once `inbox` is drained (a clean EOF — the signal a caller
+// uses to tear down and reconnect). recv_frame_nb is deliberately NOT overridden so
+// the ITransport default (would_block=false → recv_frame) is what runs.
+struct MockTransport : ITransport {
+    std::vector<Bytes> sent;
+    std::vector<Bytes> inbox;
+    std::size_t cursor = 0;
+    unsigned last_timeout_ms = 0;
+
+    bool send_frame(const Bytes& payload) override {
+        if (payload.size() > kMaxFrameBytes) return false;  // mirror the real framing cap
+        sent.push_back(payload);
+        return true;
+    }
+    std::optional<Bytes> recv_frame() override {
+        if (cursor >= inbox.size()) return std::nullopt;  // EOF → caller reconnects
+        return inbox[cursor++];
+    }
+    void set_recv_timeout_ms(unsigned ms) override { last_timeout_ms = ms; }
+    // recv_frame_nb intentionally inherited (tests the ITransport default).
+};
 
 // ---------------------------------------------------------------------------
 // 1. Framing
@@ -371,6 +414,349 @@ void test_transport_links() {
     CHECK(!as_iface->recv_frame_nb(would_block).has_value());
 }
 
+// ===========================================================================
+// GAP-FILLING EDGE CASES (issue #100): framing boundaries, reconnect/transport
+// error paths, version-field boundaries, malformed-frame rejection via the
+// FlatBuffers verifier. These ADD to the #95/#274/#302 coverage above; they do
+// not duplicate it.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 6. Framing edge cases (#100: "framing edge cases")
+// ---------------------------------------------------------------------------
+void test_framing_edge_cases() {
+    std::puts("[framing/edge] boundaries, zero-length, back-to-back, compaction");
+
+    // length_is_valid boundary: exactly kMaxFrameBytes is accepted; +1 is not; 0 ok.
+    CHECK(length_is_valid(0));
+    CHECK(length_is_valid(kMaxFrameBytes));
+    CHECK(!length_is_valid(kMaxFrameBytes + 1));
+
+    // A payload of EXACTLY kMaxFrameBytes frames (the accept side of the cap the
+    // existing test only proves the reject side of), and round-trips through a reader.
+    Bytes max_payload(kMaxFrameBytes, 0x5A);
+    auto max_framed = frame_message(max_payload);
+    CHECK(max_framed.has_value());
+    CHECK(max_framed->size() == kLengthPrefixBytes + kMaxFrameBytes);
+    FrameReader rmax;
+    rmax.feed(*max_framed);
+    auto max_out = rmax.next();
+    CHECK(max_out.has_value() && *max_out == max_payload);
+    CHECK(!rmax.error());
+
+    // read_length_prefix decodes a high-bit-set u32 LE correctly (byte order proof
+    // beyond the small value the existing test uses).
+    CHECK(*read_length_prefix(bytes_of({0x78, 0x56, 0x34, 0x12})) == 0x12345678u);
+    // Exactly-prefix-length input reads; anything shorter is nullopt.
+    CHECK(read_length_prefix(bytes_of({0x00, 0x00, 0x00, 0x00})).has_value());
+    CHECK(!read_length_prefix(bytes_of({0x00, 0x00, 0x00})).has_value());
+
+    // Zero-length frames: a bare prefix of 00 00 00 00 yields an EMPTY payload, and
+    // several back-to-back drain as several empty payloads (not swallowed / merged).
+    FrameReader rz;
+    auto z1 = frame_message(Bytes{});
+    rz.feed(*z1);
+    rz.feed(*z1);
+    rz.feed(*z1);
+    for (int i = 0; i < 3; ++i) {
+        auto z = rz.next();
+        CHECK(z.has_value() && z->empty());
+    }
+    CHECK(!rz.next().has_value());
+
+    // A zero-length frame wedged BETWEEN two non-empty frames is delivered in order.
+    FrameReader rmix;
+    rmix.feed(*frame_message(bytes_of({0xA1})));
+    rmix.feed(*frame_message(Bytes{}));
+    rmix.feed(*frame_message(bytes_of({0xB2, 0xB3})));
+    auto m1 = rmix.next();
+    auto m2 = rmix.next();
+    auto m3 = rmix.next();
+    CHECK(m1.has_value() && *m1 == bytes_of({0xA1}));
+    CHECK(m2.has_value() && m2->empty());
+    CHECK(m3.has_value() && *m3 == bytes_of({0xB2, 0xB3}));
+
+    // An advertised length of EXACTLY kMaxFrameBytes+1 latches the error (the reject
+    // boundary of the reader's length gate).
+    FrameReader rbad;
+    const std::uint32_t over = kMaxFrameBytes + 1;  // 0x2001
+    Bytes over_prefix = bytes_of({static_cast<std::uint8_t>(over & 0xFF),
+                                  static_cast<std::uint8_t>((over >> 8) & 0xFF),
+                                  static_cast<std::uint8_t>((over >> 16) & 0xFF),
+                                  static_cast<std::uint8_t>((over >> 24) & 0xFF)});
+    rbad.feed(over_prefix);
+    CHECK(!rbad.next().has_value());
+    CHECK(rbad.error());
+
+    // feed() is a no-op for n==0 and for any bytes fed AFTER the error latched.
+    FrameReader rnoop;
+    rnoop.feed(nullptr, 0);
+    CHECK(rnoop.buffered() == 0);
+    rbad.feed(bytes_of({0xFF}));       // post-error feed ignored
+    CHECK(rbad.buffered() == over_prefix.size());  // buffer unchanged, still errored
+    CHECK(rbad.error());
+
+    // buffered() accounting: after feeding a partial prefix, all bytes are buffered;
+    // after a whole frame drains, the buffer is reclaimed (compact()) back toward 0.
+    FrameReader rbuf;
+    auto ftwo = frame_message(bytes_of({0x01, 0x02}));
+    rbuf.feed(ftwo->data(), 3);            // 3 of 6 bytes
+    CHECK(rbuf.buffered() == 3);
+    CHECK(!rbuf.next().has_value());
+    rbuf.feed(ftwo->data() + 3, ftwo->size() - 3);
+    CHECK(rbuf.next().has_value());
+    CHECK(rbuf.buffered() == 0);           // fully drained + compacted
+
+    // Compaction stress: many frames through ONE reader with interleaved feed/drain
+    // stays correct and does not grow the buffer unbounded (buffered() returns to 0).
+    FrameReader rlong;
+    for (int i = 0; i < 64; ++i) {
+        Bytes p = bytes_of({static_cast<std::uint8_t>(i & 0xFF),
+                            static_cast<std::uint8_t>((i >> 8) & 0xFF)});
+        rlong.feed(*frame_message(p));
+        auto got = rlong.next();
+        CHECK(got.has_value() && *got == p);
+    }
+    CHECK(rlong.buffered() == 0);
+    CHECK(!rlong.error());
+}
+
+// ---------------------------------------------------------------------------
+// 7. IF-2 wire-frame edge cases (#100: framing/header boundaries)
+// ---------------------------------------------------------------------------
+void test_wire_frame_edge_cases() {
+    std::puts("[wire_frame/edge] seq/opcode extremes, header boundary, all opcodes");
+
+    // A body of EXACTLY kFrameHeaderBytes-1 (9 bytes) is malformed; exactly the
+    // header (10 bytes) decodes with an empty payload. An empty buffer is malformed.
+    CHECK(!decode_world_frame(Bytes(kFrameHeaderBytes - 1, 0x00)).has_value());
+    CHECK(!decode_world_frame(Bytes{}).has_value());
+    auto hdr_only = decode_world_frame(Bytes(kFrameHeaderBytes, 0x00));
+    CHECK(hdr_only.has_value() && hdr_only->payload.empty());
+
+    // seq extremes round-trip (0 and UINT64_MAX) — the u64 LE writer/reader is exact.
+    for (std::uint64_t s : {std::uint64_t{0}, UINT64_MAX}) {
+        auto f = decode_world_frame(encode_world_frame(kOpClockSync, s, bytes_of({0x01})));
+        CHECK(f.has_value() && f->seq == s && f->opcode == kOpClockSync);
+    }
+
+    // opcode extremes round-trip (0x0000 and 0xFFFF), and EVERY defined opcode does.
+    const std::uint16_t opcodes[] = {
+        0x0000, 0xFFFF, kOpWorldHello, kOpHandshakeOk, kOpDisconnect, kOpClockSync,
+        kOpMovementIntent, kOpMovementState, kOpEntityEnter, kOpEntityUpdate,
+        kOpEntityLeave};
+    for (std::uint16_t op : opcodes) {
+        auto f = decode_world_frame(encode_world_frame(op, 1, Bytes{}));
+        CHECK(f.has_value() && f->opcode == op);
+    }
+
+    // A large payload (near the transport cap) survives the header round-trip intact.
+    Bytes big(4096, 0xC3);
+    auto bf = decode_world_frame(encode_world_frame(kOpMovementState, 9, big));
+    CHECK(bf.has_value() && bf->payload == big && bf->seq == 9);
+}
+
+// ---------------------------------------------------------------------------
+// 8. AEAD world-session edge cases (#100: tamper/replay/error paths)
+// ---------------------------------------------------------------------------
+void test_world_session_edge_cases() {
+    std::puts("[world_session/edge] empty msg, short/tampered ct, s2c, interop reject");
+
+    Bytes key(kAeadKeyBytes);
+    for (std::size_t i = 0; i < key.size(); ++i) key[i] = static_cast<std::uint8_t>(i + 1);
+    WorldSession a(key), b(key);
+    CHECK(a.ok() && b.ok());
+
+    // Key-length guards: empty and over-length keys both yield not-ok sessions, and a
+    // not-ok session refuses to seal or open.
+    WorldSession empty_key(Bytes{});
+    WorldSession long_key(Bytes(kAeadKeyBytes + 1, 0x00));
+    CHECK(!empty_key.ok() && !long_key.ok());
+    std::uint64_t junk_seq = 0;
+    CHECK(!empty_key.seal(Direction::kClientToServer, bytes_of({0x01}), Bytes{}, junk_seq)
+               .has_value());
+    CHECK(!empty_key.open(Direction::kClientToServer, Bytes(kAeadTagBytes, 0x00), 0, Bytes{})
+               .has_value());
+
+    // next_seq() tracks the counter the next seal will use (0, then 1, then 2).
+    CHECK(a.next_seq(Direction::kClientToServer) == 0);
+    std::uint64_t s0 = 0;
+    auto sealed0 = a.seal(Direction::kClientToServer, bytes_of({0x09}), Bytes{}, s0);
+    CHECK(sealed0.has_value() && s0 == 0);
+    CHECK(a.next_seq(Direction::kClientToServer) == 1);
+    a.seal(Direction::kClientToServer, bytes_of({0x09}), Bytes{}, s0);
+    CHECK(a.next_seq(Direction::kClientToServer) == 2);
+    // The two directions count independently.
+    CHECK(a.next_seq(Direction::kServerToClient) == 0);
+
+    // Empty-plaintext seal produces a bare tag (kAeadTagBytes) and opens to empty.
+    std::uint64_t es = 0;
+    auto sealed_empty = b.seal(Direction::kServerToClient, Bytes{}, Bytes{}, es);
+    CHECK(sealed_empty.has_value() && sealed_empty->size() == kAeadTagBytes);
+    auto opened_empty = a.open(Direction::kServerToClient, *sealed_empty, es, Bytes{});
+    CHECK(opened_empty.has_value() && opened_empty->empty());
+
+    // s2c round-trip (the existing suite proves c2s; this proves the other key too).
+    Bytes msg = bytes_of({0xDE, 0xAD});
+    std::uint64_t sq = 0;
+    auto s2c = a.seal(Direction::kServerToClient, msg, Bytes{}, sq);
+    CHECK(s2c.has_value());
+    auto s2c_open = b.open(Direction::kServerToClient, *s2c, sq, Bytes{});
+    CHECK(s2c_open.has_value() && *s2c_open == msg);
+
+    // A too-short ciphertext (fewer than tag bytes, incl. empty) is rejected, never
+    // read out of bounds.
+    CHECK(!b.open(Direction::kServerToClient, Bytes{}, sq, Bytes{}).has_value());
+    CHECK(!b.open(Direction::kServerToClient, Bytes(kAeadTagBytes - 1, 0x00), sq, Bytes{})
+               .has_value());
+
+    // Tampering the TAG byte (last byte), or TRUNCATING the ciphertext, fails auth —
+    // complements the existing "first byte tampered" check.
+    Bytes tag_tamper = *s2c;
+    tag_tamper.back() ^= 0x80;
+    CHECK(!b.open(Direction::kServerToClient, tag_tamper, sq, Bytes{}).has_value());
+    Bytes truncated = *s2c;
+    truncated.pop_back();
+    CHECK(!b.open(Direction::kServerToClient, truncated, sq, Bytes{}).has_value());
+
+    // open() is STATELESS (does not advance a counter): opening the SAME sealed frame
+    // twice under the same seq both succeed. Replay defence is the caller's seq
+    // bookkeeping, not open()'s — this pins that documented contract.
+    CHECK(b.open(Direction::kServerToClient, *s2c, sq, Bytes{}).has_value());
+    CHECK(b.open(Direction::kServerToClient, *s2c, sq, Bytes{}).has_value());
+
+    // Negative interop: a session with a DIFFERENT key cannot open a's frame.
+    Bytes other_key(kAeadKeyBytes, 0xEE);
+    WorldSession c(other_key);
+    CHECK(c.ok());
+    CHECK(!c.open(Direction::kServerToClient, *s2c, sq, Bytes{}).has_value());
+}
+
+// ---------------------------------------------------------------------------
+// 9. Malformed-frame rejection via the FlatBuffers verifier (#100 exit item) +
+//    version-field boundaries (#100: "version mismatch").
+// ---------------------------------------------------------------------------
+void test_codec_malformed_and_versions() {
+    std::puts("[codec/malformed] empty+truncated+garbage rejected by verifier");
+
+    // An EMPTY buffer is rejected by EVERY decoder (verify-before-GetRoot never reads
+    // a root out of zero bytes).
+    Bytes empty;
+    CHECK(!codec::decode_client_hello(empty).has_value());
+    CHECK(!codec::decode_movement_intent(empty).has_value());
+    CHECK(!codec::decode_movement_state(empty).has_value());
+    CHECK(!codec::decode_disconnect(empty).has_value());
+    CHECK(!codec::decode_entity_enter(empty).has_value());
+    CHECK(!codec::decode_entity_update(empty).has_value());
+    CHECK(!codec::decode_entity_leave(empty).has_value());
+
+    // A TRUNCATED valid buffer (first half of a good encode) fails the verifier — a
+    // partial FlatBuffer is never GetRoot'd. Covers the "malformed frame" exit item
+    // for a message that is plausible-but-cut, not just random garbage.
+    codec::MovementState ms;
+    ms.entity_guid = 0x1122334455667788ull;
+    ms.ack_seq = 5;
+    ms.x = 1.0f;
+    ms.server_time_ms = 42;
+    Bytes good = codec::encode_movement_state(ms);
+    CHECK(good.size() > 4);
+    Bytes truncated(good.begin(), good.begin() + static_cast<std::ptrdiff_t>(good.size() / 2));
+    CHECK(!codec::decode_movement_state(truncated).has_value());
+
+    // Random garbage is rejected by the decoders the existing suite does NOT cover
+    // (state / disconnect) — completing the verifier discipline across every message.
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x11, 0x22, 0x33, 0x44});
+    CHECK(!codec::decode_movement_state(garbage).has_value());
+    CHECK(!codec::decode_disconnect(garbage).has_value());
+
+    // Version fields (#100 "version mismatch"): the IF-1 ClientHello build/proto_ver
+    // survive the round-trip at their extremes so the login core's version check
+    // (client/gdextension .../version_compat_test) sees the true peer values. The
+    // mismatch POLICY lives in login_core; this proves the codec never corrupts the
+    // numbers the policy compares.
+    codec::ClientHello hi{UINT32_MAX, UINT16_MAX};
+    auto hi_out = codec::decode_client_hello(codec::encode_client_hello(hi));
+    CHECK(hi_out.has_value());
+    CHECK(hi_out->build == UINT32_MAX && hi_out->proto_ver == UINT16_MAX);
+    codec::ClientHello lo{0, 0};
+    auto lo_out = codec::decode_client_hello(codec::encode_client_hello(lo));
+    CHECK(lo_out.has_value() && lo_out->build == 0 && lo_out->proto_ver == 0);
+
+    // Extreme finite float values survive the movement round-trip bit-exactly (the
+    // wire carries IEEE-754; a codec that dropped precision would desync prediction).
+    codec::MovementIntent mi;
+    mi.x = -1.5e30f;
+    mi.y = 3.4e-38f;    // ~smallest normal float
+    mi.z = -12.5f;
+    mi.orientation = 6.2831853f;
+    auto mi_out = codec::decode_movement_intent(codec::encode_movement_intent(mi));
+    CHECK(mi_out.has_value());
+    CHECK(mi_out->x == -1.5e30f && mi_out->y == 3.4e-38f && mi_out->orientation == 6.2831853f);
+    CHECK(mi_out->z == -12.5f);
+    // Codec semantics: FlatBuffers ELIDES a scalar equal to its default (0.0f), so a
+    // signed zero does NOT survive the wire — -0.0f decodes back as +0.0f (value-equal
+    // to the default). Pinned here so nobody mistakes it for a bug later.
+    codec::MovementIntent zi;
+    zi.z = -0.0f;
+    auto zi_out = codec::decode_movement_intent(codec::encode_movement_intent(zi));
+    CHECK(zi_out.has_value() && zi_out->z == 0.0f && !std::signbit(zi_out->z));
+
+    // A Disconnect carrying a version-mismatch-style reason + message round-trips
+    // (the S→C frame a server sends to reject an incompatible build).
+    codec::Disconnect dc{/*reason=*/7, "incompatible build"};
+    auto dc_out = codec::decode_disconnect(codec::encode_disconnect(dc));
+    CHECK(dc_out.has_value() && dc_out->reason == 7 && dc_out->message == "incompatible build");
+}
+
+// ---------------------------------------------------------------------------
+// 10. Transport error / reconnect paths (#100: "reconnect paths").
+// ---------------------------------------------------------------------------
+void test_transport_error_paths() {
+    std::puts("[transport/edge] offline TCP, not-ok error surface, mock seam + EOF");
+
+    // TcpTransport offline (nothing listening on port 1): not-ok, a reason surfaced,
+    // and its I/O fails cleanly (the caller's cue to reconnect / back off).
+    TcpTransport tcp("127.0.0.1", 1);
+    CHECK(!tcp.ok());
+    CHECK(!tcp.error().empty());
+    CHECK(!tcp.send_frame(bytes_of({0x01})));   // no socket → write fails
+    CHECK(!tcp.recv_frame().has_value());        // no socket → read fails (nullopt)
+    bool wb = true;
+    CHECK(!tcp.recv_frame_nb(wb).has_value());
+
+    // The ITransport SEAM contract, socket-free via a mock: a frame sent goes out
+    // verbatim; frames received come back in order; a payload over the cap is refused.
+    MockTransport mock;
+    mock.inbox = {bytes_of({0x10}), bytes_of({0x20, 0x21}), Bytes{}};
+    ITransport* seam = &mock;
+    CHECK(seam->send_frame(bytes_of({0xAB, 0xCD})));
+    CHECK(mock.sent.size() == 1 && mock.sent[0] == bytes_of({0xAB, 0xCD}));
+    CHECK(!seam->send_frame(Bytes(kMaxFrameBytes + 1, 0x00)));  // oversize refused
+    CHECK(mock.sent.size() == 1);                                // and not enqueued
+
+    // recv_frame drains the inbox in order, including a zero-length frame.
+    auto r1 = seam->recv_frame();
+    auto r2 = seam->recv_frame();
+    auto r3 = seam->recv_frame();
+    CHECK(r1.has_value() && *r1 == bytes_of({0x10}));
+    CHECK(r2.has_value() && *r2 == bytes_of({0x20, 0x21}));
+    CHECK(r3.has_value() && r3->empty());
+
+    // Inbox drained → recv_frame returns nullopt (a clean EOF: the reconnect signal).
+    CHECK(!seam->recv_frame().has_value());
+
+    // The DEFAULT recv_frame_nb (not overridden by the mock) reports would_block=false
+    // and delegates to recv_frame — so on EOF it too returns nullopt with no timeout.
+    bool would_block = true;
+    auto nb = seam->recv_frame_nb(would_block);
+    CHECK(!nb.has_value() && would_block == false);
+
+    // set_recv_timeout_ms reaches the transport (default is a no-op on a real mock;
+    // here the mock records it to prove the seam call is wired).
+    seam->set_recv_timeout_ms(250);
+    CHECK(mock.last_timeout_ms == 250);
+}
+
 }  // namespace
 
 int main() {
@@ -382,6 +768,13 @@ int main() {
     test_entity_codec();
     test_full_stack();
     test_transport_links();
+
+    // #100 gap-filling edge cases (add to, do not duplicate, the above).
+    test_framing_edge_cases();
+    test_wire_frame_edge_cases();
+    test_world_session_edge_cases();
+    test_codec_malformed_and_versions();
+    test_transport_error_paths();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     if (g_failures == 0) {
