@@ -68,14 +68,19 @@ inline std::string disconnect_reason_label(net::DisconnectReason r) {
 }
 
 // The movement-violation `kind` label value (catalog
-// meridian_movement_violations_total{...,kind}), mapping the validator's
-// MoveReject to the catalog's speed/teleport/bounds/flag taxonomy.
+// meridian_movement_violations_total{...,kind}). The catalog names the taxonomy
+// "speed/teleport/bounds/flag"; the M0 validator's MoveReject maps as: per-packet
+// over-cap -> "speed", sliding-window over-cap (burst-then-idle, catches the
+// teleport/blink cheat) -> "teleport", outside map bounds -> "bounds", z outside
+// the ground envelope -> "z" (its own kind — an honest label rather than forcing
+// it into "flag", which is reserved for state-flag violations landing with the v1
+// envelope at M1). Low-cardinality, stable strings safe as a label.
 inline std::string move_reject_kind(MoveReject r) {
     switch (r) {
         case MoveReject::kSpeedPerPacket: return "speed";
-        case MoveReject::kSpeedWindow:    return "speed_window";
+        case MoveReject::kSpeedWindow:    return "teleport";
         case MoveReject::kOutOfBounds:    return "bounds";
-        case MoveReject::kZOutOfRange:    return "flag";  // z-vs-ground envelope check
+        case MoveReject::kZOutOfRange:    return "z";
         case MoveReject::kNone:           return "none";
     }
     return "none";
