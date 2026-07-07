@@ -230,10 +230,10 @@ jobs:
           mariadb -h 127.0.0.1 -P 3306 -u root -pci -e "CREATE DATABASE IF NOT EXISTS meridian_world"
           ( echo "SET FOREIGN_KEY_CHECKS=0;"; cat schema/sql/world/*.sql ) \
             | mariadb -h 127.0.0.1 -P 3306 -u root -pci meridian_world
-      - name: Build worldd-session-test + worldd-relay-test + worldd-boot-db-test
+      - name: Build worldd-session-test + worldd-grant-test + worldd-relay-test + worldd-boot-db-test
         run: |
           cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
-          cmake --build server/build --target worldd worldd-session-test worldd-relay-test worldd-boot-db-test
+          cmake --build server/build --target worldd worldd-session-test worldd-grant-test worldd-relay-test worldd-boot-db-test
       - name: Run worldd IF-3 session establishment test (MariaDB service)
         env:
           MERIDIAN_DB_HOST: 127.0.0.1
@@ -242,6 +242,20 @@ jobs:
           MERIDIAN_DB_PASS: ci
           MERIDIAN_DB_NAME: meridian_auth
         run: ./server/build/worldd/worldd-session-test
+      # worldd grant-lifecycle classification (#81): drives validate_and_consume_grant
+      # DIRECTLY (no wire) so it asserts WHY a grant was rejected — the wire path
+      # collapses every failure to one opaque GRANT_INVALID Disconnect, so the
+      # session test above cannot see the create/replay/expired/wrong-realm/unknown
+      # branch. Same mariadb service + auth schema. Inert (SKIP) in the plain `server`
+      # ctest (no MERIDIAN_DB_* env).
+      - name: Run worldd grant-lifecycle test (MariaDB service)
+        env:
+          MERIDIAN_DB_HOST: 127.0.0.1
+          MERIDIAN_DB_PORT: 3306
+          MERIDIAN_DB_USER: root
+          MERIDIAN_DB_PASS: ci
+          MERIDIAN_DB_NAME: meridian_auth
+        run: ./server/build/worldd/worldd-grant-test
       # worldd Grid/AoI engine v0 + movement relay (#87): the IT-M0 "two clients
       # see each other move" capstone. Two real TLS sessions consume two grants,
       # both enter world near each other; A moves -> B gets A's EntityEnter then
