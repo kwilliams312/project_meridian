@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Local build override (#177, D-30 §10 rule 2: "build-from-source stays one flag
+# away"). Layer this on top of docker-compose.yml to BUILD the authd/worldd
+# images from the repo instead of pulling the published GHCR images:
+#
+#     docker compose \
+#       -f deploy/docker/docker-compose.yml \
+#       -f deploy/docker/docker-compose.build.yml \
+#       up -d --build
+#
+# Both build the ONE parameterized Dockerfile (deploy/docker/Dockerfile) from the
+# REPO ROOT context, selecting the daemon via the DAEMON build-arg. The `image:`
+# keys still name the GHCR refs so a built image is tagged identically to a pulled
+# one (locally :latest), keeping the two paths interchangeable.
+
+name: meridian
+
+services:
+  authd:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        DAEMON: authd
+        PORT: "7100"
+    image: ghcr.io/kwilliams312/project_meridian/authd:${MERIDIAN_TAG:-latest}
+
+  worldd:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        DAEMON: worldd
+        PORT: "7200"
+    image: ghcr.io/kwilliams312/project_meridian/worldd:${MERIDIAN_TAG:-latest}

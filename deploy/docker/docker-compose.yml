@@ -1,0 +1,129 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Project Meridian — reference server compose (#177, D-30 §10 rule 2).
+#
+# Brings up a single-realm M0 topology: authd + worldd running the PUBLISHED
+# GHCR images (D-30 §10 rule 2: "the compose file consumes *published* GHCR
+# images by default; build-from-source stays one flag away"), plus the MariaDB
+# holding the auth / characters / world schemas.
+#
+# ── Run the published images (default) ──────────────────────────────────────
+#     docker compose -f deploy/docker/docker-compose.yml up -d
+#   Pin a build:  MERIDIAN_TAG=<short-sha> docker compose ... up -d   (default: latest)
+#
+# ── Build from source instead (one flag away) ───────────────────────────────
+#     docker compose -f deploy/docker/docker-compose.yml \
+#                    -f deploy/docker/docker-compose.build.yml up -d --build
+#
+# ── With the OPS-05 observability overlay (server/ops) ───────────────────────
+#   This compose creates the `meridian` network; the observability overlay
+#   attaches to it as `external: true`. Bring both up together:
+#     docker compose \
+#       -f deploy/docker/docker-compose.yml \
+#       -f server/ops/docker-compose.observability.yml \
+#       up -d
+#   (The overlay's collector then scrapes authd/worldd /metrics by service name
+#    once the OPS-05 endpoints land.)
+#
+# TLS: authd (IF-1) and worldd (IF-2 at M0) both need a server cert + key. Drop
+# a PEM cert/key pair in ./certs (server.crt / server.key) — mounted read-only.
+# See ./certs/README.md for a one-liner self-signed pair for local dev.
+
+name: meridian
+
+networks:
+  # The server stack's network. Named `meridian` so the OPS-05 observability
+  # overlay (server/ops/docker-compose.observability.yml, `external: true,
+  # name: meridian`) attaches to THIS network by name.
+  meridian:
+    name: meridian
+    driver: bridge
+
+volumes:
+  meridian-db-data:
+
+services:
+  # ── MariaDB: auth + characters + world schemas ────────────────────────────
+  db:
+    image: mariadb:11
+    container_name: meridian-db
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MERIDIAN_DB_ROOT_PASS:-meridian-root}
+      # App user the daemons connect as (MERIDIAN_DB_USER/_PASS below).
+      MARIADB_USER: ${MERIDIAN_DB_USER:-meridian}
+      MARIADB_PASSWORD: ${MERIDIAN_DB_PASS:-meridian}
+    volumes:
+      - meridian-db-data:/var/lib/mysql
+      # First-boot init: wrapper scripts CREATE DATABASE + SOURCE the schemas.
+      # Run alphabetically (01-auth, 02-characters, 03-world) on an empty volume.
+      - ./db-init:/docker-entrypoint-initdb.d:ro
+      # The schema sources the wrappers SOURCE, mounted read-only:
+      - ../../server/db/auth/migrations:/schemas/auth:ro
+      - ../../server/db/characters/migrations:/schemas/characters:ro
+      - ../../schema/sql/world:/schemas/world:ro
+    # The app user (MARIADB_USER) is granted access to all three meridian_* DBs
+    # by db-init/04-grants.sql (the *_USER env only grants one MARIADB_DATABASE,
+    # which we don't set). NOTE: 04-grants.sql hardcodes user `meridian`; if you
+    # override MERIDIAN_DB_USER, update that grant script to match.
+    command: ["--skip-name-resolve"]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - meridian
+
+  # ── authd: login / realm-list / session-grant (IF-1, TLS 1.3, port 7100) ──
+  authd:
+    image: ghcr.io/kwilliams312/project_meridian/authd:${MERIDIAN_TAG:-latest}
+    container_name: meridian-authd
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MERIDIAN_DB_HOST: db
+      MERIDIAN_DB_PORT: "3306"
+      MERIDIAN_DB_USER: ${MERIDIAN_DB_USER:-meridian}
+      MERIDIAN_DB_PASS: ${MERIDIAN_DB_PASS:-meridian}
+      MERIDIAN_DB_NAME: meridian_auth
+    command:
+      - --cert=/certs/server.crt
+      - --key=/certs/server.key
+      - --bind=0.0.0.0
+      - --port=7100
+    volumes:
+      - ./certs:/certs:ro
+    ports:
+      - "7100:7100"   # IF-1 login (SAD §5.1)
+    # Hardening (D-30 §10 rule 6): read-only rootfs — the daemon writes only
+    # stdout/stderr and reads the ro cert mount. No new privileges.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - meridian
+
+  # ── worldd: shard worker / map simulation (IF-2, TLS 1.3 at M0, port 7200) ─
+  worldd:
+    image: ghcr.io/kwilliams312/project_meridian/worldd:${MERIDIAN_TAG:-latest}
+    container_name: meridian-worldd
+    restart: unless-stopped
+    # worldd has no DB dependency at M0 (SAD §5.2) — it needs only the cert.
+    command:
+      - --cert=/certs/server.crt
+      - --key=/certs/server.key
+      - --bind=0.0.0.0
+      - --port=7200
+    volumes:
+      - ./certs:/certs:ro
+    ports:
+      - "7200:7200"   # IF-2 world transport (SAD §5.2)
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - meridian
