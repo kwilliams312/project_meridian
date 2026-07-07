@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1.7
+# SPDX-License-Identifier: Apache-2.0
+#
+# worldd image (#176) — a thin convenience wrapper over the parameterized
+# ./Dockerfile (the single source of truth for the multi-stage build + hardening
+# baseline). CI and compose build ./Dockerfile with --build-arg DAEMON=worldd
+# directly; this wrapper exists for hand-builds and the per-daemon convention.
+#
+# worldd (server SAD §2.5, §5.2): shard worker / map simulation. TLS 1.3 IF-2
+# on port 7200 (M0 transport). No DB at M0 — needs only a TLS cert/key to serve.
+#
+# Build from the REPO ROOT:
+#   docker build -f deploy/docker/Dockerfile.worldd -t meridian-worldd .
+
+FROM debian:bookworm-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake ninja-build g++ \
+        flatbuffers-compiler libflatbuffers-dev libssl-dev libmariadb-dev \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY schema/ ./schema/
+COPY server/ ./server/
+RUN cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build server/build --target worldd
+
+FROM debian:bookworm-slim AS runtime
+LABEL org.opencontainers.image.title="meridian-worldd" \
+      org.opencontainers.image.description="Project Meridian worldd — shard worker / map simulation (clean-room, Apache-2.0)" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.source="https://github.com/kwilliams312/project_meridian"
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libssl3 libmariadb3 ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 meridian \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin meridian
+COPY --from=build /src/server/build/worldd/worldd /usr/local/bin/meridiand
+USER 10001:10001
+EXPOSE 7200
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD ["/usr/local/bin/meridiand", "--version"]
+ENTRYPOINT ["/usr/local/bin/meridiand"]

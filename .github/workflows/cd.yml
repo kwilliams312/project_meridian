@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Continuous delivery — GHCR autopublish on green main (#175, D-30 §10 rule 1).
+#
+# Trigger mechanism (the "on green main" contract):
+#   This workflow keys off `workflow_run` for the "build" CI workflow
+#   (.github/workflows/build.yml). It fires when that workflow COMPLETES, and the
+#   `publish` job is guarded to run ONLY when:
+#       conclusion == 'success'   (CI was green)  AND
+#       head_branch == 'main'     (it was a push to main, not a PR)
+#   So images publish strictly AFTER main passes CI — exactly D-30's "every push
+#   to main that passes CI builds and publishes". We use `workflow_run` (not a job
+#   appended to build.yml) deliberately: the CI-conflict-avoidance rule for this
+#   change forbids editing build.yml, and a separate downstream workflow keeps CD
+#   decoupled from CI while still gating on its success. `workflow_run` runs from
+#   the DEFAULT branch's copy of this file — expected, since CD lives on main.
+#
+# What it publishes (D-30 §10 rule 1): the authd + worldd images, built with
+# Buildx from the ONE parameterized Dockerfile (deploy/docker/Dockerfile), tagged
+# by short commit SHA + `latest`, pushed to
+#   ghcr.io/kwilliams312/project_meridian/authd
+#   ghcr.io/kwilliams312/project_meridian/worldd
+# Auth is the built-in GITHUB_TOKEN with `packages: write` — no external secret
+# is needed for GHCR. OCI source/revision labels are stamped at build.
+
+name: cd
+
+on:
+  workflow_run:
+    workflows: ["build"]   # must match build.yml's `name:`
+    types: [completed]
+
+# Least-privilege: read the repo, write packages (GHCR). No other scopes.
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # ── The "on green main" guard ──────────────────────────────────────────
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.event == 'push'
+    strategy:
+      # Build both daemon images in parallel; one image per matrix leg.
+      matrix:
+        daemon: [authd, worldd]
+    env:
+      REGISTRY: ghcr.io
+      # Lowercase owner/repo path GHCR requires.
+      IMAGE: ghcr.io/kwilliams312/project_meridian/${{ matrix.daemon }}
+    steps:
+      # Check out the EXACT commit CI validated (the workflow_run's head_sha),
+      # not the tip of main — so the published image matches the green build.
+      - name: Checkout the validated commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Short SHA (7 chars) of the validated commit, for the immutable tag.
+      - name: Compute short SHA
+        id: sha
+        run: echo "short=$(echo '${{ github.event.workflow_run.head_sha }}' | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      # OCI + tag metadata: `latest` and the short SHA; source/revision labels.
+      - name: Derive tags + OCI labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ steps.sha.outputs.short }}
+          labels: |
+            org.opencontainers.image.title=meridian-${{ matrix.daemon }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - name: Build + push ${{ matrix.daemon }} image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          build-args: |
+            DAEMON=${{ matrix.daemon }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Speed up repeat builds; scoped per daemon so authd/worldd don't clash.
+          cache-from: type=gha,scope=${{ matrix.daemon }}
+          cache-to: type=gha,scope=${{ matrix.daemon }},mode=max
+
+      - name: Summary
+        run: |
+          {
+            echo "### Published \`${{ matrix.daemon }}\` :rocket:"
+            echo ""
+            echo "- **image:** \`${{ env.IMAGE }}\`"
+            echo "- **tags:** \`latest\`, \`${{ steps.sha.outputs.short }}\`"
+            echo "- **revision:** \`${{ github.event.workflow_run.head_sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

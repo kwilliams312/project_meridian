@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1.7
+# SPDX-License-Identifier: Apache-2.0
+#
+# authd image (#176) — a thin convenience wrapper over the parameterized
+# ./Dockerfile so `docker build -f Dockerfile.authd` works without remembering
+# the DAEMON build-arg. The real build logic (multi-stage, hardening baseline,
+# runtime-lib-only stage) lives in ./Dockerfile — the single source of truth.
+# CI (.github/workflows/cd.yml) and compose build ./Dockerfile with
+# --build-arg DAEMON=authd directly; these wrappers exist for hand-builds and to
+# satisfy the per-daemon Dockerfile convention.
+#
+# authd (server SAD §2.1, §5.1): login / realm-list / session-grant. TLS 1.3
+# IF-1 on port 7100. Needs a live auth DB (MERIDIAN_DB_*) + TLS cert/key to serve.
+#
+# Build from the REPO ROOT:
+#   docker build -f deploy/docker/Dockerfile.authd -t meridian-authd .
+
+FROM debian:bookworm-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake ninja-build g++ \
+        flatbuffers-compiler libflatbuffers-dev libssl-dev libmariadb-dev \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY schema/ ./schema/
+COPY server/ ./server/
+RUN cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build server/build --target authd
+
+FROM debian:bookworm-slim AS runtime
+LABEL org.opencontainers.image.title="meridian-authd" \
+      org.opencontainers.image.description="Project Meridian authd — login/realm-list/session-grant (clean-room, Apache-2.0)" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.source="https://github.com/kwilliams312/project_meridian"
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libssl3 libmariadb3 ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 meridian \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin meridian
+COPY --from=build /src/server/build/authd/authd /usr/local/bin/meridiand
+USER 10001:10001
+EXPOSE 7100
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD ["/usr/local/bin/meridiand", "--version"]
+ENTRYPOINT ["/usr/local/bin/meridiand"]

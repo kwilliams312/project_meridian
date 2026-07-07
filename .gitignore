@@ -30,3 +30,10 @@ client/project/bin/libmeridian.*
 *.exp
 *.ilk
 *.gen.cpp
+
+# --- Deploy: local TLS certs for the reference compose (#177) ---
+# Per-deployment secrets — never committed. The certs/ dir + its README are
+# tracked; the actual key/cert material is not.
+deploy/docker/certs/*.crt
+deploy/docker/certs/*.key
+deploy/docker/certs/*.pem
