@@ -147,7 +147,42 @@ MovementSnapshot integrate_tick(const MovementSnapshot& prev,
                                 const IWorldQuery& world);
 
 // ===========================================================================
-// Prediction + reconciliation (the ring buffer + rewind/re-sim).
+// Reconciliation SMOOTHING tunables (#103) — CLIENT-ONLY PRESENTATION.
+// ===========================================================================
+// These govern how a server correction is PRESENTED, not how the sim runs, so —
+// unlike movement_constants.h — they are NOT part of the shared #101 client/server
+// contract and have NO server mirror: the server never smooths, it just states the
+// authoritative position. The reconciler keeps the *simulation* state exactly
+// server-authoritative (so subsequent predictions never drift), and carries the
+// visible/render position toward it via a decaying error offset (Client SAD §2.2
+// (b) "rewind … re-simulate … smooth small errors, snap large ones").
+namespace reconcile_tuning {
+// Error-offset decay window. On a SMALL correction, the discrepancy between where
+// the player was being shown and the newly-corrected sim is captured as a render
+// offset that decays to zero over THIS many milliseconds instead of popping. The
+// task envelope is 100–200 ms; 150 ms is the midpoint — long enough to hide the
+// sub-metre per-tick jitter a well-behaved client produces, short enough that the
+// visible position stays honest to the server. Time-parameterised (not a per-frame
+// exponential), so the offset reaches EXACTLY zero at the window end regardless of
+// frame rate — deterministic and monotonic (the property the #103 test pins).
+inline constexpr uint64_t kErrorDecayWindowMs = 150;
+
+// Snap threshold (metres). A correction whose magnitude exceeds THIS is too large
+// to hide by sliding — a teleport, a long stall, or a genuine desync — so the
+// visible position SNAPS straight to the corrected sim (offset dropped to zero)
+// rather than gliding a big, obviously-wrong distance. Chosen just above ordinary
+// correction noise: kMaxPacketDisplacement ≈ 0.69 m is the largest ground move a
+// single legal packet makes (movement_constants.h §6), so 1.0 m (~1.5×) clears
+// per-packet jitter while still snapping real desyncs (≥ ~2 ticks of divergence).
+inline constexpr float kSnapThresholdMeters = 1.0f;
+
+static_assert(kErrorDecayWindowMs >= 100 && kErrorDecayWindowMs <= 200,
+              "#103: error-offset decay window must stay in the 100–200 ms envelope");
+static_assert(kSnapThresholdMeters > 0.0f, "#103: snap threshold must be positive");
+} // namespace reconcile_tuning
+
+// ===========================================================================
+// Prediction + reconciliation (the ring buffer + rewind/re-sim + smoothing).
 // ===========================================================================
 class PredictionReconciler {
 public:
@@ -167,8 +202,40 @@ public:
 	// position and RE-SIMULATE every surviving unacked input in order. After
 	// this, `predicted_state()` == server-authoritative + the local residual of
 	// the still-unacked inputs (Client SAD §2.2 (b); the R5 cross-track
-	// determinism check). Returns the post-reconciliation predicted state.
+	// determinism check). Returns the post-reconciliation predicted (SIM) state.
+	//
+	// SMOOTHING (#103): reconcile also computes the error between where the player
+	// was being SHOWN (last visible position) and this corrected sim, and sets up
+	// the render-offset response: a SMALL error is captured as an offset that
+	// `advance_smoothing` decays to zero over kErrorDecayWindowMs (no pop); a LARGE
+	// error (> kSnapThresholdMeters) SNAPS — the offset is dropped so the visible
+	// position jumps straight to the corrected sim. The SIM state returned here is
+	// authoritative-correct either way; smoothing only affects `visible_state()`.
 	MovementSnapshot reconcile(const MovementStateIn& server);
+
+	// Advance the error-offset decay by `dt_ms` of real (render) time. Call once
+	// per frame AFTER draining server acks at the net-thread pre-sim sync point.
+	// No-op when no correction is being smoothed. When the decay window elapses the
+	// offset is exactly zero and smoothing goes inactive.
+	void advance_smoothing(uint64_t dt_ms);
+
+	// The current render-space error offset (visible_position = sim + this). Zero
+	// when nothing is being smoothed or right after a snap.
+	const Vec3& error_offset() const { return error_offset_; }
+
+	// The CLIENT-VISIBLE (render) state: the corrected sim state with the decaying
+	// error offset added to its position. This is what a local-player node renders;
+	// `predicted_state()` remains the raw authoritative-correct sim used for the
+	// next prediction and for gameplay queries.
+	MovementSnapshot visible_state() const;
+
+	// True while a small-error correction is still decaying to zero.
+	bool is_smoothing() const { return smoothing_active_; }
+
+	// Magnitude (metres) of the error the last reconcile() computed, and whether it
+	// exceeded the snap threshold (true == snapped). Observability / telemetry.
+	float last_error_magnitude() const { return last_error_mag_; }
+	bool  last_reconcile_snapped() const { return last_snapped_; }
 
 	// Rate-cap gate for intent emission (kMovementIntentMaxHz ≤ 10/s + on state
 	// change). Returns true if an intent captured at `client_time_ms` with
@@ -189,9 +256,19 @@ public:
 
 private:
 	const IWorldQuery& world_;
-	MovementSnapshot   predicted_;          // client-visible, N ticks ahead of ack
+	MovementSnapshot   predicted_;          // authoritative-correct SIM, N ticks ahead of ack
 	std::deque<PredictedInput> buffer_;     // unacked inputs, ascending seq
 	uint32_t next_seq_ = 1;                 // seq 0 reserved as "none"
+
+	// Error-offset smoothing state (#103). `error_offset_` is added to the sim
+	// position to produce the visible position; it starts at `error_offset_start_`
+	// on a small correction and decays to zero over kErrorDecayWindowMs.
+	Vec3     error_offset_{};                // current render offset (sim -> visible)
+	Vec3     error_offset_start_{};          // offset captured at the last correction
+	uint64_t smoothing_elapsed_ms_ = 0;      // time since the last correction
+	bool     smoothing_active_     = false;  // a small-error decay is in progress
+	float    last_error_mag_       = 0.0f;   // |error| of the last reconcile (observability)
+	bool     last_snapped_         = false;  // did the last reconcile snap?
 
 	// Intent-rate bookkeeping.
 	bool     have_sent_ = false;

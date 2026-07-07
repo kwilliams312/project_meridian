@@ -147,7 +147,31 @@ MovementIntentOut PredictionReconciler::predict(const MovementInput& input,
 	return out;
 }
 
+// Time-parameterised decay curve for the render error offset (#103). Maps elapsed
+// time in [0, window] to a scale in [1, 0]. Smoothstep falloff (1 - (3u²-2u³)):
+// monotonically DECREASING on [0,1] (its derivative -6u(1-u) ≤ 0), C1-continuous at
+// both ends for a soft start/stop, and EXACTLY zero at the window end — so the
+// offset converges (the #103 monotonic-decay/convergence property) independent of
+// frame rate. dt-agnostic: we scale the captured start offset by f(elapsed), we do
+// not multiply the running offset frame-by-frame (which would be frame-rate coupled).
+static float decay_scale(uint64_t elapsed_ms) {
+	const uint64_t window = reconcile_tuning::kErrorDecayWindowMs;
+	if (elapsed_ms >= window) return 0.0f;
+	const float u = static_cast<float>(elapsed_ms) / static_cast<float>(window);
+	return 1.0f - (3.0f * u * u - 2.0f * u * u * u);
+}
+
 MovementSnapshot PredictionReconciler::reconcile(const MovementStateIn& server) {
+	// Capture where the player is currently being SHOWN (sim + any in-flight decay
+	// offset) BEFORE adopting the correction, so the visible position stays
+	// continuous across the reconcile — a mid-decay correction composes cleanly
+	// with the one still resolving instead of popping.
+	const Vec3 visible_before{
+	    predicted_.position.x + error_offset_.x,
+	    predicted_.position.y + error_offset_.y,
+	    predicted_.position.z + error_offset_.z,
+	};
+
 	// 1. Discard acknowledged inputs: the server has processed everything with
 	//    seq <= ack_seq, so those predictions are now confirmed and irrelevant.
 	while (!buffer_.empty() && buffer_.front().seq <= server.ack_seq) {
@@ -179,7 +203,67 @@ MovementSnapshot PredictionReconciler::reconcile(const MovementStateIn& server) 
 	}
 
 	predicted_ = state;
+
+	// 4. Error-offset smoothing (#103). The error is how far the corrected sim sits
+	//    from where we were SHOWING the player (visible_before). Small error ->
+	//    capture it as a render offset so the visible position does not pop, then
+	//    decay it to zero over the window in advance_smoothing(). Large error ->
+	//    snap (drop the offset; the visible position jumps to the corrected sim).
+	const Vec3 err{
+	    visible_before.x - predicted_.position.x,
+	    visible_before.y - predicted_.position.y,
+	    visible_before.z - predicted_.position.z,
+	};
+	last_error_mag_ = std::sqrt(err.x * err.x + err.y * err.y + err.z * err.z);
+
+	if (last_error_mag_ > reconcile_tuning::kSnapThresholdMeters) {
+		// Snap: too large to hide — show the corrected sim immediately.
+		error_offset_       = Vec3{};
+		error_offset_start_ = Vec3{};
+		smoothing_elapsed_ms_ = 0;
+		smoothing_active_   = false;
+		last_snapped_       = true;
+	} else if (last_error_mag_ > 0.0f) {
+		// Small error: begin (or restart) the decay from the full offset.
+		error_offset_       = err;
+		error_offset_start_ = err;
+		smoothing_elapsed_ms_ = 0;
+		smoothing_active_   = true;
+		last_snapped_       = false;
+	} else {
+		// Exact match: nothing to smooth; clear any residual offset.
+		error_offset_       = Vec3{};
+		error_offset_start_ = Vec3{};
+		smoothing_elapsed_ms_ = 0;
+		smoothing_active_   = false;
+		last_snapped_       = false;
+	}
+
 	return predicted_;
+}
+
+void PredictionReconciler::advance_smoothing(uint64_t dt_ms) {
+	if (!smoothing_active_) return;
+	smoothing_elapsed_ms_ += dt_ms;
+	if (smoothing_elapsed_ms_ >= reconcile_tuning::kErrorDecayWindowMs) {
+		// Window elapsed: offset is exactly zero, visible == corrected sim.
+		smoothing_elapsed_ms_ = reconcile_tuning::kErrorDecayWindowMs;
+		error_offset_     = Vec3{};
+		smoothing_active_ = false;
+		return;
+	}
+	const float f = decay_scale(smoothing_elapsed_ms_);
+	error_offset_.x = error_offset_start_.x * f;
+	error_offset_.y = error_offset_start_.y * f;
+	error_offset_.z = error_offset_start_.z * f;
+}
+
+MovementSnapshot PredictionReconciler::visible_state() const {
+	MovementSnapshot s = predicted_;
+	s.position.x += error_offset_.x;
+	s.position.y += error_offset_.y;
+	s.position.z += error_offset_.z;
+	return s;
 }
 
 bool PredictionReconciler::should_emit_intent(uint64_t client_time_ms,

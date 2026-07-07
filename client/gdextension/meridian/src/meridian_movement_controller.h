@@ -53,11 +53,25 @@ public:
 	// Rate-cap gate for intent emission (≤ 10/s + on state change).
 	bool should_emit_intent(uint64_t client_time_ms, uint32_t state_flags);
 
+	// Advance the reconciliation error-offset decay by `dt_ms` of render time
+	// (#103). Call once per frame, AFTER draining server acks (reconcile) at the
+	// net-thread pre-sim sync point, so a small correction slides toward the
+	// authoritative sim over the decay window instead of popping.
+	void advance_smoothing(uint64_t dt_ms);
+
 	// Client-visible predicted state accessors.
-	godot::Vector3 get_predicted_position() const;
+	godot::Vector3 get_predicted_position() const;   // raw authoritative-correct SIM
+	// The RENDER position: corrected sim + decaying error offset (#103). The local
+	// player node should render THIS; get_predicted_position() stays the sim truth.
+	godot::Vector3 get_render_position() const;
 	godot::Vector3 get_predicted_velocity() const;
 	bool is_grounded() const;
 	uint32_t pending_input_count() const;
+
+	// Reconciliation smoothing observability (#103).
+	bool is_smoothing() const;               // a small-error correction is decaying
+	float last_error_magnitude() const;      // |error| of the last reconcile (m)
+	bool last_reconcile_snapped() const;     // did the last reconcile snap?
 
 private:
 	movement::FlatWorldQuery world_;                              // M0 (D-19)

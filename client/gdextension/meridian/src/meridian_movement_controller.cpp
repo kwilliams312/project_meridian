@@ -35,14 +35,24 @@ void MeridianMovementController::_bind_methods() {
 	    &MeridianMovementController::reconcile);
 	ClassDB::bind_method(D_METHOD("should_emit_intent", "client_time_ms", "state_flags"),
 	                     &MeridianMovementController::should_emit_intent);
+	ClassDB::bind_method(D_METHOD("advance_smoothing", "dt_ms"),
+	                     &MeridianMovementController::advance_smoothing);
 	ClassDB::bind_method(D_METHOD("get_predicted_position"),
 	                     &MeridianMovementController::get_predicted_position);
+	ClassDB::bind_method(D_METHOD("get_render_position"),
+	                     &MeridianMovementController::get_render_position);
 	ClassDB::bind_method(D_METHOD("get_predicted_velocity"),
 	                     &MeridianMovementController::get_predicted_velocity);
 	ClassDB::bind_method(D_METHOD("is_grounded"),
 	                     &MeridianMovementController::is_grounded);
 	ClassDB::bind_method(D_METHOD("pending_input_count"),
 	                     &MeridianMovementController::pending_input_count);
+	ClassDB::bind_method(D_METHOD("is_smoothing"),
+	                     &MeridianMovementController::is_smoothing);
+	ClassDB::bind_method(D_METHOD("last_error_magnitude"),
+	                     &MeridianMovementController::last_error_magnitude);
+	ClassDB::bind_method(D_METHOD("last_reconcile_snapped"),
+	                     &MeridianMovementController::last_reconcile_snapped);
 }
 
 void MeridianMovementController::reset(const Vector3 &position, float orientation) {
@@ -96,9 +106,19 @@ bool MeridianMovementController::should_emit_intent(uint64_t client_time_ms,
 	return reconciler_->should_emit_intent(client_time_ms, state_flags);
 }
 
+void MeridianMovementController::advance_smoothing(uint64_t dt_ms) {
+	if (reconciler_) reconciler_->advance_smoothing(dt_ms);
+}
+
 Vector3 MeridianMovementController::get_predicted_position() const {
 	if (!reconciler_) return Vector3();
 	const mv::Vec3 &p = reconciler_->predicted_state().position;
+	return Vector3(p.x, p.y, p.z);
+}
+
+Vector3 MeridianMovementController::get_render_position() const {
+	if (!reconciler_) return Vector3();
+	const mv::Vec3 p = reconciler_->visible_state().position;
 	return Vector3(p.x, p.y, p.z);
 }
 
@@ -114,6 +134,18 @@ bool MeridianMovementController::is_grounded() const {
 
 uint32_t MeridianMovementController::pending_input_count() const {
 	return reconciler_ ? static_cast<uint32_t>(reconciler_->pending_count()) : 0u;
+}
+
+bool MeridianMovementController::is_smoothing() const {
+	return reconciler_ ? reconciler_->is_smoothing() : false;
+}
+
+float MeridianMovementController::last_error_magnitude() const {
+	return reconciler_ ? reconciler_->last_error_magnitude() : 0.0f;
+}
+
+bool MeridianMovementController::last_reconcile_snapped() const {
+	return reconciler_ ? reconciler_->last_reconcile_snapped() : false;
 }
 
 } // namespace meridian
