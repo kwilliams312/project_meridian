@@ -159,6 +159,31 @@ endif()
 
 add_test(NAME tps-camera-core COMMAND tps-camera-core-test)
 
+# --- Settings store + first-run auto-benchmark core (#108) ---
+# The engine-free client settings store (settings_core.*): the typed, categorised
+# settings model (graphics/audio/input/network) + INI (de)serialisation with
+# corrupt-file tolerance, the benchmark->quality-tier mapping, and the first-run-
+# once orchestration + CPU-probe benchmark SKELETON. Same engine-free discipline:
+# no godot-cpp, plain C++17; the Godot node (meridian_settings) is a thin wrapper
+# that only does user:// file I/O + marshals typed values into GDScript.
+add_executable(settings-core-test
+  settings_core_test.cpp
+  "${SRC}/settings_core.cpp"
+)
+target_include_directories(settings-core-test PRIVATE "${SRC}")
+set_target_properties(settings-core-test PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+if(MSVC)
+  target_compile_options(settings-core-test PRIVATE /W4)
+else()
+  target_compile_options(settings-core-test PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME settings-core COMMAND settings-core-test)
+
 # --- Telemetry log capture core (#168) ---
 # The engine-free ERROR/CRITICAL log capture + shipping core (Client SAD §9.2 /
 # D-29 client channel). Same engine-free discipline: no godot-cpp, plain C++17.
