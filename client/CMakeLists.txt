@@ -23,11 +23,25 @@ project(meridian-client LANGUAGES CXX)
 # godot-cpp needed). Wired into a client-test CI job by #61. Default OFF so the
 # normal extension build is unchanged.
 option(MERIDIAN_CLIENT_TESTS "Build engine-free client core unit tests" OFF)
-if(MERIDIAN_CLIENT_TESTS)
+
+# --- Engine-free headless BOT client v0 (#111) ---
+# The headless bot (client/bot/, meridian-bot) is engine-free too: it links the
+# #99 login core + #102 movement core + this repo's client worldd session and
+# drives the FULL client protocol against the real servers with NO Godot. Enable
+# with -DMERIDIAN_BOT=ON (default OFF). It builds independently of the GDExtension
+# (no godot-cpp), so a CI test job / a load harness needs no Godot toolchain.
+option(MERIDIAN_BOT "Build the headless bot client (meridian-bot) + its tests" OFF)
+
+if(MERIDIAN_CLIENT_TESTS OR MERIDIAN_BOT)
 	enable_testing()
-	add_subdirectory(gdextension/meridian/test)
-	# Tests-only configure: skip the godot-cpp-dependent GDExtension target so a
-	# CI test job needs no Godot toolchain.
+	if(MERIDIAN_CLIENT_TESTS)
+		add_subdirectory(gdextension/meridian/test)
+	endif()
+	if(MERIDIAN_BOT)
+		add_subdirectory(bot)
+	endif()
+	# Tests/bot-only configure: skip the godot-cpp-dependent GDExtension target so a
+	# CI test / bot job needs no Godot toolchain.
 	return()
 endif()
 
