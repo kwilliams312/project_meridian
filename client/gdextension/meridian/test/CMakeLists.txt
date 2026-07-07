@@ -59,6 +59,55 @@ endif()
 
 add_test(NAME prediction-reconcile COMMAND prediction-reconcile-test)
 
+# --- Deterministic replay harness (#106) ---
+# The engine-free desync regression net (Client SAD §9.2 / R5): records a
+# (input + server-correction) sequence and replays it through the SAME
+# predict()/reconcile()/integrate_tick() path (movement_controller.cpp) so the
+# per-tick trace reproduces BIT-IDENTICALLY. Checks record->replay determinism,
+# exact serialisation round-trip, tamper detection, and — the regression net —
+# that each checked-in fixtures/*.replay golden still replays bit-for-bit. Same
+# engine-free discipline: no godot-cpp, plain C++17. Links the SAME core the
+# #102/#103 tests use so replay and the live client share ONE code path.
+add_executable(replay-harness-test
+  replay_harness_test.cpp
+  "${SRC}/replay_harness.cpp"
+  "${SRC}/movement_controller.cpp"
+)
+target_include_directories(replay-harness-test PRIVATE "${SRC}")
+set_target_properties(replay-harness-test PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+if(MSVC)
+  target_compile_options(replay-harness-test PRIVATE /W4)
+else()
+  target_compile_options(replay-harness-test PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME replay-harness COMMAND replay-harness-test)
+
+# The golden-fixture GENERATOR (maintenance tool, NOT a ctest): (re)mints the
+# checked-in test/fixtures/*.replay from replay_fixture_defs.h. Run once and commit
+# the output; the test above then guards it. Kept out of `ctest` so a normal test
+# run never rewrites the golden it verifies.
+add_executable(replay-fixture-gen
+  replay_fixture_gen.cpp
+  "${SRC}/replay_harness.cpp"
+  "${SRC}/movement_controller.cpp"
+)
+target_include_directories(replay-fixture-gen PRIVATE "${SRC}")
+set_target_properties(replay-fixture-gen PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+if(MSVC)
+  target_compile_options(replay-fixture-gen PRIVATE /W4)
+else()
+  target_compile_options(replay-fixture-gen PRIVATE -Wall -Wextra)
+endif()
+
 # --- Remote-entity interpolation + clock-sync estimator core (#104) ---
 # The engine-free REMOTE-side smoothing core (remote_interpolation.*): buffers
 # remote EntityUpdate snapshots and renders an interpolated position at
