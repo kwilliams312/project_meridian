@@ -1,0 +1,68 @@
+# A fixture "widget" type exercising every generator feature in one schema:
+#   - required + optional scalars (string / integer / number / boolean)
+#   - a local enum, a shared-def enum ($ref itemClass), a shared scalar ($ref money)
+#   - a shared struct $ref (intRange) and an inline nested object (specs)
+#   - a typed content ref (itemRef) and a typed asset ref (artRef)
+#   - an array of nested objects (parts) and an array of scalars (tags)
+#   - a discriminated-union array (actions: oneOf tagged by `kind`)
+#   - an object-with-oneOf-required (link: item XOR art)
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/widget.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, id, name, size, kind]
+properties:
+  schema: { const: "meridian/widget@1" }
+  id: { $ref: "#/$defs/contentId" }
+  name: { type: string, minLength: 1 }
+  weight: { type: number }
+  active: { type: boolean, default: true }
+  size: { $ref: "#/$defs/intRange" }
+  price: { $ref: "#/$defs/money" }
+  category: { $ref: "#/$defs/itemClass" }
+  kind:
+    enum: [alpha, beta, gamma]
+  tags:
+    type: array
+    items: { type: string }
+  specs:
+    type: object
+    additionalProperties: false
+    required: [rating]
+    properties:
+      rating: { type: integer }
+      note: { type: string }
+  parts:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [item]
+      properties:
+        item: { $ref: "#/$defs/itemRef" }
+        count: { type: integer, default: 1 }
+  actions:
+    type: array
+    items:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [kind, amount]
+          properties:
+            kind: { const: grant }
+            amount: { type: integer }
+        - type: object
+          additionalProperties: false
+          required: [kind, target]
+          properties:
+            kind: { const: link }
+            target: { $ref: "#/$defs/itemRef" }
+  link:
+    type: object
+    additionalProperties: false
+    oneOf:
+      - required: [item]
+      - required: [art]
+    properties:
+      item: { $ref: "#/$defs/itemRef" }
+      art: { $ref: "#/$defs/artRef" }
