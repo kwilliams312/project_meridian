@@ -30,7 +30,10 @@
 #include <unistd.h>
 #include <vector>
 
-namespace log = meridian::core::log;
+// Alias intentionally NOT named `log`: under g++-15 `-Werror`, a namespace
+// alias `log` shadows the C `log()` math builtin and trips an ambiguity/shadow
+// warning (#239). `mlog` (meridian log) sidesteps it; behavior is unchanged.
+namespace mlog = meridian::core::log;
 
 namespace {
 
@@ -165,13 +168,13 @@ bool parse_object(const std::string& s, Json& out) {
 // Test 1+2+3: JSON render shape, required fields, typed fields, escaping.
 // -------------------------------------------------------------------------
 int test_json_shape() {
-    log::Fields fields = {
-        log::field("session_id", std::string("sess-42")),
-        log::field("opcode", 7),                       // number
-        log::field("grant_id", std::uint64_t{99887766}),  // number
-        log::field("ok", true),                        // bare true
+    mlog::Fields fields = {
+        mlog::field("session_id", std::string("sess-42")),
+        mlog::field("opcode", 7),                       // number
+        mlog::field("grant_id", std::uint64_t{99887766}),  // number
+        mlog::field("ok", true),                        // bare true
     };
-    std::string line = log::render_json(log::Level::Info, "world",
+    std::string line = mlog::render_json(mlog::Level::Info, "world",
                                         "session \"entered\"\tzone", fields);
 
     Json j;
@@ -216,8 +219,8 @@ int test_json_shape() {
 int test_level_filter() {
     // render_* ignores level filtering (they're pure renderers); the filter
     // lives in write(). Drive write() with a redirected stdout and count lines.
-    log::set_format(log::Format::Json);
-    log::set_level(log::Level::Warn);
+    mlog::set_format(mlog::Format::Json);
+    mlog::set_level(mlog::Level::Warn);
 
     std::fflush(stdout);
     char tmpl[] = "/tmp/meridian-log-lvl-XXXXXX";
@@ -227,10 +230,10 @@ int test_level_filter() {
     CHECK(saved >= 0);
     CHECK(dup2(fd, fileno(stdout)) >= 0);
 
-    log::debug("world", "dropped-debug");  // below Warn -> dropped
-    log::info("world", "dropped-info");    // below Warn -> dropped
-    log::warn("world", "kept-warn");       // >= Warn -> emitted
-    log::error("world", "kept-error");     // >= Warn -> emitted
+    mlog::debug("world", "dropped-debug");  // below Warn -> dropped
+    mlog::info("world", "dropped-info");    // below Warn -> dropped
+    mlog::warn("world", "kept-warn");       // >= Warn -> emitted
+    mlog::error("world", "kept-error");     // >= Warn -> emitted
     std::fflush(stdout);
 
     CHECK(dup2(saved, fileno(stdout)) >= 0);
@@ -252,7 +255,7 @@ int test_level_filter() {
     CHECK(has(content, "kept-error"));
 
     // Reset for later tests.
-    log::set_level(log::Level::Info);
+    mlog::set_level(mlog::Level::Info);
     return 0;
 }
 
@@ -260,8 +263,8 @@ int test_level_filter() {
 // Test 5: text mode renders the legacy readable line + key=value trailers.
 // -------------------------------------------------------------------------
 int test_text_mode() {
-    log::Fields fields = {log::field("slot", 3), log::field("guid", std::string("g-7"))};
-    std::string line = log::render_text(log::Level::Warn, "authd",
+    mlog::Fields fields = {mlog::field("slot", 3), mlog::field("guid", std::string("g-7"))};
+    std::string line = mlog::render_text(mlog::Level::Warn, "authd",
                                         "login rejected", fields);
     CHECK(has(line, "WARN"));
     CHECK(has(line, "[authd]"));
@@ -278,8 +281,8 @@ int test_text_mode() {
 // N lines, each an independently-parseable complete JSON object (no interleave).
 // -------------------------------------------------------------------------
 int test_concurrency() {
-    log::set_format(log::Format::Json);
-    log::set_level(log::Level::Info);
+    mlog::set_format(mlog::Format::Json);
+    mlog::set_level(mlog::Level::Info);
 
     std::fflush(stdout);
     char tmpl[] = "/tmp/meridian-log-conc-XXXXXX";
@@ -296,8 +299,8 @@ int test_concurrency() {
     for (int t = 0; t < kThreads; ++t) {
         ts.emplace_back([t] {
             for (int k = 0; k < kPerThread; ++k) {
-                log::info("world", "concurrent line with \"quotes\" and, commas",
-                          {log::field("thread", t), log::field("seq", k)});
+                mlog::info("world", "concurrent line with \"quotes\" and, commas",
+                          {mlog::field("thread", t), mlog::field("seq", k)});
             }
         });
     }
@@ -347,20 +350,20 @@ int test_concurrency() {
 // Test 7: string-parse vocabulary.
 // -------------------------------------------------------------------------
 int test_vocab() {
-    CHECK(log::level_from_string("TRACE") == log::Level::Trace);
-    CHECK(log::level_from_string("Debug") == log::Level::Debug);
-    CHECK(log::level_from_string("info") == log::Level::Info);
-    CHECK(log::level_from_string("warning") == log::Level::Warn);
-    CHECK(log::level_from_string("error") == log::Level::Error);
-    CHECK(log::level_from_string("bogus") == log::Level::Info);  // default
+    CHECK(mlog::level_from_string("TRACE") == mlog::Level::Trace);
+    CHECK(mlog::level_from_string("Debug") == mlog::Level::Debug);
+    CHECK(mlog::level_from_string("info") == mlog::Level::Info);
+    CHECK(mlog::level_from_string("warning") == mlog::Level::Warn);
+    CHECK(mlog::level_from_string("error") == mlog::Level::Error);
+    CHECK(mlog::level_from_string("bogus") == mlog::Level::Info);  // default
 
-    CHECK(log::format_from_string("json") == log::Format::Json);
-    CHECK(log::format_from_string("TEXT") == log::Format::Text);
-    CHECK(log::format_from_string("bogus") == log::Format::Json);  // default
+    CHECK(mlog::format_from_string("json") == mlog::Format::Json);
+    CHECK(mlog::format_from_string("TEXT") == mlog::Format::Text);
+    CHECK(mlog::format_from_string("bogus") == mlog::Format::Json);  // default
 
-    CHECK(std::string(log::level_loki(log::Level::Info)) == "info");
-    CHECK(std::string(log::level_loki(log::Level::Error)) == "error");
-    CHECK(std::string(log::level_name(log::Level::Warn)) == "WARN");
+    CHECK(std::string(mlog::level_loki(mlog::Level::Info)) == "info");
+    CHECK(std::string(mlog::level_loki(mlog::Level::Error)) == "error");
+    CHECK(std::string(mlog::level_name(mlog::Level::Warn)) == "WARN");
     return 0;
 }
 
