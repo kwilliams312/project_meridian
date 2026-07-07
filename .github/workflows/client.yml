@@ -56,6 +56,14 @@ jobs:
   client-cores:
     runs-on: [self-hosted, macOS]
     steps:
+      # The self-hosted runner's Actions shell starts with a minimal PATH that
+      # excludes /opt/homebrew/bin (Actions does NOT source the login shell), so
+      # brew-installed cmake/ninja/flatc aren't found. Prepend the Apple-Silicon
+      # Homebrew bin/sbin via $GITHUB_PATH — this persists for every later step.
+      - name: Put Homebrew (arm64) on PATH
+        run: |
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/sbin" >> "$GITHUB_PATH"
       - uses: actions/checkout@v4
         # No submodules: the engine-agnostic cores never touch godot-cpp.
       # Runs in the runner's own (Rosetta x86_64) process on purpose, so the log
@@ -124,6 +132,12 @@ jobs:
   client-gdext:
     runs-on: [self-hosted, macOS]
     steps:
+      # Same minimal-PATH fix as client-cores: make the Homebrew toolchain
+      # reachable from the Actions shell for every later step.
+      - name: Put Homebrew (arm64) on PATH
+        run: |
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/sbin" >> "$GITHUB_PATH"
       - uses: actions/checkout@v4
         with:
           submodules: recursive   # client/godot-cpp at its pinned 4.7 commit
