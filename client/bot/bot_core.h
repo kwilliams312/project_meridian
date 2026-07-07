@@ -26,13 +26,31 @@
 #define MERIDIAN_BOT_CORE_H
 
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "bot_world_session.h"
 #include "login_core.h"          // login::ILoginTransport, login::LoginResult
 
 namespace meridian::bot {
+
+// A captured inbound AoI observation about ANOTHER entity — the #87 relay sends
+// EntityEnter/Update/Leave for OTHER sessions in range. #111 merely COUNTED these;
+// #248 CAPTURES them (guid + position + kind) so the two-bot harness can assert
+// "bot B saw bot A enter and move". Position carries the wire (Z-UP) frame: x/y =
+// ground plane, z = height (world.fbs). EntityUpdate makes position optional; the
+// bot records has_position for whichever fields the delta carried.
+enum class SightingKind : std::uint8_t { kEnter = 0, kUpdate = 1, kLeave = 2 };
+
+struct EntitySighting {
+    SightingKind kind = SightingKind::kEnter;
+    std::uint64_t entity_guid = 0;  // the OTHER entity's server-assigned guid
+    float x = 0.0f, y = 0.0f, z = 0.0f;  // wire coords (present for enter/update)
+    bool has_position = false;      // EntityLeave carries no position
+    std::uint16_t leave_reason = 0; // world.fbs LeaveReason (kLeave only)
+};
 
 // A scripted movement path the bot walks. v0 ships a closed square (walk the four
 // edges of a box, turning at each corner) — a legal, bounded, repeating route that
@@ -68,6 +86,25 @@ struct BotRunResult {
     // the honest "did it actually move on the server?" signal.
     float moved_distance = 0.0f;
 
+    // --- AoI mutual visibility (#248; the see-each-other-move evidence) ---------
+    // Every EntityEnter/Update/Leave the bot received, IN ORDER — the OTHER
+    // players it saw. The two-bot harness asserts over these: each bot must see the
+    // other ENTER (login-time visibility) and UPDATE (the other moving).
+    std::vector<EntitySighting> sightings;
+    // Per-observed-guid tallies, derived from `sightings` as they arrive.
+    std::unordered_map<std::uint64_t, std::uint32_t> enters_by_guid;
+    std::unordered_map<std::uint64_t, std::uint32_t> updates_by_guid;
+    std::unordered_map<std::uint64_t, std::uint32_t> leaves_by_guid;
+
+    // Distinct OTHER guids this bot saw enter its AoI.
+    std::size_t distinct_entities_seen() const { return enters_by_guid.size(); }
+    // Total EntityUpdate deltas seen (the other(s) moving in view).
+    std::uint32_t total_updates_seen() const {
+        std::uint32_t n = 0;
+        for (const auto& kv : updates_by_guid) n += kv.second;
+        return n;
+    }
+
     bool entered_world() const { return handshake_ok; }
 };
 
@@ -78,6 +115,15 @@ struct BotWorldConfig {
     // How many 20 Hz sim ticks to run the movement loop for. At 20 Hz, 200 ticks
     // = 10 s of simulated movement. The CLI derives this from --duration.
     std::uint32_t movement_ticks = 200;
+
+    // Optional rendezvous barrier (#248, two-bot mutual visibility). Invoked ONCE,
+    // right after this bot has entered the world (HandshakeOk + login-time AoI
+    // drain) and BEFORE it starts moving. The two-bot driver passes a barrier that
+    // blocks until BOTH bots are in-world, so each is already registered in the AoI
+    // grid before either moves — guaranteeing both the login-time EntityEnter and
+    // overlapping movement (so each sees the other MOVE, not just enter). Default
+    // (null) is a no-op — the single-bot CLI + unit tests are unaffected.
+    std::function<void()> on_entered_world;
 };
 
 // Drive the CLIENT-side worldd session over `transport` from a successful authd

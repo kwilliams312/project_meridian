@@ -192,16 +192,38 @@ int main(int argc, char** argv) {
     std::printf("  states_received   : %u\n", run.states_received);
     std::printf("  moves_accepted    : %u\n", run.moves_accepted);
     std::printf("  entity_updates    : %u\n", run.entity_updates);
+    // #248: the OTHER players this bot SAW (the #87 AoI relay). One bot alone sees
+    // nobody; the two-bot harness is where these are non-zero (see-each-other-move).
+    std::printf("  entities_seen     : %zu distinct (enters=%zu, updates=%u, leaves=%zu)\n",
+                run.distinct_entities_seen(), run.enters_by_guid.size(),
+                run.total_updates_seen(), run.leaves_by_guid.size());
+    for (const auto& s : run.sightings) {
+        const char* k = s.kind == bot::SightingKind::kEnter  ? "ENTER"
+                        : s.kind == bot::SightingKind::kUpdate ? "UPDATE"
+                                                               : "LEAVE";
+        if (s.has_position) {
+            std::printf("    saw guid=%llu %s at (%.2f, %.2f, %.2f)\n",
+                        static_cast<unsigned long long>(s.entity_guid), k, s.x, s.y, s.z);
+        } else {
+            std::printf("    saw guid=%llu %s (reason=%u)\n",
+                        static_cast<unsigned long long>(s.entity_guid), k, s.leave_reason);
+        }
+    }
     std::printf("  final position    : (%.2f, %.2f, %.2f) [wire x,y,z]\n",
                 run.final_x, run.final_y, run.final_z);
     std::printf("  moved from spawn  : %.2f m\n", run.moved_distance);
     std::printf("  detail            : %s\n", run.detail.c_str());
 
-    // Machine-readable summary line for the integration harness to grep.
+    // Machine-readable summary line for the integration harness to grep. #248 adds
+    // the AoI-visibility fields so a two-bot harness can assert mutual visibility
+    // straight off this line (entities_seen / entity_enters / entity_updates).
     std::printf("BOT_RESULT handshake_ok=%d intents_sent=%u states_received=%u "
-                "moves_accepted=%u moved_distance=%.3f disconnect_reason=%u\n",
+                "moves_accepted=%u moved_distance=%.3f disconnect_reason=%u "
+                "entities_seen=%zu entity_enters=%zu entity_updates=%u\n",
                 run.handshake_ok ? 1 : 0, run.intents_sent, run.states_received,
-                run.moves_accepted, run.moved_distance, run.disconnect_reason);
+                run.moves_accepted, run.moved_distance, run.disconnect_reason,
+                run.distinct_entities_seen(), run.enters_by_guid.size(),
+                run.total_updates_seen());
 
     if (!run.handshake_ok) {
         std::printf("\nmeridian-bot: FAILED to enter world\n");
