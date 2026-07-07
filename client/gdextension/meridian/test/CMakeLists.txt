@@ -31,6 +31,33 @@ endif()
 
 add_test(NAME movement-controller COMMAND movement-controller-test)
 
+# --- Remote-entity interpolation + clock-sync estimator core (#104) ---
+# The engine-free REMOTE-side smoothing core (remote_interpolation.*): buffers
+# remote EntityUpdate snapshots and renders an interpolated position at
+# `server_now - interp_delay`, plus a filtered client<->server clock-offset
+# estimator (Client SAD §2.2 interpolation clock / §5.1 clock sync). Distinct
+# from the #102 LOCAL prediction. Same engine-free discipline: no godot-cpp,
+# plain C++17; time + snapshots injected so every assertion is deterministic.
+# Depends on movement_controller.cpp only for the shared Vec3 value type.
+add_executable(remote-interpolation-test
+  remote_interpolation_test.cpp
+  "${SRC}/remote_interpolation.cpp"
+  "${SRC}/movement_controller.cpp"
+)
+target_include_directories(remote-interpolation-test PRIVATE "${SRC}")
+set_target_properties(remote-interpolation-test PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+if(MSVC)
+  target_compile_options(remote-interpolation-test PRIVATE /W4)
+else()
+  target_compile_options(remote-interpolation-test PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME remote-interpolation COMMAND remote-interpolation-test)
+
 # --- Telemetry log capture core (#168) ---
 # The engine-free ERROR/CRITICAL log capture + shipping core (Client SAD §9.2 /
 # D-29 client channel). Same engine-free discipline: no godot-cpp, plain C++17.
