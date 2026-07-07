@@ -12,6 +12,9 @@
 // lock-free SPSC ring drained at the pre-sim sync point, with a priority send queue.
 // #105 adds the third-person WoW camera rig (MeridianTpsCamera): hold-RMB steer,
 // hold-LMB orbit, wheel zoom, SpringArm3D collision boom.
+// #108 adds the client settings store + first-run auto-benchmark skeleton
+// (MeridianSettings): typed graphics/audio/input/network settings persisted to
+// user://, with a first-run CPU-probe benchmark that picks a starting quality tier.
 // Later issues add the remaining net / stream / datastore classes (Client SAD §2).
 
 #include "register_types.h"
@@ -28,6 +31,7 @@
 #include "meridian_net_thread.h"
 #include "meridian_pack_mount.h"
 #include "meridian_remote_interpolator.h"
+#include "meridian_settings.h"
 #include "meridian_telemetry.h"
 #include "meridian_tps_camera.h"
 
@@ -46,6 +50,7 @@ void initialize_meridian_module(ModuleInitializationLevel p_level) {
 	GDREGISTER_CLASS(meridian::MeridianRemoteInterpolator);
 	GDREGISTER_CLASS(meridian::MeridianNetThread);
 	GDREGISTER_CLASS(meridian::MeridianTpsCamera);
+	GDREGISTER_CLASS(meridian::MeridianSettings);
 }
 
 void uninitialize_meridian_module(ModuleInitializationLevel p_level) {
