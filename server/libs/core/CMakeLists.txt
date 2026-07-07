@@ -11,6 +11,7 @@ add_library(meridian-core STATIC
   src/version.cpp
   src/log.cpp
   src/config.cpp
+  src/config_loader.cpp
 )
 
 # Canonical alias so consumers link `meridian::core` — decouples the link name
@@ -39,3 +40,14 @@ add_executable(meridian-core-log-test test/log_test.cpp)
 target_link_libraries(meridian-core-log-test PRIVATE meridian::core Threads::Threads)
 set_target_properties(meridian-core-log-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME core-log COMMAND meridian-core-log-test)
+
+# --- Unit test: layered config loader (issue #90). ----------------------------
+# Drives the four-source loader (defaults < file < env < cmdline) directly:
+# precedence + order-independence, typed getters/fallbacks, the TOML/INI-subset
+# file parser (sections, dotted keys, quotes, comments), malformed-file + missing
+# -file handling, the MERIDIAN_<A>_<B> env->key mapping over an injected environ,
+# and "--key=value" command-line ingestion. Pure (no DB, no socket).
+add_executable(meridian-core-config-test test/config_test.cpp)
+target_link_libraries(meridian-core-config-test PRIVATE meridian::core)
+set_target_properties(meridian-core-config-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME core-config COMMAND meridian-core-config-test)
