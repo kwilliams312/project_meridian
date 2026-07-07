@@ -32,10 +32,22 @@ option(MERIDIAN_CLIENT_TESTS "Build engine-free client core unit tests" OFF)
 # (no godot-cpp), so a CI test job / a load harness needs no Godot toolchain.
 option(MERIDIAN_BOT "Build the headless bot client (meridian-bot) + its tests" OFF)
 
-if(MERIDIAN_CLIENT_TESTS OR MERIDIAN_BOT)
+# --- Engine-agnostic client NET CORE (#95) ---
+# The net core (client/net/, meridian-clientnet) is a standalone static library —
+# plain sockets + OpenSSL TLS 1.3, u32-LE framing, IF-2 world-frame codec, the
+# per-session AEAD channel, and the FlatBuffers codec — that links WITHOUT
+# godot-cpp. The bot and (later) the Godot client consume it; its framing/codec/
+# AEAD round-trip tests register in ctest (clientnet). Enable with
+# -DMERIDIAN_CLIENT_NET=ON (default OFF). Builds in any C++17 toolchain.
+option(MERIDIAN_CLIENT_NET "Build the engine-agnostic client net core + its tests" OFF)
+
+if(MERIDIAN_CLIENT_TESTS OR MERIDIAN_BOT OR MERIDIAN_CLIENT_NET)
 	enable_testing()
 	if(MERIDIAN_CLIENT_TESTS)
 		add_subdirectory(gdextension/meridian/test)
+	endif()
+	if(MERIDIAN_CLIENT_NET)
+		add_subdirectory(net)
 	endif()
 	if(MERIDIAN_BOT)
 		add_subdirectory(bot)
