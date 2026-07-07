@@ -166,9 +166,12 @@ target_link_libraries(meridian-proto-roundtrip
 # Protocol drift guard: freezes a canonical instance of every IF-1/IF-2 message
 # (schema/net/{auth,world}.fbs) as its FlatBuffer root-table bytes under
 # conformance/golden/*.bin, then, on each run, decodes each golden via the real
-# meridian::proto codec + asserts the expected logical fields AND re-encodes it
-# for byte-identity to the golden. A codec/schema change that alters the wire
-# format fails this test. The client SAD §5.1 "golden-message round-trip"
+# meridian::proto codec + asserts the expected logical fields (the version-stable
+# wire-drift guard), checks same-build re-encode determinism, and verifies a
+# semantic round-trip. A codec/schema change that alters the wire format fails
+# this test. These checks are flatc-version-independent — they never compare
+# freshly-encoded bytes to the golden bytes (unstable across flatc versions; see
+# conformance.cpp header, #264). The client SAD §5.1 "golden-message round-trip"
 # conformance requirement for the NETWORK protocol — the network analogue of the
 # mcc content-determinism golden (#122).
 #
