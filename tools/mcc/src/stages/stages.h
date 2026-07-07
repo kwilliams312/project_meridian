@@ -8,12 +8,13 @@
 //                                          \----> emit-sql (bake feeds sql too)
 //
 // Each stage is separately testable and cacheable. discover/parse, the
-// structural-lint layer of validate, the Link stage (IF-9 idmap), and EmitSql
-// (IF-4 world DB SQL + world_manifest) are now real (see the matching sources
-// under this directory, driven by `mcc check` / `mcc link` / `mcc emit-sql`).
-// Bake (Recast/audio) and EmitPck (IF-5 .pck) remain no-op stubs that report
-// their role until later M0 tasks land. This header stays dependency-free — the
-// stub runner is used only for those two remaining stages.
+// structural-lint layer of validate, the Link stage (IF-9 idmap), EmitSql
+// (IF-4 world DB SQL + world_manifest), and EmitPck (IF-5 pack.manifest.json +
+// M0 client pack) are now real (see the matching sources under this directory,
+// driven by `mcc check` / `mcc link` / `mcc emit-sql` / `mcc emit-pck`). Bake
+// (Recast/audio) remains a no-op stub that reports its role until a later M0
+// task lands. This header stays dependency-free — the stub runner is used only
+// for that one remaining stage.
 
 #ifndef MCC_STAGES_STAGES_H
 #define MCC_STAGES_STAGES_H

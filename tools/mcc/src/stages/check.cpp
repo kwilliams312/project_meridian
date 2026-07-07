@@ -13,6 +13,7 @@
 
 #include "stages/diagnostics.h"
 #include "stages/discover.h"
+#include "stages/emit_pck.h"
 #include "stages/emit_sql.h"
 #include "stages/idmap.h"
 #include "stages/link.h"
@@ -159,6 +160,91 @@ int emit_sql_content(const std::string& content_dir, const std::string& out_file
             return 2;
         }
         f << emitted.sql;
+    }
+    return 0;
+}
+
+int emit_pck_content(const std::string& content_dir, const std::string& out_dir,
+                     const std::string& mcc_version, const std::string& built_at,
+                     const std::string& godot_version, DiagFormat format,
+                     std::ostream& out, std::ostream& err) {
+    model::ContentModel model;
+    if (!discover(content_dir, model)) {
+        err << "mcc emit-pck: content directory not found: " << content_dir << '\n';
+        return 2;
+    }
+
+    diag::Diagnostics diags;
+    parse(model, diags);
+    validate(model, diags);
+    // emit-pck consumes the EXISTING idmap.lock (read-only: allocate=false), same
+    // as emit-sql — the entry numeric ids must match the SQL keys exactly, so both
+    // stages read the identical allocated idmap. A drift is an L015 error.
+    const LinkResult linked =
+        link(model, content_dir, /*allocate=*/false, diags, /*emit_dangling=*/false);
+
+    EmitPckResult emitted;
+    if (diags.ok()) {
+        EmitPckOptions opts;
+        opts.mcc_version = mcc_version;
+        opts.built_at = built_at;
+        opts.godot_version = godot_version;
+        emitted = emit_pck(model, linked, opts, diags);
+    }
+
+    // Diagnostics render to `out` when writing files (out_dir set), else to `err`
+    // so the manifest is clean on stdout.
+    std::ostream& diag_out = out_dir.empty() ? err : out;
+    if (format == DiagFormat::Json) {
+        diag::render_json(diags, diag_out);
+    } else {
+        std::string stats = "Emitted client pack '" + emitted.pack_namespace +
+                            "': pack.manifest.json + " +
+                            std::to_string(emitted.entries.size()) + " entries (content_hash " +
+                            (emitted.content_hash.size() >= 12 ? emitted.content_hash.substr(0, 12)
+                                                               : emitted.content_hash) +
+                            "...).";
+        diag::render_text(diags, stats, diag_out);
+    }
+
+    if (!diags.ok()) {
+        err << "mcc emit-pck: check/link/emit failed — no pack written\n";
+        return 1;
+    }
+
+    if (out_dir.empty()) {
+        // No output dir: the manifest (the IF-5 contract) goes to stdout.
+        out << emitted.manifest_json;
+    } else {
+        // Write pack.manifest.json + the M0 directory-manifest pack into
+        // <out_dir>/meridian/<ns>/ (mirroring the res:// layout root).
+        std::error_code ec;
+        const fs::path pack_root =
+            fs::path(out_dir) / "meridian" / emitted.pack_namespace;
+        fs::create_directories(pack_root, ec);
+        if (ec) {
+            err << "mcc emit-pck: could not create output dir: " << pack_root.string()
+                << '\n';
+            return 2;
+        }
+        {
+            std::ofstream f(pack_root / "pack.manifest.json",
+                            std::ios::binary | std::ios::trunc);
+            if (!f) {
+                err << "mcc emit-pck: could not write pack.manifest.json\n";
+                return 2;
+            }
+            f << emitted.manifest_json;
+        }
+        {
+            std::ofstream f(pack_root / "pack.contents.jsonl",
+                            std::ios::binary | std::ios::trunc);
+            if (!f) {
+                err << "mcc emit-pck: could not write pack.contents.jsonl\n";
+                return 2;
+            }
+            f << emitted.contents_jsonl;
+        }
     }
     return 0;
 }

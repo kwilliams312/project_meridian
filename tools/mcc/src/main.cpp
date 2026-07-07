@@ -161,7 +161,21 @@ int cmd_build(const std::vector<std::string>& args) {
         return emit_rc;
     }
     std::cout << "  emit-sql: wrote IF-4 world DB SQL -> " << world_sql << '\n';
-    emit_stage(mcc::stages::Stage::EmitPck);  // #121, still a stub
+
+    // emit-pck (#121): after link allocated the ids and emit-sql produced the
+    // IF-4 SQL, assemble the IF-5 client pack (pack.manifest.json + M0 pack) under
+    // build/pck/. Its content_hash is byte-identical to the world_manifest hash
+    // above (the three-way tie, SAD §2.6). A failing emit aborts the build.
+    const std::string pck_dir = "build/pck";
+    const int pck_rc = mcc::stages::emit_pck_content(
+        content_dir, pck_dir, MCC_VERSION, std::string(kDefaultBuiltAt),
+        /*godot_version=*/"", format, std::cout, std::cerr);
+    if (pck_rc != 0) {
+        std::cerr << kProg << " build: emit-pck failed — aborting build\n";
+        return pck_rc;
+    }
+    std::cout << "  emit-pck: wrote IF-5 client pack -> " << pck_dir
+              << "/meridian/<ns>/pack.manifest.json\n";
     return 0;
 }
 
@@ -221,6 +235,53 @@ int cmd_emit_sql(const std::vector<std::string>& args) {
     if (!parse_check_flags("emit-sql", check_args, content_dir, format)) return 2;
     return mcc::stages::emit_sql_content(content_dir, out_file, MCC_VERSION, built_at,
                                          format, std::cout, std::cerr);
+}
+
+// mcc emit-pck [dir] [--out <dir>] [--built-at "<ts>"] [--godot-version <v>]
+//              [--diag-format=...]
+//   Assemble the IF-5 client pack (Tools SAD §2.7): pack.manifest.json + an M0
+//   directory-manifest pack. Consumes the existing idmap.lock read-only (run
+//   `mcc link` / `mcc build --allocate-ids` first). Without --out, the manifest
+//   goes to stdout (diagnostics to stderr); with --out <dir> the pack is written
+//   under <dir>/meridian/<ns>/. The manifest content_hash equals emit-sql's
+//   world_manifest content_hash (the three-way tie, SAD §2.6).
+int cmd_emit_pck(const std::vector<std::string>& args) {
+    std::string out_dir;
+    std::string built_at(kDefaultBuiltAt);
+    std::string godot_version;
+    std::vector<std::string> check_args;
+    bool expect_out = false;
+    bool expect_built = false;
+    bool expect_godot = false;
+    for (const auto& a : args) {
+        if (expect_out) { out_dir = a; expect_out = false; }
+        else if (expect_built) { built_at = a; expect_built = false; }
+        else if (expect_godot) { godot_version = a; expect_godot = false; }
+        else if (a == "--out") expect_out = true;
+        else if (a.rfind("--out=", 0) == 0) out_dir = a.substr(std::strlen("--out="));
+        else if (a == "--built-at") expect_built = true;
+        else if (a.rfind("--built-at=", 0) == 0) built_at = a.substr(std::strlen("--built-at="));
+        else if (a == "--godot-version") expect_godot = true;
+        else if (a.rfind("--godot-version=", 0) == 0) godot_version = a.substr(std::strlen("--godot-version="));
+        else check_args.push_back(a);
+    }
+    if (expect_out) {
+        std::cerr << kProg << " emit-pck: --out requires a directory argument\n";
+        return 2;
+    }
+    if (expect_built) {
+        std::cerr << kProg << " emit-pck: --built-at requires a timestamp argument\n";
+        return 2;
+    }
+    if (expect_godot) {
+        std::cerr << kProg << " emit-pck: --godot-version requires a version argument\n";
+        return 2;
+    }
+    std::string content_dir;
+    mcc::stages::DiagFormat format;
+    if (!parse_check_flags("emit-pck", check_args, content_dir, format)) return 2;
+    return mcc::stages::emit_pck_content(content_dir, out_dir, MCC_VERSION, built_at,
+                                         godot_version, format, std::cout, std::cerr);
 }
 
 int cmd_check(const std::vector<std::string>& args) {
@@ -356,6 +417,7 @@ const Command kCommands[] = {
     {"check",     "validate /content (or --file <p>): structural lints (L001-L011)", cmd_check},
     {"link",      "resolve refs + backlinks + allocate IF-9 ids (--report, --no-allocate-ids)", cmd_link},
     {"emit-sql",  "emit IF-4 world DB SQL + world_manifest (--out <file>, --built-at)",         cmd_emit_sql},
+    {"emit-pck",  "emit IF-5 client pack + pack.manifest.json (--out <dir>, --built-at)",       cmd_emit_pck},
     {"fmt",       "canonically format /content YAML; --check for CI/pre-commit",       cmd_fmt},
     {"diff",      "compare two builds: diff <buildA> <buildB>",                        cmd_diff},
     {"pack",      "build a signed .mcpack community pack + content hash",              cmd_pack},
@@ -418,10 +480,22 @@ void print_help() {
            "                       timestamp for a nightly build).\n"
            "                       Consumes the existing idmap.lock read-only — run\n"
            "                       'mcc link' / 'mcc build' first to allocate ids.\n\n"
+           "EMIT-PCK OPTIONS (IF-5, SAD §2.7):\n"
+           "  [dir]                content root to emit (default: ./content)\n"
+           "  --out <dir>          write the pack under <dir>/meridian/<ns>/ (default:\n"
+           "                       stdout gets pack.manifest.json, diagnostics stderr).\n"
+           "  --built-at \"<ts>\"    pack.manifest.json built_at (default a fixed epoch\n"
+           "                       for reproducible output).\n"
+           "  --godot-version <v>  pinned engine version override (default: the pack's\n"
+           "                       engine.godot). The manifest content_hash equals\n"
+           "                       emit-sql's world_manifest hash (three-way tie).\n"
+           "                       At M0 the pack payload is a documented directory\n"
+           "                       manifest; the Godot-native .pck binary is a follow-up.\n\n"
            "NOTE: discover/parse, the structural lints (L001-L011), the link stage\n"
-           "(reference graph + backlinks + IF-9 idmap), and emit-sql (IF-4 world DB\n"
-           "SQL + world_manifest) are implemented; JSON Schema validation, semantic\n"
-           "lints, bake, and emit-pck land in later M0 tasks (they report as stubs).\n";
+           "(reference graph + backlinks + IF-9 idmap), emit-sql (IF-4 world DB SQL +\n"
+           "world_manifest), and emit-pck (IF-5 pack.manifest.json + M0 pack) are\n"
+           "implemented; JSON Schema validation, semantic lints, bake, and the\n"
+           "Godot-native .pck binary land in later M0 tasks (they report as stubs).\n";
 }
 
 }  // namespace

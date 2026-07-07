@@ -62,7 +62,9 @@ add_library(mcc_stages STATIC
     src/stages/format.cpp
     src/stages/idmap.cpp
     src/stages/link.cpp
+    src/stages/content_hash.cpp
     src/stages/emit_sql.cpp
+    src/stages/emit_pck.cpp
     src/hash/blake3.cpp)
 
 # The single-file `--watch` loop (check.cpp) uses std::thread; some libstdc++
@@ -154,6 +156,23 @@ else()
 endif()
 
 add_test(NAME mcc-emit-sql-unit COMMAND mcc-emit-sql-tests)
+
+# emit-pck stage tests (SAD §2.7, IF-5): well-formed pack.manifest.json (namespace,
+# version, pinned godot, id_band, 64-hex BLAKE3 content_hash, entry list with
+# IF-9 numeric ids + res:// paths), the IF-4/IF-5 content-hash agreement invariant
+# (emit-pck hash == emit-sql world_manifest hash — the three-way tie), determinism
+# (same content -> identical manifest), and entry-list coverage (entry count ==
+# allocated idmap id count).
+add_executable(mcc-emit-pck-tests
+    tests/test_emit_pck.cpp)
+target_link_libraries(mcc-emit-pck-tests PRIVATE mcc_stages)
+if(MSVC)
+    target_compile_options(mcc-emit-pck-tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(mcc-emit-pck-tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_test(NAME mcc-emit-pck-unit COMMAND mcc-emit-pck-tests)
 
 # DB-backed emit-sql integration test (SAD §2.6, IF-4): loads the world DDL + the
 # mcc-emitted SQL into a REAL MariaDB and asserts world_manifest + content tables
