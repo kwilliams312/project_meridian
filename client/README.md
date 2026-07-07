@@ -185,9 +185,13 @@ godot --headless --path project \
 
 The first client-side CI job lands in [`.github/workflows/client.yml`](../.github/workflows/client.yml)
 (#112 / A-16). It runs on the self-hosted Apple-Silicon runner (`runs-on: [self-hosted,
-macOS]`) and targets **arm64 explicitly** (`-DCMAKE_OSX_ARCHITECTURES=arm64`, which
-godot-cpp honors) because the runner reports the `macOS` label set, not an `arm64` label.
-Two jobs:
+macOS]`). Two runner quirks are handled explicitly: the box registers with the `macOS`
+label set (no `arm64` label), and its Actions runner **runs under Rosetta 2** so
+`uname -m` reports `x86_64` inside a step. So the job never gates on `uname -m` — it
+detects Apple Silicon Rosetta-proof via `sysctl -n hw.optional.arm64` (== 1 even from an
+x86_64 process), invokes the toolchain natively with `arch -arm64 cmake/ctest`, passes
+`-DCMAKE_OSX_ARCHITECTURES=arm64`, and asserts every produced binary is `arm64` via
+`lipo` so a silent x86_64 build can't pass. Two jobs:
 
 - **`client-cores`** — builds the engine-agnostic cores with
   `-DMERIDIAN_CLIENT_NET=ON -DMERIDIAN_BOT=ON -DMERIDIAN_CLIENT_TESTS=ON` and runs their
