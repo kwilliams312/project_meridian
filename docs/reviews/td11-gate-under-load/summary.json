@@ -1,0 +1,92 @@
+{
+  "harness": "td11_music_timing",
+  "spec": "music SAD \u00a73.1 (TD-11)",
+  "issue": 145,
+  "measured": false,
+  "source": "mock",
+  "note": "MODELLED by SampleClockModel \u2014 profile 'load', seed 0. Not real audio; use --source godot to measure the real ZoneMusicPlayer (#144) where a Godot 4.7 binary is available.",
+  "config": {
+    "sample_rate": 44100,
+    "bpm": 96.0,
+    "beats_per_bar": 4,
+    "mix_block_frames": 128,
+    "samples_per_bar": 110250.0
+  },
+  "run": {
+    "trials": 2000,
+    "bars": 128,
+    "seed": 0,
+    "profile": "load"
+  },
+  "results": {
+    "transition_error_ms": {
+      "unit": "ms",
+      "count": 2000,
+      "min": 0.0,
+      "median": 2.5510204081632653,
+      "p95": 4.648526077097506,
+      "max": 7.392290249433106,
+      "mean": 2.621360544217687
+    },
+    "transition_error_beats": {
+      "unit": "beats",
+      "count": 2000,
+      "min": 0.0,
+      "median": 0.004081632653061225,
+      "p95": 0.007437641723356009,
+      "max": 0.01182766439909297,
+      "mean": 0.004194176870748299
+    },
+    "stem_drift_ms": {
+      "unit": "ms",
+      "count": 128,
+      "min": 0.022675736961451247,
+      "median": 0.11337868480725624,
+      "p95": 0.18140589569160998,
+      "max": 0.20408163265306123,
+      "mean": 0.10558390022675737
+    },
+    "stack_vs_shadow_ms": {
+      "unit": "ms",
+      "count": 128,
+      "min": 0.0,
+      "median": 0.022675736961451247,
+      "p95": 0.045351473922902494,
+      "max": 0.06802721088435375,
+      "mean": 0.018069727891156462
+    },
+    "starvation_count": 0,
+    "stack_vs_shadow_trend_ms_per_bar": 9.913627906146284e-05,
+    "worst_case_bars": 0.0029569160997732426,
+    "gate": {
+      "verdict": "PASS",
+      "criteria": [
+        {
+          "name": "transition_error_p95_le_10ms",
+          "passed": true,
+          "detail": "p95=4.649 ms (limit 10.0 ms)"
+        },
+        {
+          "name": "transition_worst_case_le_1_bar",
+          "passed": true,
+          "detail": "worst case 0.0030 bars (limit 1 bar)"
+        },
+        {
+          "name": "stem_drift_max_le_1ms",
+          "passed": true,
+          "detail": "max=0.2041 ms (limit 1.0 ms)"
+        },
+        {
+          "name": "no_monotonic_drift_trend",
+          "passed": true,
+          "detail": "stack-vs-shadow trend +0.00010 ms/bar (limit \u00b10.02)"
+        },
+        {
+          "name": "zero_starvation",
+          "passed": true,
+          "detail": "0 starvation event(s) (limit 0)"
+        }
+      ]
+    }
+  }
+}
