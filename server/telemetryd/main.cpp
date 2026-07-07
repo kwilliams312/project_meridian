@@ -30,6 +30,8 @@
 // Clean-room; no GPL source consulted (CONTRIBUTING.md). Mirrors authd's flag/env
 // config shape (flags override env override defaults; no config file yet).
 
+#include "meridian/core/config.hpp"
+#include "meridian/core/config_loader.hpp"
 #include "meridian/core/log.hpp"
 #include "meridian/core/version.hpp"
 #include "meridian/metrics/exposer.h"
@@ -75,8 +77,6 @@ struct TelemetrydConfig {
     std::string log_level;
 };
 
-const char* env(const char* k) { return std::getenv(k); }
-
 void print_help() {
     std::printf(
         "%s — Project Meridian client telemetry ingest daemon (OPS-05 / D-29)\n"
@@ -89,6 +89,9 @@ void print_help() {
         "JSON lines to stdout (the M0 sink; a collector tails it to Loki).\n"
         "\n"
         "Options:\n"
+        "  --config PATH       Layered config file (TOML/INI subset). Also\n"
+        "                      MERIDIAN_CONFIG. Precedence: defaults < file < env\n"
+        "                      < flags. Any key also settable as --<key>=<value>.\n"
         "  --ingest-port N     Ingest HTTP port (default 9469; 0=ephemeral).\n"
         "  --ingest-bind ADDR  Ingest bind address (default 127.0.0.1).\n"
         "  --ingest-path PATH  Sentry-compatible ingest path (default /api/1/store/).\n"
@@ -120,6 +123,21 @@ void print_version() {
 int main(int argc, char** argv) {
     TelemetrydConfig cfg;
 
+    // --- Layered config (issue #90) --------------------------------------------
+    // defaults < file < env < flags; named flags key the same as MERIDIAN_* env
+    // (e.g. --ingest-port and MERIDIAN_INGEST_PORT both -> "ingest.port"), so the
+    // documented env vars keep working while flags win. See authd for the model.
+    namespace core = meridian::core;
+    core::Config c;
+    c.set("ingest.port", "9469", core::ConfigLayer::Default);
+    c.set("ingest.bind", "127.0.0.1", core::ConfigLayer::Default);
+    c.set("ingest.path", "/api/1/store/", core::ConfigLayer::Default);
+    c.set("rate.max", "100", core::ConfigLayer::Default);
+    c.set("rate.window_ms", "60000", core::ConfigLayer::Default);
+    c.set("metrics.port", "9464", core::ConfigLayer::Default);
+    c.set("metrics.bind", "127.0.0.1", core::ConfigLayer::Default);
+    c.set("realm", "reference", core::ConfigLayer::Default);
+
     for (int i = 1; i < argc; ++i) {
         auto next = [&](const char* flag) -> const char* {
             if (i + 1 >= argc) {
@@ -128,53 +146,45 @@ int main(int argc, char** argv) {
             }
             return argv[++i];
         };
+        const auto cl = core::ConfigLayer::CommandLine;
         if (std::strcmp(argv[i], "--version") == 0) { print_version(); return 0; }
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             print_help(); return 0;
         }
-        if (std::strcmp(argv[i], "--ingest-port") == 0) {
-            cfg.ingest_port = static_cast<std::uint16_t>(std::atoi(next("--ingest-port")));
-            continue;
-        }
-        if (std::strcmp(argv[i], "--ingest-bind") == 0) { cfg.ingest_bind = next("--ingest-bind"); continue; }
-        if (std::strcmp(argv[i], "--ingest-path") == 0) { cfg.ingest_path = next("--ingest-path"); continue; }
-        if (std::strcmp(argv[i], "--rate-max") == 0) {
-            cfg.rl_max = static_cast<std::uint32_t>(std::strtoul(next("--rate-max"), nullptr, 10));
-            continue;
-        }
-        if (std::strcmp(argv[i], "--rate-window-ms") == 0) {
-            cfg.rl_window_ms = std::strtoull(next("--rate-window-ms"), nullptr, 10);
-            continue;
-        }
-        if (std::strcmp(argv[i], "--metrics-port") == 0) {
-            cfg.metrics_port = static_cast<std::uint16_t>(std::atoi(next("--metrics-port")));
-            continue;
-        }
-        if (std::strcmp(argv[i], "--metrics-bind") == 0) { cfg.metrics_bind = next("--metrics-bind"); continue; }
-        if (std::strcmp(argv[i], "--realm") == 0) { cfg.realm_label = next("--realm"); continue; }
-        if (std::strcmp(argv[i], "--log-format") == 0) { cfg.log_format = next("--log-format"); continue; }
-        if (std::strcmp(argv[i], "--log-level") == 0) { cfg.log_level = next("--log-level"); continue; }
+        if (std::strcmp(argv[i], "--config") == 0) { c.set("config", next("--config"), cl); continue; }
+        if (std::strcmp(argv[i], "--ingest-port") == 0) { c.set("ingest.port", next("--ingest-port"), cl); continue; }
+        if (std::strcmp(argv[i], "--ingest-bind") == 0) { c.set("ingest.bind", next("--ingest-bind"), cl); continue; }
+        if (std::strcmp(argv[i], "--ingest-path") == 0) { c.set("ingest.path", next("--ingest-path"), cl); continue; }
+        if (std::strcmp(argv[i], "--rate-max") == 0) { c.set("rate.max", next("--rate-max"), cl); continue; }
+        if (std::strcmp(argv[i], "--rate-window-ms") == 0) { c.set("rate.window_ms", next("--rate-window-ms"), cl); continue; }
+        if (std::strcmp(argv[i], "--metrics-port") == 0) { c.set("metrics.port", next("--metrics-port"), cl); continue; }
+        if (std::strcmp(argv[i], "--metrics-bind") == 0) { c.set("metrics.bind", next("--metrics-bind"), cl); continue; }
+        if (std::strcmp(argv[i], "--realm") == 0) { c.set("realm", next("--realm"), cl); continue; }
+        if (std::strcmp(argv[i], "--log-format") == 0) { c.set("log.format", next("--log-format"), cl); continue; }
+        if (std::strcmp(argv[i], "--log-level") == 0) { c.set("log.level", next("--log-level"), cl); continue; }
+        if (std::strncmp(argv[i], "--", 2) == 0 && std::strchr(argv[i], '=') != nullptr) continue;
         std::fprintf(stderr, "%s: unknown option '%s' (try --help)\n", kDaemonName, argv[i]);
         return 2;
     }
+    core::load_args_kv(c, argc, argv);        // CommandLine: --key=value form
+    core::load_env_prefixed(c);               // Environment: MERIDIAN_* -> keys
+    core::load_config_file(c, c.get_string_or("config", ""));  // File (from --config/MERIDIAN_CONFIG)
 
-    // OPS-05 logging (#165): env defaults first, flags override below.
+    // Resolve effective values.
+    cfg.ingest_port = static_cast<std::uint16_t>(c.get_int_or("ingest.port", 9469));
+    cfg.ingest_bind = c.get_string_or("ingest.bind", "127.0.0.1");
+    cfg.ingest_path = c.get_string_or("ingest.path", "/api/1/store/");
+    cfg.rl_max = static_cast<std::uint32_t>(c.get_int_or("rate.max", 100));
+    cfg.rl_window_ms = static_cast<std::uint64_t>(c.get_int_or("rate.window_ms", 60'000));
+    cfg.metrics_port = static_cast<std::uint16_t>(c.get_int_or("metrics.port", 9464));
+    cfg.metrics_bind = c.get_string_or("metrics.bind", "127.0.0.1");
+    cfg.realm_label = c.get_string_or("realm", "reference");
+    cfg.log_format = c.get_string_or("log.format", "");
+    cfg.log_level = c.get_string_or("log.level", "");
+
+    // OPS-05 logging (#165): env baseline first, then layered realm + log flags.
     meridian::core::log::configure_from_env();
     meridian::core::log::set_process(kDaemonName);
-
-    // Env fallbacks (flags already applied override these).
-    if (const char* p = env("MERIDIAN_INGEST_PORT")) {
-        cfg.ingest_port = static_cast<std::uint16_t>(std::atoi(p));
-    }
-    if (const char* b = env("MERIDIAN_INGEST_BIND")) cfg.ingest_bind = b;
-    if (const char* p = env("MERIDIAN_INGEST_PATH")) cfg.ingest_path = p;
-    if (const char* p = env("MERIDIAN_METRICS_PORT")) {
-        cfg.metrics_port = static_cast<std::uint16_t>(std::atoi(p));
-    }
-    if (const char* b = env("MERIDIAN_METRICS_BIND")) cfg.metrics_bind = b;
-    if (const char* r = env("MERIDIAN_REALM")) cfg.realm_label = r;
-
-    // Realm label -> the daemon-log `realm` field; then log flags override.
     meridian::core::log::set_realm(cfg.realm_label);
     if (!cfg.log_format.empty()) {
         meridian::core::log::set_format(
