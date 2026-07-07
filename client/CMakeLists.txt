@@ -16,6 +16,21 @@ cmake_minimum_required(VERSION 3.22)
 
 project(meridian-client LANGUAGES CXX)
 
+# --- Engine-free core tests (#102) ---
+# The GDExtension cores (e.g. the movement controller, movement_controller.*) are
+# engine-agnostic (Client SAD §9.2) and unit-tested WITHOUT a Godot runtime.
+# Enable with -DMERIDIAN_CLIENT_TESTS=ON to build only the plain-C++ tests (no
+# godot-cpp needed). Wired into a client-test CI job by #61. Default OFF so the
+# normal extension build is unchanged.
+option(MERIDIAN_CLIENT_TESTS "Build engine-free client core unit tests" OFF)
+if(MERIDIAN_CLIENT_TESTS)
+	enable_testing()
+	add_subdirectory(gdextension/meridian/test)
+	# Tests-only configure: skip the godot-cpp-dependent GDExtension target so a
+	# CI test job needs no Godot toolchain.
+	return()
+endif()
+
 # --- Vendored godot-cpp (pinned submodule) ---
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/godot-cpp/CMakeLists.txt")
 	message(FATAL_ERROR

@@ -181,3 +181,22 @@ values have a home before Zone-01 movement work starts.
   minimal spike proof). Not the controller.
 
 Build/verify status is recorded in the PR description (#101).
+
+### 5.1 What #102 delivered (the controller, on top of this spike)
+
+#102 implemented the controller against the seam locked above, in an **engine-free core**
+(Client SAD §9.2) that a plain-C++ test — and the server track (#86) — can replay:
+
+- `client/gdextension/meridian/src/movement_controller.{h,cpp}` — the engine-free core:
+  the fixed-20 Hz `integrate_tick()` (LOCKED §2 constants + `IWorldQuery::sample_ground`),
+  and `PredictionReconciler` (the `(seq, input, predicted)` ring buffer + rewind/re-sim
+  reconciliation + intent-rate gate). No Godot types.
+- `client/gdextension/meridian/src/meridian_movement_controller.{h,cpp}` — the
+  `MeridianMovementController` GDExtension node (thin Godot glue: `predict` / `reconcile`
+  / `should_emit_intent`), registered in `register_types.cpp` alongside `MeridianClient`.
+- `client/gdextension/meridian/test/movement_controller_test.cpp` — the engine-free unit
+  test + the **golden cross-track reconciliation fixture** (§4 trip-wire): integrator
+  advances at the locked speed exactly; a server correction re-simulates unacked inputs to
+  server-authoritative + local residual (SAD R5/R3); intent emission respects the ≤ 10/s +
+  on-state-change cap. Wired via `client/CMakeLists.txt -DMERIDIAN_CLIENT_TESTS=ON`
+  (`ctest`, no Godot runtime) for the #61 client-test job.
