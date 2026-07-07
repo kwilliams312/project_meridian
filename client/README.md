@@ -16,6 +16,28 @@ Bootstrap status (#158): a placeholder `MeridianClient` module compiles/links ag
 the pinned godot-cpp to prove the toolchain. The real modules land in later issues
 (e.g. the C++ movement controller, #102).
 
+`MeridianTelemetry` (#168, D-29) — the client half of the telemetry triple's
+ERROR/CRITICAL log channel: a thin GDExtension binding over an **engine-free** capture
+core (`telemetry_log_*`) that captures **only ERROR/CRITICAL** events, attaches
+session/build/platform context (**no PII**, privacy §3), batches + rate-limits them,
+serializes to a Sentry-compatible envelope, and ships to a **configurable** endpoint
+(the #167 ingest; a no-op sink when unset). Honors the opt-out toggle (privacy §5).
+The policy lives in the engine-free core and is unit-tested without Godot; see
+`gdextension/meridian/test/telemetry_log_capture_test.cpp`.
+
+```gdscript
+# Autoload wiring (illustrative): route Godot's logger + module logs into the
+# client telemetry channel and drain it off the game loop.
+var tel := MeridianTelemetry.new()
+tel.configure(session_id, build_version, "macos-arm64")   # no PII — ephemeral session id
+tel.set_endpoint(project_ingest_url)                       # empty => no-op/local sink
+tel.set_enabled(Settings.telemetry_opt_in)                 # opt-out toggle (privacy §5)
+# For each captured log line (ERROR/CRITICAL only actually ship):
+tel.capture_log(MeridianTelemetry.SEVERITY_ERROR, msg, "net")
+# On a low-frequency timer (never on the frame path):
+tel.poll()                                                 # flush + ship a due batch
+```
+
 ## GDScript (interaction path)
 
 Scene flow (Boot/Login/CharSelect/World) · entity presentation · typed event bus ·
