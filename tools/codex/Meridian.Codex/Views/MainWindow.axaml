@@ -3,6 +3,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:Meridian.Codex.ViewModels"
+        xmlns:conv="using:Avalonia.Data.Converters"
         mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="600"
         x:Class="Meridian.Codex.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
@@ -52,12 +53,19 @@
         </DockPanel>
       </Border>
 
-      <StackPanel Grid.Column="1" Margin="24" Spacing="12">
-        <TextBlock Text="{Binding SelectedEditor.Name}" FontSize="24" FontWeight="SemiBold" />
-        <TextBlock Text="{Binding SelectedEditor.Description}" Opacity="0.8" TextWrapping="Wrap" />
-        <TextBlock Text="{Binding Greeting}" TextWrapping="Wrap" Margin="0,12,0,0" />
-        <Button Content="Show model info" Command="{Binding ShowModelInfoCommand}" />
-      </StackPanel>
+      <Panel Grid.Column="1">
+        <!-- Real editor for the active selection (NPC editor #128); resolved by ViewLocator. -->
+        <ContentControl Content="{Binding ActiveEditor}" IsVisible="{Binding ActiveEditor, Converter={x:Static conv:ObjectConverters.IsNotNull}}" />
+
+        <!-- Placeholder for rail entries whose editor has not landed yet. -->
+        <StackPanel Margin="24" Spacing="12"
+                    IsVisible="{Binding ActiveEditor, Converter={x:Static conv:ObjectConverters.IsNull}}">
+          <TextBlock Text="{Binding SelectedEditor.Name}" FontSize="24" FontWeight="SemiBold" />
+          <TextBlock Text="{Binding SelectedEditor.Description}" Opacity="0.8" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding Greeting}" TextWrapping="Wrap" Margin="0,12,0,0" />
+          <Button Content="Show model info" Command="{Binding ShowModelInfoCommand}" />
+        </StackPanel>
+      </Panel>
 
     </Grid>
 
