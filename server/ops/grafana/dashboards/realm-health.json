@@ -72,7 +72,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
       "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
-      "description": "DB write-queue depth (meridian_db_queue_depth) is not charted at M0: the DB layer is synchronous with no queue to measure (#297). It returns with the async DB worker-pool at M1.",
+      "description": "DB write-queue depth is not charted at M0: the DB layer is synchronous with no queue to measure (#297). A queue-depth signal returns with the async DB worker-pool at M1.",
       "targets": [
         {
           "refId": "A",

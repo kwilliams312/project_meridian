@@ -10,6 +10,7 @@
 
 #include "meridian/metrics/rss_sampler.h"
 
+#include "meridian/metrics/catalog.h"
 #include "meridian/metrics/process_stats.h"
 #include "meridian/metrics/registry.h"
 
