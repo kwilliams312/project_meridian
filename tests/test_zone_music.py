@@ -35,7 +35,6 @@ from zone_music.bar_clock import (  # noqa: E402
 from zone_music.track_map import (  # noqa: E402
     ZoneMusicConfigError,
     ZoneTrackMap,
-    load_config,
 )
 
 pytestmark = pytest.mark.unit
