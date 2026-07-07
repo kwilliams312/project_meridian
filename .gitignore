@@ -1,3 +1,12 @@
+# --- Claude Code local artifacts (machine-specific; never committed) ---
+# Per-machine settings override, agent worktrees, and any ephemeral run state a
+# tool created while cwd was under .claude/. Team-shared assets (.claude/skills/,
+# .claude/rules/, .claude/commands/, .claude/agents/) are NOT ignored and may be
+# committed deliberately.
+.claude/settings.local.json
+.claude/worktrees/
+.claude/.dev-run/
+
 # Python (validator tooling)
 __pycache__/
 *.pyc
@@ -10,6 +19,8 @@ __pycache__/
 # --- Native macOS dev toolkit (scripts/dev/, issue #223) ---
 # CMake build trees produced by scripts/dev/build.sh
 /build/
+# Headless bot build tree produced by scripts/dev/demo-networked.sh (-DMERIDIAN_BOT=ON)
+/build-client-bot/
 # Throwaway local MariaDB datadirs + runtime state (scripts/dev/test.sh --db,
 # scripts/dev/run-local.sh). NEVER committed — ephemeral local state only.
 /.dev-run/
@@ -28,6 +39,10 @@ client/build-*/
 client/.sconsign.dblite
 # Compiled GDExtension output (dropped into client/project/bin/ by the build)
 client/project/bin/libmeridian.*
+# Godot 4.7 per-resource UID sidecars — regenerated on every editor import (the
+# #283 windowed seed). Machine-local, none tracked; res:// paths are the source of
+# truth for our scenes, so these are cache, not content (like .godot/).
+client/project/**/*.uid
 # --- Forge forge_core GDExtension build artifacts (issue #134) ---
 # CMake build trees + compiled output (dropped into forge/project/bin/ by the build)
 client/gdextension/forge_core/build/
