@@ -265,6 +265,57 @@ void test_codec() {
 }
 
 // ---------------------------------------------------------------------------
+// 4b. Entity-relay codec (#87 AoI: EntityEnter / EntityUpdate / EntityLeave)
+// ---------------------------------------------------------------------------
+void test_entity_codec() {
+    std::puts("[codec] EntityEnter/Update/Leave round-trip + verifier");
+
+    // EntityEnter — full spawn/enter snapshot (guid + type + wire pose).
+    codec::EntityEnter en;
+    en.entity_guid = 0x1122334455667788ull;
+    en.type_id = 7;
+    en.x = 64.0f;
+    en.y = 65.0f;
+    en.z = 0.5f;
+    en.orientation = 1.25f;
+    auto en_buf = codec::encode_entity_enter(en);
+    auto en_out = codec::decode_entity_enter(en_buf);
+    CHECK(en_out.has_value());
+    CHECK(en_out->entity_guid == 0x1122334455667788ull && en_out->type_id == 7);
+    CHECK(en_out->x == 64.0f && en_out->y == 65.0f && en_out->z == 0.5f);
+    CHECK(std::fabs(en_out->orientation - 1.25f) < 1e-6f);
+
+    // EntityUpdate — a movement delta (all position fields present, as worldd sends).
+    codec::EntityUpdate up;
+    up.entity_guid = 0xABCDull;
+    up.x = 70.0f;
+    up.y = 60.0f;
+    up.z = 0.0f;
+    up.orientation = 2.0f;
+    auto up_buf = codec::encode_entity_update(up);
+    auto up_out = codec::decode_entity_update(up_buf);
+    CHECK(up_out.has_value());
+    CHECK(up_out->entity_guid == 0xABCDull);
+    CHECK(up_out->has_position());
+    CHECK(up_out->has_x && up_out->has_y && up_out->has_z);
+    CHECK(up_out->x == 70.0f && up_out->y == 60.0f && up_out->z == 0.0f);
+    CHECK(std::fabs(up_out->orientation - 2.0f) < 1e-6f);
+
+    // EntityLeave — guid + reason.
+    codec::EntityLeave lv{/*guid=*/0xFEEDull, /*reason=*/1 /*DESPAWNED*/};
+    auto lv_buf = codec::encode_entity_leave(lv);
+    auto lv_out = codec::decode_entity_leave(lv_buf);
+    CHECK(lv_out.has_value());
+    CHECK(lv_out->entity_guid == 0xFEEDull && lv_out->reason == 1);
+
+    // Garbage is rejected by the verifier on every entity decoder.
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_entity_enter(garbage).has_value());
+    CHECK(!codec::decode_entity_update(garbage).has_value());
+    CHECK(!codec::decode_entity_leave(garbage).has_value());
+}
+
+// ---------------------------------------------------------------------------
 // 5. Full client stack composition (offline)
 // ---------------------------------------------------------------------------
 void test_full_stack() {
@@ -328,6 +379,7 @@ int main() {
     test_wire_frame();
     test_world_session();
     test_codec();
+    test_entity_codec();
     test_full_stack();
     test_transport_links();
 

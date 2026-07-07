@@ -119,4 +119,84 @@ std::optional<Disconnect> decode_disconnect(const Bytes& buf) {
     return out;
 }
 
+// ---- IF-2 EntityEnter (#87 AoI relay) --------------------------------------
+
+Bytes encode_entity_enter(const EntityEnter& in) {
+    fb::FlatBufferBuilder b;
+    // attrs empty at M0 — created so the table shape is complete for the verifier
+    // (mirrors worldd's encode_entity_enter_payload).
+    auto attrs = b.CreateVector(std::vector<fb::Offset<mn::AttrDelta>>{});
+    auto e = mn::CreateEntityEnter(b, in.entity_guid, in.type_id, in.x, in.y, in.z,
+                                   in.orientation, attrs);
+    b.Finish(e);
+    return to_bytes(b);
+}
+
+std::optional<EntityEnter> decode_entity_enter(const Bytes& buf) {
+    const mn::EntityEnter* t = verify_and_get<mn::EntityEnter>(buf);
+    if (t == nullptr) return std::nullopt;
+    EntityEnter out;
+    out.entity_guid = t->entity_guid();
+    out.type_id = t->type_id();
+    out.x = t->x();
+    out.y = t->y();
+    out.z = t->z();
+    out.orientation = t->orientation();
+    return out;
+}
+
+// ---- IF-2 EntityUpdate (#87 AoI relay) -------------------------------------
+
+Bytes encode_entity_update(const EntityUpdate& in) {
+    fb::FlatBufferBuilder b;
+    auto attrs = b.CreateVector(std::vector<fb::Offset<mn::AttrDelta>>{});
+    // world.fbs marks x/y/z/orientation optional; a move delta carries them all
+    // (mirrors worldd's encode_entity_update_payload, which always sends position).
+    auto u = mn::CreateEntityUpdate(b, in.entity_guid, in.x, in.y, in.z, in.orientation,
+                                    attrs);
+    b.Finish(u);
+    return to_bytes(b);
+}
+
+std::optional<EntityUpdate> decode_entity_update(const Bytes& buf) {
+    const mn::EntityUpdate* t = verify_and_get<mn::EntityUpdate>(buf);
+    if (t == nullptr) return std::nullopt;
+    EntityUpdate out;
+    out.entity_guid = t->entity_guid();
+    // Each position field is optional (default null) — record whichever the delta
+    // carried so a movement-only vs attribute-only delta are distinguishable.
+    const auto ox = t->x();
+    const auto oy = t->y();
+    const auto oz = t->z();
+    const auto oo = t->orientation();
+    out.has_x = ox.has_value();
+    out.has_y = oy.has_value();
+    out.has_z = oz.has_value();
+    out.has_orientation = oo.has_value();
+    out.x = ox.has_value() ? *ox : 0.0f;
+    out.y = oy.has_value() ? *oy : 0.0f;
+    out.z = oz.has_value() ? *oz : 0.0f;
+    out.orientation = oo.has_value() ? *oo : 0.0f;
+    return out;
+}
+
+// ---- IF-2 EntityLeave (#87 AoI relay) --------------------------------------
+
+Bytes encode_entity_leave(const EntityLeave& in) {
+    fb::FlatBufferBuilder b;
+    auto l = mn::CreateEntityLeave(b, in.entity_guid,
+                                   static_cast<mn::LeaveReason>(in.reason));
+    b.Finish(l);
+    return to_bytes(b);
+}
+
+std::optional<EntityLeave> decode_entity_leave(const Bytes& buf) {
+    const mn::EntityLeave* t = verify_and_get<mn::EntityLeave>(buf);
+    if (t == nullptr) return std::nullopt;
+    EntityLeave out;
+    out.entity_guid = t->entity_guid();
+    out.reason = static_cast<std::uint16_t>(t->reason());
+    return out;
+}
+
 }  // namespace meridian::clientnet::codec

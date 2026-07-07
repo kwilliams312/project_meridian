@@ -81,6 +81,56 @@ struct Disconnect {
 Bytes encode_disconnect(const Disconnect& in);
 std::optional<Disconnect> decode_disconnect(const Bytes& buf);
 
+// ---------------------------------------------------------------------------
+// IF-2 (world.fbs) — the #87 AoI relay: EntityEnter / EntityUpdate / EntityLeave
+// (all S→C). These are the frames a client renders OTHER players from: a session
+// spawns/enters range (EntityEnter), moves (EntityUpdate), or leaves range
+// (EntityLeave). This is the ONE shared decode both the GUI net path
+// (net_thread_core / MeridianNetThread) and the headless client-world probe use to
+// turn a relay frame into a position for the remote interpolator — the single
+// source of truth for the client-side entity-relay codec (the bot's separate
+// bot_core.capture_entity_frame mirrors the same schema).
+//
+// Positions carry the WIRE (Z-UP) frame from world.fbs: x/y = ground plane, z =
+// height. The consumer maps to the render frame (the interpolator / Godot node).
+
+// EntityEnter (world.fbs): a full spawn/enter snapshot. attrs are ignored at M0
+// (D-11 placeholder carries none); only guid + type + pose are decoded for render.
+struct EntityEnter {
+    std::uint64_t entity_guid = 0;
+    std::uint32_t type_id = 0;
+    float x = 0.0f, y = 0.0f, z = 0.0f;  // wire coords (z = height)
+    float orientation = 0.0f;
+};
+
+Bytes encode_entity_enter(const EntityEnter& in);
+std::optional<EntityEnter> decode_entity_enter(const Bytes& buf);
+
+// EntityUpdate (world.fbs): a delta. Position fields are OPTIONAL (a move delta
+// carries them; an attribute-only delta would not), so each is flagged present.
+struct EntityUpdate {
+    std::uint64_t entity_guid = 0;
+    bool has_x = false, has_y = false, has_z = false, has_orientation = false;
+    float x = 0.0f, y = 0.0f, z = 0.0f;  // wire coords (z = height)
+    float orientation = 0.0f;
+
+    // True when the delta carried a position (any of x/y/z) — i.e. the peer moved.
+    bool has_position() const { return has_x || has_y || has_z; }
+};
+
+// Encode a move delta (all position fields present — matches worldd's move relay).
+Bytes encode_entity_update(const EntityUpdate& in);
+std::optional<EntityUpdate> decode_entity_update(const Bytes& buf);
+
+// EntityLeave (world.fbs): the peer left the client's AoI.
+struct EntityLeave {
+    std::uint64_t entity_guid = 0;
+    std::uint16_t reason = 0;  // world.fbs LeaveReason
+};
+
+Bytes encode_entity_leave(const EntityLeave& in);
+std::optional<EntityLeave> decode_entity_leave(const Bytes& buf);
+
 }  // namespace meridian::clientnet::codec
 
 #endif  // MERIDIAN_CLIENTNET_CODEC_H
