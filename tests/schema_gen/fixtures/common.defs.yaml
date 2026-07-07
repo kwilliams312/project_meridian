@@ -1,0 +1,28 @@
+# Minimal common.defs for the generator fixture — a controlled subset of the
+# real /schema/content/common.defs.yaml exercising each IR lowering path:
+# id ref, typed content ref, typed asset ref, shared struct def, shared enum def,
+# and shared scalar def.
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/common.defs.yaml"
+$defs:
+  contentId:
+    type: string
+    pattern: "^[a-z]+:widget\\.[a-z0-9_]+$"
+  itemRef:
+    type: string
+    pattern: "^item\\.[a-z0-9_]+$"
+  artRef:
+    type: string
+    pattern: "^art\\.[a-z0-9_]+$"
+  intRange:
+    type: object
+    additionalProperties: false
+    required: [min, max]
+    properties:
+      min: { type: integer }
+      max: { type: integer }
+  money:
+    type: integer
+    minimum: 0
+  itemClass:
+    enum: [weapon, armor, consumable]
