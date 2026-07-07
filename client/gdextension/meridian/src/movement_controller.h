@@ -107,17 +107,27 @@ struct MovementStateIn {
 
 // ===========================================================================
 // state_flags wire bitfield (schema/net/world.fbs — "forward/back/strafe/jump/
-// swim/sit/…"). M0 subset. The server (#86) decodes the same bits to recover the
+// swim/sit/…"). M0 subset. The server (#86) decodes the LOW 3 BITS to recover the
 // active MoveMode for its speed check, so client and server MUST agree on the
-// encoding — this is part of the shared movement contract (spike §4).
+// encoding. The CANONICAL layout is defined ONCE in movement_constants.h §2b
+// (kStateFlagsModeMask + mode_from_state_flags) and mirrored in the server header;
+// this is the #247 fix that makes both sides agree without a wire-boundary hack.
+//
+//   bits 0..2 : MoveMode (kStateFlagsModeMask = 0x7) — the server's `& 0x7` read.
+//   bit  3    : forward, bit 4 back, bit 5 strafeL, bit 6 strafeR (direction).
+//   bit  7    : jump, bit 8 walk toggle. bits 9..31 reserved (swim/sit at M1).
+//
+// The direction/jump/walk flags therefore live ABOVE the 3 mode bits — they no
+// longer collide with the mode selector the server reads (pre-#247 they occupied
+// the low bits and a forward run decoded to the wrong mode).
 // ===========================================================================
 namespace flags {
-inline constexpr uint32_t kForward = 1u << 0;
-inline constexpr uint32_t kBack    = 1u << 1;
-inline constexpr uint32_t kStrafeL = 1u << 2;
-inline constexpr uint32_t kStrafeR = 1u << 3;
-inline constexpr uint32_t kJump    = 1u << 4;
-inline constexpr uint32_t kWalk    = 1u << 5;   // walk toggle active (else run)
+inline constexpr uint32_t kForward = 1u << 3;
+inline constexpr uint32_t kBack    = 1u << 4;
+inline constexpr uint32_t kStrafeL = 1u << 5;
+inline constexpr uint32_t kStrafeR = 1u << 6;
+inline constexpr uint32_t kJump    = 1u << 7;
+inline constexpr uint32_t kWalk    = 1u << 8;   // walk toggle active (else run)
 } // namespace flags
 
 // Encode a sampled input + resolved mode into the wire state_flags bitfield.

@@ -64,35 +64,21 @@ Bytes finish(fb::FlatBufferBuilder& b) {
     return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
 }
 
-// The MoveMode enum values worldd #86 reads out of the LOW 3 BITS of state_flags
-// (server/worldd/movement_validation.cpp mode_from_flags -> movement_constants.h
-// MoveMode). This is the wire contract the SERVER's speed check keys off, and it
-// is DIFFERENT from the #102 client `flags::` bitfield (kForward/kStrafe/… — see
-// below): the client bitfield's low bits are NOT a MoveMode. worldd reads
-// state_flags & 0x7 as the mode selector (Idle=0, Walk=1, Run=2, Jump=3) and picks
-// server_speed(mode) as the per-packet displacement cap. So the bot MUST put the
-// server-readable mode in those low 3 bits or the server caps it at the wrong
-// speed and rejects the move. (This #102/#86 flags-layout disagreement is flagged
-// as a follow-up in BOTH headers — movement_controller.h §state_flags and
-// movement_validation.h mode_from_flags. The bot resolves it at the wire boundary
-// by writing the server-mode bits; a shared canonical encoding is the real fix.)
-enum class ServerMoveMode : std::uint32_t { kIdle = 0, kWalk = 1, kRun = 2, kJump = 3 };
-
-// Compose the wire state_flags: keep the #102 client bitfield in the HIGH bits (so
-// a future server that decodes the richer layout still sees it) but stamp the
-// server-readable MoveMode into the low 3 bits. The bot's square path runs on the
-// ground -> Run; idle -> Idle.
-std::uint32_t wire_state_flags(std::uint32_t client_flags, ServerMoveMode mode) {
-    // Shift the client bitfield above the low 3 mode bits, then OR the mode in.
-    return (client_flags << 3) | static_cast<std::uint32_t>(mode);
-}
+// #247: The client movement controller (#102 encode_state_flags) now encodes the
+// CANONICAL state_flags layout — the active MoveMode in the LOW 3 BITS (the field
+// worldd #86 reads with `state_flags & 0x7` to pick the speed cap), direction/jump/
+// walk flags ABOVE them (movement_constants.h §2b). So the bot no longer needs to
+// re-stamp the mode at the wire boundary: it passes the controller's state_flags
+// through UNCHANGED and the server decodes the correct mode directly. (Previously
+// this file carried a ServerMoveMode enum + wire_state_flags() that OR'd the mode
+// into the low bits; that workaround is removed now that the encoding is canonical.)
 
 // Encode a MovementIntent payload from a #102 integrator output, converting the
-// client Y-UP frame to the wire Z-UP frame (see the file header) and stamping the
-// server-readable MoveMode into state_flags (see wire_state_flags).
-Bytes enc_movement_intent(const mv::MovementIntentOut& out, ServerMoveMode mode) {
+// client Y-UP frame to the wire Z-UP frame (see the file header). state_flags is
+// the controller's canonical encoding, passed straight through (no wire fix-up).
+Bytes enc_movement_intent(const mv::MovementIntentOut& out) {
     fb::FlatBufferBuilder b;
-    auto mi = mn::CreateMovementIntent(b, out.seq, wire_state_flags(out.state_flags, mode),
+    auto mi = mn::CreateMovementIntent(b, out.seq, out.state_flags,
                                        /*x=*/out.x,   // ground X
                                        /*y=*/out.z,   // ground Z (client z)
                                        /*z=*/out.y,   // height  (client y)
@@ -403,9 +389,10 @@ BotRunResult run_world_session(login::ILoginTransport& transport,
         mv::MovementIntentOut intent = reconciler.predict(in, client_time_ms);
 
         if (reconciler.should_emit_intent(client_time_ms, intent.state_flags)) {
-            // The bot's scripted path runs on the flat ground -> the server-readable
-            // mode is Run (largest legal cap). Idle path never reaches here.
-            Bytes payload = enc_movement_intent(intent, ServerMoveMode::kRun);
+            // The controller already encoded the canonical state_flags (mode in the
+            // low 3 bits) — the bot's scripted run path resolves to Run there. Pass
+            // it straight through; no wire-boundary mode fix-up (#247).
+            Bytes payload = enc_movement_intent(intent);
             std::uint64_t seq = intent.seq;  // wire seq == intent seq (in lockstep)
             Bytes frame = encode_world_frame(kOpMovementIntent, seq, payload);
             if (!transport.send_frame(login::Bytes(frame.begin(), frame.end()))) {

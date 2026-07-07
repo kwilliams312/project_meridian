@@ -15,17 +15,21 @@ namespace meridian::movement {
 // ---------------------------------------------------------------------------
 // state_flags encoding (shared wire contract with server #86).
 // ---------------------------------------------------------------------------
+// CANONICAL layout (movement_constants.h §2b, #247): the LOW 3 BITS carry the
+// active MoveMode (the field the server reads with `state_flags & 0x7` to pick the
+// speed cap); the direction/jump/walk flags sit ABOVE them. The client stamps the
+// mode here so the server decodes the correct cap directly — no wire-boundary
+// fix-up (the pre-#247 bot #111 workaround) is needed.
 uint32_t encode_state_flags(const MovementInput& in, MoveMode mode) {
-	uint32_t f = 0;
+	// Low 3 bits: the active MoveMode (server reads state_flags & kStateFlagsModeMask).
+	uint32_t f = static_cast<uint32_t>(mode) & kStateFlagsModeMask;
+	// Direction / jump / walk flags live above the mode bits.
 	if (in.move_z > 0.0f) f |= flags::kForward;
 	if (in.move_z < 0.0f) f |= flags::kBack;
 	if (in.move_x > 0.0f) f |= flags::kStrafeR;
 	if (in.move_x < 0.0f) f |= flags::kStrafeL;
 	if (in.jump)          f |= flags::kJump;
 	if (in.walk)          f |= flags::kWalk;
-	// `mode` is implied by forward/back + walk today; kept in the signature so
-	// the encoding can grow (swim/sit at M1) without touching call sites.
-	(void)mode;
 	return f;
 }
 

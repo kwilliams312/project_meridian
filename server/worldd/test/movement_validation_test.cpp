@@ -212,6 +212,79 @@ int main() {
               vec_ok == static_cast<int>(fixture::kGoldenVectors.size()));
     }
 
+    // ===== I. CANONICAL state_flags: client encoding decodes to the right mode =
+    // (#247) The client now encodes the active MoveMode into the LOW 3 BITS with
+    // direction/jump/walk flags ABOVE (movement_constants.h §2b). This proves the
+    // server decodes the CLIENT'S REAL encoding — no wire-boundary workaround — via
+    // the shared canonical mirror (movement_fixture.h client_encode_state_flags).
+    {
+        // (I.1) Every mode + direction combo the client can emit decodes back to the
+        //       SAME mode on the server. The direction/jump/walk flags set ABOVE the
+        //       mode bits must NOT change the decoded mode.
+        struct Combo { mc::MoveMode mode; float mx; float mz; bool jump; bool walk; };
+        const Combo combos[] = {
+            {mc::MoveMode::Idle, 0.0f, 0.0f, false, false},
+            {mc::MoveMode::Run,  0.0f, 1.0f, false, false},   // forward run
+            {mc::MoveMode::Run,  0.0f, -1.0f, false, false},  // backpedal
+            {mc::MoveMode::Walk, 1.0f, 0.0f, false, true},    // strafe-right walk
+            {mc::MoveMode::Run,  -1.0f, 1.0f, false, false},  // fwd + strafe-left
+            {mc::MoveMode::Jump, 0.0f, 1.0f, true, false},    // forward jump
+        };
+        int rt_ok = 0;
+        const int n = static_cast<int>(sizeof(combos) / sizeof(combos[0]));
+        for (const Combo& c : combos) {
+            const std::uint32_t enc =
+                fixture::client_encode_state_flags(c.mode, c.mx, c.mz, c.jump, c.walk);
+            if (mode_from_flags(enc) == c.mode) ++rt_ok;
+        }
+        check("I: client-encoded flags decode to the same mode (all combos)", rt_ok == n);
+
+        // (I.2) A canonically-encoded RUN move is accepted at the RUN speed cap. A
+        //       forward-run step of 0.68 m in 100 ms is inside the run budget
+        //       (0.69 m) but OVER the walk budget (0.2875 m): it is accepted ONLY
+        //       because the server decodes Run from the client's low-3-bit mode. If
+        //       the low bits were misread (pre-#247: forward=1 => Walk), the SAME
+        //       step would be rejected — so this move being accepted is the fix's
+        //       positive proof, using the client's real encoding.
+        {
+            const std::uint32_t run_flags = fixture::client_encode_state_flags(
+                mc::MoveMode::Run, /*mx=*/0.0f, /*mz=*/1.0f, /*jump=*/false, /*walk=*/false);
+            check("I: run flags decode as Run (not Walk)",
+                  mode_from_flags(run_flags) == mc::MoveMode::Run);
+            SessionMovementState s({20.0f, 20.0f, 0.0f, 0.0f}, 1000);
+            MovementIntentPod mi;
+            mi.seq = 1;
+            mi.state_flags = run_flags;
+            mi.pos = {20.68f, 20.0f, 0.0f, 0.0f};   // 0.68 m: legal at run, illegal at walk
+            mi.client_time_ms = 1100;
+            MoveDecision d = step(s, mi);
+            check("I: canonical run move accepted at the run cap", d.accepted);
+            check("I: authoritative advanced to the run step",
+                  approx(s.authoritative().x, 20.68f));
+        }
+
+        // (I.3) A SPEED HACK using the client's real RUN encoding is still rejected:
+        //       1.50 m in 100 ms ≫ 0.69 m run budget. Proves the fix does not weaken
+        //       the speed check (the decoded mode gives the RUN cap, and the hack
+        //       still overruns it) — the speed-hack proof on the canonical encoding.
+        {
+            const std::uint32_t run_flags = fixture::client_encode_state_flags(
+                mc::MoveMode::Run, 0.0f, 1.0f, false, false);
+            SessionMovementState s({30.0f, 30.0f, 0.0f, 0.0f}, 1000);
+            MovementIntentPod mi;
+            mi.seq = 2;
+            mi.state_flags = run_flags;
+            mi.pos = {31.50f, 30.0f, 0.0f, 0.0f};   // 1.50 m ≫ run budget
+            mi.client_time_ms = 1100;
+            MoveDecision d = step(s, mi);
+            check("I: speed-hack on canonical run encoding rejected", !d.accepted);
+            check("I: reject reason is per-packet speed",
+                  d.reject == MoveReject::kSpeedPerPacket);
+            check("I: snap-back keeps last authoritative x",
+                  approx(s.authoritative().x, 30.0f));
+        }
+    }
+
     std::printf(g_fail == 0 ? "\nALL WORLDD MOVEMENT VALIDATION TESTS PASSED\n"
                             : "\n%d WORLDD MOVEMENT VALIDATION TEST(S) FAILED\n", g_fail);
     return g_fail == 0 ? 0 : 1;

@@ -51,19 +51,17 @@ float ground_sample(float /*x*/, float /*y*/) { return mc::kFlatGroundZ; }
 // ---------------------------------------------------------------------------
 
 mc::MoveMode mode_from_flags(std::uint32_t state_flags) {
-    // v0 minimal decode: the low 3 bits select the mode (walk=1/run=2/jump=3),
-    // matching the MoveMode enum values (movement_constants.h §2). A richer
-    // per-bit forward/back/strafe/jump/swim layout is a #102/#101 follow-up; v0
-    // needs only the speed-cap-selecting active mode. Any value outside the known
-    // set falls back to Run — the SAFEST default (largest ground-speed budget, so
-    // an unknown flag never spuriously rejects a legal move).
-    switch (state_flags & 0x7u) {
-        case static_cast<std::uint32_t>(mc::MoveMode::Idle): return mc::MoveMode::Idle;
-        case static_cast<std::uint32_t>(mc::MoveMode::Walk): return mc::MoveMode::Walk;
-        case static_cast<std::uint32_t>(mc::MoveMode::Run):  return mc::MoveMode::Run;
-        case static_cast<std::uint32_t>(mc::MoveMode::Jump): return mc::MoveMode::Jump;
-        default:                                             return mc::MoveMode::Run;
-    }
+    // CANONICAL decode (#247): the LOW 3 BITS (kStateFlagsModeMask = 0x7) select the
+    // mode (Idle=0/Walk=1/Run=2/Jump=3), matching the MoveMode enum values and the
+    // client's encode_state_flags (client movement_controller.cpp #102). The client
+    // now stamps the mode into these bits directly — the pre-#247 bot #111
+    // wire-boundary workaround is gone. The richer direction/jump/walk flags occupy
+    // the bits ABOVE the mode field (movement_constants.h §2b) and do not affect the
+    // speed-cap-selecting mode read here. Any value outside the known set falls back
+    // to Run — the SAFEST default (largest ground-speed budget, so an unknown flag
+    // never spuriously rejects a legal move). The mask + fallback are single-sourced
+    // in mode_from_state_flags (movement_constants.h §2b).
+    return mc::mode_from_state_flags(state_flags);
 }
 
 // ---------------------------------------------------------------------------
