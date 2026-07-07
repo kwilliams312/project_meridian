@@ -1,0 +1,90 @@
+{
+  "uid": "meridian-audit",
+  "title": "Audit & security events",
+  "tags": ["meridian", "ops-05", "v1", "audit"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "realm",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+        "query": "label_values(meridian_ccu, realm)",
+        "includeAll": true,
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Audit event rate by action",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "loki", "uid": "meridian-loki" },
+      "description": "The {event=\"audit\"} stream (libmeridian-core audit, #92). The collector pipeline indexes `realm` as the Loki stream label; `event`/`action`/`outcome` are JSON body fields parsed with | json — same convention as the Errors dashboard.",
+      "fieldConfig": { "defaults": { "unit": "logps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (action) (rate({realm=~\"$realm\"} | json | event=`audit` [5m]))", "legendFormat": "{{action}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Grant lifecycle (issue / consume / reject)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "loki", "uid": "meridian-loki" },
+      "description": "grant_issued (authd) vs grant_consumed / grant_rejected (worldd IF-3 validation, #84). This is the authoritative grant issue-vs-consume signal — grant CONSUME is NOT a Prometheus metric at M0, only an audit event (gap).",
+      "fieldConfig": { "defaults": { "unit": "logps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (action) (rate({realm=~\"$realm\"} | json | event=`audit` | action=~`grant_.*` [5m]))", "legendFormat": "{{action}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Denied / failed audit events by action",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "loki", "uid": "meridian-loki" },
+      "description": "outcome=\"failure\" audit records (login_failure, grant_rejected, ...) — a failed security event is logged at Warn (audit.cpp level_for).",
+      "fieldConfig": { "defaults": { "unit": "logps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (action) (rate({realm=~\"$realm\"} | json | event=`audit` | outcome=`failure` [5m]))", "legendFormat": "{{action}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Session enter / leave rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "loki", "uid": "meridian-loki" },
+      "fieldConfig": { "defaults": { "unit": "logps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (action) (rate({realm=~\"$realm\"} | json | event=`audit` | action=~`session_.*` [5m]))", "legendFormat": "{{action}}" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Audit stream (live)",
+      "type": "logs",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "loki", "uid": "meridian-loki" },
+      "description": "Raw {event=\"audit\"} records. Fields: action, outcome, account_id, target, reason, correlation_id, peer (audit.cpp build_fields). No secret-bearing surface (privacy §2a).",
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        { "refId": "A", "expr": "{realm=~\"$realm\"} | json | event=`audit`" }
+      ]
+    }
+  ]
+}

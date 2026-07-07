@@ -23,10 +23,36 @@ server/ops/
     │   ├── datasources/datasources.yml   # Prometheus + Loki datasources
     │   └── dashboards/dashboards.yml     # dashboard provider
     └── dashboards/                       # dashboards-as-code (versioned JSON)
+        ├── realm-overview.json           # golden signals (traffic/errors/latency/saturation)
+        ├── worldd.json                   # simulation: tick, movement, AoI, IO-worker saturation
+        ├── audit.json                    # {event="audit"} security/grant/session stream
         ├── realm-health.json
         ├── player-experience.json
         └── errors.json
 ```
+
+Every panel query references a metric/log stream that is **actually emitted** by
+the M0 daemons (verified against the `server/libs/metrics` catalog call sites and
+the `libmeridian-core` audit stream). Signals that are declared in the catalog but
+not yet instrumented at M0 are **NOT** charted on `realm-overview`/`worldd`/`audit`
+(they would read "No data"); they are tracked as gaps below.
+
+### Known instrumentation gaps (M0)
+
+These catalog names exist but have **no live series** yet, so no panel on the three
+new dashboards queries them. The older `realm-health`/`player-experience`/`errors`
+dashboards keep forward-looking panels on some of them (they render "No data" until
+the signal lands, as their panel descriptions note).
+
+| Signal | Status | Where it would land |
+|--------|--------|---------------------|
+| `meridian_action_rtt_seconds` | declared, not emitted | worldd action apply loop (M1) |
+| `meridian_reconnects_total` | declared, not emitted | session reconnect path (M1) |
+| `meridian_db_queue_depth` | declared, not emitted | DB write-queue seam |
+| `meridian_grids_active` / `meridian_instances_active` / `meridian_saves_batched_total` | declared, not emitted | worldd grid/instance/persistence (M1) |
+| `meridian_client_crash_total` | declared, not emitted | client crash sink (Sentry-compatible, **not this stack** — privacy §4) |
+| `meridian_client_log_ingest_total` | emitted by **telemetryd**, but `telemetryd:9464` is **not** in the collector scrape config | add the scrape target in `otel-collector/config.yml` to light up the `errors` client-ingest panels |
+| worldd **IO-worker** count / utilization | not a metric at all | `meridian_io_workers` + `_busy` gauges (#278). Until then, `worldd.json` uses **CCU per shard** as the saturation proxy — at M0 `max CCU/worldd ≈ io_workers` (set `--io-workers ≥ expected CCU`). |
 
 ## Run it
 

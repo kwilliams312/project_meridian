@@ -1,0 +1,194 @@
+{
+  "uid": "meridian-realm-overview",
+  "title": "Realm overview (golden signals)",
+  "tags": ["meridian", "ops-05", "v1", "golden-signals"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "realm",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+        "query": "label_values(meridian_ccu, realm)",
+        "includeAll": true,
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 100,
+      "title": "Traffic",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "id": 1,
+      "title": "Concurrent users (CCU)",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [
+        { "refId": "A", "expr": "sum(meridian_ccu{realm=~\"$realm\"})", "legendFormat": "CCU" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Active sessions",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "description": "meridian_sessions{state=\"active\"} — the only session state emitted at M0 (world_dispatch.cpp).",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [
+        { "refId": "A", "expr": "sum(meridian_sessions{realm=~\"$realm\", state=\"active\"})", "legendFormat": "active" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Login attempt vs grant-issue rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "description": "Grant-issue = login granted (authd). Grant-CONSUME is not a metric at M0 — see the Audit dashboard grant-lifecycle panel.",
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(meridian_auth_attempts_total{realm=~\"$realm\"}[5m]))", "legendFormat": "login attempts" },
+        { "refId": "B", "expr": "sum(rate(meridian_auth_results_total{realm=~\"$realm\", outcome=\"granted\"}[5m]))", "legendFormat": "grants issued" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Message / connection rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(meridian_opcode_total{realm=~\"$realm\"}[5m]))", "legendFormat": "opcodes/s" },
+        { "refId": "B", "expr": "sum(rate(meridian_connections_accepted_total{realm=~\"$realm\"}[5m]))", "legendFormat": "conn accepted/s" },
+        { "refId": "C", "expr": "sum(rate(meridian_connections_closed_total{realm=~\"$realm\"}[5m]))", "legendFormat": "conn closed/s" }
+      ]
+    },
+    {
+      "id": 101,
+      "title": "Errors",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 }
+    },
+    {
+      "id": 5,
+      "title": "Login failures by outcome",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (outcome) (rate(meridian_auth_results_total{realm=~\"$realm\", outcome!=\"granted\"}[5m]))", "legendFormat": "{{outcome}}" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Opcode error / drop rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(meridian_opcode_errors_total{realm=~\"$realm\"}[5m]))", "legendFormat": "errors/s" },
+        { "refId": "B", "expr": "sum(rate(meridian_opcode_dropped_total{realm=~\"$realm\"}[5m]))", "legendFormat": "dropped/s" }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Server ERROR/CRITICAL log rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 15 },
+      "datasource": { "type": "loki", "uid": "meridian-loki" },
+      "fieldConfig": { "defaults": { "unit": "logps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (process) (rate({realm=~\"$realm\"} | json | level=~\"ERROR|CRITICAL\" [5m]))", "legendFormat": "{{process}}" }
+      ]
+    },
+    {
+      "id": 102,
+      "title": "Latency",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 }
+    },
+    {
+      "id": 8,
+      "title": "SRP login handshake p95/p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(meridian_auth_srp_duration_seconds_bucket{realm=~\"$realm\"}[5m])))", "legendFormat": "p95" },
+        { "refId": "B", "expr": "histogram_quantile(0.99, sum by (le) (rate(meridian_auth_srp_duration_seconds_bucket{realm=~\"$realm\"}[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "DB latency p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.99, sum by (le, db) (rate(meridian_db_latency_seconds_bucket{realm=~\"$realm\"}[5m])))", "legendFormat": "{{db}}" }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Map tick p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.99, sum by (le, zone, shard) (rate(meridian_tick_duration_seconds_bucket{realm=~\"$realm\"}[5m])))", "legendFormat": "{{zone}}/{{shard}}" }
+      ]
+    },
+    {
+      "id": 103,
+      "title": "Saturation",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 }
+    },
+    {
+      "id": 11,
+      "title": "Process RSS",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 33 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (process) (meridian_rss_bytes{realm=~\"$realm\"})", "legendFormat": "{{process}}" }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Disconnects by reason",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 33 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (reason) (rate(meridian_disconnects_total{realm=~\"$realm\"}[5m]))", "legendFormat": "{{reason}}" }
+      ]
+    }
+  ]
+}
