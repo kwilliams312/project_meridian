@@ -168,7 +168,7 @@ func _tick_local_player() -> void:
 
 	var intent: Dictionary = _mover.predict(move, false, false, yaw, _client_ms)
 	if _mover.should_emit_intent(_client_ms, int(intent.get("state_flags", 0))):
-		var frame := _net.build_movement_intent_frame(intent)
+		var frame: PackedByteArray = _net.build_movement_intent_frame(intent)
 		if frame.size() > 0:
 			_net.send_movement_intent(frame)
 

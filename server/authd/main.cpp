@@ -261,6 +261,7 @@ int main(int argc, char** argv) {
     c.set("bind", "0.0.0.0", core::ConfigLayer::Default);
     c.set("port", "7100", core::ConfigLayer::Default);         // IF-1 (SAD §5.1)
     c.set("login.build_floor", "0", core::ConfigLayer::Default);
+    c.set("login.grant_ttl_seconds", "30", core::ConfigLayer::Default);
     c.set("metrics.port", "9464", core::ConfigLayer::Default);
     c.set("metrics.bind", "127.0.0.1", core::ConfigLayer::Default);
     c.set("realm", "reference", core::ConfigLayer::Default);
@@ -309,6 +310,7 @@ int main(int argc, char** argv) {
     cfg.bind_addr = c.get_string_or("bind", "0.0.0.0");
     cfg.port = static_cast<std::uint16_t>(c.get_int_or("port", 7100));
     cfg.login.build_floor = static_cast<std::uint32_t>(c.get_int_or("login.build_floor", 0));
+    cfg.login.grant_ttl_seconds = static_cast<std::uint32_t>(c.get_int_or("login.grant_ttl_seconds", 30));
     cfg.metrics_port = static_cast<std::uint16_t>(c.get_int_or("metrics.port", 9464));
     cfg.metrics_bind = c.get_string_or("metrics.bind", "127.0.0.1");
     cfg.otlp_endpoint = c.get_string_or("otlp.endpoint", "");

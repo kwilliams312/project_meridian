@@ -129,7 +129,10 @@ $(ok "READY — watch the bot move in the GUI")
 
 EOF
 
-log "launching the GUI client (scripts/dev/run-client.sh, windowed Metal)"
-"${SELF_DIR}/run-client.sh" || true
+log "launching the GUI client into the LOGIN flow (scripts/dev/run-client.sh, windowed Metal)"
+# Boot the login screen (the project main_scene), NOT the default camera_demo — the
+# login → char-select → Enter World chain is what hands world.tscn its real session
+# (grant + worldd addr + session_key) so it connects to worldd and renders the bot.
+"${SELF_DIR}/run-client.sh" --scene res://scenes/login/login_screen.tscn || true
 
 ok "client closed — cleaning up"
