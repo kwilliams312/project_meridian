@@ -10,6 +10,8 @@
 // #97 adds the dedicated NET THREAD (MeridianNetThread): owns the IF-2 world
 // session on its own std::thread, hands decoded messages to the main thread over a
 // lock-free SPSC ring drained at the pre-sim sync point, with a priority send queue.
+// #105 adds the third-person WoW camera rig (MeridianTpsCamera): hold-RMB steer,
+// hold-LMB orbit, wheel zoom, SpringArm3D collision boom.
 // Later issues add the remaining net / stream / datastore classes (Client SAD §2).
 
 #include "register_types.h"
@@ -27,6 +29,7 @@
 #include "meridian_pack_mount.h"
 #include "meridian_remote_interpolator.h"
 #include "meridian_telemetry.h"
+#include "meridian_tps_camera.h"
 
 using namespace godot;
 
@@ -42,6 +45,7 @@ void initialize_meridian_module(ModuleInitializationLevel p_level) {
 	GDREGISTER_CLASS(meridian::MeridianLogin);
 	GDREGISTER_CLASS(meridian::MeridianRemoteInterpolator);
 	GDREGISTER_CLASS(meridian::MeridianNetThread);
+	GDREGISTER_CLASS(meridian::MeridianTpsCamera);
 }
 
 void uninitialize_meridian_module(ModuleInitializationLevel p_level) {

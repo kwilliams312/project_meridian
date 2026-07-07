@@ -61,6 +61,30 @@ endif()
 
 add_test(NAME remote-interpolation COMMAND remote-interpolation-test)
 
+# --- Third-person WoW camera core (#105) ---
+# The engine-free WoW-style camera state machine (tps_camera_core.*): steer-vs-
+# orbit mode selection, yaw/pitch accumulation + clamps, wheel-zoom clamping, and
+# the collision-boom springs (instant pull-in, smooth spring-out). Same engine-
+# free discipline: no godot-cpp, plain C++17; the Godot node (meridian_tps_camera)
+# is a thin wrapper that only supplies the per-frame collision distance.
+add_executable(tps-camera-core-test
+  tps_camera_core_test.cpp
+  "${SRC}/tps_camera_core.cpp"
+)
+target_include_directories(tps-camera-core-test PRIVATE "${SRC}")
+set_target_properties(tps-camera-core-test PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+if(MSVC)
+  target_compile_options(tps-camera-core-test PRIVATE /W4)
+else()
+  target_compile_options(tps-camera-core-test PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME tps-camera-core COMMAND tps-camera-core-test)
+
 # --- Telemetry log capture core (#168) ---
 # The engine-free ERROR/CRITICAL log capture + shipping core (Client SAD §9.2 /
 # D-29 client channel). Same engine-free discipline: no godot-cpp, plain C++17.
