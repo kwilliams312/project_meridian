@@ -22,6 +22,7 @@ find_package(Threads REQUIRED)
 add_library(world-dispatch STATIC
   world_dispatch.cpp
   world_session.cpp
+  movement_validation.cpp
 )
 add_library(meridian::world-dispatch ALIAS world-dispatch)
 target_include_directories(world-dispatch
@@ -84,3 +85,20 @@ target_link_libraries(worldd-session-test
 )
 set_target_properties(worldd-session-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-session COMMAND worldd-session-test)
+
+# --- Movement intake + validation v0 UNIT test (IT-M0 movement; #86). ---------
+# PURE (no DB, no socket, no session): exercises the movement validator, the
+# sliding-window speed check, the rate-class intake gate, and the golden
+# cross-track fixture directly. It always runs in the plain server ctest (no
+# MERIDIAN_DB_* needed) — the "prefer a pure function so it is DB-free
+# unit-testable" ask (#86). Drift in any #101 shared constant flips a golden
+# fixture vector and fails this test loudly (movement-spike.md §4 trip-wire).
+add_executable(worldd-movement-test
+  test/movement_validation_test.cpp
+)
+target_link_libraries(worldd-movement-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-movement-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-movement COMMAND worldd-movement-test)
