@@ -34,6 +34,7 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -511,6 +512,119 @@ int main() {
                     all_updates_positioned = false;
             }
             check("6b: peer updates carry a position", all_updates_positioned);
+        }
+    }
+
+    // ===== 7. RECONNECT wrapper end-to-end vs a MOCK worldd (#96) =============
+    // Drive the FULL reconnect-capable wrapper (run_session_with_reconnect) through
+    // the real code path against the mock: enter world, inject a transient drop,
+    // then run the FSM-governed backoff/attempt loop. Two mocks model the TWO server
+    // realities so the wrapper is proven correct either way — and HONESTLY reports
+    // which one it faced. A virtual clock advances the backoff (no real sleeps).
+    std::printf("\n7. reconnect wrapper end-to-end vs mock worldd (#96)\n");
+    {
+        login::LoginResult grant;
+        grant.status = login::LoginStatus::kSuccess;
+        grant.grant_id = 77;
+        grant.session_key = rand_key();
+        grant.selected_realm_id = 1;
+
+        std::uint64_t vclock = 0;
+        auto now = [&vclock]() { return vclock; };
+        auto wait = [&vclock](std::uint32_t ms) { vclock += ms; };
+        bot::BotWorldConfig idle;
+        idle.path = bot::BotPath::kIdle;
+        idle.movement_ticks = 2;  // brief — this test is about the lifecycle, not movement
+
+        // 7a. kFullRelogin — the WORKING M0 path. connect() hands back a fresh mock
+        //     that accepts the (fresh) grant; relogin() returns a fresh success.
+        //     Expect: reconnected, but NOT a token resume (it was a re-login).
+        {
+            bot::ReconnectConfig rc;
+            rc.strategy = bot::ReconnectStrategy::kFullRelogin;
+            rc.backoff.base_delay_ms = 200;
+            rc.backoff.window_ms = 0;      // isolate the attempts ceiling
+            rc.backoff.max_attempts = 3;
+            rc.world = idle;
+
+            auto connect = []() -> std::unique_ptr<login::ILoginTransport> {
+                return std::make_unique<MockWorldd>(/*grant_ok=*/true);
+            };
+            auto relogin = [&grant]() -> login::LoginResult { return grant; };
+            bool dropped_once = false;
+            auto inject_drop = [&dropped_once]() {
+                if (dropped_once) return false;
+                dropped_once = true;
+                return true;  // force exactly one transient drop
+            };
+
+            auto first = std::make_unique<MockWorldd>(/*grant_ok=*/true);
+            bot::ReconnectRunReport rep = bot::run_session_with_reconnect(
+                std::move(first), grant, rc, connect, relogin, inject_drop, now, wait);
+
+            check("7a: first session entered world", rep.first_session.handshake_ok);
+            check("7a: a drop occurred", rep.dropped);
+            check("7a: reconnected", rep.reconnect.reconnected);
+            check("7a: final state InWorld", rep.final_state == bot::ConnState::kInWorld);
+            check("7a: NOT a token resume (full re-login)",
+                  !rep.reconnect.resumed_without_relogin);
+            check("7a: resumed session re-entered world",
+                  rep.resumed_session.handshake_ok);
+        }
+
+        // 7b. kResumeWithGrant against a mock that REJECTS the re-presented grant —
+        //     the M0 single-use reality (worldd validate_and_consume_grant). Expect:
+        //     every attempt GRANT_INVALID, backoff exhausts, gives up, and — the
+        //     honest headline — resumed_without_relogin == false.
+        {
+            bot::ReconnectConfig rc;
+            rc.strategy = bot::ReconnectStrategy::kResumeWithGrant;
+            rc.backoff.base_delay_ms = 100;
+            rc.backoff.max_delay_ms = 400;
+            rc.backoff.window_ms = 0;
+            rc.backoff.max_attempts = 3;
+            rc.world = idle;
+
+            // connect() hands back a mock that REJECTS the grant (grant_ok=false),
+            // modelling worldd: the grant was consumed on first enter-world.
+            auto connect = []() -> std::unique_ptr<login::ILoginTransport> {
+                return std::make_unique<MockWorldd>(/*grant_ok=*/false);
+            };
+            auto relogin = []() -> login::LoginResult { return {}; };  // unused here
+            bool dropped_once = false;
+            auto inject_drop = [&dropped_once]() {
+                if (dropped_once) return false;
+                dropped_once = true;
+                return true;
+            };
+
+            auto first = std::make_unique<MockWorldd>(/*grant_ok=*/true);
+            bot::ReconnectRunReport rep = bot::run_session_with_reconnect(
+                std::move(first), grant, rc, connect, relogin, inject_drop, now, wait);
+
+            check("7b: first session entered world", rep.first_session.handshake_ok);
+            check("7b: a drop occurred", rep.dropped);
+            check("7b: did NOT reconnect (single-use grant)", !rep.reconnect.reconnected);
+            check("7b: gave up", rep.reconnect.gave_up);
+            check("7b: final state Failed", rep.final_state == bot::ConnState::kFailed);
+            check("7b: NOT resumed without relogin (HONEST server gap)",
+                  !rep.reconnect.resumed_without_relogin);
+            check("7b: attempted max_attempts times", rep.reconnect.attempts == 3);
+        }
+
+        // 7c. No drop injected — the wrapper just runs one session and returns clean.
+        {
+            bot::ReconnectConfig rc;
+            rc.world = idle;
+            auto connect = []() -> std::unique_ptr<login::ILoginTransport> { return nullptr; };
+            auto relogin = []() -> login::LoginResult { return {}; };
+            auto no_drop = []() { return false; };
+            auto first = std::make_unique<MockWorldd>(/*grant_ok=*/true);
+            bot::ReconnectRunReport rep = bot::run_session_with_reconnect(
+                std::move(first), grant, rc, connect, relogin, no_drop, now, wait);
+            check("7c: entered world", rep.first_session.handshake_ok);
+            check("7c: no drop -> not dropped", !rep.dropped);
+            check("7c: final state InWorld", rep.final_state == bot::ConnState::kInWorld);
         }
     }
 

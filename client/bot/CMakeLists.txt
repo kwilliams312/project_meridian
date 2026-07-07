@@ -130,6 +130,8 @@ add_executable(bot-world-session-test
   test/bot_world_session_test.cpp
   bot_world_session.cpp
   bot_core.cpp
+  connection_fsm.cpp
+  reconnect_coordinator.cpp
   "${MERIDIAN_CLIENT_SRC}/login_core.cpp"
   "${MERIDIAN_CLIENT_SRC}/srp_client_core.cpp"
   "${MERIDIAN_CLIENT_SRC}/login_transport.cpp"
