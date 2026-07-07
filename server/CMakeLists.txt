@@ -67,6 +67,13 @@ add_subdirectory(libs/net)
 # --- Daemons (server/README.md process table; SAD §2.1 / §2.5). --------------
 add_subdirectory(authd)
 add_subdirectory(worldd)
+# telemetryd (#167): the OPS-05 client-telemetry INGEST daemon — receives the
+# #168 client ERROR/CRITICAL log batches (+ crash / missing-content events),
+# validates them against the D-29 privacy contract, rate-limits per build/IP, and
+# forwards validated events to the structured-log sink (Loki via the M0 stdout
+# JSON sink). Composes meridian::core + meridian::metrics; standalone service so
+# the untrusted client-facing ingest fails/scales independently of authd.
+add_subdirectory(telemetryd)
 
 # --- Tools. -------------------------------------------------------------------
 # meridian-account (#80): the M0 account-creation CLI (ACC-03). Composes
