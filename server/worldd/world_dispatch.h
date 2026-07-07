@@ -179,6 +179,14 @@ struct ConnCtx {
     // authenticated/counted without a world registry in the DB-less path).
     bool entered_metrics = false;
 
+    // OPS-05 audit stream (#92): the account + grant this session authenticated
+    // as, captured on a valid WORLD_HELLO so the serve loop can attribute the
+    // session-leave audit record to the same actor + correlation id as the
+    // session-enter record. 0 until authenticated (an unauthenticated connection
+    // that never entered emits no leave audit).
+    std::uint64_t account_id = 0;
+    std::uint64_t grant_id = 0;
+
     bool disconnect = false;             // handler asks the serve loop to close
     net::DisconnectReason disconnect_reason = net::DisconnectReason::UNKNOWN;
     std::string disconnect_message;

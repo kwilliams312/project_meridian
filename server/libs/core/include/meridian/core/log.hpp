@@ -140,6 +140,16 @@ void write(Level level, std::string_view category, std::string_view message,
 // Field-less overload (legacy call sites): renders with no structured body.
 void write(Level level, std::string_view category, std::string_view message);
 
+// Emit one record UNCONDITIONALLY, bypassing the global level filter — same
+// sink, format, rendering and write-lock as write(). This exists for the audit
+// stream (#92): security/compliance audit records MUST be recorded regardless of
+// the operational MERIDIAN_LOG_LEVEL an operator sets, so raising the log level
+// to quiet operational noise can never silently drop an audit trail. Ordinary
+// logging uses write(); only the audit facility (meridian/core/audit.hpp) uses
+// this.
+void write_always(Level level, std::string_view category,
+                  std::string_view message, const Fields& fields);
+
 // Convenience wrappers — both the legacy (no fields) and structured forms.
 inline void trace(std::string_view category, std::string_view message) {
     write(Level::Trace, category, message);

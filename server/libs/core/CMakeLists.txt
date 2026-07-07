@@ -10,6 +10,7 @@
 add_library(meridian-core STATIC
   src/version.cpp
   src/log.cpp
+  src/audit.cpp
   src/config.cpp
   src/config_loader.cpp
 )
@@ -51,3 +52,15 @@ add_executable(meridian-core-config-test test/config_test.cpp)
 target_link_libraries(meridian-core-config-test PRIVATE meridian::core)
 set_target_properties(meridian-core-config-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME core-config COMMAND meridian-core-config-test)
+
+# --- Unit test: structured audit stream (OPS-05, #92). ------------------------
+# Drives the audit API directly and parses the rendered records: the audit stream
+# tag (event/logger="audit" labels + body stream="audit"), the typed schema
+# (action/outcome/account_id/reason/correlation_id), and the #92 NO-SECRETS
+# guarantee — a login-failure record carries the reason but the password / SRP
+# verifier / session key strings are asserted ABSENT from the rendered line. Pure
+# (no DB, no socket) — runs in the plain `server` CI job's ctest.
+add_executable(meridian-core-audit-test test/audit_test.cpp)
+target_link_libraries(meridian-core-audit-test PRIVATE meridian::core)
+set_target_properties(meridian-core-audit-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME core-audit COMMAND meridian-core-audit-test)
