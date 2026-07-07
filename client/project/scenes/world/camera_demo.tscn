@@ -1,0 +1,15 @@
+; SPDX-License-Identifier: Apache-2.0
+;
+; Project Meridian — interactive playtest scene for the #105 third-person WoW
+; camera. The root Node3D's script (camera_demo.gd) builds the whole sandbox
+; (ground, collision pillars, lit capsule "character", and a MeridianTpsCamera)
+; in _ready, so this scene file stays trivial. Run:
+;   godot --path project res://scenes/world/camera_demo.tscn
+; See camera_verify.gd for the automatable, no-render counterpart.
+
+[gd_scene load_steps=2 format=3 uid="uid://bcam0demo105tps"]
+
+[ext_resource type="Script" path="res://scenes/world/camera_demo.gd" id="1_demo"]
+
+[node name="CameraDemo" type="Node3D"]
+script = ExtResource("1_demo")
