@@ -50,6 +50,11 @@ enable_testing()
 # (libmeridian-proto, #67 — flatc runs at build time; needs flatc + the runtime,
 # see server/libs/proto/CMakeLists.txt for the find-first / fetch-fallback).
 add_subdirectory(libs/core)
+# metrics: OPS-05 in-process Prometheus registry + /metrics HTTP exposer (#164,
+# covers #93) — server SAD §8.5, docs/telemetry-architecture.md §5. Clean-room,
+# dependency-free (BSD sockets + the exposition-format spec). authd + worldd link
+# it to expose the SAD §8.5 metric set the server/ops dashboards query.
+add_subdirectory(libs/metrics)
 add_subdirectory(libs/proto)
 # srp: SRP-6a authentication (#78) — clean-room from RFC 5054; needs OpenSSL.
 add_subdirectory(libs/srp)
