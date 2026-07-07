@@ -229,6 +229,56 @@ endif()
 
 add_test(NAME telemetry-log-capture COMMAND telemetry-log-capture-test)
 
+# --- Crash report core + upload queue (#109) ---
+# The engine-free CLIENT crash channel: the .mcrash report-file (de)serialiser,
+# the Sentry-compatible crash envelope (reuses the #167 ingest shape), and the
+# upload queue that ships pending reports through the SAME telemetry ITransport
+# seam a MockTransport stands in for. Same engine-free discipline: no godot-cpp,
+# plain C++17. Links crash_report_core + crash_upload_queue only.
+add_executable(crash-report-core-test
+  crash_report_core_test.cpp
+  "${SRC}/crash_report_core.cpp"
+  "${SRC}/crash_upload_queue.cpp"
+)
+target_include_directories(crash-report-core-test PRIVATE "${SRC}")
+set_target_properties(crash-report-core-test PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+if(MSVC)
+  target_compile_options(crash-report-core-test PRIVATE /W4)
+else()
+  target_compile_options(crash-report-core-test PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME crash-report-core COMMAND crash-report-core-test)
+
+# --- Controlled crash-handler smoke test (#109) ---
+# Exercises the REAL POSIX fatal-signal handler: forks a child that installs the
+# handler and deliberately crashes (SIGSEGV/SIGABRT), then asserts a parseable
+# .mcrash report was written — WITHOUT killing the runner (the crash is in the
+# child). POSIX-only; SKIPs (exit 0) elsewhere. Links crash_handler + the cores.
+add_executable(crash-handler-smoke-test
+  crash_handler_smoke_test.cpp
+  "${SRC}/crash_handler.cpp"
+  "${SRC}/crash_report_core.cpp"
+  "${SRC}/crash_upload_queue.cpp"
+)
+target_include_directories(crash-handler-smoke-test PRIVATE "${SRC}")
+set_target_properties(crash-handler-smoke-test PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+if(MSVC)
+  target_compile_options(crash-handler-smoke-test PRIVATE /W4)
+else()
+  target_compile_options(crash-handler-smoke-test PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME crash-handler-smoke COMMAND crash-handler-smoke-test)
+
 # --- IF-5 pack-manifest verify core (#107) ---
 # The engine-free client boot-scene pack-mount manifest verifier (Client SAD §2.3
 # / §5.2; the client counterpart to worldd's #89 world-DB boot check). Same

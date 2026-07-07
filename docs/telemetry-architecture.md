@@ -122,7 +122,7 @@ Label shorthand: map-scoped metrics carry `{realm, zone, shard}` per D-23 (SAD �
 | `meridian_grids_active` | gauge | worldd | `realm,zone,shard,map` | Active (ticking) grids per map | Realm health | M1 (catalog name reservation) |
 | `meridian_instances_active` | gauge | worldd | `realm` | Active dungeon/BG instances | Realm health | M1 (catalog name reservation) |
 | `meridian_saves_batched_total` | counter | worldd | `realm` | Batched persistence writes | Realm health | M1 (catalog name reservation) |
-| `meridian_client_crash_total` | counter | telemetryd (ingest endpoint) | `realm,build,platform` | Client crash reports received (count only) | Errors | M1 (blocked on client crashpad #109; catalog name reservation) |
+| `meridian_client_crash_total` | counter | telemetryd (ingest endpoint) | `realm,build,platform` | Client crash reports received (count only) | Errors | M0 (wired by #109: client minimal fatal-signal handler → report → upload; ingest counts on receipt) |
 | **Sharding additions (SAD §8.5, M2+)** | | | | | | |
 | `meridian_shard_population` | gauge | coordd | `realm,zone,shard` | Population per shard | Realm health | M2 |
 | `meridian_shard_state` | gauge | coordd | `realm,state` | Shards by lifecycle state | Realm health | M2 |

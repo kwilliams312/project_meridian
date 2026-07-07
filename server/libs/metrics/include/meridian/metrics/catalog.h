@@ -210,13 +210,13 @@ inline CounterFamily& client_log_ingest_total() {
         {"realm", "severity", "build", "platform"});
 }
 
-// Client crash reports received. FUTURE — not emitted at M0 (#297). BLOCKED ON
-// the client crash handler (crashpad, #109): until the client captures and ships
-// crash reports there is nothing to count. Per telemetry-privacy.md §4 the crash
-// SINK is a Sentry-compatible endpoint, NOT this Prometheus stack — this counter
-// is only the server-side received-count once #109 lands. Kept as a name
-// reservation; no M0 dashboard/alert queries it. Wire the emit site + the panel
-// together when #109 ships.
+// Client crash reports received. WIRED by #109: telemetryd's ingest increments
+// this per crash report accepted (server/telemetryd/ingest_http.cpp), keyed on
+// realm/build/platform. Per telemetry-privacy.md §4 the crash SINK is a Sentry-
+// compatible endpoint, NOT this Prometheus stack — this counter is only the
+// server-side received-count. The client half (a minimal fatal-signal handler →
+// report file → upload on next launch through the #167/#168 transport) captures
+// and ships the reports; full Google Crashpad remains a documented later swap.
 inline CounterFamily& client_crash_total() {
     return default_registry().counter("meridian_client_crash_total",
                                       "Client crash reports received (count only)",

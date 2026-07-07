@@ -65,7 +65,7 @@ marked as clearly-labelled future name reservations that no panel/alert queries.
 | Signal | Blocked on |
 |--------|-----------|
 | `meridian_grids_active` / `meridian_instances_active` / `meridian_saves_batched_total` | worldd grid/instance/persistence work (M1). |
-| `meridian_client_crash_total` | client crash handler (crashpad, #109); crash **sink** is Sentry-compatible, **not this stack** (privacy §4). |
+| `meridian_client_crash_total` | client crash handler (#109: minimal fatal-signal handler now, Crashpad seam later); emitted by telemetryd's ingest on each crash report received. Crash **sink** is Sentry-compatible, **not this stack** (privacy §4). |
 
 ## Run it
 
