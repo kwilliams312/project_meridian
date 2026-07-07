@@ -2,6 +2,7 @@
 // Bootstrap scope (#158): registered the placeholder MeridianClient class.
 // #102 adds the `sim` kinematic movement controller (MeridianMovementController).
 // #168 adds the client telemetry log channel (MeridianTelemetry, D-29).
+// #107 adds the boot-scene IF-5 pack mount + manifest verify (MeridianPackMount).
 // Later issues add the remaining net / stream / datastore classes (Client SAD §2).
 
 #include "register_types.h"
@@ -14,6 +15,7 @@
 
 #include "meridian_client.h"
 #include "meridian_movement_controller.h"
+#include "meridian_pack_mount.h"
 #include "meridian_telemetry.h"
 
 using namespace godot;
@@ -26,6 +28,7 @@ void initialize_meridian_module(ModuleInitializationLevel p_level) {
 	GDREGISTER_CLASS(meridian::MeridianClient);
 	GDREGISTER_CLASS(meridian::MeridianMovementController);
 	GDREGISTER_CLASS(meridian::MeridianTelemetry);
+	GDREGISTER_CLASS(meridian::MeridianPackMount);
 }
 
 void uninitialize_meridian_module(ModuleInitializationLevel p_level) {
