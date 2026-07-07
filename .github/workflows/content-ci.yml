@@ -88,3 +88,140 @@ jobs:
             exit 1
           fi
           echo "PARITY OK: both tools exit 0 and agree on files/entities/assets/content refs."
+
+  # IT-M0 content build gate (#123, runbook #149 §5, DC-10/DC-11). Makes the full
+  # content compile a repeatable, deterministic, CI-gated step: build mcc, run the
+  # complete `mcc build content` pipeline (validate → link → emit-sql → emit-pck)
+  # via scripts/content-build.sh, and prove the artifacts are trustworthy on every
+  # green. This is the "Codex content visible via the mcc pipe" backbone: if a
+  # content or emit change breaks the compile, or breaks the IF-4↔IF-5 hash tie,
+  # this job goes red. A live MariaDB service loads the world DDL + the emitted
+  # world.sql to prove the IF-4 artifact actually loads (like build.yml's db job,
+  # but here it is the *emitted* content, not just the empty template DDL).
+  content-build:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: ci
+          MARIADB_DATABASE: meridian_world
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=12
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same C++20 toolchain as mcc-parity above; yaml-cpp is NOT installed
+      # system-wide, so this also exercises mcc's pinned FetchContent fallback.
+      # mariadb-client provides the `mariadb` CLI for the world.sql load step.
+      - name: Install toolchain (cmake, ninja, g++-13, mariadb client)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++-13 mariadb-client
+
+      # The repeatable content build: builds mcc, runs the full
+      # validate→link→emit-sql→emit-pck pipeline, collects world.sql + the pack
+      # into build/content-out/, asserts the IF-4↔IF-5 content-hash tie, AND
+      # rebuilds to prove determinism (DC-11). CXX pinned to g++-13 to match CI.
+      - name: Build content (scripts/content-build.sh)
+        env:
+          CXX: g++-13
+        run: |
+          # mcc's CMake honors CMAKE_CXX_COMPILER; the script forwards nothing
+          # special, so preconfigure the build tree with g++-13 then let the
+          # script reuse it. This keeps the compiler identical to mcc-parity.
+          cmake -S tools/mcc -B tools/mcc/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
+          cmake --build tools/mcc/build --target mcc
+          NO_COLOR=1 ./scripts/content-build.sh --skip-mcc-build
+
+      # Validation (a): emit-sql + emit-pck produced their artifacts (exit 0 above
+      # is already asserted by `set -e`; here we assert the files exist + are
+      # non-empty, the concrete IF-4/IF-5 deliverables).
+      - name: Assert artifacts exist (IF-4 world.sql + IF-5 pack)
+        run: |
+          set -euo pipefail
+          out=build/content-out
+          for f in "$out/world.sql" \
+                   "$out/pck/meridian/core/pack.manifest.json" \
+                   "$out/pck/meridian/core/pack.contents.jsonl"; do
+            test -s "$f" || { echo "MISSING/EMPTY artifact: $f" >&2; exit 1; }
+            echo "OK artifact: $f ($(wc -c < "$f") bytes)"
+          done
+
+      # Validation (c): pack.manifest.json is well-formed JSON. python3 is
+      # preinstalled on ubuntu-latest.
+      - name: Assert pack.manifest.json is well-formed JSON
+        run: |
+          set -euo pipefail
+          python3 -c "import json,sys; json.load(open('build/content-out/pck/meridian/core/pack.manifest.json')); print('pack.manifest.json: valid JSON')"
+
+      # Validation (b): the cross-emit invariant — the IF-4 world_manifest
+      # content_hash equals the IF-5 pack.manifest content_hash (the three-way
+      # tie, Tools SAD §2.6). scripts/content-build.sh already asserts this and
+      # fails on mismatch; we re-assert here as an explicit, self-documenting gate
+      # (and to print both hashes into the CI log for DC-10 provenance).
+      - name: Assert IF-4 world_manifest hash == IF-5 pack.manifest hash
+        run: |
+          set -euo pipefail
+          out=build/content-out
+          sql_hash="$(grep -A3 'INSERT INTO world_manifest' "$out/world.sql" \
+                       | grep -Eo "'[0-9a-f]{64}'" | head -1 | tr -d "'")"
+          pck_hash="$(python3 -c "import json; print(json.load(open('$out/pck/meridian/core/pack.manifest.json'))['content_hash'])")"
+          echo "IF-4 world_manifest.content_hash: ${sql_hash:-<none>}"
+          echo "IF-5 pack.manifest.content_hash:  ${pck_hash:-<none>}"
+          if [ -z "$sql_hash" ] || [ -z "$pck_hash" ]; then
+            echo "HASH FAIL: could not extract one of the content hashes." >&2
+            exit 1
+          fi
+          if [ "$sql_hash" != "$pck_hash" ]; then
+            echo "CROSS-EMIT FAIL: IF-4 and IF-5 content hashes diverge." >&2
+            exit 1
+          fi
+          echo "CROSS-EMIT OK: the world DB SQL and client pack agree on content_hash."
+
+      # BONUS validation (d): load the world DDL + the mcc-emitted world.sql into
+      # the live MariaDB and prove it loads AND populates. The DDL files reference
+      # each other across files, so FOREIGN_KEY_CHECKS is disabled for the combined
+      # load (identical to build.yml's worldd-session world-DB load). We then assert
+      # world_manifest has exactly one row whose content_hash matches the pack — the
+      # end-to-end proof that `YAML → mcc → world DB` carries the same hash the
+      # client pack (IF-5) verifies against (runbook DC-10, zero hand-written SQL).
+      - name: Load emitted world.sql into MariaDB (proves the IF-4 artifact loads)
+        run: |
+          set -euo pipefail
+          MDB() { mariadb -h 127.0.0.1 -P 3306 -u root -pci "$@"; }
+          echo "== load world DDL (schema/sql/world/*.sql) =="
+          ( echo "SET FOREIGN_KEY_CHECKS=0;"; cat schema/sql/world/*.sql ) | MDB meridian_world
+          echo "== load mcc-emitted world.sql =="
+          MDB meridian_world < build/content-out/world.sql
+          echo "== assert world_manifest populated + hash ties to the pack =="
+          rows="$(MDB -N meridian_world -e 'SELECT COUNT(*) FROM world_manifest')"
+          db_hash="$(MDB -N meridian_world -e 'SELECT content_hash FROM world_manifest LIMIT 1')"
+          pck_hash="$(python3 -c "import json; print(json.load(open('build/content-out/pck/meridian/core/pack.manifest.json'))['content_hash'])")"
+          echo "world_manifest rows: $rows"
+          echo "world_manifest.content_hash: $db_hash"
+          npcs="$(MDB -N meridian_world -e 'SELECT COUNT(*) FROM npc_template')"
+          items="$(MDB -N meridian_world -e 'SELECT COUNT(*) FROM item_template')"
+          echo "loaded content: npc_template=$npcs item_template=$items"
+          if [ "$rows" != "1" ]; then
+            echo "DB LOAD FAIL: expected exactly 1 world_manifest row, got $rows." >&2
+            exit 1
+          fi
+          if [ "$db_hash" != "$pck_hash" ]; then
+            echo "DB LOAD FAIL: DB content_hash ($db_hash) != pack ($pck_hash)." >&2
+            exit 1
+          fi
+          echo "DB LOAD OK: world.sql loads, world_manifest ties to the client pack hash."
+
+      # Capture the artifacts so downstream (client, deploy DB-init) can consume
+      # them: world.sql → the world DB, pck/ → the client (issue #107).
+      - name: Upload content build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: it-m0-content-build
+          path: build/content-out/
+          if-no-files-found: error
