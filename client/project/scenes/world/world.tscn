@@ -1,0 +1,18 @@
+; SPDX-License-Identifier: Apache-2.0
+;
+; Project Meridian — the NETWORKED world scene (issue #301). The real enter-world
+; target: the root Node3D's script (world.gd) connects to the selected realm's
+; worldd over the dedicated net thread and renders the local player + remote
+; entities (a bot / another client) MOVING, so this scene file stays trivial.
+; char_select.gd loads this on Enter World, passing the login session context via
+; configure(session, character) before the scene enters the tree. The headless
+; proof of the same net path is client/test/run_client_sees_bot_it.sh; the
+; on-screen watch is scripts/dev/demo-networked.sh. camera_demo.tscn remains the
+; standalone LOCAL demo.
+
+[gd_scene load_steps=2 format=3 uid="uid://bwrld0net301aoi"]
+
+[ext_resource type="Script" path="res://scenes/world/world.gd" id="1_world"]
+
+[node name="World" type="Node3D"]
+script = ExtResource("1_world")

@@ -74,27 +74,45 @@ func _on_login_succeeded(result: Dictionary) -> void:
 			realm_name = String(r.get("name", ""))
 	_set_status("Logged in over %s. Realm '%s' (id %d). Entering world…" % [tls, realm_name, realm_id])
 
-	# Hand off to the IF-2 world handshake: the WorldHello frame the client sends
-	# to worldd. The world-connect code (a later net story) opens the realm socket
-	# and writes this first. Here we just prove the grant produced a valid frame.
+	# Build the IF-2 WorldHello frame (the first frame the client sends to worldd)
+	# from the cached grant, and resolve the selected realm's worldd address:port.
+	# These + the session_key form the "session context" the world scene (#301) needs
+	# to open the realm socket — carried through char-select to scenes/world/world.tscn.
 	var world_hello := _flow.build_world_hello_frame()
-	print("[login] grant_id=%d session_key=%d bytes world_hello=%d bytes → IF-2 kickoff"
-		% [_flow.grant_id(), _flow.session_key().size(), world_hello.size()])
+	var worldd_host := ""
+	var worldd_port := 0
+	for r in realms:
+		if int(r.get("id", -1)) == realm_id:
+			worldd_host = String(r.get("address", ""))
+			worldd_port = int(r.get("port", 0))
+	print("[login] grant_id=%d session_key=%d bytes world_hello=%d bytes worldd=%s:%d → IF-2 kickoff"
+		% [_flow.grant_id(), _flow.session_key().size(), world_hello.size(), worldd_host, worldd_port])
+
+	var session := {
+		"grant_id": _flow.grant_id(),
+		"session_key": _flow.session_key(),
+		"realm_id": realm_id,
+		"world_hello_frame": world_hello,
+		"worldd_host": worldd_host,
+		"worldd_port": worldd_port,
+	}
 
 	# Advance the boot flow: Login → CharSelect (issue #110). The char-select screen
-	# lists this account's characters and, on Enter World, hands off to the world map.
-	_go_to_char_select(_account.text.strip_edges())
+	# lists this account's characters and, on Enter World, hands off to the world map
+	# with the session context so it connects to the selected realm's worldd (#301).
+	_go_to_char_select(_account.text.strip_edges(), session)
 
 
 # Replace this scene with the character-select screen, seeding it with the logged-in
-# account. Configured BEFORE it enters the tree so its _ready() shows the right account.
-func _go_to_char_select(account: String) -> void:
+# account + the session context. Configured BEFORE it enters the tree so its _ready()
+# shows the right account and Enter World can open the world session.
+func _go_to_char_select(account: String, session: Dictionary) -> void:
 	var packed: PackedScene = load(CHAR_SELECT_SCENE)
 	if packed == null:
 		_set_status("Could not load character select.")
 		return
 	var char_select := packed.instantiate()
-	char_select.configure(account)
+	char_select.configure(account, [], session)
 	var tree := get_tree()
 	tree.root.add_child(char_select)
 	tree.current_scene = char_select

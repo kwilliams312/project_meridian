@@ -225,6 +225,59 @@ caveat above). The runs must be **windowed** (a real Metal/MoltenVK device);
 
 ---
 
+## Networked world scene — connect to worldd + see a bot move (#301)
+
+`scenes/world/world.tscn` is the **real enter-world target**: after login and
+character select, it connects to the selected realm's worldd over the dedicated
+net thread (`MeridianNetThread`, #97/#279) and renders the **local player**
+(capsule + name label + `MeridianTpsCamera` + `MeridianMovementController` →
+`MovementIntent`s) and **remote entities** — on `EntityEnter` it spawns a remote
+capsule, on `EntityUpdate` it feeds `MeridianRemoteInterpolator` (#104) for smooth
+motion, on `EntityLeave` it despawns — with a HUD (connection state / my guid /
+remote count / last server tick). `camera_demo.tscn` stays the **standalone local
+demo**; `world.gd` runs an offline local sandbox if opened with no login session.
+
+> **worldd's IF-2 world channel is TLS 1.3** (cert/key are required to serve). The
+> net thread connects with `clientnet::TlsClientTransport` accordingly — a plain-TCP
+> connect is rejected by worldd's handshake.
+
+### Watch a bot move on screen
+
+```bash
+scripts/dev/demo-networked.sh
+```
+
+One command builds the server + bot + editor GDExtension, brings up a local realm
+(`run-local.sh`: MariaDB + authd:7100 + worldd:7200 + a `devtester` account), seeds
+a realm row pointing at worldd, launches **one bot walking a square** at the spawn,
+then opens the GUI client (windowed Metal, via `run-client.sh`). Log in as
+`devtester` / `devpassword`, create a character, **Enter World**, and a second
+capsule (the bot, labelled `guid …`) walks nearby. Close the window (or Ctrl-C) to
+tear everything down.
+
+### Headless proof (no display, CI-shaped)
+
+```bash
+client/test/run_client_sees_bot_it.sh
+```
+
+The automatable evidence for the same data flow: it boots a throwaway MariaDB +
+real authd + worldd, launches **one bot** and drives the GUI client's **world-session
+net path headlessly** (`meridian-client-probe` — the *same* `NetThreadCore` +
+`meridian-clientnet` stack `world.gd` uses), and asserts the client received the
+bot's `EntityEnter` + a stream of `EntityUpdate` (i.e. the client **saw the bot
+move**). The engine-free unit tests register in ctest:
+
+```bash
+cmake -S client -B build -DMERIDIAN_CLIENT_PROBE=ON   # implies -DMERIDIAN_CLIENT_NET=ON
+cmake --build build -j
+ctest --test-dir build --output-on-failure            # clientnet + client-world-probe + …
+# Warm scene-load + net-path helper smoke check (windowed-import once, then):
+godot --headless --path project --script res://scenes/world/world_verify.gd
+```
+
+---
+
 ## CI
 
 The first client-side CI job lands in [`.github/workflows/client.yml`](../.github/workflows/client.yml)
