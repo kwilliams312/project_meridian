@@ -27,6 +27,20 @@ namespace mcc::stages {
 // Updates `model` stats (entity/asset/content_ref counts) used by the summary.
 void validate(model::ContentModel& model, diag::Diagnostics& diags);
 
+// Single-file / validation-as-you-type path (Tools SAD §6.3): validate exactly
+// ONE parsed file in isolation, without the cross-file corpus. Runs every lint
+// that is computable from the file alone — L001 (filename/envelope), L003 (id
+// type segment) — using the SAME rule logic as `validate()` above (no
+// duplicated verdicts). Cross-file rules that need the full DAG are DEGRADED
+// GRACEFULLY, not skipped silently: each content reference is emitted as an
+// `Info` note (rule L011, "deferred — needs full check"), and L002/L010 are
+// noted once as deferred, so an editor shows what is checkable now and clearly
+// marks what a full `mcc check` must confirm. Never turns an
+// unresolved-in-isolation reference into a false error. Updates `pf` in place is
+// not required; `pf` must already be parsed (`pf.parsed == true`) or carry the
+// PARSE/L001 diagnostic from the parse stage.
+void validate_single_file(const model::ParsedFile& pf, diag::Diagnostics& diags);
+
 }  // namespace mcc::stages
 
 #endif  // MCC_STAGES_VALIDATE_H

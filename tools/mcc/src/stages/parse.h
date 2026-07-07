@@ -15,6 +15,15 @@
 
 namespace mcc::stages {
 
+// Parse ONE already-classified file in place: load its YAML, and on success set
+// `pf.parsed`, `pf.root`, and the envelope fields (`schema`/`id`, plus
+// `namespace_` for pack manifests). Malformed / empty / non-mapping documents
+// get a PARSE diagnostic (with a 1-based line when yaml-cpp reports one) and
+// leave `pf.parsed == false`. FileKind::Unknown files are left untouched (the
+// validate stage reports them as L001). Never throws. Shared by the full
+// `parse()` sweep and the single-file `check --file` path (SAD §6.3).
+void parse_file(model::ParsedFile& pf, diag::Diagnostics& diags);
+
 // Parse every file in `model.files` in place. Files whose name did not classify
 // (FileKind::Unknown) are skipped here — the validate stage reports them as
 // L001. Emits PARSE diagnostics for malformed / empty / non-mapping documents.

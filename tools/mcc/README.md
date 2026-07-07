@@ -21,6 +21,66 @@ structural lints; `mcc build` runs `check` first and aborts if it fails.
 - `mcc check [dir]` — default `dir` is `./content`. Exit `0` clean, `1` on any error.
 - `mcc check --diag-format=json` — structured diagnostics for Codex / Forge / CI (§2.2).
 
+### Validation-as-you-type — single-file mode (#130, SAD §6.3 / TLS-06)
+
+For the tight editor loop, validate **one** file in isolation instead of the
+whole corpus:
+
+- `mcc check --file <path> [dir] [--diag-format=json]` — parse + the
+  single-file-computable lints (`L001` filename/envelope, `L003` id type
+  segment, `PARSE`) over exactly one file. **Fast** — no directory walk, no
+  corpus load; sub-100ms per file (measured ~3–4ms incl. process spawn on the
+  Zone-01 corpus), and O(1) as the tree grows to the R2 10k–50k-entity scale
+  where a full `check` is O(N). The optional `[dir]` (default `./content`) is
+  used **only** as root context to make the diagnostic path repo-root-relative,
+  matching a full `check`'s paths.
+- `mcc check --file <path> --watch` — re-validate on every save, streaming a
+  fresh diagnostics render to stdout until Ctrl-C (the M1 half of the TLS-06
+  loop; the fs-event + Forge-attached session upgrade is M2, SAD §6.5).
+
+**Graceful cross-file degradation.** A single file cannot resolve references
+into other files, so the cross-file rules are **not** run as errors — they are
+reported as **deferred `info` notes** (never a false `L011`/`L002`/`L010`
+error):
+
+- each content reference → one `L011` **info** note ("not resolved single-file —
+  run `mcc check` to confirm"), carrying the field's json-path in `where`;
+- `L002` (pack-namespace ownership) and `L010` (duplicate id) → one deferred
+  `info` note each.
+
+`info` notes never fail the run: exit stays `0` unless a real single-file
+**error** (L001/L003/PARSE) is found. This is exactly the contract an editor /
+LSP layer consumes to show live errors while the author types, without
+false-flagging every not-yet-saved reference.
+
+### JSON diagnostic shape (the editor/LSP contract)
+
+`--diag-format=json` (both full `check` and `--file`) emits one stable object:
+
+```json
+{
+  "schema": "mcc-diagnostics@1",
+  "mode": "file",                     // "check" (full corpus) | "file" (single-file)
+  "ok": true,
+  "error_count": 0,
+  "warning_count": 0,
+  "info_count": 2,
+  "diagnostics": [
+    { "rule": "L011", "severity": "info",
+      "file": "content/core/quests/x.quest.yaml",
+      "where": "$.giver",             // schema json-path → maps to a form control
+      "line": 0, "col": 0,            // 1-based source coords; 0 = unknown
+      "message": "reference 'core:npc.y' not resolved single-file — run 'mcc check' to confirm it exists" }
+  ]
+}
+```
+
+`severity` is `error` | `warning` | `info` (only `error` affects `ok`/exit code).
+The shape is **additive**: the `#118` fields (`ok`, `error_count`,
+`warning_count`, `diagnostics[].rule/severity/file/where/message`) are unchanged;
+`schema`, `mode`, `info_count`, and per-diagnostic `line`/`col` are new. Consumers
+ignore unknown keys.
+
 **Lints (parity with `tools/validate_content.py`, the reference validator):**
 
 | Rule | Checks |
@@ -70,6 +130,7 @@ expose the same `yaml-cpp::yaml-cpp` target. Zero other new dependencies.
 cmake --preset default        # configure into tools/mcc/build/
 cmake --build build           # -> tools/mcc/build/mcc (+ mcc-tests)
 ./build/mcc check ../../content
+./build/mcc check --file ../../content/core/items/rusty_pickaxe.item.yaml ../../content --diag-format=json
 ./build/mcc fmt --check ../../content   # canonical-form gate
-ctest --test-dir build --output-on-failure   # unit tests (fmt guarantees)
+ctest --test-dir build --output-on-failure   # unit tests (fmt + single-file/watch)
 ```
