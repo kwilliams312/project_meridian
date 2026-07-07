@@ -30,8 +30,13 @@ never the pass/fail reference.
 
 from __future__ import annotations
 
+import json
+import os
+import shutil
+import subprocess
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from pathlib import Path
+from typing import Callable, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -141,32 +146,68 @@ class TimingSource(Protocol):
         ...
 
 
+# The Godot project the probe script lives in, and the script's res:// path.
+# Repo layout: <repo>/tools/td11_music_timing/probe.py, <repo>/client/project/.
+_CLIENT_PROJECT = Path(__file__).resolve().parents[2] / "client" / "project"
+_PROBE_SCRIPT = "res://audio/music_timing_probe.gd"
+# stdout markers the probe frames its JSON with (music_timing_probe.gd), so we
+# can slice the payload out of any engine banner noise.
+_BEGIN = "@@TD11_PROBE_BEGIN@@"
+_END = "@@TD11_PROBE_END@@"
+
+
+def _default_godot_runner(args: list[str]) -> str:
+    """Locate the Godot 4.7 binary and run the probe, returning its stdout.
+
+    Honors $GODOT_BIN (same knob scripts/dev/run-client.sh uses), then falls
+    back to `godot` / `godot4` on PATH. Raises a clear error when Godot is not
+    installed — a `--source godot` run is only meaningful where the engine and
+    the ZoneMusicPlayer runtime exist (the #147 bot-fleet rig, #111).
+    """
+    godot = os.environ.get("GODOT_BIN") or shutil.which("godot") or shutil.which("godot4")
+    if not godot:
+        raise RuntimeError(
+            "GodotTimingSource needs a Godot 4.7 binary to drive the real "
+            "ZoneMusicPlayer probe, but none was found. Set $GODOT_BIN or put "
+            "`godot` on PATH (this is expected only on a machine with the engine, "
+            "e.g. the #147 gate rig). Use `--source mock` for a modelled run."
+        )
+    cmd = [godot, "--headless", "--path", str(_CLIENT_PROJECT), "--script",
+           _PROBE_SCRIPT, "--"] + args
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"ZoneMusicPlayer probe exited {proc.returncode}:\n{proc.stderr[-2000:]}"
+        )
+    return proc.stdout
+
+
 class GodotTimingSource:
-    """Real-audio source — the plug-in point for `ZoneMusicPlayer` (#144).
+    """Real-audio source — drives the real `ZoneMusicPlayer` (#144) probe.
 
-    Not yet implemented: the M0 `ZoneMusicPlayer` runtime (music SAD §2.4,
-    issue #144) and its per-stem gain telemetry do not exist yet. When they
-    land, this source drives the real player over the debug state-switch channel
-    and reads the §3.1 ground-truth sample clock + per-stem gain edges, returning
-    the SAME `TransitionEvent` / `DriftSample` records the mock returns. The
-    harness, statistics and report code need zero changes.
+    Implemented as of #144: shells out (via `runner`) to
+    `res://audio/music_timing_probe.gd`, which runs a live ZoneMusicPlayer under
+    `--headless`, scripts state flips, and prints the SAME `TransitionEvent` /
+    `DriftSample` records the mock returns, as framed JSON. The harness, stats,
+    and report code are unchanged — that is the seam.
 
-    Wiring checklist when #144 lands:
-      * open the debug control channel to a running `ZoneMusicPlayer` (headless
-        client or the bot-fleet load rig, #111);
-      * per mix step, read
-          playback.get_playback_position()*sr
-          + AudioServer.get_time_since_last_mix()*sr
-          − AudioServer.get_output_latency()*sr;
-      * on each scripted flip, capture the predicted next-bar boundary from the
-        shadow bar clock and the −60 dB→ramp gain edge sample as the actual
-        switch; emit a `TransitionEvent`;
-      * once per bar, read every stem's playback position + the shadow clock and
-        emit a `DriftSample`.
+    `is_measured()` is True: the numbers come from a real audio graph + the §3.1
+    ground-truth sample clock, not a model. Headless (Dummy driver) still
+    advances the mix, so timing is measured — but off the min-spec device / 50-bot
+    load rig; the #147 gate re-runs this under that rig (#111) for the
+    authoritative gate evidence.
+
+    `runner(args)` is injectable so parsing is unit-testable without Godot; the
+    default locates the engine and launches the probe.
     """
 
-    def __init__(self, cfg: ClockConfig | None = None) -> None:
+    def __init__(
+        self,
+        cfg: ClockConfig | None = None,
+        runner: Callable[[list[str]], str] | None = None,
+    ) -> None:
         self._cfg = cfg or ClockConfig()
+        self._runner = runner or _default_godot_runner
 
     def config(self) -> ClockConfig:
         return self._cfg
@@ -174,16 +215,53 @@ class GodotTimingSource:
     def is_measured(self) -> bool:
         return True
 
+    def _probe_args(self, trials: int, bars: int) -> list[str]:
+        c = self._cfg
+        return [
+            "--trials", str(trials), "--bars", str(bars),
+            "--bpm", str(c.bpm), "--beats-per-bar", str(c.beats_per_bar),
+            "--sample-rate", str(c.sample_rate),
+        ]
+
+    def _run_probe(self, trials: int, bars: int) -> dict:
+        raw = self._runner(self._probe_args(trials, bars))
+        return _parse_probe_json(raw)
+
     def run_transition_trials(self, n: int) -> list[TransitionEvent]:
-        raise NotImplementedError(
-            "GodotTimingSource requires the ZoneMusicPlayer runtime (#144), "
-            "which does not exist yet. Use SampleClockModel (--source mock) "
-            "until #144 lands; see docstring for the wiring checklist."
-        )
+        payload = self._run_probe(trials=n, bars=0)
+        return [_transition_from_dict(d) for d in payload.get("transitions", [])]
 
     def run_drift_pass(self, bars: int) -> list[DriftSample]:
-        raise NotImplementedError(
-            "GodotTimingSource requires the ZoneMusicPlayer runtime (#144), "
-            "which does not exist yet. Use SampleClockModel (--source mock) "
-            "until #144 lands; see docstring for the wiring checklist."
+        payload = self._run_probe(trials=0, bars=bars)
+        return [_drift_from_dict(d) for d in payload.get("drift", [])]
+
+
+def _parse_probe_json(stdout: str) -> dict:
+    """Slice the framed JSON payload out of the probe's stdout and parse it."""
+    if _BEGIN not in stdout or _END not in stdout:
+        raise RuntimeError(
+            "ZoneMusicPlayer probe produced no framed JSON payload "
+            f"(missing {_BEGIN}/{_END} markers). Raw tail:\n{stdout[-1000:]}"
         )
+    body = stdout.split(_BEGIN, 1)[1].split(_END, 1)[0].strip()
+    return json.loads(body)
+
+
+def _transition_from_dict(d: dict) -> TransitionEvent:
+    return TransitionEvent(
+        index=int(d["index"]),
+        request_sample=int(d["request_sample"]),
+        predicted_boundary_sample=int(d["predicted_boundary_sample"]),
+        actual_switch_sample=int(d["actual_switch_sample"]),
+        from_state=str(d["from_state"]),
+        to_state=str(d["to_state"]),
+        starved=bool(d.get("starved", False)),
+    )
+
+
+def _drift_from_dict(d: dict) -> DriftSample:
+    return DriftSample(
+        bar_index=int(d["bar_index"]),
+        stem_positions=tuple(int(x) for x in d["stem_positions"]),
+        shadow_clock_sample=int(d["shadow_clock_sample"]),
+    )

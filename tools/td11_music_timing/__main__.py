@@ -45,7 +45,8 @@ def _build_source(args) -> tuple[TimingSource, dict]:
         "source": "mock",
         "note": (
             "MODELLED by SampleClockModel — profile '%s', seed %d. Not real "
-            "audio; ZoneMusicPlayer (#144) not built yet." % (args.profile, args.seed)
+            "audio; use --source godot to measure the real ZoneMusicPlayer "
+            "(#144) where a Godot 4.7 binary is available." % (args.profile, args.seed)
         ),
     }
 
@@ -57,8 +58,9 @@ def main(argv: list[str] | None = None) -> int:
         "(music SAD §3.1, issue #145).",
     )
     p.add_argument("--source", choices=["mock", "godot"], default="mock",
-                   help="mock = SampleClockModel (runnable now); "
-                   "godot = real ZoneMusicPlayer probe (#144, not built yet)")
+                   help="mock = SampleClockModel (runnable anywhere); "
+                   "godot = real ZoneMusicPlayer probe (#144 — needs a Godot 4.7 "
+                   "binary via $GODOT_BIN or on PATH)")
     p.add_argument("--profile", choices=sorted(PROFILES), default="noload",
                    help="mock variance profile (default: noload)")
     p.add_argument("--trials", type=int, default=200,

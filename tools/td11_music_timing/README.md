@@ -86,23 +86,26 @@ Outputs:
 
 ## Mock vs real — the seam
 
-`ZoneMusicPlayer` (#144) does not exist yet, so the harness ships with a
-**modelled** source. Every mock run announces itself (`measured: false`, a
-`MODELLED` banner) — the numbers are representative, **not measured from real
-audio**.
+The harness ships with a **modelled** source (runnable anywhere) and a **real**
+source (`--source godot`, wired in #144). Every mock run announces itself
+(`measured: false`, a `MODELLED` banner) — those numbers are representative,
+**not measured from real audio**. A `--source godot` run is `measured: true`.
 
-- **`SampleClockModel`** (`mock_source.py`) — the runnable source today. It
-  models the physics of clip-level, mix-step-quantized switching with documented,
-  tunable variance knobs (`VarianceModel`). Profiles: `noload` (clean M0
-  reference), `load` (a healthy engine under CPU load — jitter + read noise),
+- **`SampleClockModel`** (`mock_source.py`) — the always-runnable modelled source.
+  It models the physics of clip-level, mix-step-quantized switching with
+  documented, tunable variance knobs (`VarianceModel`). Profiles: `noload` (clean
+  M0 reference), `load` (a healthy engine under CPU load — jitter + read noise),
   `failing` (an intentionally broken engine — a negative control proving the
   harness fails a bad runtime).
-- **`GodotTimingSource`** (`probe.py`) — **the plug-in point.** It implements the
-  same `TimingSource` protocol and returns the same `TransitionEvent` /
-  `DriftSample` records. When #144 lands, wire it to the real player's debug
-  state-switch channel + per-stem gain telemetry (checklist in its docstring);
-  the harness, statistics, and report code change **not at all**. Then run
-  `--source godot` under the #111 bot fleet for the #147 gate evidence.
+- **`GodotTimingSource`** (`probe.py`) — **wired in #144.** It implements the same
+  `TimingSource` protocol and returns the same `TransitionEvent` / `DriftSample`
+  records, obtained by shelling out to the real ZoneMusicPlayer probe
+  (`client/project/audio/music_timing_probe.gd`), which drives a live player under
+  `--headless` and prints framed JSON. Needs a Godot 4.7 binary ($GODOT_BIN or on
+  PATH); the harness, statistics, and report code are unchanged. The #147 gate
+  runs `--source godot` under the #111 bot fleet on min-spec for the authoritative
+  evidence — a plain `--source godot` run elsewhere is the wiring proof (real
+  audio graph, but off the load rig).
 
 ### The one number to pin
 

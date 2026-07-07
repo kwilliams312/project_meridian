@@ -182,10 +182,52 @@ def test_summary_and_human_report_render(tmp_path):
     assert "MODELLED" in text  # mock runs must announce they are not real audio
 
 
-def test_godot_source_not_implemented_yet():
-    # Until ZoneMusicPlayer (#144) lands, the real source refuses to fabricate.
-    src = GodotTimingSource()
-    with pytest.raises(NotImplementedError):
+def test_godot_source_parses_probe_json_via_injected_runner():
+    # #144 wired the seam: GodotTimingSource shells out to the ZoneMusicPlayer
+    # probe and parses its framed JSON. An injected runner exercises the parsing
+    # without needing a Godot binary.
+    payload = {
+        "measured": True,
+        "config": {"sample_rate": 44100, "bpm": 96.0, "beats_per_bar": 4,
+                   "mix_block_frames": 735},
+        "transitions": [
+            {"index": 0, "request_sample": 5000, "predicted_boundary_sample": 27562,
+             "actual_switch_sample": 27690, "from_state": "explore",
+             "to_state": "combat", "starved": False},
+        ],
+        "drift": [
+            {"bar_index": 0, "stem_positions": [10, 10, 10, 10, 10],
+             "shadow_clock_sample": 10},
+        ],
+    }
+    framed = "engine banner\n@@TD11_PROBE_BEGIN@@\n%s\n@@TD11_PROBE_END@@\n" % json.dumps(
+        payload
+    )
+    src = GodotTimingSource(runner=lambda args: framed)
+    assert src.is_measured() is True
+    events = src.run_transition_trials(1)
+    assert len(events) == 1 and events[0].error_samples == 128  # 27690 - 27562
+    drift = src.run_drift_pass(1)
+    assert len(drift) == 1 and drift[0].stem_lockstep_drift_samples == 0
+
+
+def test_godot_source_forwards_config_to_probe_args():
+    seen: dict = {}
+
+    def _capture(args: list[str]) -> str:
+        seen["args"] = args
+        return ("@@TD11_PROBE_BEGIN@@\n"
+                '{"transitions":[],"drift":[]}\n@@TD11_PROBE_END@@')
+
+    cfg = ClockConfig(sample_rate=48_000, bpm=110.0, beats_per_bar=3)
+    GodotTimingSource(cfg, runner=_capture).run_transition_trials(7)
+    a = seen["args"]
+    assert a[a.index("--trials") + 1] == "7"
+    assert a[a.index("--sample-rate") + 1] == "48000"
+    assert a[a.index("--beats-per-bar") + 1] == "3"
+
+
+def test_godot_source_errors_clearly_when_no_json():
+    src = GodotTimingSource(runner=lambda args: "some engine output, no payload")
+    with pytest.raises(RuntimeError, match="no framed JSON"):
         src.run_transition_trials(1)
-    with pytest.raises(NotImplementedError):
-        src.run_drift_pass(1)
