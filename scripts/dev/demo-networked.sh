@@ -54,9 +54,14 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # --- 1. Build server + bot + editor GDExtension. -----------------------------
+# `build.sh --client` builds the server/mcc AND the **editor** GDExtension framework
+# (libmeridian.macos.editor.framework) — the exact variant run-client.sh dlopen()s
+# below. Rebuilding it here keeps the demo self-contained + reproducible: a stale
+# framework (the class of failure that once needed a hand rebuild, #300) can never
+# silently break the demo again. MERIDIAN_DEMO_NO_BUILD=1 skips the whole build.
 if [ "${MERIDIAN_DEMO_NO_BUILD:-0}" != "1" ]; then
-  log "building server + editor GDExtension (scripts/dev/build.sh)"
-  "${SELF_DIR}/build.sh"
+  log "building server + editor GDExtension (scripts/dev/build.sh --client)"
+  "${SELF_DIR}/build.sh" --client
 fi
 
 BOT_BIN=""

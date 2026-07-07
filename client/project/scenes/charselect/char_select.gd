@@ -57,6 +57,7 @@ const LOCAL_DEMO_SCENE: String = "res://scenes/world/camera_demo.tscn"
 var _store: CharacterStore
 var _account: String = ""
 var _session: Dictionary = {}
+var _pending_status: String = ""            # set by configure(), shown once in _ready
 
 
 # Called by the login handoff BEFORE this scene is added to the tree so the account
@@ -65,13 +66,18 @@ var _session: Dictionary = {}
 # `session` is the login session context (#301: grant + session_key + world_hello_frame
 # + worldd address:port) carried through so Enter World can open the world session; an
 # empty session runs the standalone local demo instead.
-func configure(account: String, seed_rows: Array = [], session: Dictionary = {}) -> void:
+# `error` is a non-empty message when the world scene bounced the player back here on a
+# pre-HandshakeOk connection failure (#301 UX) — surfaced on the status line so the
+# player sees WHY they are back, instead of being stranded in an empty world.
+func configure(account: String, seed_rows: Array = [], session: Dictionary = {}, error: String = "") -> void:
 	_account = account
 	_session = session if session != null else {}
 	if _store == null:
 		_store = CharacterStore.new()
 	for row in seed_rows:
 		_store.create(String(row.get("name", "")), int(row.get("race", 0)), int(row.get("class", 0)))
+	if not error.strip_edges().is_empty():
+		_pending_status = error
 
 
 func _ready() -> void:
@@ -88,7 +94,13 @@ func _ready() -> void:
 	_name_edit.text_submitted.connect(func(_t: String) -> void: _on_create_pressed())
 
 	_refresh_list()
-	_set_status("Select a character to enter the world, or create a new one.")
+	# A pending status (e.g. a world connect-failure the player was bounced back with,
+	# #301) wins over the default hint so they see why they are back at Character Select.
+	if not _pending_status.is_empty():
+		_set_status(_pending_status)
+		_pending_status = ""
+	else:
+		_set_status("Select a character to enter the world, or create a new one.")
 
 
 # Fill the race + class pickers from the M0-frozen roster. Each item carries its roster id
@@ -208,6 +220,11 @@ func _go_to_world(scene_path: String, character: Dictionary) -> void:
 		_set_status("Could not load the world scene.")
 		return
 	var world := packed.instantiate()
+	# Carry the account name + current roster in the session so that if world.gd has to
+	# bounce the player back here on a pre-HandshakeOk connect failure (#301 UX), it can
+	# rebuild THIS screen (right account label, characters intact) rather than a blank one.
+	_session["account"] = _account
+	_session["roster"] = _store.list()
 	world.configure(_session, character)
 	var tree := get_tree()
 	tree.root.add_child(world)

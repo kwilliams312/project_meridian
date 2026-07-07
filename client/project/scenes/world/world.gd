@@ -38,12 +38,23 @@ const SPAWN := Vector3(64.0, 0.0, 64.0)
 # Fixed sim cadence (matches the server 20 Hz / 50 ms tick the controller expects).
 const TICK_MS := 50
 
+# Character Select — where a PRE-HandshakeOk connection failure returns the player
+# (#301 UX: never strand them in an empty world). Kept in sync with the char-select
+# handoff (scenes/charselect/char_select.gd → WORLD_SCENE).
+const CHAR_SELECT_SCENE := "res://scenes/charselect/char_select.tscn"
+
 var _session: Dictionary = {}
 var _character: Dictionary = {}
 
 var _net: MeridianNetThread
 var _interp: MeridianRemoteInterpolator
 var _mover: MeridianMovementController
+
+# Pure routing decision for a connection outcome (unit-tested headlessly by
+# scenes/world/world_connect_router_verify.gd). Feeds on the connection signals and
+# tells us whether a failure should bounce back to Character Select.
+var _router: MeridianWorldConnectRouter
+var _routed_away := false                   # one-shot guard: route back exactly once
 
 var _player: Node3D
 var _body: Node3D
@@ -104,6 +115,7 @@ func _has_session() -> bool:
 
 
 func _connect_to_world() -> void:
+	_router = MeridianWorldConnectRouter.new()
 	_net = MeridianNetThread.new()
 	_net.handshake_ok.connect(_on_handshake_ok)
 	_net.movement_state.connect(_on_movement_state)
@@ -121,6 +133,7 @@ func _connect_to_world() -> void:
 		% [host, port, frame.size(), key.size()])
 	if not _net.connect_to_world(host, port, frame, key):
 		_conn_text = "connect failed (bad WorldHello frame)"
+		_handle_connection_event(MeridianWorldConnectRouter.EVENT_BAD_HELLO, "bad WorldHello frame")
 
 
 func _physics_process(delta: float) -> void:
@@ -192,6 +205,8 @@ func _update_remotes() -> void:
 
 func _on_handshake_ok() -> void:
 	_conn_text = "in world"
+	if _router != null:
+		_router.note_handshake_ok()   # past this point a drop is an in-world disconnect
 	print("[world] HandshakeOk — entered the world")
 
 
@@ -237,15 +252,60 @@ func _on_entity_frame(opcode: int, _seq: int, payload: PackedByteArray) -> void:
 func _on_disconnected(reason: int, message: String) -> void:
 	_conn_text = "disconnected (reason %d: %s)" % [reason, message]
 	print("[world] disconnected: reason=%d %s" % [reason, message])
+	_handle_connection_event(MeridianWorldConnectRouter.EVENT_DISCONNECTED,
+		"%s (reason %d)" % [message, reason] if not message.is_empty() else "reason %d" % reason)
 
 
 func _on_transport_closed(detail: String) -> void:
 	_conn_text = "connection closed (%s)" % detail
+	_handle_connection_event(MeridianWorldConnectRouter.EVENT_TRANSPORT_CLOSED, detail)
 
 
 func _on_connect_failed(detail: String) -> void:
 	_conn_text = "connect failed (%s)" % detail
 	print("[world] connect failed: %s" % detail)
+	_handle_connection_event(MeridianWorldConnectRouter.EVENT_CONNECT_FAILED, detail)
+
+
+# --- Connect-outcome routing (#301 UX) ---------------------------------------
+# Feed a connection-ended/failed event to the pure router and act on its decision:
+# a PRE-HandshakeOk failure returns the player to Character Select with the error
+# surfaced (never left stranded in an empty world); a post-HandshakeOk drop stays
+# in the world scene (the HUD already shows the reason). One-shot — the first
+# routing wins, so a burst of failure signals doesn't double-swap the scene.
+func _handle_connection_event(kind: String, detail: String) -> void:
+	if _router == null or _routed_away:
+		return
+	var decision: Dictionary = _router.decide(kind, detail)
+	if String(decision.get("action", "")) != MeridianWorldConnectRouter.ACTION_TO_CHAR_SELECT:
+		return
+	_routed_away = true
+	var message := String(decision.get("message", "Could not enter the world."))
+	print("[world] entering world failed pre-HandshakeOk — returning to Character Select: %s" % message)
+	_return_to_char_select(message)
+
+
+# Tear down the world session and swap back to Character Select, carrying the error
+# + the account/roster context so the player lands where they left off (not a blank
+# screen). Guarded to only run inside a live SceneTree (a headless instantiation
+# test builds this node with no current scene).
+func _return_to_char_select(message: String) -> void:
+	if _net != null:
+		_net.disconnect_from_world()
+	if not is_inside_tree():
+		return
+	var packed: PackedScene = load(CHAR_SELECT_SCENE)
+	if packed == null:
+		_conn_text = "connect failed — could not reload Character Select"
+		return
+	var char_select := packed.instantiate()
+	var account := String(_session.get("account", ""))
+	var roster: Array = _session.get("roster", [])
+	char_select.configure(account, roster, _session, message)
+	var tree := get_tree()
+	tree.root.add_child(char_select)
+	tree.current_scene = char_select
+	queue_free()
 
 
 # --- Remote-player nodes ------------------------------------------------------
