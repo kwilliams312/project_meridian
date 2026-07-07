@@ -63,6 +63,27 @@ public:
     // bytes; return the payload (prefix stripped). std::nullopt on a clean EOF or
     // any read/framing error (the caller treats it as a transport failure).
     virtual std::optional<Bytes> recv_frame() = 0;
+
+    // Non-blocking-with-timeout receive. Distinguishes "no frame yet" (a read
+    // timeout, `would_block` set true) from "peer closed / error" (`would_block`
+    // false). This is what the bot's world-session drain loop uses to poll for
+    // ASYNCHRONOUSLY relayed frames (EntityEnter/Update/Leave from the AoI relay,
+    // #87) WITHOUT blocking forever when nothing is pending — the mover's own
+    // MovementState and the OTHER session's entity frames arrive interleaved and
+    // out of lockstep, so a strict one-recv-per-send blocking loop would miss them.
+    //
+    // Default: no timeout support — behaves exactly like recv_frame() (a frame or a
+    // close; never `would_block`). Concrete socket transports override it to honour
+    // the read timeout set via set_recv_timeout_ms(). The login mock inherits the
+    // default (its queue is synchronous, so it never blocks).
+    virtual std::optional<Bytes> recv_frame_nb(bool& would_block) {
+        would_block = false;
+        return recv_frame();
+    }
+
+    // Set the receive timeout (milliseconds) applied by recv_frame_nb(); 0 disables
+    // it (blocking). Default no-op for transports without a real socket (the mock).
+    virtual void set_recv_timeout_ms(unsigned /*ms*/) {}
 };
 
 // ---------------------------------------------------------------------------

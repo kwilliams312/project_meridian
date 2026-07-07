@@ -171,6 +171,13 @@ public:
                 queue_disconnect(3 /*GRANT_INVALID*/, "grant invalid", f->seq);
             } else {
                 queue_handshake_ok(f->seq);
+                // worldd's #87 enter() sends EntityEnter for anyone already in range
+                // AFTER HandshakeOk. Flush any pre-registered peer enter in that
+                // real order so the bot's handshake read gets HandshakeOk first.
+                if (pending_enter_guid_ != 0) {
+                    relay_entity_enter(pending_enter_guid_, pending_enter_x_,
+                                       pending_enter_y_, pending_enter_z_);
+                }
             }
             return true;
         }
@@ -188,9 +195,52 @@ public:
         return f;
     }
 
+    // #248: the bot's drain loop polls with recv_frame_nb and treats
+    // would_block=true as "nothing pending, done" (vs peer close). The mock's queue
+    // is synchronous, so an empty queue means "nothing pending yet", NOT a close —
+    // report would_block so the drain ends cleanly instead of flagging a disconnect.
+    std::optional<login::Bytes> recv_frame_nb(bool& would_block) override {
+        if (out_.empty()) {
+            would_block = true;
+            return std::nullopt;
+        }
+        would_block = false;
+        login::Bytes f = out_.front();
+        out_.pop_front();
+        return f;
+    }
+
     std::uint32_t states_sent() const { return states_sent_; }
 
+    // #248: register a peer already in AoI at login — relayed as an EntityEnter
+    // AFTER HandshakeOk (worldd's real #87 enter() order), so the bot captures it.
+    void peer_in_aoi_at_login(std::uint64_t guid, float x, float y, float z) {
+        pending_enter_guid_ = guid;
+        pending_enter_x_ = x;
+        pending_enter_y_ = y;
+        pending_enter_z_ = z;
+    }
+    // #248: enable per-intent peer EntityUpdate relay for the given guid (0 off).
+    void set_relay_peer(std::uint64_t guid) { relay_peer_guid_ = guid; }
+
 private:
+    // Queue a relayed EntityEnter/Update the bot should CAPTURE (#248). Simulates
+    // worldd's #87 AoI relay handing the bot frames about ANOTHER entity `guid`.
+    void relay_entity_enter(std::uint64_t guid, float x, float y, float z) {
+        fb::FlatBufferBuilder b;
+        auto attrs = b.CreateVector(std::vector<flatbuffers::Offset<mn::AttrDelta>>{});
+        b.Finish(mn::CreateEntityEnter(b, guid, /*type_id=*/7, x, y, z, /*orient=*/0.0f, attrs));
+        push(bot::kOpEntityEnter, /*seq=*/0,
+             bot::Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize()));
+    }
+    void relay_entity_update(std::uint64_t guid, float x, float y, float z) {
+        fb::FlatBufferBuilder b;
+        auto attrs = b.CreateVector(std::vector<flatbuffers::Offset<mn::AttrDelta>>{});
+        b.Finish(mn::CreateEntityUpdate(b, guid, x, y, z, /*orient=*/0.0f, attrs));
+        push(bot::kOpEntityUpdate, /*seq=*/0,
+             bot::Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize()));
+    }
+
     void push(std::uint16_t op, std::uint64_t seq, const bot::Bytes& payload) {
         bot::Bytes fr = bot::encode_world_frame(op, seq, payload);
         out_.push_back(login::Bytes(fr.begin(), fr.end()));
@@ -232,12 +282,23 @@ private:
         push(bot::kOpMovementState, f.seq,
              bot::Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize()));
         ++states_sent_;
+
+        // #248: when set, ALSO relay an EntityUpdate for a peer entity after our own
+        // MovementState — the way worldd's #87 AoI relay tells the observing bot the
+        // OTHER bot moved. The bot must capture these even though they interleave
+        // with its own state frames.
+        if (relay_peer_guid_ != 0 && accept) {
+            relay_entity_update(relay_peer_guid_, auth_x_ + 1.0f, auth_y_, auth_z_);
+        }
     }
 
     bool grant_ok_;
     std::deque<login::Bytes> out_;
     float auth_x_ = 64.0f, auth_y_ = 64.0f, auth_z_ = 0.0f;  // worldd spawn
     std::uint32_t states_sent_ = 0;
+    std::uint64_t relay_peer_guid_ = 0;  // #248: relay a peer EntityUpdate per accept
+    std::uint64_t pending_enter_guid_ = 0;  // #248: peer to EntityEnter post-handshake
+    float pending_enter_x_ = 0.0f, pending_enter_y_ = 0.0f, pending_enter_z_ = 0.0f;
 };
 
 }  // namespace
@@ -393,6 +454,63 @@ int main() {
             check("5c: did NOT enter world on grant reject", !r.handshake_ok);
             check("5c: disconnected", r.disconnected);
             check("5c: reason = GRANT_INVALID (3)", r.disconnect_reason == 3);
+        }
+    }
+
+    // ===== 6. AoI ENTITY CAPTURE — the #248 see-each-other-move seam ==========
+    // Prove the bot CAPTURES inbound EntityEnter/Update/Leave (the OTHER players it
+    // sees via the #87 relay), exposing guid + position for assertions — not just
+    // counting them. Driven against the mock that relays a peer entity.
+    std::printf("\n6. AoI entity capture (#248 mutual-visibility seam)\n");
+    {
+        login::LoginResult grant;
+        grant.status = login::LoginStatus::kSuccess;
+        grant.grant_id = 999;
+        grant.session_key = rand_key();
+        grant.selected_realm_id = 1;
+
+        // 6a. A login-time EntityEnter (peer already in AoI) is captured with guid.
+        {
+            MockWorldd mock(/*grant_ok=*/true);
+            const std::uint64_t peer_guid = 0xA11CE;
+            mock.peer_in_aoi_at_login(peer_guid, 64.0f, 64.0f, 0.0f);
+            bot::BotWorldConfig cfg;
+            cfg.path = bot::BotPath::kIdle;   // no movement — just observe on entry
+            cfg.movement_ticks = 3;
+            bot::BotRunResult r = bot::run_world_session(mock, grant, cfg);
+            check("6a: entered world", r.handshake_ok);
+            check("6a: captured 1 entity sighting", r.sightings.size() == 1);
+            check("6a: sighting is an ENTER",
+                  !r.sightings.empty() && r.sightings[0].kind == bot::SightingKind::kEnter);
+            check("6a: sighting carries the PEER guid",
+                  !r.sightings.empty() && r.sightings[0].entity_guid == peer_guid);
+            check("6a: saw exactly 1 distinct entity", r.distinct_entities_seen() == 1);
+            check("6a: enters_by_guid[peer] == 1", r.enters_by_guid[peer_guid] == 1);
+        }
+
+        // 6b. As the bot moves, per-intent peer EntityUpdates are captured with the
+        //     peer's new position (this is "B sees A move").
+        {
+            MockWorldd mock(/*grant_ok=*/true);
+            const std::uint64_t peer_guid = 0xB0B;
+            mock.peer_in_aoi_at_login(peer_guid, 64.0f, 64.0f, 0.0f);
+            mock.set_relay_peer(peer_guid);   // relay an EntityUpdate per accepted move
+            bot::BotWorldConfig cfg;
+            cfg.path = bot::BotPath::kSquare;
+            cfg.movement_ticks = 200;
+            bot::BotRunResult r = bot::run_world_session(mock, grant, cfg);
+            check("6b: entered world + moved", r.handshake_ok && r.moves_accepted > 0);
+            check("6b: captured the peer ENTER", r.enters_by_guid[peer_guid] == 1);
+            check("6b: captured peer EntityUPDATEs (peer moved in view)",
+                  r.updates_by_guid[peer_guid] > 0);
+            check("6b: total updates seen > 0", r.total_updates_seen() > 0);
+            // Every update carried the peer's position (a move delta), not empty.
+            bool all_updates_positioned = true;
+            for (const auto& s : r.sightings) {
+                if (s.kind == bot::SightingKind::kUpdate && !s.has_position)
+                    all_updates_positioned = false;
+            }
+            check("6b: peer updates carry a position", all_updates_positioned);
         }
     }
 

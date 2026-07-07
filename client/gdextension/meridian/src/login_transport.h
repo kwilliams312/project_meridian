@@ -62,18 +62,33 @@ public:
     bool send_frame(const Bytes& payload) override;
     std::optional<Bytes> recv_frame() override;
 
+    // ILoginTransport timeout seam (the bot world-session drain loop uses these to
+    // poll for asynchronously relayed AoI frames without blocking forever — #248).
+    // recv_frame_nb() honours the SO_RCVTIMEO set by set_recv_timeout_ms(): a read
+    // that times out with NO byte consumed reports would_block=true (no frame yet),
+    // distinct from a peer close (would_block=false). A timeout mid-frame (some but
+    // not all bytes read) is a hard error (would_block=false) — a partial frame
+    // cannot be resumed on this synchronous transport.
+    std::optional<Bytes> recv_frame_nb(bool& would_block) override;
+    void set_recv_timeout_ms(unsigned ms) override;
+
     // Close the TLS session + socket (idempotent; also runs in the destructor).
     void close();
 
 private:
     bool write_all(const std::uint8_t* buf, std::size_t n);
     bool read_all(std::uint8_t* buf, std::size_t n);
+    // Read exactly n bytes, but report a clean read-timeout hit on the FIRST byte
+    // (nothing consumed yet) via `timed_out` so recv_frame_nb can surface
+    // would_block. A timeout after ≥1 byte is a hard failure (partial frame).
+    bool read_all_timed(std::uint8_t* buf, std::size_t n, bool& timed_out);
 
     void* ctx_ = nullptr;   // SSL_CTX* (void to keep OpenSSL out of the header)
     void* ssl_ = nullptr;   // SSL*
     int fd_ = -1;
     bool connected_ = false;
     std::string error_;
+    unsigned recv_timeout_ms_ = 0;  // 0 = blocking (SO_RCVTIMEO unset)
 };
 
 }  // namespace meridian::login

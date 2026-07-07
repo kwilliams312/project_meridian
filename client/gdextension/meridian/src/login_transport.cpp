@@ -11,8 +11,10 @@
 
 #include <netdb.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <cstring>
 
 namespace meridian::login {
@@ -157,6 +159,67 @@ std::optional<Bytes> TlsLoginTransport::recv_frame() {
     if (len > kMaxFrameBytes) return std::nullopt;
     Bytes payload(len);
     if (len > 0 && !read_all(payload.data(), len)) return std::nullopt;
+    return payload;
+}
+
+void TlsLoginTransport::set_recv_timeout_ms(unsigned ms) {
+    recv_timeout_ms_ = ms;
+    if (fd_ < 0) return;
+    struct timeval tv;
+    tv.tv_sec = static_cast<time_t>(ms / 1000u);
+    tv.tv_usec = static_cast<suseconds_t>((ms % 1000u) * 1000u);
+    // ms == 0 sets an all-zero timeval, which POSIX defines as "no timeout" — the
+    // exact blocking-restore semantics we want when disabling the timeout.
+    ::setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+}
+
+// Read exactly n bytes. Distinguishes a clean read-timeout on the very first byte
+// (nothing consumed → would_block, `timed_out` true, no error) from a peer close
+// or a mid-frame timeout (both hard failures). Under SO_RCVTIMEO, a timed-out
+// SSL_read returns <= 0 with SSL_get_error == SSL_ERROR_WANT_READ (BIO would block)
+// or SSL_ERROR_SYSCALL with errno EAGAIN/EWOULDBLOCK.
+bool TlsLoginTransport::read_all_timed(std::uint8_t* buf, std::size_t n, bool& timed_out) {
+    timed_out = false;
+    SSL* ssl = static_cast<SSL*>(ssl_);
+    std::size_t got = 0;
+    while (got < n) {
+        int r = SSL_read(ssl, buf + got, static_cast<int>(n - got));
+        if (r > 0) {
+            got += static_cast<std::size_t>(r);
+            continue;
+        }
+        const int e = SSL_get_error(ssl, r);
+        const bool would_block =
+            (e == SSL_ERROR_WANT_READ) ||
+            (e == SSL_ERROR_SYSCALL && (errno == EAGAIN || errno == EWOULDBLOCK));
+        if (would_block && got == 0) {
+            timed_out = true;  // no byte consumed — a clean "nothing pending yet"
+            return false;
+        }
+        return false;  // peer closed, hard error, or timeout mid-frame (partial)
+    }
+    return true;
+}
+
+std::optional<Bytes> TlsLoginTransport::recv_frame_nb(bool& would_block) {
+    would_block = false;
+    if (!connected_) return std::nullopt;
+    std::uint8_t lenbuf[4];
+    bool timed_out = false;
+    if (!read_all_timed(lenbuf, 4, timed_out)) {
+        would_block = timed_out;  // true only if the length read timed out with 0 bytes
+        return std::nullopt;
+    }
+    const std::uint32_t len = static_cast<std::uint32_t>(lenbuf[0]) |
+                              (static_cast<std::uint32_t>(lenbuf[1]) << 8) |
+                              (static_cast<std::uint32_t>(lenbuf[2]) << 16) |
+                              (static_cast<std::uint32_t>(lenbuf[3]) << 24);
+    if (len > kMaxFrameBytes) return std::nullopt;
+    Bytes payload(len);
+    if (len > 0) {
+        bool body_timed_out = false;  // a mid-frame timeout is NOT would_block (partial)
+        if (!read_all_timed(payload.data(), len, body_timed_out)) return std::nullopt;
+    }
     return payload;
 }
 
