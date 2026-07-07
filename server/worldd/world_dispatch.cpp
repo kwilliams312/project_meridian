@@ -14,12 +14,14 @@
 #include <mutex>
 #include <thread>
 
+#include "characters.h"  // meridian-characters CRUD: list/create/delete (#286 / D-35)
 #include "meridian/core/audit.hpp"
 #include "meridian/core/log.hpp"
 #include "meridian/metrics/catalog.h"
 #include "meridian/trace/session_flow.h"
 #include "meridian/trace/span.h"
 #include "meridian/trace/tracer.h"
+#include "roster.h"       // M0-frozen race/class roster (validated by create)
 
 namespace meridian::worldd {
 namespace {
@@ -30,6 +32,7 @@ namespace log = meridian::core::log;
 namespace audit = meridian::core::audit;
 namespace metrics = meridian::metrics::catalog;
 namespace tr = meridian::trace;
+namespace chr = meridian::characters;
 
 constexpr const char* kCat = "worldd";
 
@@ -134,6 +137,9 @@ bool verify_payload_for(net::Opcode op, const Frame& f) {
         case net::Opcode::CLOCK_SYNC:      return verify_table<mn::ClockSync>(f);
         case net::Opcode::MOVEMENT_INTENT: return verify_table<mn::MovementIntent>(f);
         case net::Opcode::DISCONNECT:      return verify_table<mn::Disconnect>(f);
+        case net::Opcode::CHAR_LIST_REQUEST:   return verify_table<mn::CharListRequest>(f);
+        case net::Opcode::CHAR_CREATE_REQUEST: return verify_table<mn::CharCreateRequest>(f);
+        case net::Opcode::CHAR_DELETE_REQUEST: return verify_table<mn::CharDeleteRequest>(f);
         default:                           return false;
     }
 }
@@ -175,6 +181,66 @@ Bytes encode_movement_state(std::uint64_t entity_guid, const MoveDecision& d,
                                       server_time_ms);
     b.Finish(st);
     return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// ---- character-management encoders (S→C, world.fbs; #286 / D-35) ------------
+
+// Build a CharListResponse payload from the account's roster (each row is the
+// character-select shape: id, name, race, class, level).
+Bytes encode_char_list(const std::vector<chr::CharacterSummary>& roster) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::CharListEntry>> rows;
+    rows.reserve(roster.size());
+    for (const auto& c : roster) {
+        auto name = b.CreateString(c.name);
+        rows.push_back(mn::CreateCharListEntry(b, c.id, name, c.race, c.char_class,
+                                               c.level));
+    }
+    auto vec = b.CreateVector(rows);
+    b.Finish(mn::CreateCharListResponse(b, vec));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// Build a CharCreateResponse payload: a typed status + (on OK) the minted id.
+Bytes encode_char_create(mn::CharCreateStatus status, std::uint64_t character_id) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateCharCreateResponse(b, status, character_id));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// Build a CharDeleteResponse payload: a typed ok/refused status.
+Bytes encode_char_delete(mn::CharDeleteStatus status) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateCharDeleteResponse(b, status));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// Char-management ops are legal only on an AUTHENTICATED session (post-WorldHello),
+// and always act on the session's own grant-derived account (never a client field).
+// A char request before the handshake is a protocol error — ask the serve loop to
+// close (mirrors the MOVEMENT_INTENT pre-handshake guard, SAD §5.5). Returns false
+// (and arms ctx.disconnect) when the session is not authenticated.
+bool require_authenticated(ConnCtx& ctx, const char* op) {
+    if (!ctx.authenticated || ctx.account_id == 0) {
+        log::warn(kCat, std::string(op) + " before handshake — rejecting");
+        ctx.disconnect = true;
+        ctx.disconnect_reason = net::DisconnectReason::PROTOCOL_MISMATCH;
+        ctx.disconnect_message = "char management before handshake";
+        return false;
+    }
+    return true;
+}
+
+// Send a server→client reply frame. Routed through the per-session egress channel
+// when one is established (so it serializes with the AoI relay's s2c writes from
+// OTHER threads — SAD §5.2/§6), falling back to a direct write in the DB-less
+// smoke path where no egress is wired. Mirrors the MOVEMENT_STATE reply routing.
+void send_s2c(net::Session& sess, ConnCtx& ctx, const Bytes& frame) {
+    if (ctx.egress) {
+        ctx.egress->emit_frame(frame);
+    } else {
+        sess.write_frame(frame);
+    }
 }
 
 }  // namespace
@@ -638,9 +704,137 @@ void Dispatcher::register_m0_stubs() {
         }
     });
 
+    // --- 0x0xxx character management (#286 / D-35) ------------------------
+    // WoW-style list/create/delete over the AUTHENTICATED world session, backed
+    // by the meridian-characters CRUD (#85). Every op acts on ctx.account_id —
+    // the account the grant authenticated this session as (IF-3) — NEVER an
+    // account named in the request, so a client can only ever manage its OWN
+    // characters. Ownership is additionally enforced at the DB by the CRUD's
+    // `WHERE id=? AND account_id=?` predicate (soft-ref rule, §4.4). The char DB
+    // read/write runs synchronously on the IO worker, exactly like enter-world's
+    // load_placeholder_character + the grant consume (no world-thread involvement).
+
+    // CHAR_LIST_REQUEST: return the account's roster (character-select screen).
+    on(net::Opcode::CHAR_LIST_REQUEST,
+       [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+           if (!require_authenticated(ctx, "CHAR_LIST_REQUEST")) return;
+
+           std::vector<chr::CharacterSummary> roster;
+           if (ctx.char_db != nullptr) {
+               try {
+                   roster = chr::list_characters(*ctx.char_db, ctx.account_id);
+               } catch (const db::DbError& e) {
+                   // No error channel on CharListResponse — degrade to an empty
+                   // roster and log (the client sees "no characters"; the DB fault
+                   // is server-side observable). Production always has char_db.
+                   log::warn(kCat, "CHAR_LIST_REQUEST DB error — empty roster",
+                             {log::field("account_id",
+                                         static_cast<std::int64_t>(ctx.account_id)),
+                              log::field("error", e.what())});
+               }
+           } else {
+               log::warn(kCat, "CHAR_LIST_REQUEST with no characters DB — empty roster");
+           }
+           log::debug(kCat, "CHAR_LIST_REQUEST -> " + std::to_string(roster.size()) +
+                                " character(s) for account " +
+                                std::to_string(ctx.account_id));
+           send_s2c(sess, ctx,
+                    encode_frame(net::Opcode::CHAR_LIST_RESPONSE, f.seq,
+                                 encode_char_list(roster)));
+       });
+
+    // CHAR_CREATE_REQUEST: create a character (name + race + class, D-11). Maps
+    // each meridian-characters create exception to its typed CharCreateStatus.
+    on(net::Opcode::CHAR_CREATE_REQUEST,
+       [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+           if (!require_authenticated(ctx, "CHAR_CREATE_REQUEST")) return;
+           const auto* req = fb::GetRoot<mn::CharCreateRequest>(f.payload);
+           if (req == nullptr) return;  // verified upstream; defensive
+
+           mn::CharCreateStatus status = mn::CharCreateStatus::OK;
+           std::uint64_t minted = 0;
+
+           if (ctx.char_db == nullptr) {
+               log::warn(kCat, "CHAR_CREATE_REQUEST with no characters DB");
+               status = mn::CharCreateStatus::INTERNAL;
+           } else {
+               chr::CreateRequest cr;
+               cr.account_id = ctx.account_id;  // the session's account — NEVER the client's
+               cr.name = req->name() ? req->name()->str() : std::string();
+               cr.race = req->race();
+               cr.char_class = req->char_class();
+               try {
+                   minted = chr::create_character(*ctx.char_db, cr).character_id;
+               } catch (const chr::DuplicateName&) {
+                   status = mn::CharCreateStatus::DUPLICATE_NAME;
+               } catch (const chr::InvalidRace&) {
+                   status = mn::CharCreateStatus::INVALID_RACE;
+               } catch (const chr::InvalidClass&) {
+                   status = mn::CharCreateStatus::INVALID_CLASS;
+               } catch (const chr::InvalidName&) {
+                   status = mn::CharCreateStatus::INVALID_NAME;
+               } catch (const db::DbError& e) {
+                   log::warn(kCat, "CHAR_CREATE_REQUEST DB error",
+                             {log::field("account_id",
+                                         static_cast<std::int64_t>(ctx.account_id)),
+                              log::field("error", e.what())});
+                   status = mn::CharCreateStatus::INTERNAL;
+               }
+           }
+           if (status == mn::CharCreateStatus::OK) {
+               log::info(kCat, "CHAR_CREATE_REQUEST created character",
+                         {log::field("account_id",
+                                     static_cast<std::int64_t>(ctx.account_id)),
+                          log::field("character_id",
+                                     static_cast<std::int64_t>(minted))});
+           } else {
+               log::debug(kCat, "CHAR_CREATE_REQUEST rejected (status=" +
+                                    std::to_string(static_cast<int>(status)) + ")");
+           }
+           send_s2c(sess, ctx,
+                    encode_frame(net::Opcode::CHAR_CREATE_RESPONSE, f.seq,
+                                 encode_char_create(status, minted)));
+       });
+
+    // CHAR_DELETE_REQUEST: delete one owned character by id. The CRUD's
+    // `WHERE id=? AND account_id=?` makes deleting another account's character (or
+    // a non-existent id) a no-op -> REFUSED. Ownership is impossible to bypass.
+    on(net::Opcode::CHAR_DELETE_REQUEST,
+       [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+           if (!require_authenticated(ctx, "CHAR_DELETE_REQUEST")) return;
+           const auto* req = fb::GetRoot<mn::CharDeleteRequest>(f.payload);
+           if (req == nullptr) return;  // verified upstream; defensive
+
+           mn::CharDeleteStatus status = mn::CharDeleteStatus::REFUSED;
+           if (ctx.char_db == nullptr) {
+               log::warn(kCat, "CHAR_DELETE_REQUEST with no characters DB");
+               status = mn::CharDeleteStatus::INTERNAL;
+           } else {
+               try {
+                   const bool deleted = chr::delete_character(
+                       *ctx.char_db, ctx.account_id, req->character_id());
+                   status = deleted ? mn::CharDeleteStatus::OK
+                                    : mn::CharDeleteStatus::REFUSED;
+               } catch (const db::DbError& e) {
+                   log::warn(kCat, "CHAR_DELETE_REQUEST DB error",
+                             {log::field("account_id",
+                                         static_cast<std::int64_t>(ctx.account_id)),
+                              log::field("error", e.what())});
+                   status = mn::CharDeleteStatus::INTERNAL;
+               }
+           }
+           log::debug(kCat, "CHAR_DELETE_REQUEST character_id=" +
+                                std::to_string(req->character_id()) + " status=" +
+                                std::to_string(static_cast<int>(status)));
+           send_s2c(sess, ctx,
+                    encode_frame(net::Opcode::CHAR_DELETE_RESPONSE, f.seq,
+                                 encode_char_delete(status)));
+       });
+
     // No handler is registered for server→client opcodes (HANDSHAKE_OK,
-    // MOVEMENT_STATE, ENTITY_ENTER/UPDATE/LEAVE): a client sending one is
-    // out-of-direction and is treated as an unknown opcode (Disconnect).
+    // MOVEMENT_STATE, ENTITY_ENTER/UPDATE/LEAVE, CHAR_*_RESPONSE): a client
+    // sending one is out-of-direction and is treated as an unknown opcode
+    // (Disconnect).
 }
 
 // ---------------------------------------------------------------------------

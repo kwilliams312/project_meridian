@@ -670,6 +670,155 @@ std::vector<Message> build_corpus() {
                         "if2_entity_leave.reason");
                }});
 
+  // ---- character management (0x0010..0x0015; #286 / D-35) ------------------
+  // Char list/create/delete ride the authenticated world session. The account is
+  // always the session's own (grant-derived) — never a field in these messages —
+  // so no account_id appears in the golden shapes.
+
+  // CharListRequest is an EMPTY table (no fields): freeze that it verifies + is a
+  // valid empty root (a client can only list its OWN account's characters).
+  c.push_back({"if2_char_list_request", "IF-2", "CHAR_LIST_REQUEST (0x0010)",
+               "C->S list this account's characters (empty request table)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateCharListRequest(b));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 expect(v.VerifyBuffer<mn::CharListRequest>(nullptr),
+                        "if2_char_list_request verifies (empty table)");
+               }});
+
+  // CharListResponse with two rows — exercises the vector-of-tables + string/
+  // scalar fields the character-select screen reads.
+  c.push_back({"if2_char_list_response", "IF-2", "CHAR_LIST_RESPONSE (0x0011)",
+               "S->C roster: two CharListEntry rows (id, name, race, class, level)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::CharListEntry>> rows;
+                 rows.push_back(mn::CreateCharListEntry(
+                     b, /*character_id=*/0x0000000100000001ULL,
+                     b.CreateString("Aldric"), /*race=*/1u, /*char_class=*/1u,
+                     /*level=*/7u));
+                 rows.push_back(mn::CreateCharListEntry(
+                     b, /*character_id=*/0x0000000100000002ULL,
+                     b.CreateString("Brynn"), /*race=*/3u, /*char_class=*/2u,
+                     /*level=*/12u));
+                 auto vec = b.CreateVector(rows);
+                 b.Finish(mn::CreateCharListResponse(b, vec));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::CharListResponse>(nullptr),
+                             "if2_char_list_response verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::CharListResponse>(buf.data());
+                 const auto* rows = m->characters();
+                 if (!expect(rows != nullptr && rows->size() == 2,
+                             "if2_char_list_response has 2 rows"))
+                   return;
+                 const auto* r0 = rows->Get(0);
+                 expect(r0->character_id() == 0x0000000100000001ULL,
+                        "if2_char_list_response[0].character_id");
+                 expect(r0->name() && r0->name()->str() == "Aldric",
+                        "if2_char_list_response[0].name");
+                 expect(r0->race() == 1u, "if2_char_list_response[0].race");
+                 expect(r0->char_class() == 1u,
+                        "if2_char_list_response[0].char_class");
+                 expect(r0->level() == 7u, "if2_char_list_response[0].level");
+                 const auto* r1 = rows->Get(1);
+                 expect(r1->character_id() == 0x0000000100000002ULL,
+                        "if2_char_list_response[1].character_id");
+                 expect(r1->name() && r1->name()->str() == "Brynn",
+                        "if2_char_list_response[1].name");
+                 expect(r1->level() == 12u, "if2_char_list_response[1].level");
+               }});
+
+  // CharCreateRequest — the D-11 create fields (name + race + class).
+  c.push_back({"if2_char_create_request", "IF-2", "CHAR_CREATE_REQUEST (0x0012)",
+               "C->S create a character: name + race + class (D-11)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 auto name = b.CreateString("Cerys");
+                 b.Finish(mn::CreateCharCreateRequest(b, name, /*race=*/2u,
+                                                      /*char_class=*/4u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::CharCreateRequest>(nullptr),
+                             "if2_char_create_request verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::CharCreateRequest>(buf.data());
+                 expect(m->name() && m->name()->str() == "Cerys",
+                        "if2_char_create_request.name");
+                 expect(m->race() == 2u, "if2_char_create_request.race");
+                 expect(m->char_class() == 4u,
+                        "if2_char_create_request.char_class");
+               }});
+
+  // CharCreateResponse — canonical is the SUCCESS variant (status=OK + minted id).
+  c.push_back({"if2_char_create_response", "IF-2", "CHAR_CREATE_RESPONSE (0x0013)",
+               "S->C create success: status=OK, character_id minted",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateCharCreateResponse(
+                     b, mn::CharCreateStatus::OK,
+                     /*character_id=*/0x0000000100000003ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::CharCreateResponse>(nullptr),
+                             "if2_char_create_response verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::CharCreateResponse>(buf.data());
+                 expect(m->status() == mn::CharCreateStatus::OK,
+                        "if2_char_create_response.status");
+                 expect(m->character_id() == 0x0000000100000003ULL,
+                        "if2_char_create_response.character_id");
+               }});
+
+  // CharDeleteRequest — one owned character id (ownership checked server-side).
+  c.push_back({"if2_char_delete_request", "IF-2", "CHAR_DELETE_REQUEST (0x0014)",
+               "C->S delete one owned character by id",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateCharDeleteRequest(
+                     b, /*character_id=*/0x0000000100000003ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::CharDeleteRequest>(nullptr),
+                             "if2_char_delete_request verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::CharDeleteRequest>(buf.data());
+                 expect(m->character_id() == 0x0000000100000003ULL,
+                        "if2_char_delete_request.character_id");
+               }});
+
+  // CharDeleteResponse — canonical is the OK variant (a row was deleted).
+  c.push_back({"if2_char_delete_response", "IF-2", "CHAR_DELETE_RESPONSE (0x0015)",
+               "S->C delete result: status=OK",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateCharDeleteResponse(
+                     b, mn::CharDeleteStatus::OK));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::CharDeleteResponse>(nullptr),
+                             "if2_char_delete_response verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::CharDeleteResponse>(buf.data());
+                 expect(m->status() == mn::CharDeleteStatus::OK,
+                        "if2_char_delete_response.status");
+               }});
+
   return c;
 }
 

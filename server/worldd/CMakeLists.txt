@@ -37,6 +37,7 @@ target_link_libraries(world-dispatch
     meridian::net
     meridian::proto
     meridian::db
+    meridian::characters  # char-management handlers: list/create/delete CRUD (#286 / D-35)
     meridian::metrics  # OPS-05 session/opcode/movement/tick/disconnect metrics (#164)
     meridian::trace    # OPS-05 session-flow trace: the worldd.enter_world span (#166)
     Threads::Threads
