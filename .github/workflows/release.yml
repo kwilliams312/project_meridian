@@ -90,6 +90,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Required for cosign KEYLESS signing (Sigstore/OIDC): mints the short-lived
+      # OIDC token Fulcio exchanges for an ephemeral signing cert. Scoped to this
+      # job only — validate and release never touch id-token.
+      id-token: write
     strategy:
       matrix:
         daemon: [authd, worldd]
@@ -143,6 +147,50 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.daemon }}
           cache-to: type=gha,scope=${{ matrix.daemon }},mode=max
 
+      # ── Supply chain (D-30 §10 rule 4): SBOM + keyless signature per image ──
+      # Runs AFTER push, targeting the immutable digest (steps.build.outputs.digest)
+      # — never the mutable semver/major.minor tags. Same posture as cd.yml.
+      - name: Pin the published image by digest
+        id: ref
+        run: echo "image=${IMAGE}@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+      # SBOM: Syft (via anchore/sbom-action) over the pushed image, CycloneDX JSON.
+      - name: Generate SBOM (Syft -> CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.ref.outputs.image }}
+          format: cyclonedx-json
+          artifact-name: sbom-${{ matrix.daemon }}.cdx.json
+          output-file: sbom-${{ matrix.daemon }}.cdx.json
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Keyless (Sigstore/OIDC) signature over the image DIGEST. No private key —
+      # provenance is the workflow identity; signature + cert go to Rekor.
+      - name: Sign image (cosign keyless)
+        env:
+          COSIGN_YES: "true"
+        run: cosign sign --yes "${{ steps.ref.outputs.image }}"
+
+      # Signed CycloneDX SBOM attestation, also keyless, bound to the digest.
+      - name: Attest SBOM (cosign attest, keyless)
+        env:
+          COSIGN_YES: "true"
+        run: >-
+          cosign attest --yes
+          --type cyclonedx
+          --predicate sbom-${{ matrix.daemon }}.cdx.json
+          "${{ steps.ref.outputs.image }}"
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.daemon }}
+          path: sbom-${{ matrix.daemon }}.cdx.json
+          retention-days: 30
+          if-no-files-found: error
+
       # Persist the immutable digest as a per-daemon artifact. We deliberately
       # do NOT use matrix job `outputs:` for this: with a 2-leg matrix both legs
       # write the SAME output map, and GitHub merges them nondeterministically —
@@ -170,6 +218,7 @@ jobs:
             echo "- **image:** \`${{ env.IMAGE }}\`"
             echo "- **tags:** \`${{ github.ref_name }}\`, major.minor, short SHA"
             echo "- **digest:** \`${{ steps.build.outputs.digest }}\`"
+            echo "- **supply chain:** CycloneDX SBOM + cosign keyless signature & SBOM attestation (by digest)"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ── Cut the GitHub Release: generated notes + pinned image refs + a checksums
@@ -192,6 +241,14 @@ jobs:
         with:
           pattern: digest-*
           path: digests
+          merge-multiple: true
+
+      # Pull the per-daemon SBOMs so they can be attached to the Release too.
+      - name: Download SBOM artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sbom-*
+          path: sboms
           merge-multiple: true
 
       # Assemble the release body + the attached artifacts (a checksums file over
@@ -229,8 +286,12 @@ jobs:
           # this release (MERIDIAN_TAG=<tag> selects these images).
           cp deploy/docker/docker-compose.yml dist/docker-compose.yml
 
+          # Ship the per-daemon CycloneDX SBOMs (also attached as a signed cosign
+          # attestation on each image — this is the downloadable copy).
+          cp sboms/*.cdx.json dist/ 2>/dev/null || true
+
           # Checksums over the attached artifacts (D-30 §10 rule 5: "+ checksums").
-          ( cd dist && sha256sum images.txt docker-compose.yml > SHA256SUMS.txt )
+          ( cd dist && sha256sum images.txt docker-compose.yml *.cdx.json > SHA256SUMS.txt )
 
           # Human-readable release body.
           {
@@ -249,6 +310,31 @@ jobs:
             echo ""
             echo "Also tagged \`:major.minor\` (rolling patch pointer) and the"
             echo "immutable short commit SHA."
+            echo ""
+            echo "### Verify provenance (cosign keyless)"
+            echo ""
+            echo "Each image is signed keyless via Sigstore/GitHub OIDC and carries"
+            echo "a signed CycloneDX SBOM attestation (D-30 §10 rule 4). Verify the"
+            echo "signature against this repo's workflow identity:"
+            echo ""
+            echo '```sh'
+            echo "# Verify the keyless signature (pin by digest, not tag):"
+            echo "cosign verify \\"
+            echo "  --certificate-identity-regexp \\"
+            echo "    '^https://github.com/${{ github.repository }}/.github/workflows/release.yml@.*' \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
+            echo "  ${authd_pinned}"
+            echo ""
+            echo "# Verify the SBOM attestation for the same digest:"
+            echo "cosign verify-attestation \\"
+            echo "  --type cyclonedx \\"
+            echo "  --certificate-identity-regexp \\"
+            echo "    '^https://github.com/${{ github.repository }}/.github/workflows/release.yml@.*' \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
+            echo "  ${authd_pinned}"
+            echo '```'
+            echo ""
+            echo "The CycloneDX SBOMs are also attached below as files."
             echo ""
             echo "### Run this release"
             echo ""
@@ -277,3 +363,4 @@ jobs:
             dist/docker-compose.yml
             dist/images.txt
             dist/SHA256SUMS.txt
+            dist/*.cdx.json
