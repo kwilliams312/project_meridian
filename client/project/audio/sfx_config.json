@@ -1,0 +1,39 @@
+{
+  "schema": "meridian/sfx_config@1",
+  "_comment": "Gameplay/UI event -> SFX-asset-id -> one-shot mapping for the SFX trigger runtime (AUD-01 seed, issue #148). The SFX counterpart of zone_music_config.json (#144): music resolves zone->set->stem, SFX resolves event->sfx-id->one-shot through the SAME content-ID hook (music SAD §5). Content references stable asset IDs ONLY (music PRD §7) — never file paths. The runtime datastore (IF-5 pack manifest, PackEntry.resource) resolves each asset ID to a res://meridian/... resource. At M0 the resolver is the PLACEHOLDER factory (sfx_placeholder_factory.gd) — synthesized clicks/blips, NOT real sound effects. Real SFX authoring (#143 audio direction) is deferred.",
+  "placeholder": true,
+  "categories": {
+    "_comment": "category -> {bus, concurrency group, cap}. Bus tree per music SAD §2.5; group + cap per PRD §3.4. cap is carried as data for the M1 voice manager — NOT enforced at M0 (the M0 system is routing + trigger only, no voice manager yet).",
+    "combat.impact": {"bus": "SFX_Combat", "group": "impact", "cap": 10},
+    "combat.melee": {"bus": "SFX_Combat", "group": "melee", "cap": 8},
+    "foley.footstep": {"bus": "SFX_Foley", "group": "footsteps", "cap": 6},
+    "npc.vocal": {"bus": "SFX_NPC", "group": "npc_vocal", "cap": 6},
+    "world.interact": {"bus": "SFX_World", "group": "world", "cap": 10},
+    "ui": {"bus": "UI", "group": "ui", "cap": 4}
+  },
+  "sfx": {
+    "_comment": "~10 PLACEHOLDER one-shots — procedurally synthesized enveloped tones per entry (short attack, fast decay, NON-looping). Clearly not real SFX; they prove the event->id->one-shot trigger system + the ID hook path end-to-end without shipping any audio asset. placeholder_tone_hz / placeholder_ms drive the synth in sfx_placeholder_factory.gd.",
+    "core:sfx.foley.footstep.grass": {"category": "foley.footstep", "attenuation": "small", "placeholder_tone_hz": 180.0, "placeholder_ms": 90},
+    "core:sfx.foley.footstep.stone": {"category": "foley.footstep", "attenuation": "small", "placeholder_tone_hz": 140.0, "placeholder_ms": 80},
+    "core:sfx.foley.footstep.dirt": {"category": "foley.footstep", "attenuation": "small", "placeholder_tone_hz": 160.0, "placeholder_ms": 90},
+    "core:sfx.foley.footstep.wood": {"category": "foley.footstep", "attenuation": "small", "placeholder_tone_hz": 200.0, "placeholder_ms": 80},
+    "core:sfx.ui.click": {"category": "ui", "attenuation": "ui2d", "placeholder_tone_hz": 880.0, "placeholder_ms": 40},
+    "core:sfx.ui.hover": {"category": "ui", "attenuation": "ui2d", "placeholder_tone_hz": 660.0, "placeholder_ms": 35},
+    "core:sfx.ui.error": {"category": "ui", "attenuation": "ui2d", "placeholder_tone_hz": 220.0, "placeholder_ms": 160},
+    "core:sfx.ui.login_sting": {"category": "ui", "attenuation": "ui2d", "placeholder_tone_hz": 523.25, "placeholder_ms": 600},
+    "core:sfx.world.loot_pickup": {"category": "world.interact", "attenuation": "medium", "placeholder_tone_hz": 740.0, "placeholder_ms": 120},
+    "core:sfx.combat.impact.generic": {"category": "combat.impact", "attenuation": "medium", "placeholder_tone_hz": 300.0, "placeholder_ms": 110}
+  },
+  "events": {
+    "_comment": "Client-authored event registry (music SAD §5): events with no content object. Footsteps: physics-material -> surface tag -> foley footstep variation group. UI: UI event registry -> sfx.ui.*. Login sting: the boot/login one-shot. Content-carried ids (ability cast_sfx/impact_sfx, npc sound_set) are NOT listed here — they carry their own sfx.* id in /content and resolve through the SAME resolved_sfx() hook.",
+    "footstep.grass": "core:sfx.foley.footstep.grass",
+    "footstep.stone": "core:sfx.foley.footstep.stone",
+    "footstep.dirt": "core:sfx.foley.footstep.dirt",
+    "footstep.wood": "core:sfx.foley.footstep.wood",
+    "ui.click": "core:sfx.ui.click",
+    "ui.hover": "core:sfx.ui.hover",
+    "ui.error": "core:sfx.ui.error",
+    "login.sting": "core:sfx.ui.login_sting",
+    "world.loot_pickup": "core:sfx.world.loot_pickup"
+  }
+}
