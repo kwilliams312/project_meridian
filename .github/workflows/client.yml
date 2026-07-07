@@ -1,0 +1,202 @@
+# Client build CI (#112) — the FIRST client-side CI job. Builds the Godot
+# GDExtension for macOS **arm64** on the self-hosted Apple-Silicon runner and
+# proves the engine-agnostic client cores (net + bot + movement/interp/telemetry)
+# compile clean and pass their ctest suites on arm64 — closing the gap where
+# those tests (clientnet-test's 77 checks, the bot FSM/session tests, the
+# GDExtension core tests) never ran in CI (all other jobs are ubuntu-latest).
+#
+# Runner reality (A-16) — TWO gotchas on the "MacOS-M1" box:
+#   1. It registers with the label set `[self-hosted, macOS]` — it does NOT
+#      advertise an `arm64`/`ARM64` label. So we select on `[self-hosted, macOS]`.
+#   2. The Actions runner PROCESS runs under **Rosetta 2**, so `uname -m` reports
+#      `x86_64` inside a step even though the hardware is Apple Silicon. Therefore
+#      we NEVER gate on `uname -m`. We detect Apple Silicon Rosetta-proof via
+#      `sysctl -n hw.optional.arm64` (== 1 on Apple Silicon even from an x86_64
+#      process) and we run the toolchain natively with `arch -arm64 <cmd>` (which
+#      re-spawns cmake/ctest as native arm64 from the Rosetta host). We ALSO pass
+#      `-DCMAKE_OSX_ARCHITECTURES=arm64` as belt-and-suspenders, and assert every
+#      produced binary is `arm64` via lipo so a silent x86_64 build can't pass.
+#
+# Crypto note: the client net core (client/net) + login core use **OpenSSL**
+# (TLS 1.3 + SRP-6a + ChaCha20-Poly1305/HKDF), NOT mbedTLS — there is no mbedTLS
+# in the tree. This job is what verifies OpenSSL builds/links clean under -arch
+# arm64 (alignment/NEON in the FlatBuffers codec + the OpenSSL net core).
+name: client
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'client/**'
+      - 'schema/net/**'
+      - 'server/libs/srp/**'
+      - 'scripts/dev/_common.sh'
+      - '.github/workflows/client.yml'
+  pull_request:
+    paths:
+      - 'client/**'
+      - 'schema/net/**'
+      - 'server/libs/srp/**'
+      - 'scripts/dev/_common.sh'
+      - '.github/workflows/client.yml'
+
+# One self-hosted Mac — cancel superseded runs on the same ref so a push doesn't
+# queue behind stale work.
+concurrency:
+  group: client-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --- Engine-agnostic client cores + their ctest suites (arm64) -------------
+  # No godot-cpp needed: client/CMakeLists.txt returns early when any of the
+  # MERIDIAN_CLIENT_NET / MERIDIAN_BOT / MERIDIAN_CLIENT_TESTS options is ON, so
+  # this job builds ONLY the plain-C++17 cores + tests. This is the coverage that
+  # was missing from CI. Fast (~1 min), and independent signal from the heavier
+  # GDExtension job below.
+  client-cores:
+    runs-on: [self-hosted, macOS]
+    steps:
+      # The self-hosted runner's Actions shell starts with a minimal PATH that
+      # excludes /opt/homebrew/bin (Actions does NOT source the login shell), so
+      # brew-installed cmake/ninja/flatc aren't found. Prepend the Apple-Silicon
+      # Homebrew bin/sbin via $GITHUB_PATH — this persists for every later step.
+      - name: Put Homebrew (arm64) on PATH
+        run: |
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/sbin" >> "$GITHUB_PATH"
+      # Install the toolchain rather than assuming the runner has it — a
+      # self-hosted runner is not guaranteed to have ninja/flatc. brew install is
+      # a no-op when already present; `|| true` swallows the nonzero some brew
+      # versions return for "already installed".
+      - name: Ensure build tools (arm64 Homebrew)
+        run: HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install flatbuffers openssl@3 || true
+      - uses: actions/checkout@v4
+        # No submodules: the engine-agnostic cores never touch godot-cpp.
+      # Runs in the runner's own (Rosetta x86_64) process on purpose, so the log
+      # shows the real environment: `uname -m` = x86_64, yet hw.optional.arm64 = 1.
+      - name: Verify Apple-Silicon host (Rosetta-proof) + toolchain
+        run: |
+          echo "runner process uname -m : $(uname -m)"        # x86_64 under Rosetta on MacOS-M1
+          arm="$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)"
+          echo "hw.optional.arm64       : $arm"
+          test "$arm" = "1" || { echo "::error::not Apple Silicon (hw.optional.arm64=$arm)"; exit 1; }
+          echo "arch -arm64 uname -m    : $(arch -arm64 uname -m)"   # arm64 — native toolchain reachable
+          for t in cmake flatc; do
+            command -v "$t" >/dev/null || { echo "::error::missing $t"; exit 1; }
+          done
+          arch -arm64 cmake --version | head -1
+      # Reuse the canonical Homebrew CMake env (openssl@3 + flatbuffers keg-only
+      # prefixes, libmariadb pkg-config) from the dev toolkit so CI matches local.
+      # Resolved under arch -arm64 so brew yields the arm64 (/opt/homebrew) prefixes.
+      - name: Configure Homebrew CMake env (arm64 prefixes)
+        run: |
+          # brew resolves the /opt/homebrew (arm64) prefixes regardless of the
+          # host process arch, so this needs no arch wrapper.
+          # shellcheck source=/dev/null
+          source scripts/dev/_common.sh
+          setup_cmake_env
+          echo "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+      # arch -arm64 re-spawns cmake as native arm64 (escapes the Rosetta host);
+      # -DCMAKE_OSX_ARCHITECTURES=arm64 additionally forces arm64 output.
+      - name: Configure client cores (native arm64)
+        run: |
+          arch -arm64 cmake -S client -B build/client-cores \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DMERIDIAN_CLIENT_NET=ON \
+            -DMERIDIAN_BOT=ON \
+            -DMERIDIAN_CLIENT_TESTS=ON
+      - name: Build client cores (native arm64)
+        run: arch -arm64 cmake --build build/client-cores -j "$(sysctl -n hw.ncpu)"
+      # Hard gate: every test binary must really be arm64 (not an x86_64/Rosetta
+      # build). lipo/file inspect the file, so this needs no arch wrapper.
+      - name: Assert built binaries are arm64
+        run: |
+          fail=0
+          while IFS= read -r bin; do
+            arch="$(lipo -archs "$bin" 2>/dev/null || true)"
+            printf '%-60s %s\n' "$(basename "$bin")" "$arch"
+            case "$arch" in
+              *arm64*) ;;
+              *) echo "::error::$bin is not arm64 (got '$arch')"; fail=1 ;;
+            esac
+          done < <(find build/client-cores -type f -perm +111 -name '*test*'; \
+                   find build/client-cores/bot -maxdepth 1 -type f -name 'meridian-*' -perm +111)
+          test "$fail" -eq 0
+      # The engine-agnostic suites: clientnet (77 checks — framing/wire/AEAD/codec/
+      # TLS-construct), bot (world-session AEAD interop + connection FSM), and the
+      # GDExtension cores (movement, remote-interp, telemetry, pack-manifest,
+      # login-core). authd-login-it SKIPs cleanly with no --host/--port. Run under
+      # arch -arm64 so the whole test harness executes as native arm64.
+      - name: Test client cores (ctest, native arm64)
+        run: arch -arm64 ctest --test-dir build/client-cores --output-on-failure
+
+  # --- godot-cpp + the GDExtension framework (arm64) -------------------------
+  # Builds the vendored godot-cpp bindings and the meridian GDExtension for arm64,
+  # producing client/project/bin/libmeridian.macos.<target>.framework — the exact
+  # bundle project/meridian.gdextension references for macos.debug/release.
+  client-gdext:
+    runs-on: [self-hosted, macOS]
+    steps:
+      # Same minimal-PATH fix as client-cores: make the Homebrew toolchain
+      # reachable from the Actions shell for every later step.
+      - name: Put Homebrew (arm64) on PATH
+        run: |
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/sbin" >> "$GITHUB_PATH"
+      # Same self-sufficiency as client-cores: install the toolchain, don't assume it.
+      - name: Ensure build tools (arm64 Homebrew)
+        run: HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install flatbuffers openssl@3 || true
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive   # client/godot-cpp at its pinned 4.7 commit
+      - name: Verify Apple-Silicon host (Rosetta-proof) + toolchain
+        run: |
+          echo "runner process uname -m : $(uname -m)"        # x86_64 under Rosetta on MacOS-M1
+          arm="$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)"
+          echo "hw.optional.arm64       : $arm"
+          test "$arm" = "1" || { echo "::error::not Apple Silicon (hw.optional.arm64=$arm)"; exit 1; }
+          echo "arch -arm64 uname -m    : $(arch -arm64 uname -m)"
+          for t in cmake flatc; do
+            command -v "$t" >/dev/null || { echo "::error::missing $t"; exit 1; }
+          done
+          test -f client/godot-cpp/CMakeLists.txt || { echo "::error::godot-cpp submodule not checked out"; exit 1; }
+      - name: Configure Homebrew CMake env (arm64 prefixes)
+        run: |
+          # brew resolves the /opt/homebrew (arm64) prefixes regardless of the
+          # host process arch, so this needs no arch wrapper.
+          # shellcheck source=/dev/null
+          source scripts/dev/_common.sh
+          setup_cmake_env
+          echo "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+      # Cache the compiled godot-cpp bindings, keyed on the pin (ENGINE_VERSION
+      # holds GODOT_CPP_COMMIT). godot-cpp sources only change when the pin changes,
+      # so on an unchanged pin ninja finds the static lib + objects present and
+      # skips ~1000 compiles; the small meridian objects still rebuild each run.
+      - name: Cache godot-cpp build (keyed on the pin)
+        uses: actions/cache@v4
+        with:
+          path: build/client-gdext/godot-cpp
+          key: godotcpp-arm64-${{ hashFiles('client/ENGINE_VERSION') }}
+      - name: Configure GDExtension (native arm64, template_debug)
+        run: |
+          arch -arm64 cmake -S client -B build/client-gdext \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DGODOTCPP_TARGET=template_debug
+      - name: Build godot-cpp + GDExtension (native arm64)
+        run: arch -arm64 cmake --build build/client-gdext -j "$(sysctl -n hw.ncpu)"
+      # The framework the .gdextension manifest points at must exist and be arm64.
+      - name: Assert framework built + is arm64
+        run: |
+          fw="client/project/bin/libmeridian.macos.template_debug.framework"
+          bin="$fw/libmeridian.macos.template_debug"
+          test -f "$bin" || { echo "::error::framework binary missing: $bin"; exit 1; }
+          arch="$(lipo -archs "$bin")"
+          echo "framework binary arch: $arch"
+          case "$arch" in *arm64*) ;; *) echo "::error::framework is not arm64 (got '$arch')"; exit 1 ;; esac
+          # godot-cpp static lib must be arm64 too.
+          gcpp="$(find build/client-gdext -name 'libgodot-cpp*.a' | head -1)"
+          echo "godot-cpp lib arch: $(lipo -archs "$gcpp")"
+          # OpenSSL (not mbedTLS) is what the net/login core links.
+          otool -L "$bin" | grep -iE 'ssl|crypto' || { echo "::error::OpenSSL not linked into the extension"; exit 1; }
