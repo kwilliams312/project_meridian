@@ -161,3 +161,38 @@ target_link_libraries(meridian-proto-roundtrip
   PRIVATE
     meridian::proto
 )
+
+# --- 6. Golden wire-corpus conformance harness (Issue #68). ------------------
+# Protocol drift guard: freezes a canonical instance of every IF-1/IF-2 message
+# (schema/net/{auth,world}.fbs) as its FlatBuffer root-table bytes under
+# conformance/golden/*.bin, then, on each run, decodes each golden via the real
+# meridian::proto codec + asserts the expected logical fields AND re-encodes it
+# for byte-identity to the golden. A codec/schema change that alters the wire
+# format fails this test. The client SAD §5.1 "golden-message round-trip"
+# conformance requirement for the NETWORK protocol — the network analogue of the
+# mcc content-determinism golden (#122).
+#
+# `--update` regenerates the golden corpus + manifest (a golden diff is a
+# wire-protocol diff; review + commit both). The golden dir is passed as an
+# absolute path so the harness reads/writes the checked-in corpus from any CWD
+# (e.g. ctest runs from the build tree).
+add_executable(meridian-proto-conformance
+  conformance/conformance.cpp
+)
+
+target_link_libraries(meridian-proto-conformance
+  PRIVATE
+    meridian::proto
+)
+
+target_compile_definitions(meridian-proto-conformance
+  PRIVATE
+    MERIDIAN_PROTO_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/conformance/golden"
+)
+
+set_target_properties(meridian-proto-conformance PROPERTIES CXX_EXTENSIONS OFF)
+
+# Register in ctest so the CI `server` job (`ctest --test-dir server/build`)
+# runs the drift guard. Default (no args) is --check mode: exit non-zero on any
+# decode-mismatch or byte drift vs the golden corpus.
+add_test(NAME proto-conformance COMMAND meridian-proto-conformance)
