@@ -31,10 +31,21 @@ public partial class MainWindowViewModel : ViewModelBase
     ];
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ActiveEditor))]
     private EditorItem? _selectedEditor;
 
     [ObservableProperty]
     private string _statusText = "Ready.";
+
+    /// <summary>The NPC editor (#128), created once and shown when the NPCs rail entry is active.</summary>
+    public NpcEditorViewModel NpcEditor { get; } = new();
+
+    /// <summary>
+    /// The editor VM to host in the main content area for the current selection, or
+    /// null when the selected editor has no implementation yet (Items/Abilities/Quests
+    /// arrive later). The ViewLocator maps this VM to its View automatically.
+    /// </summary>
+    public object? ActiveEditor => SelectedEditor?.Name == "NPCs" ? NpcEditor : null;
 
     public MainWindowViewModel()
     {

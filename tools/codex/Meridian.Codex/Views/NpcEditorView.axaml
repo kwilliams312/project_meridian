@@ -1,0 +1,167 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Meridian.Codex.ViewModels"
+             mc:Ignorable="d" d:DesignWidth="640" d:DesignHeight="700"
+             x:Class="Meridian.Codex.Views.NpcEditorView"
+             x:DataType="vm:NpcEditorViewModel">
+
+  <UserControl.Styles>
+    <Style Selector="TextBlock.section">
+      <Setter Property="FontSize" Value="16" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Margin" Value="0,12,0,4" />
+    </Style>
+    <Style Selector="TextBlock.field">
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Margin" Value="0,0,8,0" />
+    </Style>
+  </UserControl.Styles>
+
+  <DockPanel>
+
+    <!-- Command + file bar. -->
+    <Border DockPanel.Dock="Top" Padding="8" Background="{DynamicResource SystemControlBackgroundListLowBrush}">
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <Button Content="New" Command="{Binding NewCommand}" />
+        <Button Content="Open" Command="{Binding OpenCommand}" />
+        <Button Content="Save" Command="{Binding SaveCommand}" />
+        <TextBox Width="360" Watermark="content/core/npcs/…​.npc.yaml"
+                 Text="{Binding FilePath}" VerticalAlignment="Center" />
+      </StackPanel>
+    </Border>
+
+    <!-- Validation + status bar. -->
+    <Border DockPanel.Dock="Bottom" Padding="8,4" Background="{DynamicResource SystemControlBackgroundListLowBrush}">
+      <StackPanel Spacing="2">
+        <TextBlock Text="{Binding StatusText}" />
+        <TextBlock Text="{Binding ValidationMessage}" FontSize="11" Opacity="0.8" TextWrapping="Wrap" />
+      </StackPanel>
+    </Border>
+
+    <Grid ColumnDefinitions="*,320">
+
+      <!-- Form. -->
+      <ScrollViewer Grid.Column="0" Padding="16">
+        <StackPanel Spacing="4">
+
+          <TextBlock Classes="section" Text="Identity / display" />
+          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" >
+            <TextBlock Grid.Row="0" Grid.Column="0" Classes="field" Text="ID" />
+            <TextBox   Grid.Row="0" Grid.Column="1" Text="{Binding Id}" />
+            <TextBlock Grid.Row="1" Grid.Column="0" Classes="field" Text="Name" />
+            <TextBox   Grid.Row="1" Grid.Column="1" Text="{Binding Name}" />
+            <TextBlock Grid.Row="2" Grid.Column="0" Classes="field" Text="Subtitle" />
+            <TextBox   Grid.Row="2" Grid.Column="1" Text="{Binding Subtitle}" />
+            <TextBlock Grid.Row="3" Grid.Column="0" Classes="field" Text="Creature type" />
+            <ComboBox  Grid.Row="3" Grid.Column="1" HorizontalAlignment="Stretch"
+                       ItemsSource="{Binding CreatureTypes}" SelectedItem="{Binding CreatureType}" />
+            <TextBlock Grid.Row="4" Grid.Column="0" Classes="field" Text="Rank" />
+            <ComboBox  Grid.Row="4" Grid.Column="1" HorizontalAlignment="Stretch"
+                       ItemsSource="{Binding Ranks}" SelectedItem="{Binding Rank}" />
+            <TextBlock Grid.Row="5" Grid.Column="0" Classes="field" Text="Faction" />
+            <ComboBox  Grid.Row="5" Grid.Column="1" HorizontalAlignment="Stretch"
+                       ItemsSource="{Binding Factions}" SelectedItem="{Binding Faction}" />
+            <TextBlock Grid.Row="6" Grid.Column="0" Classes="field" Text="Level (min / max)" />
+            <StackPanel Grid.Row="6" Grid.Column="1" Orientation="Horizontal" Spacing="8">
+              <TextBox Width="80" Text="{Binding LevelMin}" />
+              <TextBox Width="80" Text="{Binding LevelMax}" />
+            </StackPanel>
+            <TextBlock Grid.Row="7" Grid.Column="0" Classes="field" Text="Model / scale / sfx" />
+            <StackPanel Grid.Row="7" Grid.Column="1" Orientation="Horizontal" Spacing="8">
+              <TextBox Width="180" Watermark="art ref" Text="{Binding VisualModel}" />
+              <TextBox Width="60" Watermark="scale" Text="{Binding VisualScale}" />
+              <TextBox Width="140" Watermark="sfx ref" Text="{Binding VisualSoundSet}" />
+            </StackPanel>
+          </Grid>
+
+          <TextBlock Classes="section" Text="Stats" />
+          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto">
+            <TextBlock Grid.Row="0" Grid.Column="0" Classes="field" Text="Health / mana / armor" />
+            <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="8">
+              <TextBox Width="90" Watermark="health" Text="{Binding Health}" />
+              <TextBox Width="90" Watermark="mana" Text="{Binding Mana}" />
+              <TextBox Width="90" Watermark="armor" Text="{Binding Armor}" />
+            </StackPanel>
+            <TextBlock Grid.Row="1" Grid.Column="0" Classes="field" Text="Damage (min / max)" />
+            <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="8">
+              <TextBox Width="80" Text="{Binding DamageMin}" />
+              <TextBox Width="80" Text="{Binding DamageMax}" />
+            </StackPanel>
+            <TextBlock Grid.Row="2" Grid.Column="0" Classes="field" Text="Attack speed (ms)" />
+            <TextBox   Grid.Row="2" Grid.Column="1" Width="100" HorizontalAlignment="Left" Text="{Binding AttackSpeedMs}" />
+          </Grid>
+
+          <TextBlock Classes="section" Text="AI" />
+          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto">
+            <TextBlock Grid.Row="0" Grid.Column="0" Classes="field" Text="Behavior" />
+            <ComboBox  Grid.Row="0" Grid.Column="1" HorizontalAlignment="Left" Width="180"
+                       ItemsSource="{Binding Behaviors}" SelectedItem="{Binding Behavior}" />
+            <TextBlock Grid.Row="1" Grid.Column="0" Classes="field" Text="Aggro / leash / help (m)" />
+            <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="8">
+              <TextBox Width="70" Watermark="aggro" Text="{Binding AggroRadiusM}" />
+              <TextBox Width="70" Watermark="leash" Text="{Binding LeashRadiusM}" />
+              <TextBox Width="70" Watermark="help" Text="{Binding CallForHelpRadiusM}" />
+            </StackPanel>
+            <TextBlock Grid.Row="2" Grid.Column="0" Classes="field" Text="Flee at HP %" />
+            <TextBox   Grid.Row="2" Grid.Column="1" Width="70" HorizontalAlignment="Left" Text="{Binding FleeAtHealthPct}" />
+          </Grid>
+
+          <TextBlock Text="Ability rotation" FontWeight="SemiBold" Margin="0,8,0,4" />
+          <ItemsControl ItemsSource="{Binding Abilities}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:NpcAbilityRowViewModel">
+                <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
+                  <TextBox Width="180" Watermark="ability ref" Text="{Binding Ability}" />
+                  <TextBox Width="70" Watermark="prio" Text="{Binding Priority}" />
+                  <TextBox Width="90" Watermark="cd ms" Text="{Binding CooldownOverrideMs}" />
+                  <TextBox Width="80" Watermark="use&lt;HP%" Text="{Binding UseAtHealthBelowPct}" />
+                  <Button Content="✕"
+                          Command="{Binding $parent[ItemsControl].((vm:NpcEditorViewModel)DataContext).RemoveAbilityCommand}"
+                          CommandParameter="{Binding}" />
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <Button Content="+ Add ability" Command="{Binding AddAbilityCommand}" HorizontalAlignment="Left" />
+
+          <TextBlock Classes="section" Text="Interaction" />
+          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto">
+            <TextBlock Grid.Row="0" Grid.Column="0" Classes="field" Text="Gossip text" />
+            <TextBox   Grid.Row="0" Grid.Column="1" AcceptsReturn="True" TextWrapping="Wrap"
+                       Height="60" Text="{Binding GossipText}" />
+            <TextBlock Grid.Row="1" Grid.Column="0" Classes="field" Text="Vendor ref" />
+            <TextBox   Grid.Row="1" Grid.Column="1" Text="{Binding Vendor}" />
+          </Grid>
+
+          <TextBlock Classes="section" Text="Loot" />
+          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto">
+            <TextBlock Grid.Row="0" Grid.Column="0" Classes="field" Text="Loot table ref" />
+            <TextBox   Grid.Row="0" Grid.Column="1" Text="{Binding LootTable}" />
+            <TextBlock Grid.Row="1" Grid.Column="0" Classes="field" Text="Money (min / max)" />
+            <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="8">
+              <TextBox Width="80" Text="{Binding MoneyMin}" />
+              <TextBox Width="80" Text="{Binding MoneyMax}" />
+            </StackPanel>
+          </Grid>
+
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- Live YAML preview — proves the round-trip the CST layer guarantees. -->
+      <Border Grid.Column="1" BorderThickness="1,0,0,0"
+              BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Top" Text="YAML preview" FontWeight="SemiBold" Margin="8" />
+          <ScrollViewer Padding="8">
+            <TextBox Text="{Binding PreviewYaml}" IsReadOnly="True" AcceptsReturn="True"
+                     FontFamily="Cascadia Code,Menlo,Consolas,monospace" FontSize="12"
+                     BorderThickness="0" Background="Transparent" />
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+
+    </Grid>
+  </DockPanel>
+</UserControl>

@@ -53,6 +53,15 @@ public sealed class NpcData
     /// <summary>True when <paramref name="path"/> has a value.</summary>
     public bool Has(string path) => _values.ContainsKey(path);
 
+    /// <summary>Remove every <c>ai.abilities[i].*</c> entry (used when the editor rebuilds the list).</summary>
+    public void RemoveAbilities()
+    {
+        foreach (var key in _values.Keys.Where(k => k.StartsWith("ai.abilities[", System.StringComparison.Ordinal)).ToList())
+        {
+            _values.Remove(key);
+        }
+    }
+
     /// <summary>Number of <c>ai.abilities[i]</c> entries currently present (contiguous from 0).</summary>
     public int AbilityCount
     {
