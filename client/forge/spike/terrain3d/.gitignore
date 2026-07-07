@@ -1,0 +1,9 @@
+# Compiled Terrain3D GDExtension output — build artifact, rebuilt by
+# build_terrain3d.sh (same convention as client/project/bin/libmeridian.*).
+addons/terrain_3d/bin/
+
+# Scratch build tree (godot-cpp clone + object files).
+.build/
+
+# Godot import cache.
+.godot/

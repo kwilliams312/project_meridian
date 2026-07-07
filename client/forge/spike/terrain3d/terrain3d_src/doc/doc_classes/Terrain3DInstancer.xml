@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="Terrain3DInstancer" inherits="Object" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/godotengine/godot/master/doc/class.xsd">
+	<brief_description>
+	</brief_description>
+	<description>
+		This class places mesh instances defined in the Terrain3D asset dock into MultiMeshInstance3Ds on the ground.
+		Data is currently stored in [member Terrain3DRegion.instances] and loaded into MultiMeshInstances, which are attached to the scene tree and managed by this class.
+		[b]The methods available for adding instances are:[/b]
+		- [method add_transforms] - Accepts your list of transforms and parses them by region and cell location and stores in our data storage. Recommended for general API instancing.
+		- [method add_multimesh] - Pulls the transforms out of your MultiMesh and calls add_transforms.
+		- [method add_instances] - A feature rich function designed for hand editing via Terrain3DEditor.
+		- Creating your own instance data and inserting it directly into [member Terrain3DRegion.instances]. It's not difficult to do this in GDScript, but a thorough understanding of the C++ code in this class is recommended.
+		[b]The methods available for removing instances are:[/b]
+		- [method remove_instances] - Like add_instances, this is can be used procedurally but is designed for hand editing.
+		- [method clear_by_mesh], [method clear_by_location] - To erase large sections of instances.
+		- Editing [member Terrain3DRegion.instances] directly.
+		After modifying region data, run [method update_mmis] to rebuild the MultiMeshInstance3Ds.
+		[b]Read More:[/b]
+		- [b]Tutorial:[/b] [url=https://terrain3d.readthedocs.io/en/stable/docs/instancer.html]Foliage Instancing[/url]
+		- [b]Godot Reference:[/b] [url=https://docs.godotengine.org/en/stable/classes/class_multimesh.html]MultiMesh[/url]
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="add_instances">
+			<return type="void" />
+			<param index="0" name="global_position" type="Vector3" />
+			<param index="1" name="params" type="Dictionary" />
+			<description>
+				Used by Terrain3DEditor to place instances within the brush radius (size). In addition to the brush position, it also uses the following parameters if available, which are all set in the editor via tool_settings.gd.
+				- asset_id:int
+				- size:float
+				- strength:float
+				- fixed_scale:float
+				- random_scale:float
+				- fixed_spin:float
+				- random_spin:float
+				- fixed_tilt:float
+				- random_tilt:float
+				- align_to_normal:bool
+				- height_offset:float
+				- random_height:float
+				- vertex_color:Color
+				- random_hue:float
+				- random_darken:float
+				- slope:Vector2
+				- on_collision:bool
+				- raycast_height:float
+			</description>
+		</method>
+		<method name="add_multimesh">
+			<return type="void" />
+			<param index="0" name="mesh_id" type="int" />
+			<param index="1" name="multimesh" type="MultiMesh" />
+			<param index="2" name="transform" type="Transform3D" default="Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)" />
+			<param index="3" name="update" type="bool" default="true" />
+			<description>
+				Allows procedural placement of meshes, or importing from another MultiMeshInstancer placement tool. The specified mesh_id should already be setup as a [Terrain3DMeshAsset] in the asset dock. This function extracts the instance transforms and colors from a multimesh and passes it to [method add_transforms].
+				Update will regenerate the MultiMeshInstances. Disable for bulk adding, then call at the end.
+			</description>
+		</method>
+		<method name="add_transforms">
+			<return type="void" />
+			<param index="0" name="mesh_id" type="int" />
+			<param index="1" name="transforms" type="Transform3D[]" />
+			<param index="2" name="colors" type="PackedColorArray" default="PackedColorArray()" />
+			<param index="3" name="update" type="bool" default="true" />
+			<description>
+				Allows procedural placement of meshes. The mesh_id should already be setup as a [Terrain3DMeshAsset] in the asset dock. You provide the array of Transform3Ds and optional Colors, which will be parsed into our data storage.
+				This function adds the [member Terrain3DMeshAsset.height_offset] to the transform along its local Y axis.
+				Update will regenerate the MultiMeshInstances. Disable for bulk adding, then call at the end.
+			</description>
+		</method>
+		<method name="append_location">
+			<return type="void" />
+			<param index="0" name="region_location" type="Vector2i" />
+			<param index="1" name="mesh_id" type="int" />
+			<param index="2" name="transforms" type="Transform3D[]" />
+			<param index="3" name="colors" type="PackedColorArray" />
+			<param index="4" name="update" type="bool" default="true" />
+			<description>
+				Appends new transforms to the existing data within a region location. The mesh_id should already be setup as a [Terrain3DMeshAsset] in the asset dock.
+				Update will regenerate the MultiMeshInstances. Disable for bulk adding, then call at the end.
+			</description>
+		</method>
+		<method name="append_region">
+			<return type="void" />
+			<param index="0" name="region" type="Terrain3DRegion" />
+			<param index="1" name="mesh_id" type="int" />
+			<param index="2" name="transforms" type="Transform3D[]" />
+			<param index="3" name="colors" type="PackedColorArray" />
+			<param index="4" name="update" type="bool" default="true" />
+			<description>
+				Appends new transforms to the existing data within a region location. The mesh_id should already be setup as a [Terrain3DMeshAsset] in the asset dock.
+				Update will regenerate the MultiMeshInstances. Disable for bulk adding, then call at the end.
+			</description>
+		</method>
+		<method name="clear_by_location">
+			<return type="void" />
+			<param index="0" name="region_location" type="Vector2i" />
+			<param index="1" name="mesh_id" type="int" />
+			<description>
+				Removes all instancer data and MultiMeshInstance nodes attached to the tree for the specified region location and mesh id.
+			</description>
+		</method>
+		<method name="clear_by_mesh">
+			<return type="void" />
+			<param index="0" name="mesh_id" type="int" />
+			<description>
+				Removes all instancer data and MultiMeshInstance nodes attached to the tree for all regions for the specified mesh id.
+			</description>
+		</method>
+		<method name="clear_by_region">
+			<return type="void" />
+			<param index="0" name="region" type="Terrain3DRegion" />
+			<param index="1" name="mesh_id" type="int" />
+			<description>
+				Removes all instancer data and MultiMeshInstance nodes attached to the tree for the specified region and mesh id.
+			</description>
+		</method>
+		<method name="get_closest_mesh_id" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="global_position" type="Vector3" />
+			<description>
+				Returns the mesh instance ID closest to the specified global position on the ground.
+			</description>
+		</method>
+		<method name="is_enabled" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns true if [member mode] is not disabled.
+			</description>
+		</method>
+		<method name="remove_instances">
+			<return type="void" />
+			<param index="0" name="global_position" type="Vector3" />
+			<param index="1" name="params" type="Dictionary" />
+			<description>
+				Terrain3DEditor uses this to randomly remove instances within the indicated brush position and radius (size). It uses these parameters if available, which are all set in the editor via tool_settings.gd:
+				- asset_id:int
+				- modifier_shift:bool
+				- size:float
+				- strength:float
+				- slope:Vector2
+				- on_collision:bool
+				- raycast_height:float
+			</description>
+		</method>
+		<method name="swap_ids">
+			<return type="void" />
+			<param index="0" name="src_id" type="int" />
+			<param index="1" name="dest_id" type="int" />
+			<description>
+				Swaps the ID of two meshes without changing the mesh instances on the ground.
+			</description>
+		</method>
+		<method name="update_mmis">
+			<return type="void" />
+			<param index="0" name="mesh_id" type="int" default="-1" />
+			<param index="1" name="region_location" type="Vector2i" default="Vector2i(2147483647, 2147483647)" />
+			<param index="2" name="rebuild_all" type="bool" default="false" />
+			<description>
+				Queues a request to rebuild the MMIs for the specified IDs and regions on the next RenderingServer.frame_pre_draw signal. This is safe to call multiple times per frame and it will de-duplicate and do the most general requests. So if you first call it for region (0,0), mesh 52, then later in the frame ask for all regions, mesh 52, it will do only the latter.
+				- mesh_id - rebuild MMIs for this mesh id. Use `-1` for all IDs.
+				- region_location - rebuild MMIs for this region. Use `Vector2i.MAX` for all regions.
+				- rebuild_all - destroy all MMIs first before rebuilding.
+			</description>
+		</method>
+		<method name="update_transforms">
+			<return type="void" />
+			<param index="0" name="aabb" type="AABB" />
+			<description>
+				Reviews all existing instance transforms within an AABB and adjusts their heights to match the terrain.
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="mode" type="int" setter="set_mode" getter="get_mode" enum="Terrain3DInstancer.InstancerMode" default="1">
+			Normal - Generates MMIs and renders  all instances as normal.
+			Disabled - prevents the instancer from creating any MultiMeshInstance3Ds.
+		</member>
+	</members>
+	<constants>
+		<constant name="NORMAL" value="1" enum="InstancerMode">
+			Create MultiMeshInstance3Ds and render instances as normal.
+		</constant>
+		<constant name="DISABLED" value="0" enum="InstancerMode">
+			Disables creation of MultiMeshInstance3Ds and instances.
+		</constant>
+	</constants>
+</class>
