@@ -1,0 +1,169 @@
+{
+  "uid": "meridian-worldd",
+  "title": "worldd (simulation)",
+  "tags": ["meridian", "ops-05", "v1", "worldd"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "realm",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+        "query": "label_values(meridian_ccu, realm)",
+        "includeAll": true,
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 200,
+      "title": "Tick loop",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "id": 1,
+      "title": "Map tick p50 / p99 (per zone/shard)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le, zone, shard) (rate(meridian_tick_duration_seconds_bucket{realm=~\"$realm\"}[5m])))", "legendFormat": "p50 {{zone}}/{{shard}}" },
+        { "refId": "B", "expr": "histogram_quantile(0.99, sum by (le, zone, shard) (rate(meridian_tick_duration_seconds_bucket{realm=~\"$realm\"}[5m])))", "legendFormat": "p99 {{zone}}/{{shard}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Tick throughput (ticks/s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "description": "Rate of tick observations = effective tick frequency per zone/shard.",
+      "fieldConfig": { "defaults": { "unit": "hertz" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (zone, shard) (rate(meridian_tick_duration_seconds_count{realm=~\"$realm\"}[5m]))", "legendFormat": "{{zone}}/{{shard}}" }
+      ]
+    },
+    {
+      "id": 201,
+      "title": "Movement validation",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }
+    },
+    {
+      "id": 3,
+      "title": "Movement violations by kind",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "description": "kind ∈ {speed, teleport, bounds, z} — the M0 validator taxonomy (world_metrics.h move_reject_kind).",
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (kind) (rate(meridian_movement_violations_total{realm=~\"$realm\"}[5m]))", "legendFormat": "{{kind}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Snap-back corrections",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (zone, shard) (rate(meridian_movement_corrections_total{realm=~\"$realm\"}[5m]))", "legendFormat": "{{zone}}/{{shard}}" }
+      ]
+    },
+    {
+      "id": 202,
+      "title": "Area of interest & load",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 }
+    },
+    {
+      "id": 5,
+      "title": "AoI entities per map",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (map, zone, shard) (meridian_aoi_entities{realm=~\"$realm\"})", "legendFormat": "{{map}} {{zone}}/{{shard}}" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Opcode rate (top 10)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "topk(10, sum by (opcode) (rate(meridian_opcode_total{realm=~\"$realm\"}[5m])))", "legendFormat": "{{opcode}}" }
+      ]
+    },
+    {
+      "id": 203,
+      "title": "IO-worker saturation (max CCU/worldd ≈ io_workers — #278)",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 }
+    },
+    {
+      "id": 7,
+      "title": "CCU per shard (io-worker saturation proxy)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "description": "At M0 worldd uses one blocking IO worker per connection (pool = cores−3, or --io-workers N). Max concurrent CCU per worldd ≈ io_workers (#278). No io-worker count/utilization metric exists yet (GAP) — CCU is the closest saturation signal. Rising CCU approaching the configured --io-workers ceiling means connections will start waiting in the accept backlog.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (zone, shard) (meridian_ccu{realm=~\"$realm\"})", "legendFormat": "CCU {{zone}}/{{shard}}" }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Connection churn (accepted / closed)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "description": "process=\"worldd\" isolates worldd's connection lifecycle from authd's.",
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(meridian_connections_accepted_total{realm=~\"$realm\", process=\"worldd\"}[5m]))", "legendFormat": "accepted/s" },
+        { "refId": "B", "expr": "sum(rate(meridian_connections_closed_total{realm=~\"$realm\", process=\"worldd\"}[5m]))", "legendFormat": "closed/s" }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "IO-worker utilization — instrumentation gap (#278)",
+      "type": "text",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 36 },
+      "options": {
+        "mode": "markdown",
+        "content": "### IO-worker utilization is not yet a metric (gap — #278)\n\nAt **M0**, worldd serves each connection start-to-finish on **one blocking IO worker**; the pool auto-sizes to `hardware_concurrency − 3` (override with `--io-workers N`). Therefore **max concurrent CCU per worldd ≈ io_workers** — on small hosts the `cores−3` default silently starves connections (they wait in the accept backlog until their session grants expire; this bit the 10-bot soak on a 2-vCPU runner, PR #275).\n\n**No `meridian_io_workers` / worker-busy gauge is emitted today**, so utilization cannot be charted directly. Use the **CCU per shard** panel above as the saturation proxy and compare it against the realm's configured `--io-workers`. Operators MUST set `--io-workers ≥ expected concurrent players` per realm (do not rely on the `cores−3` auto-default for capacity — #278).\n\n_To close this gap: add an `meridian_io_workers{realm,process}` gauge (pool size) + `meridian_io_workers_busy` gauge (in-flight) to `server/libs/metrics` catalog and stamp them from the worldd accept loop; this panel can then chart `busy / pool`._"
+      }
+    },
+    {
+      "id": 10,
+      "title": "DB latency p99 + RSS",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 43 },
+      "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [ { "matcher": { "id": "byFrameRefID", "options": "B" }, "properties": [ { "id": "unit", "value": "bytes" } ] } ] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.99, sum by (le, db) (rate(meridian_db_latency_seconds_bucket{realm=~\"$realm\"}[5m])))", "legendFormat": "db p99 {{db}}" },
+        { "refId": "B", "expr": "max (meridian_rss_bytes{realm=~\"$realm\", process=\"worldd\"})", "legendFormat": "worldd RSS" }
+      ]
+    }
+  ]
+}
