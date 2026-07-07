@@ -218,4 +218,87 @@ void validate(model::ContentModel& model, diag::Diagnostics& diags) {
     model.content_ref_count = refs.size();
 }
 
+void validate_single_file(const model::ParsedFile& pf, diag::Diagnostics& diags) {
+    const auto& f = pf.file;
+
+    // L001a — filename did not classify. (Same verdict as validate().)
+    if (f.kind == model::FileKind::Unknown) {
+        diags.error("L001", f.rel_path, "",
+                    "filename must be '<name>.<type>.yaml' or 'pack.yaml'");
+        return;
+    }
+    // A PARSE diagnostic was already emitted by the parse stage; nothing more is
+    // computable from an unparsed file.
+    if (!pf.parsed) return;
+
+    // L001b — declared envelope type must match the filename's type token.
+    const std::string expected = "meridian/" + f.file_type + "@1";
+    if (pf.schema != expected) {
+        diags.error("L001", f.rel_path, "",
+                    "declares '" + pf.schema + "', expected '" + expected + "'");
+        return;
+    }
+
+    // A pack manifest has no id and defines no references — nothing else is
+    // single-file-checkable beyond L001. (L002 pack ownership is inherently
+    // cross-file; noted below.)
+    if (f.kind == model::FileKind::Pack) return;
+
+    // From here every file is a content or asset definition with an `id`.
+    const std::string& doc_id = pf.id;
+    const std::size_t colon = doc_id.find(':');
+    if (colon == std::string::npos) {
+        diags.error("L003", f.rel_path, "",
+                    "id '" + doc_id + "' is not of the form '<namespace>:<type>.<name>'");
+        return;
+    }
+    const std::string local = doc_id.substr(colon + 1);
+    const std::string type_segment = local.substr(0, local.find('.'));
+
+    // L003 — id type segment must match the file's schema type. (Same verdict.)
+    if (f.kind == model::FileKind::Asset) {
+        if (!is_asset_prefix(type_segment)) {
+            diags.error("L003", f.rel_path, "",
+                        "asset id must use an art/mus/sfx/amb prefix, got '" +
+                            type_segment + "'");
+            return;
+        }
+    } else if (type_segment != f.file_type) {
+        diags.error("L003", f.rel_path, "",
+                    "id type segment '" + type_segment +
+                        "' does not match schema type '" + f.file_type + "'");
+        return;
+    }
+
+    // L002 (id namespace == owning pack namespace) needs the ancestor pack.yaml,
+    // and L010 (duplicate id) needs the whole corpus — neither is decidable from
+    // one file. Note them as deferred so the editor knows they are unconfirmed,
+    // rather than silently omitting them.
+    diags.info("L002", f.rel_path, "",
+               "id namespace ownership deferred — run 'mcc check' for the full corpus");
+    diags.info("L010", f.rel_path, "",
+               "duplicate-id check deferred — run 'mcc check' for the full corpus");
+
+    // Asset sidecars carry metadata refs, not L011 content refs (parity with
+    // validate()'s pass-1 skip).
+    if (f.kind == model::FileKind::Asset) return;
+
+    // Collect content references. In single-file mode we CANNOT resolve them
+    // (the referent lives in another file), so instead of a false L011 error we
+    // emit each as an Info note: "checkable, but deferred to a full check".
+    const std::string namespace_ = doc_id.substr(0, colon);
+    std::vector<std::pair<std::string, std::string>> strings;
+    walk_strings(pf.root, "$", /*top_level=*/true, strings);
+    for (const auto& [loc, value] : strings) {
+        std::smatch m;
+        if (std::regex_match(value, m, kRefRe)) {
+            const std::string ns = m[1].matched ? m[1].str() : namespace_;
+            const std::string resolved = resolve(m[2].str(), ns);
+            diags.info("L011", f.rel_path, loc,
+                       "reference '" + resolved +
+                           "' not resolved single-file — run 'mcc check' to confirm it exists");
+        }
+    }
+}
+
 }  // namespace mcc::stages

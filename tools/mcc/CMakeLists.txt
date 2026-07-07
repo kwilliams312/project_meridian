@@ -61,8 +61,13 @@ add_library(mcc_stages STATIC
     src/stages/check.cpp
     src/stages/format.cpp)
 
+# The single-file `--watch` loop (check.cpp) uses std::thread; some libstdc++
+# toolchains need an explicit pthread link. Threads::Threads is a no-op where
+# the standard library already pulls it in (e.g. macOS libc++).
+find_package(Threads REQUIRED)
+
 target_include_directories(mcc_stages PUBLIC src)
-target_link_libraries(mcc_stages PUBLIC yaml-cpp::yaml-cpp)
+target_link_libraries(mcc_stages PUBLIC yaml-cpp::yaml-cpp Threads::Threads)
 
 # ---- The single `mcc` executable -------------------------------------------
 add_executable(mcc src/main.cpp)
@@ -102,3 +107,17 @@ else()
 endif()
 
 add_test(NAME mcc-fmt-unit COMMAND mcc-tests)
+
+# Single-file / validation-as-you-type tests (`mcc check --file`, SAD §6.3):
+# valid/invalid verdicts, graceful cross-file-ref degradation, stable JSON
+# envelope, and the --watch re-validation loop.
+add_executable(mcc-check-file-tests
+    tests/test_check_file.cpp)
+target_link_libraries(mcc-check-file-tests PRIVATE mcc_stages)
+if(MSVC)
+    target_compile_options(mcc-check-file-tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(mcc-check-file-tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_test(NAME mcc-check-file-unit COMMAND mcc-check-file-tests)

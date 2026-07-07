@@ -44,16 +44,25 @@ void emit_stage(mcc::stages::Stage s) { mcc::stages::run(s, std::cout); }
 // from the repo root in CI and by editors, so ./content is the convention.
 constexpr std::string_view kDefaultContentDir = "./content";
 
-// Shared parse of the check/build diagnostics flags: `--diag-format=text|json`
-// and an optional positional content directory. Returns false on a bad flag
-// (with a message on stderr); on success fills `content_dir` and `format`.
+// Shared parse of the check/build diagnostics flags: `--diag-format=text|json`,
+// an optional positional content directory, and (check only) `--file <path>`
+// for single-file / validation-as-you-type mode. Returns false on a bad flag
+// (with a message on stderr); on success fills `content_dir`, `format`, and
+// `single_file` (empty unless `--file` was given). `--file` accepts both
+// `--file=<path>` and `--file <path>` forms.
 bool parse_check_flags(std::string_view prog_sub, const std::vector<std::string>& args,
-                       std::string& content_dir, mcc::stages::DiagFormat& format) {
+                       std::string& content_dir, mcc::stages::DiagFormat& format,
+                       std::string& single_file) {
     content_dir = std::string(kDefaultContentDir);
     format = mcc::stages::DiagFormat::Text;
+    single_file.clear();
     bool have_dir = false;
+    bool expect_file = false;  // saw a bare "--file"; next token is its value
     for (const auto& a : args) {
-        if (a == "--diag-format=json") {
+        if (expect_file) {
+            single_file = a;
+            expect_file = false;
+        } else if (a == "--diag-format=json") {
             format = mcc::stages::DiagFormat::Json;
         } else if (a == "--diag-format=text") {
             format = mcc::stages::DiagFormat::Text;
@@ -61,6 +70,10 @@ bool parse_check_flags(std::string_view prog_sub, const std::vector<std::string>
             std::cerr << kProg << " " << prog_sub << ": unknown --diag-format value '"
                       << a.substr(std::strlen("--diag-format=")) << "' (expected text | json)\n";
             return false;
+        } else if (a == "--file") {
+            expect_file = true;
+        } else if (a.rfind("--file=", 0) == 0) {
+            single_file = a.substr(std::strlen("--file="));
         } else if (!a.empty() && a[0] == '-') {
             std::cerr << kProg << " " << prog_sub << ": unknown flag '" << a << "'\n";
             return false;
@@ -71,6 +84,23 @@ bool parse_check_flags(std::string_view prog_sub, const std::vector<std::string>
             std::cerr << kProg << " " << prog_sub << ": unexpected extra argument '" << a << "'\n";
             return false;
         }
+    }
+    if (expect_file) {
+        std::cerr << kProg << " " << prog_sub << ": --file requires a path argument\n";
+        return false;
+    }
+    return true;
+}
+
+// Convenience overload for callers that never take `--file` (e.g. build).
+bool parse_check_flags(std::string_view prog_sub, const std::vector<std::string>& args,
+                       std::string& content_dir, mcc::stages::DiagFormat& format) {
+    std::string ignored_single_file;
+    if (!parse_check_flags(prog_sub, args, content_dir, format, ignored_single_file))
+        return false;
+    if (!ignored_single_file.empty()) {
+        std::cerr << kProg << " " << prog_sub << ": --file is not supported here\n";
+        return false;
     }
     return true;
 }
@@ -114,9 +144,37 @@ int cmd_build(const std::vector<std::string>& args) {
 }
 
 int cmd_check(const std::vector<std::string>& args) {
+    // --watch is stripped here (single-file only); the rest go to parse_check_flags.
+    bool watch = false;
+    std::vector<std::string> rest;
+    for (const auto& a : args) {
+        if (a == "--watch") watch = true;
+        else rest.push_back(a);
+    }
+
     std::string content_dir;
+    std::string single_file;
     mcc::stages::DiagFormat format;
-    if (!parse_check_flags("check", args, content_dir, format)) return 2;
+    if (!parse_check_flags("check", rest, content_dir, format, single_file)) return 2;
+
+    if (watch && single_file.empty()) {
+        std::cerr << kProg << " check: --watch requires --file <path>"
+                     " (single-file validation-as-you-type)\n";
+        return 2;
+    }
+
+    // --file <path> selects the fast single-file / validation-as-you-type path
+    // (Tools SAD §6.3): validate one file in isolation, cross-file refs deferred.
+    // The positional [dir] (default ./content) is used only as root context to
+    // make the diagnostic path root-relative, matching a full check's paths.
+    if (!single_file.empty()) {
+        if (watch) {
+            // Runs until the process is signalled (Ctrl-C); streams each result.
+            return mcc::stages::watch_file(single_file, content_dir, format, std::cout,
+                                           std::cerr);
+        }
+        return mcc::stages::check_file(single_file, content_dir, format, std::cout, std::cerr);
+    }
     return mcc::stages::check(content_dir, format, std::cout, std::cerr);
 }
 
@@ -215,7 +273,7 @@ int cmd_idmap(const std::vector<std::string>& args) {
 
 const Command kCommands[] = {
     {"build",     "check then compile /content -> IF-4 SQL + IF-5 .pck (--full, --watch)", cmd_build},
-    {"check",     "validate /content: structural lints (L001-L011); --diag-format=json", cmd_check},
+    {"check",     "validate /content (or --file <p>): structural lints (L001-L011)", cmd_check},
     {"fmt",       "canonically format /content YAML; --check for CI/pre-commit",       cmd_fmt},
     {"diff",      "compare two builds: diff <buildA> <buildB>",                        cmd_diff},
     {"pack",      "build a signed .mcpack community pack + content hash",              cmd_pack},
@@ -251,6 +309,14 @@ void print_help() {
            "  [dir]                content root to scan (default: ./content)\n"
            "  --diag-format=text   human-readable diagnostics (default)\n"
            "  --diag-format=json   structured diagnostics for Codex/Forge/CI\n\n"
+           "CHECK SINGLE-FILE (validation-as-you-type, SAD §6.3):\n"
+           "  --file <path>        validate ONE file, fast (sub-100ms editor loop);\n"
+           "                       cross-file refs (L002/L010/L011) reported as\n"
+           "                       deferred 'info' notes, never false errors. The\n"
+           "                       [dir] positional is used only as root context\n"
+           "                       for the diagnostic path.\n"
+           "  --watch              (with --file) re-validate on change, streaming\n"
+           "                       diagnostics until Ctrl-C (M1 half of TLS-06).\n\n"
            "FMT OPTIONS:\n"
            "  [path]               file or dir to format (default: ./content)\n"
            "  --check              report drift and exit non-zero; do not write\n\n"
