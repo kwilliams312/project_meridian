@@ -64,6 +64,12 @@ jobs:
         run: |
           echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/sbin" >> "$GITHUB_PATH"
+      # Install the toolchain rather than assuming the runner has it — a
+      # self-hosted runner is not guaranteed to have ninja/flatc. brew install is
+      # a no-op when already present; `|| true` swallows the nonzero some brew
+      # versions return for "already installed".
+      - name: Ensure build tools (arm64 Homebrew)
+        run: brew install ninja cmake flatbuffers openssl@3 || true
       - uses: actions/checkout@v4
         # No submodules: the engine-agnostic cores never touch godot-cpp.
       # Runs in the runner's own (Rosetta x86_64) process on purpose, so the log
@@ -138,6 +144,9 @@ jobs:
         run: |
           echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/sbin" >> "$GITHUB_PATH"
+      # Same self-sufficiency as client-cores: install the toolchain, don't assume it.
+      - name: Ensure build tools (arm64 Homebrew)
+        run: brew install ninja cmake flatbuffers openssl@3 || true
       - uses: actions/checkout@v4
         with:
           submodules: recursive   # client/godot-cpp at its pinned 4.7 commit
