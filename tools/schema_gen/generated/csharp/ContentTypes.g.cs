@@ -541,7 +541,7 @@ public sealed record Quest
     public required IReadOnlyList<QuestObjective> Objectives { get; init; }
     public required QuestRewards Rewards { get; init; }
     /// <summary>Reserved for QST-02 (M2) scripted events. Validators reject non-null values until then.</summary>
-    public object?? Script { get; init; }
+    public object? Script { get; init; }
 }
 
 public sealed record LootEntry
@@ -672,7 +672,7 @@ public sealed record Zone
     /// <summary>New characters may start here (spawn point = first graveyard).</summary>
     public bool? StartZone { get; init; }
     /// <summary>RESERVED (A-08). Will point at the Forge chunk-export manifest once the format is in /schema.</summary>
-    public object?? ChunkManifest { get; init; }
+    public object? ChunkManifest { get; init; }
     /// <summary>Zone-default adaptive music set (AUD-02); explore layer is required if music is present.</summary>
     public ZoneMusic? Music { get; init; }
     /// <summary>Zone-default ambient bed (AUD-03). amb.* asset ID per decision D-24.</summary>

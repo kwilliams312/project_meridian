@@ -31,7 +31,10 @@ _SCALAR_CS = {
     "integer": "long",
     "number": "double",
     "boolean": "bool",
-    "null": "object?",
+    # A schema `type: null` field (reserved keys like quest.script). Base type is
+    # `object`; the optional-member logic adds the `?`. Reserved-null fields are
+    # always optional in practice, so this surfaces as `object?`.
+    "null": "object",
 }
 
 _REF_TYPE_NAME = {

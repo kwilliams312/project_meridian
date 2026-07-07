@@ -283,3 +283,7 @@ def test_csharp_output_is_wellformed():
     assert "namespace Meridian.Codex.Models;" in text
     assert "#nullable enable" in text
     assert text.count("{") == text.count("}")
+    # A `type: null` schema field must not double up nullability (`object??` is a
+    # C# syntax error — regression guard for the quest.script / zone.chunk_manifest
+    # reserved-null fields).
+    assert "??" not in text
