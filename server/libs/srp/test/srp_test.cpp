@@ -2,11 +2,12 @@
 //
 // meridian-srp tests. The correctness gate is the RFC 5054 Appendix B test
 // vectors: the standard's worked SRP-6a example (I=alice, P=password123,
-// 1024-bit group, SHA-1) with published intermediate values. Reproducing k, x,
-// and u exactly proves the group parameters, hashing, PAD, and the A/B/v
-// derivations are correct (u = H(PAD(A) | PAD(B)), so a matching u transitively
-// confirms A and B, and B depends on v). A round-trip and negative cases cover
-// the M1/M2 proof machinery (RFC 5054 App B stops at the premaster secret S).
+// 1024-bit group, SHA-1) with published intermediate values. This test asserts
+// EVERY value Appendix B publishes — k, x, the verifier v, the public values A
+// and B, u, and the premaster secret S — byte-for-byte against the RFC. Matching
+// them proves the group parameters, hashing, PAD, and the full v/A/B/S derivation
+// chain are correct end to end. A round-trip and negative cases then cover the
+// M1/M2 proof machinery (Appendix B itself stops at S).
 //
 // Clean-room: values below are transcribed from RFC 5054 Appendix B, not from
 // any implementation.
@@ -69,27 +70,55 @@ int main() {
     const Bytes b = from_hex("E487CB59D31AC550471E81F00F6928E01DDA08E974A004F49E61F5D105284D20");
     const Parameters p{Group::Rfc5054_1024, Hash::Sha1};
 
-    // Expected intermediate values (RFC 5054 Appendix B):
+    // Expected intermediate values (RFC 5054 Appendix B). k/x/u are the SHA-1
+    // scalars (20 bytes); v/A/B/S are the 1024-bit group values (128 bytes,
+    // big-endian, exactly as the RFC prints them).
     const std::string EXP_k = "7556AA045AEF2CDD07ABAF0F665C3E818913186F";
     const std::string EXP_x = "94B7555AABE9127CC58CCF4993DB6CF84D16C124";
     const std::string EXP_u = "CE38B9593487DA98554ED47D70A7AE5F462EF019";
+    const std::string EXP_v =
+        "7E273DE8696FFC4F4E337D05B4B375BEB0DDE1569E8FA00A9886D8129BADA1F1"
+        "822223CA1A605B530E379BA4729FDC59F105B4787E5186F5C671085A1447B52A"
+        "48CF1970B4FB6F8400BBF4CEBFBB168152E08AB5EA53D15C1AFF87B2B9DA6E04"
+        "E058AD51CC72BFC9033B564E26480D78E955A5E29E7AB245DB2BE315E2099AFB";
+    const std::string EXP_A =
+        "61D5E490F6F1B79547B0704C436F523DD0E560F0C64115BB72557EC44352E890"
+        "3211C04692272D8B2D1A5358A2CF1B6E0BFCF99F921530EC8E39356179EAE45E"
+        "42BA92AEACED825171E1E8B9AF6D9C03E1327F44BE087EF06530E69F66615261"
+        "EEF54073CA11CF5858F0EDFDFE15EFEAB349EF5D76988A3672FAC47B0769447B";
+    const std::string EXP_B =
+        "BD0C61512C692C0CB6D041FA01BB152D4916A1E77AF46AE105393011BAF38964"
+        "DC46A0670DD125B95A981652236F99D9B681CBF87837EC996C6DA04453728610"
+        "D0C6DDB58B318885D7D82C7F8DEB75CE7BD4FBAA37089E6F9C6059F388838E7A"
+        "00030B331EB76840910440B1B27AAEAEEB4012B7D7665238A8E3FB004B117B58";
+    const std::string EXP_S =
+        "B0DC82BABCF30674AE450C0287745E7990A3381F63B387AAF271A10D233861E3"
+        "59B48220F7C4693C9AE12B0A6F67809F0876E2D013800D6C41BB59B6D5979B5C"
+        "00A172B4A2A5903A0BDCAF8A709585EB2AFAFA8F3499B200210DCC1F10EB3394"
+        "3CD67FC88A2F39A4BE5BEC4EC0A3212DC346D7E474B29EDE8A469FFECA686E5A";
 
     std::printf("RFC 5054 Appendix B vectors (1024-bit group, SHA-1):\n");
     check_eq("k", testing::compute_k(p), EXP_k);
     check_eq("x", testing::compute_x(I, P, s, p), EXP_x);
 
-    // Registration reproduces the verifier; ServerSession(fixed b) and the
-    // test client(fixed a) reproduce B and A; u is derived from those.
+    // Registration reproduces the verifier v = g^x mod N (RFC 5054 App B).
     Verifier v = make_verifier(I, P, p, s);
+    check_eq("v", v.verifier, EXP_v);
+
+    // ServerSession(fixed b) reproduces B; the test client(fixed a) reproduces
+    // A; u is derived from both. Assert A and B against the RFC directly (not
+    // only transitively via u).
     ServerSession server(I, v.salt, v.verifier, p, b);
     testing::ClientProof cp = testing::client_side(I, P, s, a, server.B(), p);
+    check_eq("A", cp.A, EXP_A);
+    check_eq("B", server.B(), EXP_B);
     check_eq("u", testing::compute_u(cp.A, server.B(), p), EXP_u);
 
-    // Server and client independently derive the same premaster secret S — and
-    // therefore the same session key K (RFC 5054 App B's S is confirmed via u).
+    // The server-side premaster secret S = (A * v^u)^b mod N — the last value
+    // RFC 5054 Appendix B publishes. Assert it byte-for-byte.
     Bytes S_server = testing::server_premaster(I, s, v.verifier, cp.A, b, p);
-    std::printf("premaster / session key:\n");
-    check("server S nonzero", !S_server.empty());
+    std::printf("premaster secret S:\n");
+    check_eq("S", S_server, EXP_S);
 
     // ---- Full round-trip: client proof verifies, server returns M2 --------
     std::printf("round-trip (M1 verify -> M2):\n");
