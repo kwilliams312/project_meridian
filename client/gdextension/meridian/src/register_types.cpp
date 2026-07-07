@@ -1,6 +1,7 @@
 // GDExtension entry point for the Meridian client module.
-// Bootstrap scope (#158): registers only the placeholder MeridianClient class.
-// Later issues add the net / sim / stream / datastore classes (Client SAD §2).
+// Bootstrap scope (#158): registered the placeholder MeridianClient class.
+// #102 adds the `sim` kinematic movement controller (MeridianMovementController).
+// Later issues add the remaining net / stream / datastore classes (Client SAD §2).
 
 #include "register_types.h"
 
@@ -11,6 +12,7 @@
 #include <godot_cpp/godot.hpp>
 
 #include "meridian_client.h"
+#include "meridian_movement_controller.h"
 
 using namespace godot;
 
@@ -20,6 +22,7 @@ void initialize_meridian_module(ModuleInitializationLevel p_level) {
 	}
 
 	GDREGISTER_CLASS(meridian::MeridianClient);
+	GDREGISTER_CLASS(meridian::MeridianMovementController);
 }
 
 void uninitialize_meridian_module(ModuleInitializationLevel p_level) {
