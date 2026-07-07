@@ -104,6 +104,26 @@ Types: `str`, `int`, `bool` (`1/true/yes/on` ↔ `0/false/no/off`).
 | `worlddb.*` (content DB, IF-4) | str/int | ConnectParams defaults | — | `MERIDIAN_WORLDDB_*` |
 | `worlddb.expected.hash` | str | — | — | `MERIDIAN_WORLDDB_EXPECTED_HASH` |
 
+#### IO-worker sizing — max CCU per worldd (M0)
+
+At M0 worldd's network layer dedicates one blocking IO worker per active client
+connection for the life of the session — the same thread-per-connection model
+authd uses (meridian-net keeps BSD sockets + OpenSSL with no async runtime at M0,
+server SAD §5.1). The practical consequence is a hard M0 sizing rule:
+
+> **max concurrent clients per worldd ≈ `io.workers`.**
+
+`io.workers` defaults to `cores − 3`, leaving headroom for the tick loop, the
+AoI/relay work, and the acceptor. When connected clients reach `io.workers`,
+additional connects **starve** — they block waiting for a free worker instead of
+being served, surfacing as connect/handshake stalls (a failure mode seen in local
+multi-client demos when workers were scarce). Size a worldd for its target CCU
+accordingly, or raise `--io-workers` on a box with spare cores.
+
+This is a characteristic of the M0 blocking IO model; the M1+ net module may move
+to an async/evented design that decouples CCU from worker count (tracked with the
+M1 net work).
+
 ### telemetryd (client telemetry ingest)
 
 | Key | Type | Default | Flag | Env |
