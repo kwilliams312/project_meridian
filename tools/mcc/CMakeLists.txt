@@ -61,7 +61,9 @@ add_library(mcc_stages STATIC
     src/stages/check.cpp
     src/stages/format.cpp
     src/stages/idmap.cpp
-    src/stages/link.cpp)
+    src/stages/link.cpp
+    src/stages/emit_sql.cpp
+    src/hash/blake3.cpp)
 
 # The single-file `--watch` loop (check.cpp) uses std::thread; some libstdc++
 # toolchains need an explicit pthread link. Threads::Threads is a no-op where
@@ -137,3 +139,40 @@ else()
 endif()
 
 add_test(NAME mcc-link-unit COMMAND mcc-link-tests)
+
+# emit-sql stage + vendored BLAKE3 tests (SAD §2.6, IF-4): BLAKE3 correctness vs
+# published vectors, well-formed world DB SQL + a world_manifest row (64-hex
+# BLAKE3 hash, schema_version=1 — worldd #89's read shape), determinism (same
+# content -> identical SQL), and *Ref -> IF-9 numeric-id resolution.
+add_executable(mcc-emit-sql-tests
+    tests/test_emit_sql.cpp)
+target_link_libraries(mcc-emit-sql-tests PRIVATE mcc_stages)
+if(MSVC)
+    target_compile_options(mcc-emit-sql-tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(mcc-emit-sql-tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_test(NAME mcc-emit-sql-unit COMMAND mcc-emit-sql-tests)
+
+# DB-backed emit-sql integration test (SAD §2.6, IF-4): loads the world DDL + the
+# mcc-emitted SQL into a REAL MariaDB and asserts world_manifest + content tables
+# are populated. ENV-GUARDED — SKIPS (exit 0) without MERIDIAN_DB_*/MERIDIAN_WORLDDB_*
+# (parity with the worldd DB tests). Shells out to the `mariadb`/`mysql` client so
+# mcc keeps its dependency surface at just yaml-cpp (no MariaDB client lib link).
+add_executable(mcc-emit-sql-db-tests
+    tests/test_emit_sql_db.cpp)
+target_link_libraries(mcc-emit-sql-db-tests PRIVATE mcc_stages)
+if(MSVC)
+    target_compile_options(mcc-emit-sql-db-tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(mcc-emit-sql-db-tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Pass the repo-root world DDL dir + a sample content dir to the DB test so it can
+# load the real schema and emit real content. Resolved at configure time.
+target_compile_definitions(mcc-emit-sql-db-tests PRIVATE
+    MCC_WORLD_DDL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../schema/sql/world"
+    MCC_SAMPLE_CONTENT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../content")
+
+add_test(NAME mcc-emit-sql-db COMMAND mcc-emit-sql-db-tests)

@@ -32,6 +32,19 @@ int check(const std::string& content_dir, DiagFormat format, std::ostream& out,
 int link_content(const std::string& content_dir, DiagFormat format, bool allocate_ids,
                  bool report, std::ostream& out, std::ostream& err);
 
+// Run discover+parse+validate+link then the emit-sql stage (Tools SAD §2.6, IF-4).
+// Emits the world DB DML (content-table inserts + the one `world_manifest` row
+// worldd reads at boot) to `out_file` when non-empty, else to `out`. The front
+// half runs read-only (never writes idmap.lock — emit consumes the existing lock;
+// a drift is an L015 error and aborts). `mcc_version`/`built_at` are stamped into
+// world_manifest (built_at is a fixed/parameterized value, never the wall clock,
+// so the emit is reproducible). Diagnostics render to `out` unless emitting there.
+// Returns 0 on success, 1 on any error, 2 when `content_dir` cannot be scanned or
+// `out_file` cannot be written.
+int emit_sql_content(const std::string& content_dir, const std::string& out_file,
+                     const std::string& mcc_version, const std::string& built_at,
+                     DiagFormat format, std::ostream& out, std::ostream& err);
+
 // Fast single-file / incremental validation path (Tools SAD §6.3, TLS-06): run
 // classify + parse + the single-file lints over exactly ONE content file, with
 // cross-file rules (L002/L010/L011) degraded to deferred `Info` notes rather
