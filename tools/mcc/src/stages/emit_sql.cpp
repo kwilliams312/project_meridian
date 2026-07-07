@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "hash/blake3.h"
+#include "stages/content_hash.h"
 #include "stages/idmap.h"
 
 namespace mcc::stages {
@@ -867,40 +868,11 @@ EmitSqlResult emit_sql(const model::ContentModel& model, const LinkResult& linke
     }
 
     // ---- Compute the per-pack content hash (BLAKE3 of the canonical source
-    // tree): every content + asset + pack file under the namespace, iterated in
-    // sorted rel_path order, each contributing "rel_path\0<bytes>\0". This binds
-    // the hash to the exact source that produced the SQL (the three-way tie).
-    std::map<std::string, hash::Blake3> pack_hash;  // ns -> running hash
-    std::vector<const model::ParsedFile*> all_files;
-    for (const auto& pf : model.files) {
-        if (!pf.parsed) continue;
-        all_files.push_back(&pf);
-    }
-    std::sort(all_files.begin(), all_files.end(),
-              [](const model::ParsedFile* a, const model::ParsedFile* b) {
-                  return a->file.rel_path < b->file.rel_path;
-              });
-    // Group files by namespace. Pack manifests carry the namespace directly;
-    // content/asset ids carry it in the id prefix.
-    for (const model::ParsedFile* pf : all_files) {
-        std::string ns;
-        if (pf->file.kind == model::FileKind::Pack) ns = pf->namespace_;
-        else ns = ns_of(pf->id);
-        if (ns.empty()) continue;
-        // Re-serialize the parsed YAML canonically for a stable, editor-agnostic
-        // hash input (whitespace/comment-insensitive; matches "canonical source
-        // tree" in the SAD). Emitter uses the parsed model, so hashing the parsed
-        // form ties the hash to exactly what was compiled.
-        YAML::Emitter em;
-        em << pf->root;
-        const std::string canon = em.c_str() ? em.c_str() : "";
-        hash::Blake3& h = pack_hash[ns];
-        const std::string& rp = pf->file.rel_path;
-        h.update(rp.data(), rp.size());
-        h.update("\0", 1);
-        h.update(canon.data(), canon.size());
-        h.update("\0", 1);
-    }
+    // tree). This is the SHARED computation emit-pck also uses (content_hash.h),
+    // so the IF-4 world_manifest hash and the IF-5 pack.manifest.json hash are
+    // byte-identical — the three-way content-hash tie (SAD §2.6). Keeping it in
+    // one place is what makes the tie structurally impossible to break.
+    const std::map<std::string, std::string> pack_hash = compute_pack_hashes(model);
 
     // ---- Assemble the SQL script. -----------------------------------------
     std::ostringstream out;
@@ -933,7 +905,7 @@ EmitSqlResult emit_sql(const model::ContentModel& model, const LinkResult& linke
         const auto mit = linked.idmaps.find(pr.ns);
         pr.band = mit != linked.idmaps.end() ? mit->second.band : 0;
         const auto hit = pack_hash.find(pr.ns);
-        pr.hash = hit != pack_hash.end() ? hit->second.hex()
+        pr.hash = hit != pack_hash.end() ? hit->second
                                          : std::string(hash::kBlake3HexLen, '0');
         packs.push_back(std::move(pr));
     }

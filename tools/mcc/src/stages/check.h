@@ -45,6 +45,25 @@ int emit_sql_content(const std::string& content_dir, const std::string& out_file
                      const std::string& mcc_version, const std::string& built_at,
                      DiagFormat format, std::ostream& out, std::ostream& err);
 
+// Run discover+parse+validate+link then the emit-pck stage (Tools SAD §2.7, IF-5).
+// Assembles the client content pack: pack.manifest.json (the IF-5 metadata the
+// client mounts + verifies) plus an M0 directory-manifest pack payload. When
+// `out_dir` is non-empty, both files are written under
+// <out_dir>/meridian/<namespace>/ (mirroring the res:// layout root); when empty,
+// pack.manifest.json goes to `out` and diagnostics to `err`. Like emit-sql, the
+// front half runs read-only (never writes idmap.lock — the entry numeric ids MUST
+// match the SQL keys, so both stages read the identical allocated idmap; a drift
+// is an L015 error). `content_hash` in the manifest is byte-identical to
+// emit-sql's world_manifest hash (the three-way tie, SAD §2.6). `mcc_version`/
+// `built_at` are stamped in (built_at parameterized, never the wall clock);
+// `godot_version` overrides the pack's engine.godot pin when non-empty. Returns 0
+// on success, 1 on any error, 2 when `content_dir` cannot be scanned or `out_dir`
+// cannot be written.
+int emit_pck_content(const std::string& content_dir, const std::string& out_dir,
+                     const std::string& mcc_version, const std::string& built_at,
+                     const std::string& godot_version, DiagFormat format,
+                     std::ostream& out, std::ostream& err);
+
 // Fast single-file / incremental validation path (Tools SAD §6.3, TLS-06): run
 // classify + parse + the single-file lints over exactly ONE content file, with
 // cross-file rules (L002/L010/L011) degraded to deferred `Info` notes rather
