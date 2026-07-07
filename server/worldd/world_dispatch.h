@@ -49,6 +49,7 @@
 
 #include "movement_validation.h"
 #include "world_generated.h"
+#include "world_metrics.h"
 #include "world_session.h"
 #include "world_state.h"
 
@@ -139,6 +140,12 @@ struct ConnCtx {
     db::Connection* char_db = nullptr;   // characters DB — nullable (placeholder fallback)
     std::uint32_t realm_id = 0;          // realm this worldd serves (0 = accept any)
 
+    // OPS-05 map-scoped metric labels (#164). Stamped by serve_connection from the
+    // WorldServerConfig; every handler's metric call uses this so the emitted
+    // series carry the {realm,zone,shard,map} the dashboards group by. Defaults to
+    // the reference/0/0/bootstrap M0 labels (fine for the DB-less dispatch test).
+    MetricsLabels labels;
+
     std::optional<WorldSession> session; // established on a valid WORLD_HELLO
     bool authenticated = false;
 
@@ -156,6 +163,12 @@ struct ConnCtx {
     std::shared_ptr<SessionEgress> egress;
     SessionSlot slot = 0;
     bool entered = false;
+
+    // OPS-05: true once this session bumped the CCU / active-session gauges on a
+    // valid WORLD_HELLO, so the serve loop decrements them EXACTLY once on close
+    // (distinct from `entered`, which tracks AoI registration — a session can be
+    // authenticated/counted without a world registry in the DB-less path).
+    bool entered_metrics = false;
 
     bool disconnect = false;             // handler asks the serve loop to close
     net::DisconnectReason disconnect_reason = net::DisconnectReason::UNKNOWN;
@@ -272,6 +285,11 @@ struct WorldServerConfig {
     db::ConnectParams auth_db;
     db::ConnectParams char_db;
     std::uint32_t realm_id = 0;
+
+    // OPS-05 metric label context (#164) — copied onto each connection's ConnCtx
+    // so every worldd metric carries the {realm,zone,shard,map} the dashboards
+    // query. main() fills `labels.realm` from --realm / MERIDIAN_REALM.
+    MetricsLabels labels;
 };
 
 class WorldServer {

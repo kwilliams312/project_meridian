@@ -15,6 +15,7 @@
 #include <thread>
 
 #include "meridian/core/log.hpp"
+#include "meridian/metrics/catalog.h"
 
 namespace meridian::worldd {
 namespace {
@@ -22,6 +23,7 @@ namespace {
 namespace fb = flatbuffers;
 namespace mn = meridian::net;
 namespace log = meridian::core::log;
+namespace metrics = meridian::metrics::catalog;
 
 constexpr const char* kCat = "worldd";
 
@@ -190,18 +192,31 @@ DispatchOutcome Dispatcher::dispatch(net::Session& sess, const Bytes& frame,
     last_opcode = static_cast<std::uint16_t>(f.opcode);
     last_seq = f.seq;
 
+    // OPS-05: the opcode label for every per-opcode series (Realm-health /
+    // Errors dashboards). Computed once from the decoded opcode.
+    const std::string op = opcode_label(last_opcode);
+
     auto it = handlers_.find(last_opcode);
     if (it == handlers_.end()) {
         // No handler. Distinguish a reserved (declared-but-not-implemented)
         // domain from a wholly unknown value so the serve loop can report each
-        // cleanly (both close the connection with a Disconnect).
-        return is_reserved_range(last_opcode) ? DispatchOutcome::kReservedOpcode
-                                              : DispatchOutcome::kUnknownOpcode;
+        // cleanly (both close the connection with a Disconnect). Either way the
+        // frame is DROPPED (meridian_opcode_dropped_total{...,opcode,reason}).
+        const bool reserved = is_reserved_range(last_opcode);
+        metrics::opcode_dropped_total()
+            .with(ctx.labels.rzs_opcode_reason(op, reserved ? "reserved" : "unknown"))
+            .inc();
+        return reserved ? DispatchOutcome::kReservedOpcode
+                        : DispatchOutcome::kUnknownOpcode;
     }
 
-    // Known opcode: verify its FlatBuffer payload table before the handler sees
-    // it (never hand an unverified buffer to a handler).
+    // A known opcode was received (count it — meridian_opcode_total{...,opcode}).
+    metrics::opcode_total().with(ctx.labels.rzs_opcode(op)).inc();
+
+    // Verify its FlatBuffer payload table before the handler sees it (never hand
+    // an unverified buffer to a handler). A verify failure is a per-opcode error.
     if (!verify_payload_for(f.opcode, f)) {
+        metrics::opcode_errors_total().with(ctx.labels.rzs_opcode(op)).inc();
         return DispatchOutcome::kBadPayload;
     }
 
@@ -226,6 +241,11 @@ void Dispatcher::register_m0_stubs() {
                // the client which check failed); the reason is logged server-side.
                log::warn(kCat, "WORLD_HELLO rejected grant_id=" +
                                    std::to_string(grant_id) + ": " + why);
+               // OPS-05: a rejected handshake is a WORLD_HELLO error (Errors dash).
+               metrics::opcode_errors_total()
+                   .with(ctx.labels.rzs_opcode(opcode_label(
+                       static_cast<std::uint16_t>(net::Opcode::WORLD_HELLO))))
+                   .inc();
                ctx.disconnect = true;
                ctx.disconnect_reason = net::DisconnectReason::GRANT_INVALID;
                ctx.disconnect_message = "grant invalid";
@@ -245,9 +265,17 @@ void Dispatcher::register_m0_stubs() {
            }
 
            // 1. Validate + atomically consume the grant (single-use guarantee).
+           //    OPS-05: time the auth-DB round-trip (meridian_db_latency_seconds
+           //    {realm,db="auth"}) — the grant consume is worldd's one M0 DB call.
            GrantReject gr = GrantReject::kUnknown;
+           const auto db_t0 = std::chrono::steady_clock::now();
            std::optional<GrantConsumed> consumed =
                validate_and_consume_grant(*ctx.db, grant_id, ctx.realm_id, gr);
+           metrics::db_latency_seconds()
+               .with({ctx.labels.realm, "auth"})
+               .observe(std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - db_t0)
+                            .count());
            if (!consumed) {
                const char* why = "unknown grant";
                switch (gr) {
@@ -269,6 +297,14 @@ void Dispatcher::register_m0_stubs() {
                return;
            }
            ctx.authenticated = true;
+
+           // OPS-05: this session is now authenticated + entering the world. Bump
+           // CCU (meridian_ccu{realm,zone,shard}) and the "active" session gauge
+           // (meridian_sessions{realm,state="active"}); the serve loop decrements
+           // both on disconnect. These drive the Realm-health CCU panel.
+           metrics::ccu().with(ctx.labels.rzs()).inc();
+           metrics::sessions().with({ctx.labels.realm, "active"}).inc();
+           ctx.entered_metrics = true;
 
            // 3. Enter world: load the D-11 placeholder character.
            PlaceholderCharacter pc =
@@ -329,6 +365,11 @@ void Dispatcher::register_m0_stubs() {
                // the same entity id — otherwise two placeholder sessions would
                // both echo guid 0 and be indistinguishable to the client.
                ctx.movement->set_entity_guid(er.entity_guid);
+               // OPS-05: reflect the new AoI population on the map gauge
+               // (meridian_aoi_entities{realm,zone,shard,map}) — Realm-health.
+               metrics::aoi_entities()
+                   .with(ctx.labels.rzsm())
+                   .set(static_cast<double>(ctx.world->session_count()));
            }
        });
 
@@ -390,6 +431,14 @@ void Dispatcher::register_m0_stubs() {
             log::debug(kCat, "MOVEMENT_INTENT seq=" + std::to_string(pod.seq) +
                                  " dropped (rate class > " +
                                  std::to_string(movement::kMovementIntentMaxHz) + "/s)");
+            // OPS-05: a rate-throttled intent is a drop (not a violation) —
+            // meridian_opcode_dropped_total{...,opcode=MOVEMENT_INTENT,
+            // reason=rate_limit}. Feeds the Errors dashboard's drop panel.
+            metrics::opcode_dropped_total()
+                .with(ctx.labels.rzs_opcode_reason(
+                    opcode_label(static_cast<std::uint16_t>(net::Opcode::MOVEMENT_INTENT)),
+                    "rate_limit"))
+                .inc();
             return;
         }
 
@@ -400,6 +449,18 @@ void Dispatcher::register_m0_stubs() {
         // world thread is the WorldServer queue (#87).
         MoveDecision decision = ctx.movement->validate_move(pod, pod.client_time_ms);
         ctx.movement->apply(decision, pod, pod.client_time_ms);
+
+        // OPS-05: a REJECTED intent is BOTH a movement-check violation (by kind —
+        // meridian_movement_violations_total{...,kind}) AND a snap-back correction
+        // issued to the client (meridian_movement_corrections_total{...}). These
+        // are the Player-experience dashboard's correction/snap-back rate panels.
+        if (!decision.accepted) {
+            metrics::movement_violations_total()
+                .with({ctx.labels.realm, ctx.labels.zone, ctx.labels.shard,
+                       move_reject_kind(decision.reject)})
+                .inc();
+            metrics::movement_corrections_total().with(ctx.labels.rzs()).inc();
+        }
 
         // The authoritative timestamp for this MovementState (SAD §5.5 / world.fbs
         // server_time_ms). A real monotonic map-tick clock is a later concern; a
@@ -517,6 +578,13 @@ void WorldServer::world_thread_main() {
     using namespace std::chrono;
     const auto interval = milliseconds(cfg_.tick_interval_ms);
 
+    // OPS-05: the tick-duration histogram (meridian_tick_duration_seconds
+    // {realm,zone,shard,map}; p99 = tick health, the Realm-health headline). We
+    // time the TICK BODY (drain + process), NOT the wait_for idle — the metric is
+    // "how long the tick's work took", so an idle tick with an empty batch is not
+    // measured (it would report ~0 and drown the real work in the histogram).
+    auto& tick_hist = metrics::tick_duration_seconds().with(cfg_.labels.rzsm());
+
     while (!impl_->stop_requested.load()) {
         std::deque<WorldEvent> batch;
         {
@@ -527,6 +595,9 @@ void WorldServer::world_thread_main() {
             batch.swap(impl_->queue);
         }
 
+        if (batch.empty()) continue;  // idle tick — no work to time
+
+        const auto tick_t0 = steady_clock::now();
         // "drain inbound" — process this tick's batch. At M0 the world thread has
         // no simulation to run against these events; it just accounts for them so
         // the queue -> world-thread path is observable (drained_count()).
@@ -536,6 +607,7 @@ void WorldServer::world_thread_main() {
         }
 
         // (movement / AI / combat / spawns / AoI / flush would run here)
+        tick_hist.observe(duration<double>(steady_clock::now() - tick_t0).count());
     }
 
     // Final drain on shutdown so no enqueued event is silently lost.
@@ -563,6 +635,7 @@ void WorldServer::serve_connection(net::Session sess) {
     // players (usable for --version / dispatch smoke tests without a DB).
     ConnCtx ctx;
     ctx.realm_id = cfg_.realm_id;
+    ctx.labels = cfg_.labels;   // OPS-05: stamp {realm,zone,shard,map} on metrics
     ctx.world = &impl_->world;  // shared AoI relay registry (#87)
     std::optional<db::Connection> auth_conn;
     std::optional<db::Connection> char_conn;
@@ -603,6 +676,11 @@ void WorldServer::serve_connection(net::Session sess) {
             // close even though dispatch itself succeeded (kHandled).
             if (outcome == DispatchOutcome::kHandled && ctx.disconnect) {
                 log::warn(kCat, "disconnecting " + peer + ": " + ctx.disconnect_message);
+                // OPS-05: disconnect by reason (meridian_disconnects_total{realm,
+                // reason}) — Player-experience dashboard.
+                metrics::disconnects_total()
+                    .with({ctx.labels.realm, disconnect_reason_label(ctx.disconnect_reason)})
+                    .inc();
                 try {
                     sess.write_frame(
                         make_disconnect(ctx.disconnect_reason, ctx.disconnect_message, seq));
@@ -635,6 +713,10 @@ void WorldServer::serve_connection(net::Session sess) {
                     break;  // unreachable (handled above)
             }
             log::warn(kCat, "disconnecting " + peer + ": " + detail);
+            // OPS-05: server-initiated disconnect by reason.
+            metrics::disconnects_total()
+                .with({ctx.labels.realm, disconnect_reason_label(reason)})
+                .inc();
             try {
                 sess.write_frame(make_disconnect(reason, detail, seq));
             } catch (const mn::TlsError&) {
@@ -654,8 +736,23 @@ void WorldServer::serve_connection(net::Session sess) {
     // mark_closed(), and none can once we drop out of the registry.
     if (ctx.entered && ctx.world != nullptr) {
         ctx.world->leave(ctx.slot);
+        // OPS-05: AoI population dropped by one (meridian_aoi_entities).
+        metrics::aoi_entities()
+            .with(ctx.labels.rzsm())
+            .set(static_cast<double>(ctx.world->session_count()));
     }
     if (ctx.egress) ctx.egress->mark_closed();
+
+    // OPS-05: this session is leaving — undo the CCU / active-session gauge bumps
+    // it made on WORLD_HELLO (exactly once, guarded by entered_metrics), so the
+    // Realm-health CCU panel tracks live sessions accurately.
+    if (ctx.entered_metrics) {
+        metrics::ccu().with(ctx.labels.rzs()).dec();
+        metrics::sessions().with({ctx.labels.realm, "active"}).dec();
+    }
+    // OPS-05 net signal: connection closed (SAD §8.5 accept/close). `process`
+    // label matches the accept counter's ("worldd").
+    metrics::connections_closed_total().with({ctx.labels.realm, "worldd"}).inc();
 
     sess.close();
 }

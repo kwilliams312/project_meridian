@@ -51,6 +51,12 @@ struct LoginConfig {
     // #66, auth.fbs SessionGrant.reconnect_window_ms).
     std::uint32_t grant_ttl_seconds = 30;
     std::uint32_t reconnect_window_ms = 30000;
+
+    // OPS-05 metrics label (docs/telemetry-architecture.md §5): the `realm` label
+    // value the auth-outcome + SRP-timing series carry (meridian_auth_*). authd is
+    // realm-agnostic (it serves the realm LIST), so this is the operator's realm
+    // name for grouping; defaults to "reference" (matching the ops stack labels).
+    std::string realm_label = "reference";
 };
 
 // Outcome of one login attempt — for the caller's logging / metrics and for the

@@ -37,6 +37,7 @@ target_link_libraries(world-dispatch
     meridian::net
     meridian::proto
     meridian::db
+    meridian::metrics  # OPS-05 session/opcode/movement/tick/disconnect metrics (#164)
     Threads::Threads
 )
 target_compile_features(world-dispatch PUBLIC cxx_std_20)

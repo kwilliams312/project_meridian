@@ -23,6 +23,8 @@
 #include "meridian/core/log.hpp"
 #include "meridian/core/version.hpp"
 #include "meridian/db/connection.h"
+#include "meridian/metrics/catalog.h"
+#include "meridian/metrics/exposer.h"
 #include "meridian/net/tls_listener.h"
 
 #include "login_session.h"
@@ -31,6 +33,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -53,6 +56,17 @@ struct AuthdConfig {
 
     // Login policy (login_session LoginConfig fields).
     meridian::authd::LoginConfig login;
+
+    // OPS-05 metrics endpoint (server SAD §8.5; docs/telemetry-architecture.md).
+    // A plain-HTTP /metrics scrape endpoint on a port SEPARATE from the game TLS
+    // port. Default 9464 (the port server/ops/otel-collector scrapes) bound to
+    // loopback (safe default; set --metrics-bind 0.0.0.0 for the container net).
+    // metrics_port = 0 disables the endpoint entirely (graceful degradation —
+    // D-29 §9 rule 6). The `realm` label the series carry (also the login metric
+    // realm) groups this daemon's series in Grafana.
+    std::uint16_t metrics_port = 9464;
+    std::string metrics_bind = "127.0.0.1";
+    std::string realm_label = "reference";
 };
 
 const char* env(const char* k) { return std::getenv(k); }
@@ -69,11 +83,19 @@ void print_help() {
         "  --bind ADDR        Bind address (default 0.0.0.0).\n"
         "  --port N           Listen port (default 7100, IF-1).\n"
         "  --build-floor N    Reject client builds below N (default 0 = none).\n"
+        "  --metrics-port N   Prometheus /metrics port (default 9464; 0=off).\n"
+        "  --metrics-bind ADDR  /metrics bind address (default 127.0.0.1).\n"
+        "  --realm NAME       realm label for metrics (default 'reference').\n"
         "  --version          Print version and build info, then exit.\n"
         "  --help, -h         Print this help, then exit.\n"
         "\n"
         "DB connection is read from the environment (MERIDIAN_DB_HOST, _PORT,\n"
-        "_USER, _PASS, _NAME, or _SOCKET). authd needs a live auth DB to serve.\n",
+        "_USER, _PASS, _NAME, or _SOCKET). authd needs a live auth DB to serve.\n"
+        "\n"
+        "Metrics: authd exposes a plain-HTTP Prometheus /metrics endpoint on the\n"
+        "metrics port (SEPARATE from the game TLS port) — the internal scrape\n"
+        "surface for the OPS-05 OTel collector (server/ops). Env: MERIDIAN_METRICS_\n"
+        "PORT, MERIDIAN_METRICS_BIND, MERIDIAN_REALM.\n",
         kDaemonName, kDaemonName);
 }
 
@@ -113,6 +135,10 @@ void handle_connection(meridian::net::Session sess, meridian::db::ConnectParams 
                                   "connection " + peer + " failed: " + e.what());
     }
     sess.close();
+    // OPS-05 net signal: this connection is now closed (SAD §8.5 accept/close).
+    meridian::metrics::catalog::connections_closed_total()
+        .with({login.realm_label, kDaemonName})
+        .inc();
 }
 
 }  // namespace
@@ -142,9 +168,25 @@ int main(int argc, char** argv) {
             cfg.login.build_floor = static_cast<std::uint32_t>(std::atoi(next("--build-floor")));
             continue;
         }
+        if (std::strcmp(argv[i], "--metrics-port") == 0) {
+            cfg.metrics_port = static_cast<std::uint16_t>(std::atoi(next("--metrics-port")));
+            continue;
+        }
+        if (std::strcmp(argv[i], "--metrics-bind") == 0) {
+            cfg.metrics_bind = next("--metrics-bind"); continue;
+        }
+        if (std::strcmp(argv[i], "--realm") == 0) { cfg.realm_label = next("--realm"); continue; }
         std::fprintf(stderr, "%s: unknown option '%s' (try --help)\n", kDaemonName, argv[i]);
         return 2;
     }
+
+    // Env fallbacks for the metrics endpoint + realm label (flags override).
+    if (const char* p = env("MERIDIAN_METRICS_PORT")) {
+        cfg.metrics_port = static_cast<std::uint16_t>(std::atoi(p));
+    }
+    if (const char* b = env("MERIDIAN_METRICS_BIND")) cfg.metrics_bind = b;
+    if (const char* r = env("MERIDIAN_REALM")) cfg.realm_label = r;
+    cfg.login.realm_label = cfg.realm_label;
 
     load_db_env(cfg.db);
 
@@ -172,6 +214,31 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // --- OPS-05 metrics endpoint ------------------------------------------------
+    // Start the plain-HTTP /metrics exposer BEFORE accepting logins so the OTel
+    // collector can scrape from the first request. A bind failure (e.g. port in
+    // use) is logged and the daemon continues WITHOUT metrics — the endpoint is an
+    // OPS-01 extension the daemon degrades gracefully around (D-29 §9 rule 6). Seed
+    // the process RSS gauge label so the series exists even before a sampler runs.
+    std::optional<meridian::metrics::Exposer> exposer;
+    if (cfg.metrics_port != 0) {
+        meridian::metrics::ExposerConfig ec;
+        ec.port = cfg.metrics_port;
+        ec.bind_addr = cfg.metrics_bind;
+        try {
+            exposer.emplace(ec, meridian::metrics::default_registry());
+            exposer->start();
+            meridian::metrics::catalog::rss_bytes().with({cfg.realm_label, kDaemonName}).set(0.0);
+            meridian::core::log::info(
+                kDaemonName, "metrics /metrics on http://" + cfg.metrics_bind + ":" +
+                                 std::to_string(exposer->port()));
+        } catch (const std::exception& e) {
+            meridian::core::log::warn(
+                kDaemonName, std::string("metrics endpoint disabled: ") + e.what());
+            exposer.reset();
+        }
+    }
+
     meridian::net::ListenConfig lc;
     lc.cert_path = cfg.cert_path;
     lc.key_path = cfg.key_path;
@@ -194,6 +261,10 @@ int main(int argc, char** argv) {
         for (;;) {
             try {
                 meridian::net::Session sess = listener.accept();
+                // OPS-05 net signal: a connection was accepted (post-handshake).
+                meridian::metrics::catalog::connections_accepted_total()
+                    .with({cfg.realm_label, kDaemonName})
+                    .inc();
                 std::thread(handle_connection, std::move(sess), cfg.db, cfg.login)
                     .detach();
             } catch (const meridian::net::TlsError& e) {
