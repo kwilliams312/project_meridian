@@ -36,6 +36,7 @@ jobs:
       # this also exercises the hermetic build path CI runners rely on.
       - name: Install C++ toolchain
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/*azure* /etc/apt/sources.list.d/*microsoft* 2>/dev/null || true
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake ninja-build g++-13
 
@@ -119,6 +120,7 @@ jobs:
       # mariadb-client provides the `mariadb` CLI for the world.sql load step.
       - name: Install toolchain (cmake, ninja, g++-13, mariadb client)
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/*azure* /etc/apt/sources.list.d/*microsoft* 2>/dev/null || true
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake ninja-build g++-13 mariadb-client
 

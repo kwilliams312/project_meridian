@@ -65,6 +65,7 @@ jobs:
       # ubuntu-latest (used by scripts/build-manifest.sh).
       - name: Install C++ toolchain
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/*azure* /etc/apt/sources.list.d/*microsoft* 2>/dev/null || true
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake ninja-build g++-13
 
