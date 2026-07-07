@@ -203,10 +203,10 @@ jobs:
       - name: Load auth schema (0001_init_auth.up.sql)
         run: |
           mariadb -h 127.0.0.1 -P 3306 -u root -pci meridian_auth < server/db/auth/migrations/0001_init_auth.up.sql
-      - name: Build worldd-session-test
+      - name: Build worldd-session-test + worldd-relay-test
         run: |
           cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
-          cmake --build server/build --target worldd worldd-session-test
+          cmake --build server/build --target worldd worldd-session-test worldd-relay-test
       - name: Run worldd IF-3 session establishment test (MariaDB service)
         env:
           MERIDIAN_DB_HOST: 127.0.0.1
@@ -215,3 +215,18 @@ jobs:
           MERIDIAN_DB_PASS: ci
           MERIDIAN_DB_NAME: meridian_auth
         run: ./server/build/worldd/worldd-session-test
+      # worldd Grid/AoI engine v0 + movement relay (#87): the IT-M0 "two clients
+      # see each other move" capstone. Two real TLS sessions consume two grants,
+      # both enter world near each other; A moves -> B gets A's EntityEnter then
+      # EntityUpdate at A's new position; A moves out of AoI range -> B gets
+      # EntityLeave. Same mariadb service + auth schema as the session test; the
+      # pure grid/interest logic runs DB-free in the `server` job's ctest
+      # (worldd-aoi).
+      - name: Run worldd AoI two-session relay test (MariaDB service)
+        env:
+          MERIDIAN_DB_HOST: 127.0.0.1
+          MERIDIAN_DB_PORT: 3306
+          MERIDIAN_DB_USER: root
+          MERIDIAN_DB_PASS: ci
+          MERIDIAN_DB_NAME: meridian_auth
+        run: ./server/build/worldd/worldd-relay-test
