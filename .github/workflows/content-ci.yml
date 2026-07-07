@@ -183,6 +183,25 @@ jobs:
           fi
           echo "CROSS-EMIT OK: the world DB SQL and client pack agree on content_hash."
 
+      # DETERMINISM GATE + GOLDEN CORPUS (#122, Tools SAD §9.1/§9.4, DC-11). The
+      # guarantee the whole content pipeline (IF-4/IF-5 content hashes, IF-9 idmap)
+      # rests on: mcc emit output must be byte-deterministic across runs/machines.
+      # scripts/check-golden.sh (reusing the mcc built above via --skip-mcc-build)
+      # runs TWO checks, either failing fails the gate:
+      #   (1) cross-run — build twice, output must be byte-identical (isolates
+      #       nondeterminism, a P0 tools bug), and
+      #   (2) golden match — a fresh build matches the checked-in golden corpus
+      #       (tools/mcc/golden/: world.sql, pack.manifest.json, pack.contents.jsonl,
+      #       index.json) byte-for-byte. Drift here means either nondeterminism
+      #       crept in OR content/output changed without the golden being
+      #       regenerated (`scripts/check-golden.sh --update-golden`). This catches
+      #       accidental nondeterminism AND unintended content/output changes in one
+      #       gate — the golden is the frozen expected bytes for content/core.
+      - name: Determinism gate — mcc output vs golden corpus (#122)
+        run: |
+          set -euo pipefail
+          NO_COLOR=1 ./scripts/check-golden.sh --skip-mcc-build
+
       # BONUS validation (d): load the world DDL + the mcc-emitted world.sql into
       # the live MariaDB and prove it loads AND populates. The DDL files reference
       # each other across files, so FOREIGN_KEY_CHECKS is disabled for the combined
