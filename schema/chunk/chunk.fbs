@@ -1,0 +1,202 @@
+// IF-6 — zone chunk **server payload** (Tools/Forge owns; Server consumes).
+// Contract: docs/sad/tools-sad.md §3.4 (per-chunk payload, server slice), as amended by
+//           the A-08 requirements walk (docs/reviews/a08-terrain-walk.md — server needs S1–S8,
+//           all accept). Grid/heightfield numbers: tools SAD §3.2. Coordinate system: §3.1.
+//           Companion index manifest: schema/chunk/chunk-manifest.schema.yaml (§3.3).
+//           Wire/disk narrative + endianness + hole sentinel: schema/chunk/chunk-payload.md.
+//
+// Role:       one FlatBuffers file per chunk — `<zone>/<cx>_<cz>.chunk.bin` (tools SAD §3.4).
+//             mcc bakes it into the IF-4 artifact set; `worldd` loads it (Server SAD §4.5).
+//             worldd NEVER parses Forge scene files — this is the entire server-facing slice.
+//             The client scene (`.scn`) + proxy are a SEPARATE artifact, NOT this schema.
+// Consumed:   M1 (chunk ingestion / navmesh bake — tools SAD §8). M0 lands the contract only;
+//             D-19 runs M0 on a flat bootstrap map, so nothing loads this file at M0.
+//
+// Coordinates: zone-local metres, permanent (tools SAD §3.1, D-20). Godot axes — right-handed,
+//              Y-up, X east, −Z north. The chunk grid tiles the XZ plane. Heights are metres.
+//              Server adopts these axes as-is (no per-consumer flips — walk S-axes / §3.1).
+//
+// Determinism: identical Forge input ⇒ identical bytes (walk C8, tools SAD §2.5/§9.1). The
+//              exporter MUST emit every vector in a fixed, sorted order (see chunk-payload.md);
+//              FlatBuffers field order is fixed by this schema. Any nondeterminism is a P0.
+//
+// Versioning:  `format_version` (uint16) is the FIRST field of the root table; loaders reject
+//              unknown majors (tools SAD §3.4). Additive-field FlatBuffers evolution within a
+//              major — append fields with defaults, never remove/reorder/retype/renumber an
+//              existing field, enums append-only within their backing type (schema/net/README
+//              "Versioning & evolution"). A major bump is a re-export event (tools SAD §3.4,
+//              A-08 second half, due M1 start). `file_identifier` gives loaders a cheap magic
+//              check before the version read.
+
+namespace meridian.chunk;
+
+file_identifier "MCHK";   // 4-byte magic at buffer offset 4 — reject wrong files early
+file_extension "bin";     // canonical on-disk extension: <cx>_<cz>.chunk.bin
+
+// ===========================================================================
+// Shared value types — FlatBuffers `struct` (inline, fixed-size, no vtable) so
+// the fixed geometry costs no offset table and stays byte-deterministic.
+// ===========================================================================
+
+/// Zone-local position in metres (Godot axes: Y-up, X east, −Z north).
+struct Vec3 {
+  x:float;
+  y:float;
+  z:float;
+}
+
+/// Chunk grid index (tools SAD §3.2). May be negative (§3.1 — Zone-01 spawns at x ≈ −300).
+/// Equal to the server AoI cell id (walk C9/S4: one grid, both consumers).
+struct ChunkCoord {
+  cx:int32;
+  cz:int32;
+}
+
+/// Axis-aligned bounding box in zone-local metres.
+struct Aabb {
+  min:Vec3;
+  max:Vec3;
+}
+
+// ===========================================================================
+// §3.2 — Heightfield block
+// 129×129 samples, 1 m spacing, f32, row-major, shared-edge convention (row/col
+// 128 duplicates the neighbouring chunk's edge). 128 m span + shared edge. Holes
+// / un-sculpted cells carry a sentinel the exporter lints on rather than silently
+// zeroing (tools SAD §5.2 op 4) — sentinel value defined in chunk-payload.md.
+// ===========================================================================
+
+table Heightfield {
+  side:uint16 = 129;          // samples per edge (129 = 128 m @ 1 m + shared edge)
+  spacing_m:float = 1.0;      // sample spacing in metres
+  samples:[float];            // side*side = 16641 f32, row-major (z-major, then x)
+}
+
+// ===========================================================================
+// §3.4 — Collision slice
+// Heightfield collider params + a static-collider list for collision-relevant kit
+// placements. Forge's `dressing-only` flag excludes decorative props (tools SAD §3.4).
+// ===========================================================================
+
+/// Static-collider primitive kinds. Append-only within uint8 (never renumber).
+enum ColliderShape : uint8 {
+  BOX          = 0,   // half_extents (Vec3)
+  SPHERE       = 1,   // radius
+  CAPSULE      = 2,   // radius + height (along local Y)
+  CYLINDER     = 3,   // radius + height (along local Y)
+  CONVEX_HULL  = 4,   // geometry from the referenced kit asset (`asset` id)
+  TRIMESH      = 5,   // static concave mesh from the referenced kit asset (`asset` id)
+}
+
+/// Heightfield collider parameters — how the terrain heightfield rasterises for physics.
+table HeightfieldCollider {
+  margin_m:float = 0.04;      // collision margin
+  thickness_m:float = 0.0;    // downward skirt to seal seams (0 = none)
+}
+
+/// One collision-relevant kit placement. Primitive params are read per `shape`;
+/// convex/trimesh shapes reference their geometry by kit asset id (never a raw path).
+table StaticCollider {
+  shape:ColliderShape = BOX;
+  position:Vec3;              // zone-local metres
+  rotation:Vec3;              // Euler radians (Godot XYZ), Y-up
+  half_extents:Vec3;         // BOX
+  radius:float = 0.0;        // SPHERE / CAPSULE / CYLINDER
+  height:float = 0.0;        // CAPSULE / CYLINDER (metres, local Y)
+  asset:string;              // IF-8 asset id for CONVEX_HULL / TRIMESH geometry
+}
+
+// ===========================================================================
+// §3.4 — Navmesh slice
+// 4×4 = 16 Recast tiles per chunk (32 m tiles, tools SAD §3.2), each a serialised
+// Detour tile blob. Bit-identical across forge_core/mcc/worldd (tools SAD §2.5); the
+// vendored Recast revision that produced them is recorded for load-time compat.
+// ===========================================================================
+
+/// One 32 m Recast/Detour navmesh tile. tx,tz ∈ [0,3] within the chunk.
+table NavmeshTile {
+  tx:uint8;                  // tile column within chunk (0..3, +X)
+  tz:uint8;                  // tile row within chunk (0..3, −Z)
+  data:[ubyte];             // Detour-serialised tile (dtCreateNavMeshData output)
+}
+
+// ===========================================================================
+// §3.4 — Cell-metadata slice (Server SAD §4.5; walk S2/S5/S6/S7)
+// ===========================================================================
+
+/// Liquid body kind. Append-only within uint8.
+enum LiquidType : uint8 {
+  WATER  = 0,
+  LAVA   = 1,
+  SLIME  = 2,
+}
+
+/// A liquid region: kind + flat surface height, bounded in XZ (Server SAD §4.5 "liquid volumes";
+/// walk S2 — type + surface height). `bounds` gives the region extent the server tests against.
+table LiquidRegion {
+  type:LiquidType = WATER;
+  surface_height_m:float;    // zone-local Y of the liquid surface
+  bounds:Aabb;               // region extent (metres)
+}
+
+/// Marker kind for server-side transitions. Append-only within uint8.
+enum MarkerType : uint8 {
+  ZONE_LINE          = 0,   // teleport zone transition (tools SAD §3.1 — server-side teleport)
+  INSTANCE_ENTRANCE  = 1,   // instance entrance (GRP-02)
+}
+
+/// A zone-line / instance-entrance marker (Server SAD §4.5; walk S5). `target` is the
+/// destination content id (zone / instance), never a raw path.
+table Marker {
+  kind:MarkerType = ZONE_LINE;
+  position:Vec3;             // trigger position, zone-local metres
+  radius_m:float = 0.0;      // trigger radius (0 = point marker; use `bounds` for a box)
+  bounds:Aabb;               // optional box trigger extent (metres)
+  target:string;            // destination content id (e.g. "core:zone.zone02")
+}
+
+/// Referenced-volume kind (geometry authored in zone content; referenced here by id). Append-only.
+enum VolumeKind : uint8 {
+  GRAVEYARD  = 0,   // CMB-03 corpse-run resurrection volume
+  LEASH      = 1,   // NPC leash volume
+}
+
+/// Graveyard / leash volume reference by content id (Server SAD §4.5; walk S7 —
+/// "by content id," consistent with the asset-ID discipline; the volume geometry
+/// lives in zone content, not here).
+table VolumeRef {
+  kind:VolumeKind = GRAVEYARD;
+  content_id:string;        // e.g. "core:zone.zone01" graveyard/leash volume id
+}
+
+/// PvP / rest flags for the cell. Bitfield on `ServerChunk.cell_flags` (walk S6).
+enum CellFlags : uint32 (bit_flags) {
+  PVP,        // 1<<0 — open-PvP cell
+  REST,       // 1<<1 — rested-XP / sanctuary cell
+}
+
+// ===========================================================================
+// Root — one per `<cx>_<cz>.chunk.bin` file.
+// ===========================================================================
+
+/// The complete server-facing payload for a single chunk (tools SAD §3.4).
+/// `format_version` MUST stay field 0 (first declared): loaders read it before anything else
+/// and reject unknown majors. `coord` is the AoI cell id (walk C9/S4).
+table ServerChunk {
+  format_version:uint16 = 1;         // FIRST field — reject unknown majors before further reads
+  coord:ChunkCoord (required);       // chunk grid index = AoI cell id
+  heightfield:Heightfield (required);// §3.2 movement-validation grid (S1)
+
+  hf_collider:HeightfieldCollider;   // terrain collider params
+  static_colliders:[StaticCollider]; // collision-relevant kit placements
+
+  navmesh_tiles:[NavmeshTile];       // 4×4 Detour tiles (S3)
+  recast_rev:string;                 // vendored Recast revision that baked the tiles
+
+  cell_flags:CellFlags = 0;          // PvP / rest bitfield (S6)
+  liquids:[LiquidRegion];            // liquid volumes (S2)
+  markers:[Marker];                  // zone-line / instance-entrance markers (S5)
+  volume_refs:[VolumeRef];           // graveyard / leash volume references by content id (S7)
+}
+
+root_type ServerChunk;
