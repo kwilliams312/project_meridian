@@ -7,9 +7,10 @@
 // through the SAME telemetry ITransport seam the #168 log channel uses
 // (telemetry_transport.h) — reusing the #167/#168 transport, inventing no new
 // endpoint. A report is deleted only after the transport ACCEPTS it (Ok); a
-// Failed/NoSink leaves the file for a later attempt (bounded retry across
-// launches — a dead endpoint never loses a crash, never grows unbounded because
-// the file count is capped by the max-retained policy at write time).
+// Failed/NoSink leaves the file for a later attempt (retry across launches — a
+// dead endpoint never loses a crash). Crashes are rare, so unbounded on-disk
+// growth is not a practical concern; a retained-file cap is a straightforward
+// later addition if ever needed.
 //
 // NOT on the crash path — this runs at normal launch, so it may use
 // std::filesystem + normal allocation freely (unlike crash_handler.cpp, which is
