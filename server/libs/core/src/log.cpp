@@ -246,11 +246,14 @@ std::string render_text(Level level, std::string_view category,
     return line;
 }
 
-void write(Level level, std::string_view category, std::string_view message,
-           const Fields& fields) {
-    if (static_cast<int>(level) < g_level.load(std::memory_order_relaxed)) {
-        return;
-    }
+namespace {
+
+// Render one record and push it to the sink under the write lock. The shared
+// emit half of write()/write_always(): identical rendering, sink selection and
+// locking — the ONLY difference between the two public entry points is whether
+// the global level filter is applied before reaching here.
+void emit_line(Level level, std::string_view category, std::string_view message,
+               const Fields& fields) {
     const Format fmt = get_format();
     std::string line = (fmt == Format::Json)
                            ? render_json(level, category, message, fields)
@@ -265,9 +268,26 @@ void write(Level level, std::string_view category, std::string_view message,
     std::fflush(sink);
 }
 
+}  // namespace
+
+void write(Level level, std::string_view category, std::string_view message,
+           const Fields& fields) {
+    if (static_cast<int>(level) < g_level.load(std::memory_order_relaxed)) {
+        return;
+    }
+    emit_line(level, category, message, fields);
+}
+
 void write(Level level, std::string_view category, std::string_view message) {
     static const Fields kNoFields;
     write(level, category, message, kNoFields);
+}
+
+void write_always(Level level, std::string_view category,
+                  std::string_view message, const Fields& fields) {
+    // No level check — audit records are recorded regardless of the operational
+    // log level (see log.hpp). Same sink/format/lock as write().
+    emit_line(level, category, message, fields);
 }
 
 }  // namespace meridian::core::log

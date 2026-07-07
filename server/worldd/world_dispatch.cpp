@@ -14,6 +14,7 @@
 #include <mutex>
 #include <thread>
 
+#include "meridian/core/audit.hpp"
 #include "meridian/core/log.hpp"
 #include "meridian/metrics/catalog.h"
 #include "meridian/trace/session_flow.h"
@@ -26,6 +27,7 @@ namespace {
 namespace fb = flatbuffers;
 namespace mn = meridian::net;
 namespace log = meridian::core::log;
+namespace audit = meridian::core::audit;
 namespace metrics = meridian::metrics::catalog;
 namespace tr = meridian::trace;
 
@@ -295,7 +297,7 @@ void Dispatcher::register_m0_stubs() {
            // takes — a reject or a successful HandshakeOk.
            const std::uint64_t trace_start_ns = tr::now_unix_nano();
 
-           auto reject = [&](const std::string& why) {
+           auto reject = [&](const std::string& why, const char* reason_code) {
                // OPS-05 traces: emit the enter-world span as a FAILURE at the
                // reject point (this is the failure point the trace surfaces).
                std::string trace_id, span_id;
@@ -310,6 +312,17 @@ void Dispatcher::register_m0_stubs() {
                    wf.push_back(log::field("span_id", span_id));
                }
                log::warn(kCat, "WORLD_HELLO rejected", wf);
+               // OPS-05 audit (#92): a denied session handshake is a security
+               // event. Record the machine-readable reject code + the offending
+               // grant as the correlation id; NO secret material (the session_key
+               // is never touched here — the grant failed validation). No account
+               // id: a rejected grant is not attributed to an authenticated actor.
+               audit::emit(audit::Record{
+                   .action = audit::Action::kGrantRejected,
+                   .outcome = audit::Outcome::kFailure,
+                   .reason = reason_code,
+                   .correlation_id = grant_id,
+               });
                // OPS-05: a rejected handshake is a WORLD_HELLO error (Errors dash).
                metrics::opcode_errors_total()
                    .with(ctx.labels.rzs_opcode(opcode_label(
@@ -323,13 +336,15 @@ void Dispatcher::register_m0_stubs() {
            // A second WORLD_HELLO on an already-authenticated connection is a
            // protocol error — the handshake happens exactly once.
            if (ctx.authenticated) {
-               reject("duplicate WorldHello on an authenticated connection");
+               reject("duplicate WorldHello on an authenticated connection",
+                      "duplicate_hello");
                return;
            }
            // No auth DB wired -> cannot validate a grant. Reject (the daemon can
            // run without a DB for smoke tests, but cannot admit players).
            if (ctx.db == nullptr) {
-               reject("no auth DB configured (grant validation unavailable)");
+               reject("no auth DB configured (grant validation unavailable)",
+                      "no_auth_db");
                return;
            }
 
@@ -347,22 +362,43 @@ void Dispatcher::register_m0_stubs() {
                             .count());
            if (!consumed) {
                const char* why = "unknown grant";
+               const char* code = "grant_unknown";  // audit reject code (#92)
                switch (gr) {
-                   case GrantReject::kUnknown:         why = "unknown grant"; break;
-                   case GrantReject::kExpired:         why = "expired grant"; break;
-                   case GrantReject::kAlreadyConsumed: why = "already-consumed grant (replay)"; break;
-                   case GrantReject::kWrongRealm:      why = "grant for a different realm"; break;
-                   case GrantReject::kDbError:         why = "grant DB error"; break;
+                   case GrantReject::kUnknown:
+                       why = "unknown grant"; code = "grant_unknown"; break;
+                   case GrantReject::kExpired:
+                       why = "expired grant"; code = "grant_expired"; break;
+                   case GrantReject::kAlreadyConsumed:
+                       why = "already-consumed grant (replay)"; code = "grant_replay"; break;
+                   case GrantReject::kWrongRealm:
+                       why = "grant for a different realm"; code = "grant_wrong_realm"; break;
+                   case GrantReject::kDbError:
+                       why = "grant DB error"; code = "grant_db_error"; break;
                }
-               reject(why);
+               reject(why, code);
                return;
            }
+
+           // OPS-05 audit (#92): the grant was validated + atomically consumed
+           // (single-use spent). Attribute it to the now-known account with the
+           // grant as the correlation id. The session_key returned by the consume
+           // is NEVER logged — only the account + grant id + realm target.
+           ctx.account_id = consumed->account_id;
+           ctx.grant_id = grant_id;
+           audit::emit(audit::Record{
+               .action = audit::Action::kGrantConsumed,
+               .outcome = audit::Outcome::kSuccess,
+               .account_id = consumed->account_id,
+               .target = "realm:" + std::to_string(consumed->realm_id),
+               .correlation_id = grant_id,
+           });
 
            // 2. Establish the AEAD session keyed by the grant's session_key.
            try {
                ctx.session.emplace(consumed->session_key);
            } catch (const net::TlsError& e) {
-               reject(std::string("session key setup failed: ") + e.what());
+               reject(std::string("session key setup failed: ") + e.what(),
+                      "session_key_setup_failed");
                return;
            }
            ctx.authenticated = true;
@@ -411,6 +447,17 @@ void Dispatcher::register_m0_stubs() {
                af.push_back(log::field("span_id", span_id));
            }
            log::info(kCat, "WORLD_HELLO accepted -> HandshakeOk", af);
+
+           // OPS-05 audit (#92): an authenticated session entered the world. The
+           // actor is the account; the target is the character; the correlation id
+           // ties this to the grant_consumed + the authd login. No secrets.
+           audit::emit(audit::Record{
+               .action = audit::Action::kSessionEnter,
+               .outcome = audit::Outcome::kSuccess,
+               .account_id = consumed->account_id,
+               .target = pc.name,
+               .correlation_id = grant_id,
+           });
 
            // 4. Reply HandshakeOk. content_hash is an M0 placeholder (IF-4 world
            //    content hashing is later); server_proof empty (see encoder note).
@@ -833,6 +880,16 @@ void WorldServer::serve_connection(net::Session sess) {
     if (ctx.entered_metrics) {
         metrics::ccu().with(ctx.labels.rzs()).dec();
         metrics::sessions().with({ctx.labels.realm, "active"}).dec();
+        // OPS-05 audit (#92): the session left the world. Attributed to the same
+        // account + grant correlation as its session_enter, so an audit query can
+        // pair enter/leave for a session's lifetime. Emitted once (entered_metrics
+        // is the same exactly-once guard the gauges use). No secrets.
+        audit::emit(audit::Record{
+            .action = audit::Action::kSessionLeave,
+            .outcome = audit::Outcome::kSuccess,
+            .account_id = ctx.account_id,
+            .correlation_id = ctx.grant_id,
+        });
     }
     // OPS-05 net signal: connection closed (SAD §8.5 accept/close). `process`
     // label matches the accept counter's ("worldd").

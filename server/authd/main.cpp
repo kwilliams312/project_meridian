@@ -20,6 +20,7 @@
 //
 // Clean-room: implemented from the SAD, no GPL source consulted (CONTRIBUTING).
 
+#include "meridian/core/audit.hpp"
 #include "meridian/core/config.hpp"
 #include "meridian/core/config_loader.hpp"
 #include "meridian/core/log.hpp"
@@ -138,6 +139,68 @@ void print_version() {
                 meridian::core::build_info().c_str());
 }
 
+// OPS-05 audit stream (#92): translate one login outcome into audit records on
+// the dedicated audit stream (meridian/core/audit.hpp), separate from the
+// operational "login processed" log above. Security-relevant login events only —
+// a login SUCCESS (+ the grant it issued) and a login FAILURE with a stable,
+// machine-readable reason code. NO secret material is ever passed: only the
+// resolved account id (0 if never resolved), the network peer, the grant id as
+// correlation, and the reason code — never the attempted password, the SRP
+// verifier, or the session key (SAD §2.1 "passwords never leaked").
+//
+// A kTransportClosed outcome is NOT audited: the peer simply dropped the
+// connection at a frame boundary before any auth decision was made — there is no
+// security event to record.
+void emit_login_audit(const std::string& peer,
+                      const meridian::authd::LoginResult& r) {
+    namespace audit = meridian::core::audit;
+    using meridian::authd::LoginOutcome;
+
+    switch (r.outcome) {
+        case LoginOutcome::kGranted:
+            // SRP proof verified: the account authenticated.
+            audit::emit(audit::Record{
+                .action = audit::Action::kLoginSuccess,
+                .outcome = audit::Outcome::kSuccess,
+                .account_id = r.account_id,
+                .correlation_id = r.grant_id,
+                .peer = peer,
+            });
+            // ...and a single-use session grant was issued for it.
+            audit::emit(audit::Record{
+                .action = audit::Action::kGrantIssued,
+                .outcome = audit::Outcome::kSuccess,
+                .account_id = r.account_id,
+                .correlation_id = r.grant_id,
+                .peer = peer,
+            });
+            return;
+        case LoginOutcome::kRejectedHello:
+        case LoginOutcome::kRejectedAuth:
+        case LoginOutcome::kRejectedRealm:
+        case LoginOutcome::kProtocolError: {
+            const char* reason = "protocol_error";
+            switch (r.outcome) {
+                case LoginOutcome::kRejectedHello: reason = "build_gate"; break;
+                case LoginOutcome::kRejectedAuth:  reason = "bad_credentials"; break;
+                case LoginOutcome::kRejectedRealm: reason = "realm_unavailable"; break;
+                case LoginOutcome::kProtocolError: reason = "protocol_error"; break;
+                default: break;
+            }
+            audit::emit(audit::Record{
+                .action = audit::Action::kLoginFailure,
+                .outcome = audit::Outcome::kFailure,
+                .account_id = r.account_id,  // 0 if never resolved -> omitted
+                .reason = reason,
+                .peer = peer,
+            });
+            return;
+        }
+        case LoginOutcome::kTransportClosed:
+            return;  // no auth decision — not a security event
+    }
+}
+
 // Handle one accepted connection: open a fresh DB connection, run the login flow,
 // log the outcome, close. Runs on its own detached thread; owns everything it
 // touches, so it never races another connection.
@@ -163,6 +226,9 @@ void handle_connection(meridian::net::Session sess, meridian::db::ConnectParams 
             fields.push_back(meridian::core::log::field("span_id", r.span_id));
         }
         meridian::core::log::info(kDaemonName, "login processed", fields);
+        // OPS-05 audit stream (#92): emit the security-audit view of this login on
+        // the dedicated audit stream (separate from the operational log above).
+        emit_login_audit(peer, r);
     } catch (const std::exception& e) {
         meridian::core::log::warn(
             kDaemonName, "connection failed",
