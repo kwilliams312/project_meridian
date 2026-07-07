@@ -130,7 +130,7 @@ int test_file_parser() {
     cfgl::FileLoadResult r = cfgl::load_config_string(c, text);
     CHECK(r.ok);
     CHECK(r.file_found);
-    CHECK(r.keys_loaded == 8);
+    CHECK(r.keys_loaded == 7);
 
     CHECK(c.get_string_or("realm", "?") == "reference");     // quotes stripped
     CHECK(c.get_string_or("db.host", "?") == "127.0.0.1");

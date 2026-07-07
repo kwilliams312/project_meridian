@@ -20,6 +20,8 @@
 //
 // Clean-room: implemented from the SAD, no GPL source consulted (CONTRIBUTING).
 
+#include "meridian/core/config.hpp"
+#include "meridian/core/config_loader.hpp"
 #include "meridian/core/log.hpp"
 #include "meridian/core/version.hpp"
 #include "meridian/db/connection.h"
@@ -42,9 +44,11 @@ namespace {
 
 constexpr const char* kDaemonName = "authd";
 
-// Runtime configuration, assembled from flags + env. Kept a plain struct (M0
-// config shape decision: flags override env override defaults — no config file
-// yet; a file loader can wrap this later without changing the daemon body).
+// Runtime configuration, resolved from the layered loader (issue #90):
+//   in-code defaults < config file < environment < command line   (highest wins)
+// The daemon registers its defaults, overlays a --config/MERIDIAN_CONFIG file,
+// the MERIDIAN_* environment, and the CLI flags into a meridian::core::Config,
+// then reads the effective values into this plain struct for the serve path.
 struct AuthdConfig {
     // TLS listener (meridian-net ListenConfig fields).
     std::string cert_path;
@@ -86,8 +90,6 @@ struct AuthdConfig {
     std::string log_level;   // empty = leave env/default (info)
 };
 
-const char* env(const char* k) { return std::getenv(k); }
-
 void print_help() {
     std::printf(
         "%s — Project Meridian login / realm-list / session-grant daemon\n"
@@ -95,6 +97,9 @@ void print_help() {
         "Usage: %s [options]\n"
         "\n"
         "Options:\n"
+        "  --config PATH      Layered config file (TOML/INI subset). Also\n"
+        "                     MERIDIAN_CONFIG. Precedence: defaults < file < env\n"
+        "                     < flags. Any key also settable as --<key>=<value>.\n"
         "  --cert PATH        TLS server certificate (PEM). Required to serve.\n"
         "  --key PATH         TLS private key (PEM). Required to serve.\n"
         "  --bind ADDR        Bind address (default 0.0.0.0).\n"
@@ -131,16 +136,6 @@ void print_version() {
     std::printf("%s %s\n%s\n", kDaemonName,
                 meridian::core::version_string().c_str(),
                 meridian::core::build_info().c_str());
-}
-
-// Fill db params from MERIDIAN_DB_* (same var names as meridian-db's test).
-void load_db_env(meridian::db::ConnectParams& p) {
-    if (const char* s = env("MERIDIAN_DB_SOCKET")) p.unix_socket = s;
-    if (const char* h = env("MERIDIAN_DB_HOST")) p.host = h;
-    if (const char* port = env("MERIDIAN_DB_PORT")) p.port = static_cast<unsigned>(std::atoi(port));
-    if (const char* u = env("MERIDIAN_DB_USER")) p.user = u;
-    if (const char* pw = env("MERIDIAN_DB_PASS")) p.password = pw;
-    if (const char* n = env("MERIDIAN_DB_NAME")) p.database = n;
 }
 
 // Handle one accepted connection: open a fresh DB connection, run the login flow,
@@ -186,6 +181,27 @@ void handle_connection(meridian::net::Session sess, meridian::db::ConnectParams 
 int main(int argc, char** argv) {
     AuthdConfig cfg;
 
+    // --- Layered config (issue #90) --------------------------------------------
+    // Build a meridian::core::Config from the four sources. Because Config::set
+    // only lets an equal-or-higher layer overwrite, the layers may be loaded in
+    // any order (file last) and precedence still resolves as
+    //   Default < File < Environment < CommandLine.
+    // Named flags below map to the SAME keys the MERIDIAN_* env vars map to (e.g.
+    // --metrics-port and MERIDIAN_METRICS_PORT both key "metrics.port"), so the
+    // documented env vars keep working while flags take precedence.
+    namespace core = meridian::core;
+    core::Config c;
+    // Default layer: the daemon's in-code defaults (mirror the struct above).
+    c.set("bind", "0.0.0.0", core::ConfigLayer::Default);
+    c.set("port", "7100", core::ConfigLayer::Default);         // IF-1 (SAD §5.1)
+    c.set("login.build_floor", "0", core::ConfigLayer::Default);
+    c.set("metrics.port", "9464", core::ConfigLayer::Default);
+    c.set("metrics.bind", "127.0.0.1", core::ConfigLayer::Default);
+    c.set("realm", "reference", core::ConfigLayer::Default);
+    c.set("trace.sample_ratio", "1.0", core::ConfigLayer::Default);
+
+    // CommandLine layer: the named "--flag value" legacy flags. A "--key=value"
+    // token is left for load_args_kv (also CommandLine) so any key is overridable.
     for (int i = 1; i < argc; ++i) {
         auto next = [&](const char* flag) -> const char* {
             if (i + 1 >= argc) {
@@ -194,60 +210,63 @@ int main(int argc, char** argv) {
             }
             return argv[++i];
         };
+        const auto cl = core::ConfigLayer::CommandLine;
         if (std::strcmp(argv[i], "--version") == 0) { print_version(); return 0; }
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             print_help(); return 0;
         }
-        if (std::strcmp(argv[i], "--cert") == 0) { cfg.cert_path = next("--cert"); continue; }
-        if (std::strcmp(argv[i], "--key") == 0) { cfg.key_path = next("--key"); continue; }
-        if (std::strcmp(argv[i], "--bind") == 0) { cfg.bind_addr = next("--bind"); continue; }
-        if (std::strcmp(argv[i], "--port") == 0) {
-            cfg.port = static_cast<std::uint16_t>(std::atoi(next("--port"))); continue;
-        }
-        if (std::strcmp(argv[i], "--build-floor") == 0) {
-            cfg.login.build_floor = static_cast<std::uint32_t>(std::atoi(next("--build-floor")));
-            continue;
-        }
-        if (std::strcmp(argv[i], "--metrics-port") == 0) {
-            cfg.metrics_port = static_cast<std::uint16_t>(std::atoi(next("--metrics-port")));
-            continue;
-        }
-        if (std::strcmp(argv[i], "--metrics-bind") == 0) {
-            cfg.metrics_bind = next("--metrics-bind"); continue;
-        }
-        if (std::strcmp(argv[i], "--otlp-endpoint") == 0) {
-            cfg.otlp_endpoint = next("--otlp-endpoint"); continue;
-        }
-        if (std::strcmp(argv[i], "--trace-sample-ratio") == 0) {
-            cfg.trace_sample_ratio = std::atof(next("--trace-sample-ratio")); continue;
-        }
-        if (std::strcmp(argv[i], "--realm") == 0) { cfg.realm_label = next("--realm"); continue; }
-        if (std::strcmp(argv[i], "--log-format") == 0) { cfg.log_format = next("--log-format"); continue; }
-        if (std::strcmp(argv[i], "--log-level") == 0) { cfg.log_level = next("--log-level"); continue; }
+        if (std::strcmp(argv[i], "--config") == 0) { c.set("config", next("--config"), cl); continue; }
+        if (std::strcmp(argv[i], "--cert") == 0) { c.set("tls.cert", next("--cert"), cl); continue; }
+        if (std::strcmp(argv[i], "--key") == 0) { c.set("tls.key", next("--key"), cl); continue; }
+        if (std::strcmp(argv[i], "--bind") == 0) { c.set("bind", next("--bind"), cl); continue; }
+        if (std::strcmp(argv[i], "--port") == 0) { c.set("port", next("--port"), cl); continue; }
+        if (std::strcmp(argv[i], "--build-floor") == 0) { c.set("login.build_floor", next("--build-floor"), cl); continue; }
+        if (std::strcmp(argv[i], "--metrics-port") == 0) { c.set("metrics.port", next("--metrics-port"), cl); continue; }
+        if (std::strcmp(argv[i], "--metrics-bind") == 0) { c.set("metrics.bind", next("--metrics-bind"), cl); continue; }
+        if (std::strcmp(argv[i], "--otlp-endpoint") == 0) { c.set("otlp.endpoint", next("--otlp-endpoint"), cl); continue; }
+        if (std::strcmp(argv[i], "--trace-sample-ratio") == 0) { c.set("trace.sample_ratio", next("--trace-sample-ratio"), cl); continue; }
+        if (std::strcmp(argv[i], "--realm") == 0) { c.set("realm", next("--realm"), cl); continue; }
+        if (std::strcmp(argv[i], "--log-format") == 0) { c.set("log.format", next("--log-format"), cl); continue; }
+        if (std::strcmp(argv[i], "--log-level") == 0) { c.set("log.level", next("--log-level"), cl); continue; }
+        // Generic "--key=value" override (e.g. --db.host=... , --login.build_floor=..).
+        if (std::strncmp(argv[i], "--", 2) == 0 && std::strchr(argv[i], '=') != nullptr) continue;
         std::fprintf(stderr, "%s: unknown option '%s' (try --help)\n", kDaemonName, argv[i]);
         return 2;
     }
+    core::load_args_kv(c, argc, argv);            // CommandLine: --key=value form
+    core::load_env_prefixed(c);                   // Environment: MERIDIAN_* -> keys
+    core::load_config_file(c, c.get_string_or("config", ""));  // File (from --config/MERIDIAN_CONFIG)
 
-    // OPS-05 logging (#165): env defaults first (MERIDIAN_LOG_FORMAT/_LEVEL/
-    // _REALM), then the flags below override. set_process stamps every JSON
-    // record with this daemon's identity.
+    // Resolve effective values into the serve-path struct.
+    cfg.cert_path = c.get_string_or("tls.cert", "");
+    cfg.key_path = c.get_string_or("tls.key", "");
+    cfg.bind_addr = c.get_string_or("bind", "0.0.0.0");
+    cfg.port = static_cast<std::uint16_t>(c.get_int_or("port", 7100));
+    cfg.login.build_floor = static_cast<std::uint32_t>(c.get_int_or("login.build_floor", 0));
+    cfg.metrics_port = static_cast<std::uint16_t>(c.get_int_or("metrics.port", 9464));
+    cfg.metrics_bind = c.get_string_or("metrics.bind", "127.0.0.1");
+    cfg.otlp_endpoint = c.get_string_or("otlp.endpoint", "");
+    cfg.trace_sample_ratio = std::atof(c.get_string_or("trace.sample_ratio", "1.0").c_str());
+    cfg.realm_label = c.get_string_or("realm", "reference");
+    cfg.log_format = c.get_string_or("log.format", "");
+    cfg.log_level = c.get_string_or("log.level", "");
+
+    // Auth DB (MERIDIAN_DB_* -> db.*). Only assign when a key is present so the
+    // meridian-db ConnectParams internal defaults (host 127.0.0.1, port 3306) are
+    // preserved when unset — same behavior as the previous getenv block.
+    if (auto v = c.get_string("db.socket")) cfg.db.unix_socket = *v;
+    if (auto v = c.get_string("db.host")) cfg.db.host = *v;
+    if (auto v = c.get_int("db.port")) cfg.db.port = static_cast<unsigned>(*v);
+    if (auto v = c.get_string("db.user")) cfg.db.user = *v;
+    if (auto v = c.get_string("db.pass")) cfg.db.password = *v;
+    if (auto v = c.get_string("db.name")) cfg.db.database = *v;
+
+    // OPS-05 logging (#165): env baseline first (MERIDIAN_LOG_FORMAT/_LEVEL/
+    // _REALM), then the layered realm + log flags override. set_process stamps
+    // every JSON record with this daemon's identity.
     meridian::core::log::configure_from_env();
     meridian::core::log::set_process(kDaemonName);
-
-    // Env fallbacks for the metrics endpoint + realm label (flags override).
-    if (const char* p = env("MERIDIAN_METRICS_PORT")) {
-        cfg.metrics_port = static_cast<std::uint16_t>(std::atoi(p));
-    }
-    if (const char* b = env("MERIDIAN_METRICS_BIND")) cfg.metrics_bind = b;
-    if (const char* r = env("MERIDIAN_REALM")) cfg.realm_label = r;
-    // OPS-05 trace endpoint env fallback (flag overrides). MERIDIAN_OTLP_ENDPOINT
-    // is the same var worldd + the compose stack use.
-    if (const char* e = env("MERIDIAN_OTLP_ENDPOINT")) {
-        if (cfg.otlp_endpoint.empty()) cfg.otlp_endpoint = e;
-    }
     cfg.login.realm_label = cfg.realm_label;
-
-    // Realm label -> the log `realm` field too (unifies metric + log grouping).
     meridian::core::log::set_realm(cfg.realm_label);
     if (!cfg.log_format.empty()) {
         meridian::core::log::set_format(
@@ -257,8 +276,6 @@ int main(int argc, char** argv) {
         meridian::core::log::set_level(
             meridian::core::log::level_from_string(cfg.log_level));
     }
-
-    load_db_env(cfg.db);
 
     if (cfg.cert_path.empty() || cfg.key_path.empty()) {
         std::fprintf(stderr,
