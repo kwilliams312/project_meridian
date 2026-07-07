@@ -1,0 +1,4 @@
+# .NET build artifacts for the Codex tooling (Meridian.Yaml.Cst and friends).
+bin/
+obj/
+*.user
