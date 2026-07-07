@@ -7,6 +7,12 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Meridian.Yaml.Cst", "Meridi
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Meridian.Yaml.Cst.Tests", "Meridian.Yaml.Cst.Tests\Meridian.Yaml.Cst.Tests.csproj", "{D81A6FB0-AE26-4AB5-B1AC-CDA1AB50D598}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Meridian.Codex.Models", "Meridian.Codex.Models\Meridian.Codex.Models.csproj", "{56997FCA-56F3-47C5-A8A6-1FF9BEC0338F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Meridian.Codex", "Meridian.Codex\Meridian.Codex.csproj", "{281AB790-C768-4B5E-B630-7877780553B1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Meridian.Codex.Tests", "Meridian.Codex.Tests\Meridian.Codex.Tests.csproj", "{0D300253-60E6-4202-9BCD-F9B230A750E6}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -41,6 +47,42 @@ Global
 		{D81A6FB0-AE26-4AB5-B1AC-CDA1AB50D598}.Release|x64.Build.0 = Release|Any CPU
 		{D81A6FB0-AE26-4AB5-B1AC-CDA1AB50D598}.Release|x86.ActiveCfg = Release|Any CPU
 		{D81A6FB0-AE26-4AB5-B1AC-CDA1AB50D598}.Release|x86.Build.0 = Release|Any CPU
+		{56997FCA-56F3-47C5-A8A6-1FF9BEC0338F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{56997FCA-56F3-47C5-A8A6-1FF9BEC0338F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{56997FCA-56F3-47C5-A8A6-1FF9BEC0338F}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{56997FCA-56F3-47C5-A8A6-1FF9BEC0338F}.Debug|x64.Build.0 = Debug|Any CPU
+		{56997FCA-56F3-47C5-A8A6-1FF9BEC0338F}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{56997FCA-56F3-47C5-A8A6-1FF9BEC0338F}.Debug|x86.Build.0 = Debug|Any CPU
+		{56997FCA-56F3-47C5-A8A6-1FF9BEC0338F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{56997FCA-56F3-47C5-A8A6-1FF9BEC0338F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{56997FCA-56F3-47C5-A8A6-1FF9BEC0338F}.Release|x64.ActiveCfg = Release|Any CPU
+		{56997FCA-56F3-47C5-A8A6-1FF9BEC0338F}.Release|x64.Build.0 = Release|Any CPU
+		{56997FCA-56F3-47C5-A8A6-1FF9BEC0338F}.Release|x86.ActiveCfg = Release|Any CPU
+		{56997FCA-56F3-47C5-A8A6-1FF9BEC0338F}.Release|x86.Build.0 = Release|Any CPU
+		{281AB790-C768-4B5E-B630-7877780553B1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{281AB790-C768-4B5E-B630-7877780553B1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{281AB790-C768-4B5E-B630-7877780553B1}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{281AB790-C768-4B5E-B630-7877780553B1}.Debug|x64.Build.0 = Debug|Any CPU
+		{281AB790-C768-4B5E-B630-7877780553B1}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{281AB790-C768-4B5E-B630-7877780553B1}.Debug|x86.Build.0 = Debug|Any CPU
+		{281AB790-C768-4B5E-B630-7877780553B1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{281AB790-C768-4B5E-B630-7877780553B1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{281AB790-C768-4B5E-B630-7877780553B1}.Release|x64.ActiveCfg = Release|Any CPU
+		{281AB790-C768-4B5E-B630-7877780553B1}.Release|x64.Build.0 = Release|Any CPU
+		{281AB790-C768-4B5E-B630-7877780553B1}.Release|x86.ActiveCfg = Release|Any CPU
+		{281AB790-C768-4B5E-B630-7877780553B1}.Release|x86.Build.0 = Release|Any CPU
+		{0D300253-60E6-4202-9BCD-F9B230A750E6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0D300253-60E6-4202-9BCD-F9B230A750E6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0D300253-60E6-4202-9BCD-F9B230A750E6}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{0D300253-60E6-4202-9BCD-F9B230A750E6}.Debug|x64.Build.0 = Debug|Any CPU
+		{0D300253-60E6-4202-9BCD-F9B230A750E6}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{0D300253-60E6-4202-9BCD-F9B230A750E6}.Debug|x86.Build.0 = Debug|Any CPU
+		{0D300253-60E6-4202-9BCD-F9B230A750E6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0D300253-60E6-4202-9BCD-F9B230A750E6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0D300253-60E6-4202-9BCD-F9B230A750E6}.Release|x64.ActiveCfg = Release|Any CPU
+		{0D300253-60E6-4202-9BCD-F9B230A750E6}.Release|x64.Build.0 = Release|Any CPU
+		{0D300253-60E6-4202-9BCD-F9B230A750E6}.Release|x86.ActiveCfg = Release|Any CPU
+		{0D300253-60E6-4202-9BCD-F9B230A750E6}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
