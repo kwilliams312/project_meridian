@@ -67,20 +67,17 @@
     },
     {
       "id": 4,
-      "title": "DB latency p99 + queue depth",
+      "title": "DB latency p99",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "meridian-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "description": "DB write-queue depth is not charted at M0: the DB layer is synchronous with no queue to measure (#297). A queue-depth signal returns with the async DB worker-pool at M1.",
       "targets": [
         {
           "refId": "A",
           "expr": "histogram_quantile(0.99, sum by (le, db) (rate(meridian_db_latency_seconds_bucket{realm=~\"$realm\"}[5m])))",
           "legendFormat": "latency {{db}}"
-        },
-        {
-          "refId": "B",
-          "expr": "max by (db) (meridian_db_queue_depth{realm=~\"$realm\"})",
-          "legendFormat": "queue {{db}}"
         }
       ]
     }

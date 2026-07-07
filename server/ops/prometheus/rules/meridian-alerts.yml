@@ -23,20 +23,21 @@
 #   meridian_auth_results_total      authd  login_session.cpp:75    {realm,outcome}         (outcome: granted/rejected_hello/rejected_auth/rejected_realm/protocol_error/transport_closed)
 #   meridian_auth_attempts_total     authd  login_session.cpp:73    {realm}
 #   meridian_auth_srp_duration_seconds authd login_session.cpp:76   {realm,outcome}         (histogram)
+#   meridian_rss_bytes               authd+worldd RssSampler (rss_sampler.cpp) {realm,process}  (gauge; periodic RSS sampler — #297)
+#   meridian_io_workers / _busy      worldd main.cpp (IO-worker pool)          {realm,process}  (gauges; pool size + in-flight — #278/#297)
 #
-# GAPS — signals we would alert on but the metric is NOT emitted live at M0.
-# Do NOT add rules for these until the emit path exists (they would never fire):
-#   · Process RSS / memory growth — meridian_rss_bytes is emitted but only
-#     `.set(0.0)` once at startup as a series-registration placeholder in BOTH
-#     daemons (worldd main.cpp:349, authd main.cpp:384). No sampler updates it, so
-#     it is a constant 0 — a growth/ceiling alert can never trip. Needs a periodic
-#     getrusage/statm sampler first.
-#   · IO-worker utilization — no meridian_io_workers / _busy metric exists
-#     (worldd dashboard flags this as GAP #278). CCUSaturationProxy below is the
-#     documented stand-in until the real utilization gauge lands.
-#   · action_rtt, reconnects, db_queue_depth, grids/instances/saves_batched,
-#     client_crash — declared in the catalog and/or dashboards but never set by any
-#     daemon (cross-checked in #294). No rules here.
+# CLOSED GAPS (#297): the prior version routed AROUND several declared-but-unemitted
+# metrics. Now:
+#   · meridian_rss_bytes is sampled live (RssSampler in authd + worldd), so the
+#     ProcessMemoryGrowth rule below can fire (was a constant-0 placeholder before).
+#   · meridian_io_workers / _busy are emitted from worldd's pool, so IOWorkerSaturation
+#     below alerts on the REAL busy/pool ratio (replacing the CCU stand-in proxy).
+#   · action_rtt / reconnects / db_queue_depth were REMOVED from the catalog +
+#     dashboards (no M0 emit path — action loop, server reconnect, and async DB
+#     queue are all M1); grids/instances/saves_batched + client_crash are FUTURE
+#     name reservations queried by no dashboard/alert. Nothing here references them.
+#
+# GAPS — signals we would alert on but the metric is NOT emitted live at M0:
 #   · Sharding/coordinator signals (transfer p99, bus-lane depth, journal lag,
 #     save-fence rejection, shard flap) — metrics arrive at M2/M3. Deferred to a
 #     later alert-rules revision so v1 stays free of never-firing rules.
@@ -71,21 +72,33 @@ groups:
           summary: "DB round-trip p99 high on {{ $labels.realm }} ({{ $labels.db }})"
           description: "DB latency p99 is {{ $value | humanizeDuration }} (threshold 100 ms) on realm={{ $labels.realm }} db={{ $labels.db }}. Dashboard: Realm health."
 
-      - alert: CCUSaturationProxy
-        # io-worker saturation proxy (#278). At M0 worldd uses one blocking IO
-        # worker per connection (pool = cores-3, or --io-workers N), so max
-        # concurrent CCU per worldd ≈ io_workers. No io-worker utilization metric
-        # exists yet, so CCU is the closest saturation signal (worldd dashboard).
-        # THRESHOLD IS HOST-SPECIFIC: set it just below your configured
-        # --io-workers ceiling (default = cores-3). 900 is a placeholder for a
-        # mid-size host — retune per deployment.
-        expr: max by (realm, zone, shard) (meridian_ccu) > 900
+      - alert: IOWorkerSaturation
+        # Real IO-worker utilization (#278/#297). worldd serves each connection on
+        # one blocking IO worker (pool = cores-3, or --io-workers N); busy/pool ≈ 1
+        # means every worker is in-flight and new connections wait in the accept
+        # backlog. Host-INDEPENDENT ratio (replaces the old CCU stand-in proxy now
+        # that meridian_io_workers{,_busy} are emitted live from worldd's pool).
+        expr: max by (realm, process) (meridian_io_workers_busy / meridian_io_workers) > 0.9
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "CCU approaching io-worker ceiling on {{ $labels.realm }}/{{ $labels.zone }} (shard {{ $labels.shard }})"
-          description: "CCU is {{ $value }} on realm={{ $labels.realm }} zone={{ $labels.zone }} shard={{ $labels.shard }}. Max CCU per worldd ≈ --io-workers (default cores-3, #278); beyond it new connections wait in the accept backlog. Tune this threshold to the deployment's --io-workers. Dashboard: worldd."
+          summary: "worldd IO-worker pool near saturation on {{ $labels.realm }}"
+          description: "IO-worker utilization is {{ $value | humanizePercentage }} (threshold 90%) on realm={{ $labels.realm }} process={{ $labels.process }}. At M0 max concurrent CCU per worldd ≈ --io-workers (default cores-3, #278); beyond it new connections wait in the accept backlog. Raise --io-workers or add worldd capacity. Dashboard: worldd."
+
+      - alert: ProcessMemoryGrowth
+        # RSS leak detector (#297). meridian_rss_bytes is sampled live by the
+        # RssSampler in authd + worldd. A daemon whose RSS climbs steadily over an
+        # hour (with no matching CCU rise) is likely leaking. THRESHOLD IS A
+        # PLACEHOLDER — 256 MiB/h is a coarse leak signal; tune to observed
+        # baselines (a busy realm legitimately grows as CCU ramps).
+        expr: (meridian_rss_bytes - (meridian_rss_bytes offset 1h)) > 268435456
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Process RSS growing on {{ $labels.realm }} ({{ $labels.process }})"
+          description: "{{ $labels.process }} RSS grew by {{ $value | humanize1024 }}B over the last hour on realm={{ $labels.realm }} — possible memory leak (or a legitimate CCU ramp; correlate with CCU). Dashboard: Realm overview / worldd."
 
   # ── worldd error / quality signals ─────────────────────────────────────────
   - name: meridian-worldd

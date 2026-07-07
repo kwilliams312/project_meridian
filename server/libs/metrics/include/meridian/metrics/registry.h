@@ -62,8 +62,8 @@ enum class MetricType { kCounter, kGauge, kHistogram };
 // ---------------------------------------------------------------------------
 // Counter — a monotonically increasing value (resets only on process restart).
 // Catalog counters: meridian_opcode_total, _dropped_total, _errors_total,
-// meridian_disconnects_total, _reconnects_total, meridian_movement_*_total,
-// meridian_saves_batched_total, meridian_client_{log_ingest,crash}_total.
+// meridian_disconnects_total, meridian_movement_*_total,
+// meridian_client_log_ingest_total.
 // ---------------------------------------------------------------------------
 class Counter {
 public:
@@ -83,10 +83,9 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// Gauge — a value that can go up and down (CCU, sessions, queue depth, RSS,
-// AoI entities, active grids/instances). Catalog gauges: meridian_ccu,
-// meridian_sessions, meridian_db_queue_depth, meridian_aoi_entities,
-// meridian_grids_active, meridian_instances_active, meridian_rss_bytes.
+// Gauge — a value that can go up and down (CCU, sessions, RSS, AoI entities,
+// IO-worker pool/busy). Catalog gauges: meridian_ccu, meridian_sessions,
+// meridian_aoi_entities, meridian_rss_bytes, meridian_io_workers{,_busy}.
 // ---------------------------------------------------------------------------
 class Gauge {
 public:
@@ -105,8 +104,8 @@ private:
 
 // ---------------------------------------------------------------------------
 // Histogram — cumulative bucketed observations + sum + count. Catalog
-// histograms: meridian_action_rtt_seconds, meridian_db_latency_seconds,
-// meridian_tick_duration_seconds. Renders the Prometheus histogram triple:
+// histograms: meridian_db_latency_seconds, meridian_tick_duration_seconds,
+// meridian_auth_srp_duration_seconds. Renders the Prometheus histogram triple:
 //   <name>_bucket{le="..."}  (cumulative), <name>_sum, <name>_count.
 // Buckets are UPPER BOUNDS ("le"); the implicit +Inf bucket == count.
 // ---------------------------------------------------------------------------
