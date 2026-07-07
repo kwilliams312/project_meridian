@@ -1,0 +1,42 @@
+schema: meridian/idmap@1
+namespace: core
+band: 0                      # assigned once, immutable (SAD §2.4)
+released_watermark: 0      # highest local index frozen by a tagged release
+map:                         # append-only; local index (SAD §2.4)
+  core:ability.minor_healing: 1
+  core:ability.pickaxe_slam: 2
+  core:amb.zone01.forest_day: 3
+  core:art.char.human.male.quartermaster: 4
+  core:art.char.kobold.digmaster: 5
+  core:art.char.kobold.miner: 6
+  core:art.env.zone01.kit.wall_stone_a: 7
+  core:art.icon.item.kobold_ear: 8
+  core:art.icon.item.lamp_charm: 9
+  core:art.icon.item.pickaxe_rusty: 10
+  core:art.icon.item.potion_red_small: 11
+  core:art.icon.item.signet_bronze: 12
+  core:art.item.weapon.pickaxe_rusty: 13
+  core:art.vfx.heal.sparkle_small: 14
+  core:art.vfx.impact.dust_small: 15
+  core:item.brens_signet: 16
+  core:item.kobold_ear: 17
+  core:item.miners_lamp_charm: 18
+  core:item.minor_healing_potion: 19
+  core:item.rusty_pickaxe: 20
+  core:loot.kobold_miner: 21
+  core:mus.zone01.combat: 22
+  core:mus.zone01.explore: 23
+  core:mus.zone01.tension: 24
+  core:npc.kobold_digmaster: 25
+  core:npc.kobold_miner: 26
+  core:npc.quartermaster_bren: 27
+  core:quest.culling_the_kobolds: 28
+  core:quest.ears_for_evidence: 29
+  core:sfx.char.human_male: 30
+  core:sfx.char.kobold: 31
+  core:sfx.combat.impact.pickaxe: 32
+  core:sfx.item.potion_drink: 33
+  core:spawn.zone01_emberfall_village: 34
+  core:spawn.zone01_kobold_camp: 35
+  core:vendor.bren_general_goods: 36
+  core:zone.zone01: 37

@@ -59,7 +59,9 @@ add_library(mcc_stages STATIC
     src/stages/parse.cpp
     src/stages/validate.cpp
     src/stages/check.cpp
-    src/stages/format.cpp)
+    src/stages/format.cpp
+    src/stages/idmap.cpp
+    src/stages/link.cpp)
 
 # The single-file `--watch` loop (check.cpp) uses std::thread; some libstdc++
 # toolchains need an explicit pthread link. Threads::Threads is a no-op where
@@ -121,3 +123,17 @@ else()
 endif()
 
 add_test(NAME mcc-check-file-unit COMMAND mcc-check-file-tests)
+
+# Link stage + IF-9 idmap allocator tests (SAD §2.3/§2.4): reference resolution
+# + dangling-ref diagnostic, backlink index, idmap determinism + stability, and
+# idmap.lock round-trip.
+add_executable(mcc-link-tests
+    tests/test_link.cpp)
+target_link_libraries(mcc-link-tests PRIVATE mcc_stages)
+if(MSVC)
+    target_compile_options(mcc-link-tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(mcc-link-tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_test(NAME mcc-link-unit COMMAND mcc-link-tests)
