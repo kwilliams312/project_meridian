@@ -91,6 +91,25 @@ target_link_libraries(worldd-session-test
 set_target_properties(worldd-session-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-session COMMAND worldd-session-test)
 
+# --- Grant-lifecycle UNIT test on validate_and_consume_grant (#81). ------------
+# Drives validate_and_consume_grant() DIRECTLY (no wire), so it can assert the
+# GrantReject CLASSIFICATION the wire cannot expose — every grant failure is one
+# opaque GRANT_INVALID Disconnect there (no client oracle), so worldd-session-test
+# cannot tell WHY a grant was rejected. This pins the create/replay/expired/
+# wrong-realm/unknown branches over a real MariaDB. Needs the auth schema loaded;
+# reads MERIDIAN_DB_* env and SKIPS (exit 0) when none are set, so it is inert in
+# the plain server ctest and runs for real only in the worldd-session CI job (or
+# locally with env set).
+add_executable(worldd-grant-test
+  test/grant_lifecycle_test.cpp
+)
+target_link_libraries(worldd-grant-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-grant-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-grant COMMAND worldd-grant-test)
+
 # --- Movement intake + validation v0 UNIT test (IT-M0 movement; #86). ---------
 # PURE (no DB, no socket, no session): exercises the movement validator, the
 # sliding-window speed check, the rate-class intake gate, and the golden

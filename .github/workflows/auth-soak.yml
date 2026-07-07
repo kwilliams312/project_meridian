@@ -1,0 +1,88 @@
+# auth-soak (#81) — the 10-bot concurrent-login soak. Stands up the WHOLE auth
+# stack (throwaway MariaDB + authd + worldd) and runs 10 headless bots CONCURRENTLY
+# through a full IF-1 login -> grant issue -> IF-3 enter-world (grant consume),
+# then holds them in-world idle for the window and asserts: all 10 logged in and
+# entered world (every login succeeded + every grant was issued and consumed),
+# zero daemon crashes, zero opcode errors/drops, tick p99 within the SAD budget,
+# and bounded RSS. Reuses the #152 soak harness (client/test/run_soak.sh) — this
+# job only provides the toolchain + a real MariaDB server for it to boot.
+#
+# Runs with --path idle: the soak is AUTH-focused (login + grant lifecycle at
+# scale), so bots enter world and sit — no movement, so the movement-validation
+# snap-back path (a separate concern) cannot add noise. The endurance/movement
+# soak (10 bots x 1 h, moving) is the nightly full-realm run, not this job.
+#
+# Gated: it boots a full stack + builds server + client, so it is NOT on every
+# push. It runs nightly, on-demand (workflow_dispatch), and on PRs that touch the
+# auth path (authd / srp / worldd grant validation / the bot / the harness).
+name: auth-soak
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly at 06:40 UTC — after the daily churn, before working hours.
+    - cron: '40 6 * * *'
+  push:
+    branches: [main]
+    paths:
+      - 'server/authd/**'
+      - 'server/libs/srp/**'
+      - 'server/worldd/world_session.*'
+      - 'client/bot/**'
+      - 'client/test/run_soak.sh'
+      - '.github/workflows/auth-soak.yml'
+  pull_request:
+    paths:
+      - 'server/authd/**'
+      - 'server/libs/srp/**'
+      - 'server/worldd/world_session.*'
+      - 'client/bot/**'
+      - 'client/test/run_soak.sh'
+      - '.github/workflows/auth-soak.yml'
+
+jobs:
+  auth-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        # No submodules: meridian-bot is engine-free (builds WITHOUT godot-cpp),
+        # and srp / schema live in-tree.
+
+      # flatc + FlatBuffers runtime (auth.fbs/world.fbs codegen), OpenSSL (SRP-6a +
+      # TLS 1.3 + AEAD), libmariadb (meridian-db). mariadb-server gives the harness
+      # a real mariadbd/mariadb-install-db to boot its throwaway instance; nc + curl
+      # are used by the harness for port readiness + /metrics scraping.
+      - name: Install toolchain + MariaDB server (harness boots its own instance)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build g++-13 \
+            flatbuffers-compiler libflatbuffers-dev libssl-dev libmariadb-dev \
+            mariadb-server mariadb-client \
+            netcat-openbsd curl openssl apparmor-utils
+
+      # The harness boots mariadbd with a repo-local --datadir. Ubuntu ships an
+      # AppArmor profile that confines mariadbd to /var/lib/mysql; put it in
+      # complain mode so the custom datadir is allowed. Also stop any auto-started
+      # system instance so it never contends (the harness uses its own unique
+      # socket/port anyway). /usr/sbin holds mariadbd on Debian/Ubuntu — expose it.
+      - name: Prep MariaDB for a repo-local throwaway instance
+        run: |
+          sudo systemctl stop mariadb 2>/dev/null || true
+          sudo aa-complain /usr/sbin/mariadbd 2>/dev/null || true
+          echo "/usr/sbin" >> "$GITHUB_PATH"
+
+      # 10 concurrent logins for 60s, idle in-world. --rss-growth-pct 90: this is a
+      # SHORT login-focused soak — the start->peak RSS step is the one-time cost of
+      # standing up 10 concurrent TLS sessions (buffers, per-thread malloc arenas),
+      # not a monotonic leak, so the endurance RSS gate (50%) belongs to the nightly
+      # FULL soak. The auth-critical gates stay strict: all-bots-in-world (every
+      # login + grant succeeded), zero crashes, zero opcode errors, tick p99.
+      - name: 10-bot concurrent-login soak (authd + worldd, idle path)
+        env:
+          CC: gcc-13
+          CXX: g++-13
+        run: |
+          client/test/run_soak.sh --bots 10 --duration 60 --path idle \
+            --poll-interval 15 --rss-growth-pct 90
