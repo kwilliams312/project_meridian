@@ -1,0 +1,7 @@
+{{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
+{{- /* authd — login / realm-list / session-grant (IF-1, TLS 1.3, port 7100). */ -}}
+{{- if .Values.authd.enabled }}
+{{- include "meridian.daemon.deployment" (dict "root" $ "daemon" "authd" "cfg" .Values.authd "dbDefault" .Values.db.names.auth) }}
+---
+{{ include "meridian.daemon.service" (dict "root" $ "daemon" "authd" "cfg" .Values.authd) }}
+{{- end }}

@@ -1,0 +1,7 @@
+{{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
+{{- /* worldd — shard worker / map simulation (IF-2, TLS 1.3 at M0, port 7200). */ -}}
+{{- if .Values.worldd.enabled }}
+{{- include "meridian.daemon.deployment" (dict "root" $ "daemon" "worldd" "cfg" .Values.worldd "dbDefault" .Values.db.names.world) }}
+---
+{{ include "meridian.daemon.service" (dict "root" $ "daemon" "worldd" "cfg" .Values.worldd) }}
+{{- end }}

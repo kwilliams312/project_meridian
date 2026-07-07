@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Project Meridian — Helm chart v0 (D-30 §10 rule 3: "Kubernetes is a supported
+# option, not the reference"). This chart is the scale-out / orchestrated
+# deployment option alongside the reference docker compose (deploy/docker/); it
+# is a *config-only consumer of the same GHCR images and the same 12-factor env
+# overrides* — no K8s-specific code paths in the daemons.
+#
+# v0 scope: the single-`worldd` realm (M0–M2 topology: authd + worldd), the
+# 3-DB split (auth / characters / world) via an external MariaDB, TLS certs and
+# DB creds as Secrets, and an optional hook to the OPS-05 observability stack.
+# The sharded-topology chart (gateway/coordinator/workers/services) lands with
+# OPS-04 at M3 (D-30 §10 rule 3).
+apiVersion: v2
+name: meridian
+description: Project Meridian single-realm server (authd + worldd) — Kubernetes deployment option (D-30)
+type: application
+
+# Chart version: v0 of the chart itself (SemVer). Bump on chart changes.
+version: 0.1.0
+
+# appVersion tracks the daemon image tag the chart defaults to. "latest" matches
+# the compose default (deploy/docker/docker-compose.yml: MERIDIAN_TAG:-latest);
+# operators pin a short-SHA or a release semver via values (image.tag).
+appVersion: "latest"
+
+home: https://github.com/kwilliams312/project_meridian
+sources:
+  - https://github.com/kwilliams312/project_meridian
+keywords:
+  - meridian
+  - mmo
+  - game-server
+maintainers:
+  - name: Project Meridian
+    url: https://github.com/kwilliams312/project_meridian
+
+# v0 assumes an EXTERNAL managed MariaDB (values: db.host). A bundled MariaDB
+# subchart is intentionally NOT a dependency here — see values.yaml `db` and the
+# README "Database" section for the rationale and how to point at your DB.
