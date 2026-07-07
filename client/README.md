@@ -179,6 +179,50 @@ godot --headless --path project \
 # → meridian-client 0.0.1 (godot 4.7-stable)
 ```
 
+> **macOS `--headless` caveat (#283):** a *cold* headless import of this project
+> (no `.godot/` yet) aborts inside MoltenVK's `SPIRVToMSLConverter` (exit 134) —
+> and `--rendering-driver` is ignored under headless, so no flag avoids it. Seed
+> `.godot/` **once with a windowed real-device import** (`scripts/dev/run-client.sh`
+> does this automatically, or `godot --rendering-driver metal --editor --quit
+> --path project`), after which **warm** headless runs work. See below.
+
+---
+
+## Rendering backends (Metal default, Vulkan/MoltenVK diagnostic fallback)
+
+macOS runs on the **native Metal** backend (Windows on D3D12) per TD-02 / D-28 —
+that is the shipped default and what CI/testers use. Godot 4.7 also keeps a
+**Vulkan (MoltenVK)** backend buildable as a *diagnostic fallback only* (the
+escape-hatch mirror of the Windows Vulkan fallback): when the Metal path
+misbehaves, boot the **same test map** on MoltenVK to tell a Metal-backend bug
+apart from an engine/content bug. **It is never the shipped default.**
+
+Selection is a per-run `--rendering-driver` override (no project change — the
+project stays `renderer/rendering_method="forward_plus"` on the platform-default
+device). `scripts/dev/run-client.sh` wires this into the dev toolkit:
+
+```bash
+scripts/dev/run-client.sh                     # Metal (default), interactive
+scripts/dev/run-client.sh --renderer=vulkan   # Vulkan/MoltenVK fallback
+scripts/dev/run-client.sh --renderer=vulkan --verify   # automated boot proof + screenshot (exits 0/1)
+```
+
+Both boot the world test map the client enters after char-select
+(`res://scenes/world/camera_demo.tscn`). Under the hood it is just:
+
+```bash
+# Metal (shipped default) and Vulkan/MoltenVK (diagnostic fallback):
+godot --rendering-driver metal  --path project res://scenes/world/camera_demo.tscn
+godot --rendering-driver vulkan --path project res://scenes/world/camera_demo.tscn
+```
+
+Verified on Apple M2 Max (Godot 4.7.stable): both load the identical map on a
+real GPU device with the C++ GDExtension camera — **Metal 4.0 - Forward+** and
+**Vulkan 1.2.334 - Forward+** — via `scenes/world/renderer_boot_verify.gd`
+(the automatable, screenshot-capturing counterpart, run windowed per the #283
+caveat above). The runs must be **windowed** (a real Metal/MoltenVK device);
+`--headless` is unsupported here (#283).
+
 ---
 
 ## CI
