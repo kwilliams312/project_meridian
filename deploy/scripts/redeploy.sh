@@ -50,6 +50,11 @@
 #   DEPLOY_TARGET     SSH target for the test-realm host, e.g. deploy@realm.example
 #                     (#159). Required for a real (non --local / non --dry-run) run.
 #   MERIDIAN_TAG      Image tag to deploy (short SHA or `latest`). Default: latest.
+#   MANIFEST          Optional path to a nightly build manifest (#62). When set (or
+#                     via --manifest=FILE), the tag to deploy is read from the
+#                     manifest's .server.tag — so the redeploy stands up exactly the
+#                     images/content that nightly pinned. An explicit --tag= wins.
+#                     Needs jq. See docs/ops/artifact-retention.md.
 #   SSH_OPTS          Extra ssh options (e.g. -i key -p 2222). Default: batch-mode.
 #   COMPOSE_DIR       Directory ON THE HOST holding docker-compose.yml + certs +
 #                     db-init. Default: /opt/meridian/deploy/docker.
@@ -92,6 +97,8 @@ MODE="remote"                       # remote | local
 DRY_RUN=0
 SIMULATE_SMOKE=""                   # "", pass, fail (dry-run only)
 MERIDIAN_TAG="${MERIDIAN_TAG:-latest}"
+MANIFEST="${MANIFEST:-}"            # optional build manifest (#62) to pin the tag from
+TAG_EXPLICIT=0                      # set when --tag= is passed (wins over --manifest)
 DEPLOY_TARGET="${DEPLOY_TARGET:-}"
 SSH_OPTS="${SSH_OPTS:--o BatchMode=yes -o StrictHostKeyChecking=accept-new}"
 COMPOSE_DIR="${COMPOSE_DIR:-/opt/meridian/deploy/docker}"
@@ -109,13 +116,32 @@ while [ $# -gt 0 ]; do
     --dry-run)            DRY_RUN=1 ;;
     --local)              MODE="local" ;;
     --simulate-smoke=*)   SIMULATE_SMOKE="${1#*=}" ;;
-    --tag=*)              MERIDIAN_TAG="${1#*=}" ;;
+    --tag=*)              MERIDIAN_TAG="${1#*=}"; TAG_EXPLICIT=1 ;;
     --target=*)           DEPLOY_TARGET="${1#*=}" ;;
+    --manifest=*)         MANIFEST="${1#*=}" ;;
     -h|--help)            usage; exit 0 ;;
     *) die "unknown argument '$1' (try --help)" ;;
   esac
   shift
 done
+
+# ── Build manifest (#62): pin the tag from the nightly's manifest. ───────────
+# When --manifest / MANIFEST is given, deploy EXACTLY the tag the nightly build
+# manifest pins (.server.tag) instead of a bare `latest`. This is the contract
+# that makes a redeploy a coherent nightly — same images/content the manifest
+# recorded. An explicit --tag= still wins (manifest only fills the default).
+if [ -n "${MANIFEST}" ]; then
+  [ -f "${MANIFEST}" ] || die "manifest not found: ${MANIFEST}"
+  command -v jq >/dev/null 2>&1 || die "--manifest needs jq to read ${MANIFEST}"
+  _m_tag="$(jq -r '.server.tag // empty' "${MANIFEST}")"
+  _m_hash="$(jq -r '.content.content_hash // empty' "${MANIFEST}")"
+  [ -n "${_m_tag}" ] || die "manifest ${MANIFEST} has no .server.tag"
+  # An explicit --tag= wins; otherwise the manifest supplies the tag to deploy.
+  if [ "${TAG_EXPLICIT}" -eq 0 ]; then
+    MERIDIAN_TAG="${_m_tag}"
+  fi
+  log "Manifest ${MANIFEST}: pinning tag '${_m_tag}' (content_hash ${_m_hash:-<none>})"
+fi
 
 case "${SIMULATE_SMOKE}" in
   ""|pass|fail) ;;
