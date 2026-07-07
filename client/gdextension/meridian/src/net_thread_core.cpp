@@ -169,13 +169,15 @@ void NetThreadCore::run_loop(ConnectFn connect, NetThreadConfig cfg) {
             running_.store(false, std::memory_order_release);
             return;
         }
-        frames_received_.fetch_add(1, std::memory_order_relaxed);
         if (f->opcode == cn::kOpDisconnect) {
-            // Grant reject / server close before entering the world.
-            handle_inbound_frame(*reply);  // publishes kDisconnect
+            // Grant reject / server close before entering the world. Route through
+            // the shared decoder so it publishes kDisconnect and counts the frame
+            // exactly once (do NOT pre-increment frames_received_ here).
+            handle_inbound_frame(*reply);
             running_.store(false, std::memory_order_release);
             return;
         }
+        frames_received_.fetch_add(1, std::memory_order_relaxed);  // the HandshakeOk
         if (f->opcode != cn::kOpHandshakeOk) {
             InboundMessage m;
             m.kind = InboundKind::kConnectFailed;
