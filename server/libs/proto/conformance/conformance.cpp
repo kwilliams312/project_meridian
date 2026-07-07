@@ -1,0 +1,802 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// meridian-proto conformance harness — golden IF-1/IF-2 wire message corpus +
+// protocol drift guard (Issue #68).
+//
+// GOAL: lock the client<->server WIRE PROTOCOL against accidental drift. A
+// codec/schema change that alters the FlatBuffers wire encoding of any IF-1
+// (auth.fbs) or IF-2 (world.fbs) message must FAIL this test — the network
+// analogue of the mcc content-determinism golden (#122), which guards the
+// CONTENT pipeline. Contract: client SAD §5.1 ("golden-message round-trip tests
+// against the shared /schema fixtures used by the server track"); schema/net
+// README ("golden round-trip fixtures live alongside the schemas").
+//
+// WHAT A GOLDEN IS
+// ----------------
+// For each message table, a canonical instance is built with the REAL codec
+// (meridian::proto's flatc-generated Create*), Finish()ed, and the resulting
+// FlatBuffer ROOT-TABLE bytes are frozen to conformance/golden/<name>.bin.
+// Those bytes are exactly what login_session.cpp / world_dispatch.cpp put on the
+// wire, minus the transport-added framing (u32 LE length for IF-1; u16 opcode +
+// u64 seq for IF-2). The framing is a fixed, hand-written codec tested elsewhere
+// (net/, worldd-dispatch); the DRIFT-PRONE surface this guard protects is the
+// flatc-generated table encoding, so that is what we freeze.
+//
+// TWO CHECKS PER MESSAGE (either failing fails the gate):
+//   (1) DECODE-ASSERT   — decode the checked-in golden .bin via the real codec
+//       (GetRoot<T> + Verifier) and assert every logical field equals the
+//       expected value baked into build_corpus(). Catches a schema change that
+//       shifts field meaning / vtable layout.
+//   (2) RE-ENCODE BYTE-IDENTITY — rebuild the same canonical message and assert
+//       the freshly-encoded bytes are byte-identical to the golden. Catches a
+//       codec/flatc change that alters the encoding even when fields still
+//       decode. FlatBuffers is deterministic here: a fixed flatc version + fixed
+//       field-population order (the Create* helpers add fields in a stable order)
+//       + no maps/hashing => stable bytes. Documented nondeterminism handling:
+//       there is none to handle — we assert the invariant directly, and a broken
+//       invariant (e.g. a flatc upgrade that reorders) surfaces as a loud diff.
+//
+// MODES
+//   (default / --check)  run the gate: for every message, decode-assert the
+//                        golden and re-encode for byte-identity. Non-zero exit on
+//                        any mismatch, with an actionable drift message.
+//   --update             regenerate conformance/golden/*.bin + manifest.json from
+//                        the current codec, then exit 0. Review the golden diff
+//                        exactly as you would review the schema/codec diff — a
+//                        golden change IS a wire-protocol change — and commit both
+//                        together.
+//
+// Registered in ctest as `proto-conformance` (server/libs/proto/CMakeLists.txt);
+// the CI `server` job runs `ctest --test-dir server/build`, so wire drift fails CI.
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <functional>
+#include <string>
+#include <vector>
+
+// flatc --cpp output from schema/net/{auth,world}.fbs, via meridian::proto's
+// INTERFACE include dir. One root table per message (schema/net/README).
+#include "auth_generated.h"
+#include "world_generated.h"
+
+namespace mn = meridian::net;
+namespace fb = flatbuffers;
+
+namespace {
+
+// ---------------------------------------------------------------------------
+// Where the golden .bin files live. The build system passes the absolute source
+// dir so the harness reads/writes the checked-in corpus regardless of CWD.
+// ---------------------------------------------------------------------------
+#ifndef MERIDIAN_PROTO_GOLDEN_DIR
+#error "MERIDIAN_PROTO_GOLDEN_DIR must be defined (path to conformance/golden)"
+#endif
+const std::string kGoldenDir = MERIDIAN_PROTO_GOLDEN_DIR;
+
+// ---------------------------------------------------------------------------
+// Tiny logging + error accounting. Report every failure in one run rather than
+// aborting on the first, so a drift shows its full blast radius.
+// ---------------------------------------------------------------------------
+int g_errors = 0;
+
+void fail(const std::string& msg) {
+  std::printf("  FAIL  %s\n", msg.c_str());
+  ++g_errors;
+}
+void okmsg(const std::string& msg) { std::printf("  ok    %s\n", msg.c_str()); }
+
+bool expect(bool cond, const std::string& what) {
+  if (cond) {
+    okmsg(what);
+    return true;
+  }
+  fail(what);
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// File IO for the golden .bin blobs.
+// ---------------------------------------------------------------------------
+using Bytes = std::vector<std::uint8_t>;
+
+std::string golden_path(const std::string& name) {
+  return kGoldenDir + "/" + name + ".bin";
+}
+
+bool read_golden(const std::string& name, Bytes& out) {
+  std::FILE* f = std::fopen(golden_path(name).c_str(), "rb");
+  if (!f) return false;
+  std::fseek(f, 0, SEEK_END);
+  long n = std::ftell(f);
+  std::fseek(f, 0, SEEK_SET);
+  out.resize(n > 0 ? static_cast<std::size_t>(n) : 0);
+  std::size_t got = n > 0 ? std::fread(out.data(), 1, out.size(), f) : 0;
+  std::fclose(f);
+  return got == out.size();
+}
+
+bool write_golden(const std::string& name, const Bytes& bytes) {
+  std::FILE* f = std::fopen(golden_path(name).c_str(), "wb");
+  if (!f) return false;
+  std::size_t wrote = std::fwrite(bytes.data(), 1, bytes.size(), f);
+  std::fclose(f);
+  return wrote == bytes.size();
+}
+
+// Hex, for the manifest + drift diagnostics.
+std::string to_hex(const Bytes& b) {
+  static const char* h = "0123456789abcdef";
+  std::string s;
+  s.reserve(b.size() * 2);
+  for (std::uint8_t c : b) {
+    s.push_back(h[c >> 4]);
+    s.push_back(h[c & 0x0F]);
+  }
+  return s;
+}
+
+// First differing byte offset, for the re-encode drift message. -1 if equal.
+long first_diff(const Bytes& a, const Bytes& b) {
+  std::size_t n = a.size() < b.size() ? a.size() : b.size();
+  for (std::size_t i = 0; i < n; ++i)
+    if (a[i] != b[i]) return static_cast<long>(i);
+  if (a.size() != b.size()) return static_cast<long>(n);
+  return -1;
+}
+
+// ---------------------------------------------------------------------------
+// A corpus entry: a canonical message. `build` encodes it with the real codec;
+// `check` decodes a buffer and asserts the expected logical fields. `iface`/
+// `opcode` are descriptive metadata for the manifest (the golden bytes are the
+// bare FlatBuffer table — no framing).
+// ---------------------------------------------------------------------------
+struct Message {
+  std::string name;        // golden file stem + logical id
+  std::string iface;       // "IF-1" | "IF-2"
+  std::string opcode;      // IF-2 opcode name, or "-" for IF-1 (implicit dispatch)
+  std::string summary;     // what the canonical instance represents
+  std::function<Bytes()> build;
+  std::function<void(const Bytes&)> check;  // decode + assert expected fields
+};
+
+Bytes finish_to_bytes(fb::FlatBufferBuilder& b) {
+  return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// Shared byte blobs used across messages (salts, keys, proofs). Fixed content so
+// the golden is stable and human-auditable.
+const std::vector<std::uint8_t> kSalt16 = {0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+                                           0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B,
+                                           0x1C, 0x1D, 0x1E, 0x1F};
+const std::vector<std::uint8_t> kB32 = {
+    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A,
+    0x2B, 0x2C, 0x2D, 0x2E, 0x2F, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35,
+    0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F};
+const std::vector<std::uint8_t> kA32 = {
+    0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A,
+    0x4B, 0x4C, 0x4D, 0x4E, 0x4F, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55,
+    0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F};
+const std::vector<std::uint8_t> kM1 = {0x60, 0x61, 0x62, 0x63, 0x64, 0x65,
+                                       0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B,
+                                       0x6C, 0x6D, 0x6E, 0x6F};
+const std::vector<std::uint8_t> kM2 = {0x70, 0x71, 0x72, 0x73, 0x74, 0x75,
+                                       0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B,
+                                       0x7C, 0x7D, 0x7E, 0x7F};
+const std::vector<std::uint8_t> kSessionKey32 = {
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA,
+    0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x0F, 0x1E, 0x2D, 0x3C, 0x4B, 0x5A,
+    0x69, 0x78, 0x87, 0x96, 0xA5, 0xB4, 0xC3, 0xD2, 0xE1, 0xF0};
+const std::vector<std::uint8_t> kNonce16 = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+                                            0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C,
+                                            0x0D, 0x0E, 0x0F, 0x10};
+const std::vector<std::uint8_t> kProof32 = {
+    0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA,
+    0xAB, 0xAC, 0xAD, 0xAE, 0xAF, 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5,
+    0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF};
+const std::vector<std::uint8_t> kContentHash32 = {
+    0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA,
+    0xCB, 0xCC, 0xCD, 0xCE, 0xCF, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5,
+    0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF};
+const std::vector<std::uint8_t> kServerProof32 = {
+    0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9, 0xEA,
+    0xEB, 0xEC, 0xED, 0xEE, 0xEF, 0xF0, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5,
+    0xF6, 0xF7, 0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF};
+
+// Canonical scalar constants (shared where a field appears in >1 message).
+const std::uint32_t kBuild = 60123u;
+const std::uint16_t kProtoVer = 0x0100u;  // major 1, minor 0
+const std::uint64_t kGrantId = 0xDEADBEEFCAFEF00DULL;
+const std::uint32_t kReconnectWindowMs = 15000u;
+
+bool bytes_eq(const fb::Vector<std::uint8_t>* v,
+              const std::vector<std::uint8_t>& want) {
+  return v != nullptr && v->size() == want.size() &&
+         std::memcmp(v->data(), want.data(), want.size()) == 0;
+}
+
+// ---------------------------------------------------------------------------
+// The corpus: one entry per IF-1 / IF-2 message table (Issue #68 coverage list).
+// ---------------------------------------------------------------------------
+std::vector<Message> build_corpus() {
+  std::vector<Message> c;
+
+  // ==== IF-1 (auth.fbs) =====================================================
+
+  c.push_back({"if1_client_hello", "IF-1", "-",
+               "C->S first frame: build + proto_ver",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateClientHello(b, kBuild, kProtoVer));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::ClientHello>(nullptr),
+                             "if1_client_hello verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::ClientHello>(buf.data());
+                 expect(m->build() == kBuild, "if1_client_hello.build");
+                 expect(m->proto_ver() == kProtoVer,
+                        "if1_client_hello.proto_ver");
+               }});
+
+  c.push_back({"if1_server_hello", "IF-1", "-",
+               "S->C hello ack: server build + proto_ver",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateServerHello(b, kBuild, kProtoVer));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::ServerHello>(nullptr),
+                             "if1_server_hello verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::ServerHello>(buf.data());
+                 expect(m->build() == kBuild, "if1_server_hello.build");
+                 expect(m->proto_ver() == kProtoVer,
+                        "if1_server_hello.proto_ver");
+               }});
+
+  c.push_back({"if1_srp_start", "IF-1", "-", "C->S begin SRP for an account",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 auto acc = b.CreateString("meridian.tester");
+                 b.Finish(mn::CreateSrpStart(b, acc));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::SrpStart>(nullptr),
+                             "if1_srp_start verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::SrpStart>(buf.data());
+                 expect(m->account() != nullptr &&
+                            m->account()->str() == "meridian.tester",
+                        "if1_srp_start.account");
+               }});
+
+  c.push_back({"if1_srp_challenge", "IF-1", "-", "S->C salt + public ephemeral B",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 auto salt = b.CreateVector(kSalt16);
+                 auto bv = b.CreateVector(kB32);
+                 b.Finish(mn::CreateSrpChallenge(b, salt, bv));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::SrpChallenge>(nullptr),
+                             "if1_srp_challenge verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::SrpChallenge>(buf.data());
+                 expect(bytes_eq(m->salt(), kSalt16), "if1_srp_challenge.salt");
+                 expect(bytes_eq(m->b(), kB32), "if1_srp_challenge.b");
+               }});
+
+  c.push_back({"if1_srp_proof", "IF-1", "-", "C->S public ephemeral A + proof M1",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 auto av = b.CreateVector(kA32);
+                 auto mv = b.CreateVector(kM1);
+                 b.Finish(mn::CreateSrpProof(b, av, mv));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::SrpProof>(nullptr),
+                             "if1_srp_proof verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::SrpProof>(buf.data());
+                 expect(bytes_eq(m->a(), kA32), "if1_srp_proof.a");
+                 expect(bytes_eq(m->m1(), kM1), "if1_srp_proof.m1");
+               }});
+
+  // Canonical AuthResult is the SUCCESS variant (m2 present, error absent) —
+  // login_session.cpp encode_auth_success(). This freezes the "success=true +
+  // m2 vector" table shape, the interop-critical happy path.
+  c.push_back({"if1_auth_result", "IF-1", "-",
+               "S->C SRP success: success=true, m2 present, error absent",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 auto m2 = b.CreateVector(kM2);
+                 b.Finish(mn::CreateAuthResult(b, /*success=*/true, m2,
+                                               /*error=*/0));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::AuthResult>(nullptr),
+                             "if1_auth_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::AuthResult>(buf.data());
+                 expect(m->success() == true, "if1_auth_result.success");
+                 expect(bytes_eq(m->m2(), kM2), "if1_auth_result.m2");
+                 expect(m->error() == nullptr,
+                        "if1_auth_result.error absent on success");
+               }});
+
+  // RealmList with two rows — exercises the vector-of-tables + string fields
+  // login_session.cpp builds from the realm DB.
+  c.push_back({"if1_realm_list", "IF-1", "-",
+               "S->C realm list: two RealmRows (all scalar + string fields)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::RealmRow>> rows;
+                 rows.push_back(mn::CreateRealmRow(
+                     b, /*id=*/1u, b.CreateString("Emberfall"),
+                     b.CreateString("realm1.meridian.example"), /*port=*/7200u,
+                     /*population=*/2u, /*build_min=*/60000u,
+                     /*build_max=*/60999u, /*flags=*/0x00000001u));
+                 rows.push_back(mn::CreateRealmRow(
+                     b, /*id=*/2u, b.CreateString("Kobold Test Realm"),
+                     b.CreateString("realm2.meridian.example"), /*port=*/7201u,
+                     /*population=*/0u, /*build_min=*/60000u,
+                     /*build_max=*/61999u, /*flags=*/0x00000006u));
+                 auto vec = b.CreateVector(rows);
+                 b.Finish(mn::CreateRealmList(b, vec));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::RealmList>(nullptr),
+                             "if1_realm_list verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::RealmList>(buf.data());
+                 const auto* rows = m->realms();
+                 if (!expect(rows != nullptr && rows->size() == 2,
+                             "if1_realm_list has 2 rows"))
+                   return;
+                 const auto* r0 = rows->Get(0);
+                 expect(r0->id() == 1u, "if1_realm_list[0].id");
+                 expect(r0->name() && r0->name()->str() == "Emberfall",
+                        "if1_realm_list[0].name");
+                 expect(r0->address() &&
+                            r0->address()->str() == "realm1.meridian.example",
+                        "if1_realm_list[0].address");
+                 expect(r0->port() == 7200u, "if1_realm_list[0].port");
+                 expect(r0->population() == 2u, "if1_realm_list[0].population");
+                 expect(r0->build_min() == 60000u,
+                        "if1_realm_list[0].build_min");
+                 expect(r0->build_max() == 60999u,
+                        "if1_realm_list[0].build_max");
+                 expect(r0->flags() == 0x00000001u, "if1_realm_list[0].flags");
+                 const auto* r1 = rows->Get(1);
+                 expect(r1->id() == 2u, "if1_realm_list[1].id");
+                 expect(r1->name() &&
+                            r1->name()->str() == "Kobold Test Realm",
+                        "if1_realm_list[1].name");
+                 expect(r1->flags() == 0x00000006u, "if1_realm_list[1].flags");
+               }});
+
+  c.push_back({"if1_session_grant", "IF-1", "-",
+               "S->C session grant handed to IF-2 (grant_id, key, window)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 auto key = b.CreateVector(kSessionKey32);
+                 b.Finish(mn::CreateSessionGrant(b, kGrantId, key,
+                                                 kReconnectWindowMs));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::SessionGrant>(nullptr),
+                             "if1_session_grant verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::SessionGrant>(buf.data());
+                 expect(m->grant_id() == kGrantId, "if1_session_grant.grant_id");
+                 expect(bytes_eq(m->session_key(), kSessionKey32),
+                        "if1_session_grant.session_key");
+                 expect(m->reconnect_window_ms() == kReconnectWindowMs,
+                        "if1_session_grant.reconnect_window_ms");
+               }});
+
+  // ==== IF-2 (world.fbs) ====================================================
+
+  c.push_back({"if2_world_hello", "IF-2", "WORLD_HELLO (0x0001)",
+               "C->S present session grant: grant_id, build, nonce, proof",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 auto nonce = b.CreateVector(kNonce16);
+                 auto proof = b.CreateVector(kProof32);
+                 b.Finish(mn::CreateWorldHello(b, kGrantId, kBuild, nonce,
+                                               proof));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::WorldHello>(nullptr),
+                             "if2_world_hello verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::WorldHello>(buf.data());
+                 expect(m->grant_id() == kGrantId, "if2_world_hello.grant_id");
+                 expect(m->client_build() == kBuild,
+                        "if2_world_hello.client_build");
+                 expect(bytes_eq(m->nonce(), kNonce16),
+                        "if2_world_hello.nonce");
+                 expect(bytes_eq(m->proof(), kProof32),
+                        "if2_world_hello.proof");
+               }});
+
+  c.push_back({"if2_handshake_ok", "IF-2", "HANDSHAKE_OK (0x0002)",
+               "S->C realm proof + content hash",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 auto ch = b.CreateVector(kContentHash32);
+                 auto sp = b.CreateVector(kServerProof32);
+                 b.Finish(mn::CreateHandshakeOk(b, ch, sp));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::HandshakeOk>(nullptr),
+                             "if2_handshake_ok verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::HandshakeOk>(buf.data());
+                 expect(bytes_eq(m->content_hash(), kContentHash32),
+                        "if2_handshake_ok.content_hash");
+                 expect(bytes_eq(m->server_proof(), kServerProof32),
+                        "if2_handshake_ok.server_proof");
+               }});
+
+  c.push_back({"if2_disconnect", "IF-2", "DISCONNECT (0x0003)",
+               "S->C server-initiated close: reason=SHUTDOWN + message",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 auto msg = b.CreateString("realm draining for maintenance");
+                 b.Finish(mn::CreateDisconnect(
+                     b, mn::DisconnectReason::SHUTDOWN, msg));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::Disconnect>(nullptr),
+                             "if2_disconnect verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::Disconnect>(buf.data());
+                 expect(m->reason() == mn::DisconnectReason::SHUTDOWN,
+                        "if2_disconnect.reason");
+                 expect(m->message() &&
+                            m->message()->str() ==
+                                "realm draining for maintenance",
+                        "if2_disconnect.message");
+               }});
+
+  c.push_back({"if2_movement_intent", "IF-2", "MOVEMENT_INTENT (0x1001)",
+               "C->S movement intent: seq, flags, pos, orientation, time",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateMovementIntent(
+                     b, /*seq=*/42u, /*state_flags=*/0x00000005u,
+                     /*x=*/123.5f, /*y=*/-64.25f, /*z=*/8.0f,
+                     /*orientation=*/1.5707963f,
+                     /*client_time_ms=*/1234567890123ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::MovementIntent>(nullptr),
+                             "if2_movement_intent verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::MovementIntent>(buf.data());
+                 expect(m->seq() == 42u, "if2_movement_intent.seq");
+                 expect(m->state_flags() == 0x00000005u,
+                        "if2_movement_intent.state_flags");
+                 expect(m->x() == 123.5f, "if2_movement_intent.x");
+                 expect(m->y() == -64.25f, "if2_movement_intent.y");
+                 expect(m->z() == 8.0f, "if2_movement_intent.z");
+                 expect(m->orientation() == 1.5707963f,
+                        "if2_movement_intent.orientation");
+                 expect(m->client_time_ms() == 1234567890123ULL,
+                        "if2_movement_intent.client_time_ms");
+               }});
+
+  c.push_back({"if2_movement_state", "IF-2", "MOVEMENT_STATE (0x1002)",
+               "S->C authoritative movement state: guid, ack_seq, pos, time",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateMovementState(
+                     b, /*entity_guid=*/0x00000000ABCDEF01ULL,
+                     /*ack_seq=*/42u, /*state_flags=*/0x00000005u,
+                     /*x=*/123.5f, /*y=*/-64.25f, /*z=*/8.0f,
+                     /*orientation=*/1.5707963f,
+                     /*server_time_ms=*/1234567890200ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::MovementState>(nullptr),
+                             "if2_movement_state verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::MovementState>(buf.data());
+                 expect(m->entity_guid() == 0x00000000ABCDEF01ULL,
+                        "if2_movement_state.entity_guid");
+                 expect(m->ack_seq() == 42u, "if2_movement_state.ack_seq");
+                 expect(m->state_flags() == 0x00000005u,
+                        "if2_movement_state.state_flags");
+                 expect(m->x() == 123.5f, "if2_movement_state.x");
+                 expect(m->orientation() == 1.5707963f,
+                        "if2_movement_state.orientation");
+                 expect(m->server_time_ms() == 1234567890200ULL,
+                        "if2_movement_state.server_time_ms");
+               }});
+
+  // EntityEnter with a full attribute set (vector of AttrDelta tables).
+  c.push_back({"if2_entity_enter", "IF-2", "ENTITY_ENTER (0x2001)",
+               "S->C full state on AoI entry: guid, type, pos, 2 attrs",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::AttrDelta>> attrs;
+                 attrs.push_back(mn::CreateAttrDelta(b, /*key=*/1u,
+                                                     /*value=*/100));
+                 attrs.push_back(mn::CreateAttrDelta(b, /*key=*/2u,
+                                                     /*value=*/-7));
+                 auto av = b.CreateVector(attrs);
+                 b.Finish(mn::CreateEntityEnter(
+                     b, /*entity_guid=*/0x0000000012345678ULL,
+                     /*type_id=*/0x00000101u, /*x=*/10.0f, /*y=*/20.0f,
+                     /*z=*/0.5f, /*orientation=*/0.0f, av));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::EntityEnter>(nullptr),
+                             "if2_entity_enter verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::EntityEnter>(buf.data());
+                 expect(m->entity_guid() == 0x0000000012345678ULL,
+                        "if2_entity_enter.entity_guid");
+                 expect(m->type_id() == 0x00000101u,
+                        "if2_entity_enter.type_id");
+                 expect(m->x() == 10.0f, "if2_entity_enter.x");
+                 expect(m->y() == 20.0f, "if2_entity_enter.y");
+                 expect(m->z() == 0.5f, "if2_entity_enter.z");
+                 const auto* attrs = m->attrs();
+                 if (!expect(attrs != nullptr && attrs->size() == 2,
+                             "if2_entity_enter has 2 attrs"))
+                   return;
+                 expect(attrs->Get(0)->key() == 1u &&
+                            attrs->Get(0)->value() == 100,
+                        "if2_entity_enter.attrs[0]");
+                 expect(attrs->Get(1)->key() == 2u &&
+                            attrs->Get(1)->value() == -7,
+                        "if2_entity_enter.attrs[1]");
+               }});
+
+  // EntityUpdate exercises the OPTIONAL float fields (x/y/z/orientation =
+  // null). Canonical instance sets position (moved) but omits orientation, so
+  // the golden pins BOTH the present-optional and absent-optional encodings.
+  c.push_back({"if2_entity_update", "IF-2", "ENTITY_UPDATE (0x2002)",
+               "S->C delta: guid, x/y/z present, orientation absent, 1 attr",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::AttrDelta>> attrs;
+                 attrs.push_back(mn::CreateAttrDelta(b, /*key=*/3u,
+                                                     /*value=*/55));
+                 auto av = b.CreateVector(attrs);
+                 b.Finish(mn::CreateEntityUpdate(
+                     b, /*entity_guid=*/0x0000000012345678ULL,
+                     /*x=*/11.0f, /*y=*/21.0f, /*z=*/0.75f,
+                     /*orientation=*/fb::nullopt, av));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::EntityUpdate>(nullptr),
+                             "if2_entity_update verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::EntityUpdate>(buf.data());
+                 expect(m->entity_guid() == 0x0000000012345678ULL,
+                        "if2_entity_update.entity_guid");
+                 // Optional<float>: present -> has_value() && *== ; absent ->
+                 // !has_value(). This pins BOTH optional encodings.
+                 expect(m->x().has_value() && *m->x() == 11.0f,
+                        "if2_entity_update.x present");
+                 expect(m->y().has_value() && *m->y() == 21.0f,
+                        "if2_entity_update.y present");
+                 expect(m->z().has_value() && *m->z() == 0.75f,
+                        "if2_entity_update.z present");
+                 expect(!m->orientation().has_value(),
+                        "if2_entity_update.orientation absent");
+                 const auto* attrs = m->attrs();
+                 expect(attrs != nullptr && attrs->size() == 1 &&
+                            attrs->Get(0)->key() == 3u &&
+                            attrs->Get(0)->value() == 55,
+                        "if2_entity_update.attrs[0]");
+               }});
+
+  c.push_back({"if2_entity_leave", "IF-2", "ENTITY_LEAVE (0x2003)",
+               "S->C entity leaves AoI: guid + reason=DESPAWNED",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateEntityLeave(
+                     b, /*entity_guid=*/0x0000000012345678ULL,
+                     mn::LeaveReason::DESPAWNED));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::EntityLeave>(nullptr),
+                             "if2_entity_leave verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::EntityLeave>(buf.data());
+                 expect(m->entity_guid() == 0x0000000012345678ULL,
+                        "if2_entity_leave.entity_guid");
+                 expect(m->reason() == mn::LeaveReason::DESPAWNED,
+                        "if2_entity_leave.reason");
+               }});
+
+  return c;
+}
+
+// ---------------------------------------------------------------------------
+// --update: regenerate the golden .bin corpus + a human-readable manifest.
+// ---------------------------------------------------------------------------
+int run_update(const std::vector<Message>& corpus) {
+  std::printf("meridian-proto conformance: --update (regenerating golden corpus)\n");
+  std::printf("  golden dir: %s\n", kGoldenDir.c_str());
+
+  std::string manifest;
+  manifest +=
+      "# Golden IF-1/IF-2 wire message corpus — MANIFEST (Issue #68)\n"
+      "#\n"
+      "# Generated by meridian-proto-conformance --update. DO NOT hand-edit the\n"
+      "# .bin files. Each entry is the FlatBuffer ROOT-TABLE bytes for one wire\n"
+      "# message, encoded by the real meridian::proto codec (flatc-generated\n"
+      "# Create*). The transport-added framing (u32 LE length for IF-1; u16\n"
+      "# opcode + u64 seq for IF-2) is NOT part of these bytes — see\n"
+      "# conformance/conformance.cpp header.\n"
+      "#\n"
+      "# Columns: file | interface | opcode | size(bytes) | summary\n"
+      "#          then the full hex of the golden bytes.\n"
+      "#\n"
+      "# Regenerate:  cmake --build <build> --target meridian-proto-conformance\n"
+      "#              ./<build>/.../meridian-proto-conformance --update\n"
+      "# A golden change IS a wire-protocol change — review + commit both.\n\n";
+
+  int failures = 0;
+  for (const auto& m : corpus) {
+    Bytes bytes = m.build();
+    if (!write_golden(m.name, bytes)) {
+      std::printf("  FAIL  could not write %s\n", golden_path(m.name).c_str());
+      ++failures;
+      continue;
+    }
+    std::printf("  wrote %-22s %4zu bytes\n", (m.name + ".bin").c_str(),
+                bytes.size());
+    manifest += m.name + ".bin | " + m.iface + " | " + m.opcode + " | " +
+                std::to_string(bytes.size()) + " | " + m.summary + "\n";
+    manifest += "  hex: " + to_hex(bytes) + "\n";
+  }
+
+  std::string mpath = kGoldenDir + "/manifest.txt";
+  std::FILE* f = std::fopen(mpath.c_str(), "wb");
+  if (f) {
+    std::fwrite(manifest.data(), 1, manifest.size(), f);
+    std::fclose(f);
+    std::printf("  wrote manifest.txt\n");
+  } else {
+    std::printf("  FAIL  could not write %s\n", mpath.c_str());
+    ++failures;
+  }
+
+  if (failures == 0)
+    std::printf("UPDATE OK: %zu golden messages written\n", corpus.size());
+  else
+    std::printf("UPDATE FAILED: %d write error(s)\n", failures);
+  return failures == 0 ? 0 : 1;
+}
+
+// ---------------------------------------------------------------------------
+// --check (default): decode-assert every golden + re-encode for byte-identity.
+// ---------------------------------------------------------------------------
+int run_check(const std::vector<Message>& corpus) {
+  std::printf("meridian-proto conformance: golden IF-1/IF-2 corpus (Issue #68)\n");
+  std::printf("  golden dir: %s\n", kGoldenDir.c_str());
+  std::printf("  messages:   %zu\n\n", corpus.size());
+
+  for (const auto& m : corpus) {
+    std::printf("[%s] %s (%s)\n", m.iface.c_str(), m.name.c_str(),
+                m.opcode.c_str());
+
+    Bytes golden;
+    if (!read_golden(m.name, golden)) {
+      fail(m.name + ": golden missing/unreadable at " + golden_path(m.name) +
+           " — run with --update to (re)generate the corpus");
+      continue;
+    }
+
+    // (1) DECODE-ASSERT: decode the frozen golden and assert logical fields.
+    m.check(golden);
+
+    // (2) RE-ENCODE BYTE-IDENTITY: rebuild and compare bytes.
+    Bytes fresh = m.build();
+    long diff = first_diff(fresh, golden);
+    if (diff < 0 && fresh.size() == golden.size()) {
+      okmsg(m.name + ": re-encode byte-identical to golden (" +
+            std::to_string(fresh.size()) + " bytes)");
+    } else {
+      fail(m.name +
+           ": re-encode DRIFTED from golden — protocol codec changed vs golden."
+           " Regenerate + review if intended (meridian-proto-conformance"
+           " --update).");
+      std::printf(
+          "        first diff at byte %ld; golden=%zuB fresh=%zuB\n"
+          "        golden hex: %s\n"
+          "        fresh  hex: %s\n",
+          diff, golden.size(), fresh.size(), to_hex(golden).c_str(),
+          to_hex(fresh).c_str());
+    }
+  }
+
+  std::printf("\n");
+  if (g_errors == 0) {
+    std::printf(
+        "PASS: all %zu IF-1/IF-2 golden messages decode to the expected fields"
+        " and re-encode byte-identically.\n",
+        corpus.size());
+    return 0;
+  }
+  std::printf(
+      "FAIL: %d conformance check(s) failed — the wire protocol drifted from the"
+      " golden corpus.\n"
+      "      If this change to schema/net or the codec is INTENTIONAL, regenerate"
+      " the corpus:\n"
+      "        ./<build-dir>/server/libs/proto/meridian-proto-conformance"
+      " --update\n"
+      "      then review the golden diff (it IS a wire-protocol change) and commit"
+      " it with the schema/codec change.\n",
+      g_errors);
+  return 1;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  bool update = false;
+  for (int i = 1; i < argc; ++i) {
+    std::string a = argv[i];
+    if (a == "--update")
+      update = true;
+    else if (a == "--check")
+      update = false;
+    else if (a == "--help" || a == "-h") {
+      std::printf(
+          "meridian-proto-conformance — golden IF-1/IF-2 wire corpus + drift"
+          " guard (#68)\n"
+          "  (no args) / --check   decode-assert + re-encode byte-identity vs"
+          " golden (ctest mode)\n"
+          "  --update              regenerate conformance/golden/*.bin +"
+          " manifest.txt from the codec\n");
+      return 0;
+    } else {
+      std::printf("unknown arg: %s (try --help)\n", a.c_str());
+      return 2;
+    }
+  }
+
+  auto corpus = build_corpus();
+  return update ? run_update(corpus) : run_check(corpus);
+}
