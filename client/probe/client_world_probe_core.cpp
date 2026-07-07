@@ -21,7 +21,7 @@
 #include "login_core.h"
 #include "login_transport.h"
 #include "meridian/clientnet/codec.h"
-#include "meridian/clientnet/tcp_transport.h"
+#include "meridian/clientnet/tls_client.h"
 #include "meridian/clientnet/wire_frame.h"
 #include "movement_constants.h"
 #include "movement_controller.h"
@@ -170,9 +170,12 @@ ProbeResult run_probe(const ProbeConfig& cfg) {
 
     const std::string worldd_host = cfg.worldd_host;
     const std::uint16_t worldd_port = cfg.worldd_port;
+    // worldd's IF-2 listener is TLS 1.3 (server/worldd/main.cpp — cert/key required
+    // to serve; the proven bot connects via TLS). The GUI net path (MeridianNetThread)
+    // uses the SAME TlsClientTransport — this mirrors it exactly.
     net::ConnectFn connect = [worldd_host, worldd_port]()
         -> std::unique_ptr<cn::ITransport> {
-        auto t = std::make_unique<cn::TcpTransport>(worldd_host, worldd_port);
+        auto t = std::make_unique<cn::TlsClientTransport>(worldd_host, worldd_port);
         if (!t->ok()) return nullptr;
         return t;
     };

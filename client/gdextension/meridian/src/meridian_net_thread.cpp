@@ -15,7 +15,7 @@
 #include <godot_cpp/core/object.hpp>  // MethodInfo / ADD_SIGNAL
 #include <godot_cpp/variant/dictionary.hpp>
 
-#include "meridian/clientnet/tcp_transport.h"
+#include "meridian/clientnet/tls_client.h"
 #include "net_thread_messages.h"
 
 using namespace godot;
@@ -115,9 +115,14 @@ bool MeridianNetThread::connect_to_world(const String &host, int port,
 	const std::string host_s = to_std(host);
 	const std::uint16_t port_u = static_cast<std::uint16_t>(port);
 	// The connect runs ON the net thread — the socket is never created on the main
-	// thread. worldd's world channel is plain TCP at M0 (not TLS); see tcp_transport.h.
+	// thread. worldd's IF-2 world listener is TLS 1.3 (server/worldd/main.cpp: cert/key
+	// are "Required to serve", and the proven headless bot connects to worldd via TLS),
+	// so the client MUST speak TLS too — a plain-TCP connect is rejected by worldd's
+	// handshake ("wrong version number"). (#301: this replaces the earlier plain
+	// TcpTransport, whose "world channel is plain TCP at M0" assumption never matched
+	// the real worldd deployment — the client could not enter the world without it.)
 	net::ConnectFn connect = [host_s, port_u]() -> std::unique_ptr<cn::ITransport> {
-		auto t = std::make_unique<cn::TcpTransport>(host_s, port_u);
+		auto t = std::make_unique<cn::TlsClientTransport>(host_s, port_u);
 		if (!t->ok()) {
 			return nullptr;
 		}
