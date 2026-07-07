@@ -125,6 +125,23 @@ if [ ! -f "${PROJECT}/.godot/extension_list.cfg" ]; then
   ok ".godot/ seeded"
 fi
 
+# --- Refresh a STALE global script class cache (a `git pull` added a class_name). --
+# The seed above only fires on a MISSING .godot/. But a pull that ADDS a GDScript
+# `class_name` (e.g. MeridianWorldConnectRouter) leaves the existing .godot/ in
+# place, so global_script_class_cache.cfg never learns the new type — scripts that
+# reference it by bare name fail to PARSE ("Could not find type ... in the current
+# scope"), which cascades into "Nonexistent function 'configure'" on the caller.
+# Detect it cheaply: any *.gd newer than the cache means the cache is stale. The
+# re-import is the SAME one-time WINDOWED import as above — never headless, #283.
+CLASS_CACHE="${PROJECT}/.godot/global_script_class_cache.cfg"
+if [ -f "${CLASS_CACHE}" ] \
+   && [ -n "$(find "${PROJECT}" -name '*.gd' -newer "${CLASS_CACHE}" -print -quit)" ]; then
+  log "A *.gd file is newer than the class cache; refreshing via WINDOWED editor import (avoids #283)"
+  "$GODOT_BIN" --rendering-driver metal --editor --quit --path "$PROJECT" >/dev/null 2>&1 \
+    || die "windowed editor import failed (see run without redirection)"
+  ok "class cache refreshed"
+fi
+
 # --- Boot. -------------------------------------------------------------------
 if [ "$VERIFY" -eq 1 ]; then
   QUIT_AFTER=120
