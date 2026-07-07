@@ -26,6 +26,7 @@ target_link_libraries(authd-login
     meridian::proto
     meridian::srp
     meridian::db
+    meridian::metrics  # OPS-05 auth-outcome + SRP-timing metrics (#164)
 )
 target_compile_features(authd-login PUBLIC cxx_std_20)
 set_target_properties(authd-login PROPERTIES CXX_EXTENSIONS OFF)

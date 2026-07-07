@@ -36,6 +36,8 @@
 #include "meridian/core/log.hpp"
 #include "meridian/core/version.hpp"
 #include "meridian/db/connection.h"
+#include "meridian/metrics/catalog.h"
+#include "meridian/metrics/exposer.h"
 #include "meridian/net/tls_listener.h"
 
 #include "world_boot.h"
@@ -81,6 +83,12 @@ struct WorlddConfig {
     // tie). When set + it disagrees with the loaded hash -> a loud WARNING at
     // M0–M1 (bootable), not a refusal. Empty -> the tie is not checked.
     std::string expected_content_hash;
+
+    // OPS-05 metrics endpoint (server SAD §8.5; docs/telemetry-architecture.md).
+    // Plain-HTTP /metrics on a port SEPARATE from the game TLS port; default 9464
+    // (the port the OTel collector scrapes) bound to loopback. 0 disables it.
+    std::uint16_t metrics_port = 9464;
+    std::string metrics_bind = "127.0.0.1";
 };
 
 const char* env(const char* k) { return std::getenv(k); }
@@ -97,12 +105,20 @@ void print_help() {
         "  --bind ADDR        Bind address (default 0.0.0.0).\n"
         "  --port N           Listen port (default 7200, IF-2).\n"
         "  --io-workers N     Size of the map/IO worker pool (default: auto).\n"
+        "  --metrics-port N   Prometheus /metrics port (default 9464; 0=off).\n"
+        "  --metrics-bind ADDR  /metrics bind address (default 127.0.0.1).\n"
+        "  --realm NAME       realm label for metrics (default 'reference').\n"
         "  --version          Print version and build info, then exit.\n"
         "  --help, -h         Print this help, then exit.\n"
         "\n"
         "M0 (issues #82/#83): worldd runs the world thread + IO worker pool and\n"
         "the IF-2 opcode dispatcher over a TLS 1.3 listener. Grant validation\n"
-        "(#84), movement (#86), AoI (#87), and the real tick land on top later.\n",
+        "(#84), movement (#86), AoI (#87), and the real tick land on top later.\n"
+        "\n"
+        "Metrics (OPS-05, #164): worldd exposes a plain-HTTP Prometheus /metrics\n"
+        "endpoint on the metrics port (SEPARATE from the game TLS port) — the\n"
+        "internal scrape surface for the OTel collector (server/ops). Env:\n"
+        "MERIDIAN_METRICS_PORT, MERIDIAN_METRICS_BIND, MERIDIAN_REALM.\n",
         kDaemonName, kDaemonName);
 }
 
@@ -141,6 +157,16 @@ int main(int argc, char** argv) {
             if (n > 0) { cfg.world.io_workers = static_cast<unsigned>(n); io_workers_set = true; }
             continue;
         }
+        if (std::strcmp(argv[i], "--metrics-port") == 0) {
+            cfg.metrics_port = static_cast<std::uint16_t>(std::atoi(next("--metrics-port")));
+            continue;
+        }
+        if (std::strcmp(argv[i], "--metrics-bind") == 0) {
+            cfg.metrics_bind = next("--metrics-bind"); continue;
+        }
+        if (std::strcmp(argv[i], "--realm") == 0) {
+            cfg.world.labels.realm = next("--realm"); continue;
+        }
         std::fprintf(stderr, "%s: unknown option '%s' (try --help)\n", kDaemonName, argv[i]);
         return 2;
     }
@@ -155,6 +181,13 @@ int main(int argc, char** argv) {
     if (const char* p = env("MERIDIAN_WORLDD_PORT")) {
         cfg.port = static_cast<std::uint16_t>(std::atoi(p));
     }
+
+    // OPS-05 metrics endpoint + realm label env fallbacks (flags override).
+    if (const char* p = env("MERIDIAN_METRICS_PORT")) {
+        cfg.metrics_port = static_cast<std::uint16_t>(std::atoi(p));
+    }
+    if (const char* b = env("MERIDIAN_METRICS_BIND")) cfg.metrics_bind = b;
+    if (const char* r = env("MERIDIAN_REALM")) cfg.world.labels.realm = r;
 
     // Auth DB connection for IF-3 grant validation (#84). worldd consumes
     // session_grant rows to admit players (worldd is client-facing until the M2
@@ -241,6 +274,32 @@ int main(int argc, char** argv) {
             "content; IF-4 manifest check skipped");
     }
 
+    // --- OPS-05 metrics endpoint ------------------------------------------------
+    // Start the plain-HTTP /metrics exposer BEFORE serving so the OTel collector
+    // can scrape immediately. A bind failure is logged + the daemon continues
+    // WITHOUT metrics (graceful degradation, D-29 §9 rule 6). Seed the RSS gauge
+    // label so the series exists before any sampler runs.
+    std::optional<meridian::metrics::Exposer> exposer;
+    if (cfg.metrics_port != 0) {
+        meridian::metrics::ExposerConfig ec;
+        ec.port = cfg.metrics_port;
+        ec.bind_addr = cfg.metrics_bind;
+        try {
+            exposer.emplace(ec, meridian::metrics::default_registry());
+            exposer->start();
+            meridian::metrics::catalog::rss_bytes()
+                .with({cfg.world.labels.realm, kDaemonName})
+                .set(0.0);
+            meridian::core::log::info(
+                kDaemonName, "metrics /metrics on http://" + cfg.metrics_bind + ":" +
+                                 std::to_string(exposer->port()));
+        } catch (const std::exception& e) {
+            meridian::core::log::warn(
+                kDaemonName, std::string("metrics endpoint disabled: ") + e.what());
+            exposer.reset();
+        }
+    }
+
     meridian::net::ListenConfig lc;
     lc.cert_path = cfg.cert_path;
     lc.key_path = cfg.key_path;
@@ -296,6 +355,10 @@ int main(int argc, char** argv) {
         for (;;) {
             try {
                 meridian::net::Session sess = listener.accept();
+                // OPS-05 net signal: connection accepted (post TLS 1.3 handshake).
+                meridian::metrics::catalog::connections_accepted_total()
+                    .with({cfg.world.labels.realm, kDaemonName})
+                    .inc();
                 {
                     std::lock_guard<std::mutex> lk(mtx);
                     pending.push_back(std::move(sess));

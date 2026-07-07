@@ -22,16 +22,62 @@
 #include <openssl/rand.h>
 
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <ctime>
 
 #include "auth_generated.h"
+#include "meridian/metrics/catalog.h"
 
 namespace meridian::authd {
 namespace {
 
 namespace fb = flatbuffers;
 namespace mn = meridian::net;
+
+// Map a LoginOutcome to the `outcome` label value used by meridian_auth_results_
+// total / meridian_auth_srp_duration_seconds (OPS-05 signal catalog). Stable,
+// low-cardinality strings so the Grafana Player-experience / Errors panels can
+// group the login funnel by result.
+const char* outcome_label(LoginOutcome o) {
+    switch (o) {
+        case LoginOutcome::kGranted:         return "granted";
+        case LoginOutcome::kRejectedHello:   return "rejected_hello";
+        case LoginOutcome::kRejectedAuth:    return "rejected_auth";
+        case LoginOutcome::kRejectedRealm:   return "rejected_realm";
+        case LoginOutcome::kProtocolError:   return "protocol_error";
+        case LoginOutcome::kTransportClosed: return "transport_closed";
+    }
+    return "unknown";
+}
+
+// RAII: on construction bump meridian_auth_attempts_total{realm}; on destruction
+// record the final outcome (meridian_auth_results_total{realm,outcome}) and the
+// server-side SRP handshake duration (meridian_auth_srp_duration_seconds{realm,
+// outcome}). Reads the LoginResult by reference so it captures whatever outcome
+// run_login ends on, at ANY of its early returns — no per-return metric calls.
+class LoginMetricsScope {
+public:
+    LoginMetricsScope(const std::string& realm, const LoginResult& result)
+        : realm_(realm), result_(result),
+          start_(std::chrono::steady_clock::now()) {
+        namespace cat = meridian::metrics::catalog;
+        cat::auth_attempts_total().with({realm_}).inc();
+    }
+    ~LoginMetricsScope() {
+        namespace cat = meridian::metrics::catalog;
+        const double elapsed_s =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - start_).count();
+        const std::string outcome = outcome_label(result_.outcome);
+        cat::auth_results_total().with({realm_, outcome}).inc();
+        cat::auth_srp_duration_seconds().with({realm_, outcome}).observe(elapsed_s);
+    }
+
+private:
+    std::string realm_;
+    const LoginResult& result_;
+    std::chrono::steady_clock::time_point start_;
+};
 
 using net::Bytes;
 
@@ -205,6 +251,11 @@ db::Param blob(const Bytes& b) {
 LoginResult run_login(net::Session& sess, db::Connection& db,
                       const LoginConfig& cfg) {
     LoginResult result;
+
+    // OPS-05: count this attempt now and (on scope exit, at whichever return the
+    // flow ends on) record the outcome + server-side SRP handshake duration
+    // (meridian_auth_{attempts,results}_total + meridian_auth_srp_duration_seconds).
+    LoginMetricsScope metrics_scope(cfg.realm_label, result);
 
     // ---- 1. ClientHello -> ServerHello | Error ------------------------------
     Bytes frame;
