@@ -69,7 +69,7 @@ jobs:
       # a no-op when already present; `|| true` swallows the nonzero some brew
       # versions return for "already installed".
       - name: Ensure build tools (arm64 Homebrew)
-        run: brew install ninja cmake flatbuffers openssl@3 || true
+        run: brew install flatbuffers openssl@3 || true
       - uses: actions/checkout@v4
         # No submodules: the engine-agnostic cores never touch godot-cpp.
       # Runs in the runner's own (Rosetta x86_64) process on purpose, so the log
@@ -81,7 +81,7 @@ jobs:
           echo "hw.optional.arm64       : $arm"
           test "$arm" = "1" || { echo "::error::not Apple Silicon (hw.optional.arm64=$arm)"; exit 1; }
           echo "arch -arm64 uname -m    : $(arch -arm64 uname -m)"   # arm64 — native toolchain reachable
-          for t in cmake ninja flatc; do
+          for t in cmake flatc; do
             command -v "$t" >/dev/null || { echo "::error::missing $t"; exit 1; }
           done
           arch -arm64 cmake --version | head -1
@@ -101,7 +101,7 @@ jobs:
       # -DCMAKE_OSX_ARCHITECTURES=arm64 additionally forces arm64 output.
       - name: Configure client cores (native arm64)
         run: |
-          arch -arm64 cmake -S client -B build/client-cores -G Ninja \
+          arch -arm64 cmake -S client -B build/client-cores \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DMERIDIAN_CLIENT_NET=ON \
             -DMERIDIAN_BOT=ON \
@@ -146,7 +146,7 @@ jobs:
           echo "/opt/homebrew/sbin" >> "$GITHUB_PATH"
       # Same self-sufficiency as client-cores: install the toolchain, don't assume it.
       - name: Ensure build tools (arm64 Homebrew)
-        run: brew install ninja cmake flatbuffers openssl@3 || true
+        run: brew install flatbuffers openssl@3 || true
       - uses: actions/checkout@v4
         with:
           submodules: recursive   # client/godot-cpp at its pinned 4.7 commit
@@ -157,7 +157,7 @@ jobs:
           echo "hw.optional.arm64       : $arm"
           test "$arm" = "1" || { echo "::error::not Apple Silicon (hw.optional.arm64=$arm)"; exit 1; }
           echo "arch -arm64 uname -m    : $(arch -arm64 uname -m)"
-          for t in cmake ninja flatc; do
+          for t in cmake flatc; do
             command -v "$t" >/dev/null || { echo "::error::missing $t"; exit 1; }
           done
           test -f client/godot-cpp/CMakeLists.txt || { echo "::error::godot-cpp submodule not checked out"; exit 1; }
@@ -181,7 +181,7 @@ jobs:
           key: godotcpp-arm64-${{ hashFiles('client/ENGINE_VERSION') }}
       - name: Configure GDExtension (native arm64, template_debug)
         run: |
-          arch -arm64 cmake -S client -B build/client-gdext -G Ninja \
+          arch -arm64 cmake -S client -B build/client-gdext \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DGODOTCPP_TARGET=template_debug
       - name: Build godot-cpp + GDExtension (native arm64)
