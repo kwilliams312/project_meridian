@@ -27,12 +27,15 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "bot_world_session.h"
+#include "connection_fsm.h"       // ConnectionFsm, BackoffPolicy, ReconnectStrategy
 #include "login_core.h"          // login::ILoginTransport, login::LoginResult
+#include "reconnect_coordinator.h"  // ReconnectReport, run_reconnect
 
 namespace meridian::bot {
 
@@ -139,6 +142,70 @@ struct BotWorldConfig {
 BotRunResult run_world_session(login::ILoginTransport& transport,
                                const login::LoginResult& grant,
                                const BotWorldConfig& cfg);
+
+// ---------------------------------------------------------------------------
+// #96 — session lifecycle WITH the connection state machine + reconnect.
+// ---------------------------------------------------------------------------
+
+// A factory the reconnect wrapper calls to obtain a FRESH transport connected to
+// worldd for one enter-world attempt (each attempt needs a new socket — the dropped
+// one is dead). In the CLI this constructs a TlsLoginTransport(worldd_host, port)
+// and returns it (or nullptr on connect failure). In tests it hands back a fresh
+// mock. Ownership transfers to the wrapper for the duration of that attempt.
+using WorlddConnectFn = std::function<std::unique_ptr<login::ILoginTransport>()>;
+
+// A factory that runs a FRESH authd login and returns a NEW grant, for the
+// kFullRelogin reconnect strategy (the working M0 path — a re-login, not a resume).
+// Returns a LoginResult; ok()==false means the relogin failed (→ a failed/fatal
+// reconnect attempt). Null is allowed only when strategy == kResumeWithGrant (no
+// relogin is ever attempted, so no factory is needed).
+using ReloginFn = std::function<login::LoginResult()>;
+
+// Config for a reconnect-capable session run.
+struct ReconnectConfig {
+    // The reconnect strategy. Default kFullRelogin — the ONLY path that actually
+    // works against worldd at M0 (the grant is single-use; a true token-resume
+    // needs a server-side reconnect path that does not exist yet — see
+    // connection_fsm.h). kResumeWithGrant is the forward-looking seam: it re-presents
+    // the SAME grant and will be rejected GRANT_INVALID today, which the report
+    // surfaces honestly.
+    ReconnectStrategy strategy = ReconnectStrategy::kFullRelogin;
+    // The backoff policy. window_ms should be seeded from the grant's
+    // reconnect_window_ms (#66) by the caller.
+    BackoffPolicy backoff{};
+    // The world-session config used for each (re-)enter-world.
+    BotWorldConfig world{};
+};
+
+// The honest report of a reconnect-capable run: the first session's result, whether
+// a drop happened, and — if so — the reconnect episode's outcome (including the
+// blunt "resumed with token" vs "re-logged in" verdict).
+struct ReconnectRunReport {
+    BotRunResult first_session;      // the initial enter-world + move
+    bool dropped = false;            // a drop was injected/observed after InWorld
+    ReconnectReport reconnect;       // the reconnect episode (valid iff dropped)
+    BotRunResult resumed_session;    // the session after a successful reconnect
+    ConnState final_state = ConnState::kDisconnected;
+};
+
+// Drive a full reconnect-capable session over the connection state machine:
+//   1. enter world + move on `first_transport` (run_world_session);
+//   2. if `inject_drop` fires (returns true) after the first session, treat the
+//      session as DROPPED, enter the FSM's Reconnecting state, and run the
+//      coordinator's backoff/attempt loop using `connect` (+ `relogin` for
+//      kFullRelogin) to try to re-enter the world within the window budget;
+//   3. on a successful reconnect, run the world session again on the new transport.
+//
+// `now`/`wait` are the coordinator's clock seams (steady_clock + sleep in the CLI;
+// a virtual clock in tests). Returns the honest ReconnectRunReport. This is the
+// wrapper the bot CLI / client uses so the reconnect POLICY is exercised over the
+// real transport — while being truthful that a true token-resume is a server
+// follow-up at M0.
+ReconnectRunReport run_session_with_reconnect(
+    std::unique_ptr<login::ILoginTransport> first_transport,
+    const login::LoginResult& grant, const ReconnectConfig& cfg,
+    const WorlddConnectFn& connect, const ReloginFn& relogin,
+    const std::function<bool()>& inject_drop, const NowFn& now, const WaitFn& wait);
 
 }  // namespace meridian::bot
 

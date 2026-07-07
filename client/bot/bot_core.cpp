@@ -433,4 +433,99 @@ BotRunResult run_world_session(login::ILoginTransport& transport,
     return res;
 }
 
+// ---------------------------------------------------------------------------
+// #96 — reconnect-capable session wrapper.
+// ---------------------------------------------------------------------------
+
+ReconnectRunReport run_session_with_reconnect(
+    std::unique_ptr<login::ILoginTransport> first_transport,
+    const login::LoginResult& grant, const ReconnectConfig& cfg,
+    const WorlddConnectFn& connect, const ReloginFn& relogin,
+    const std::function<bool()>& inject_drop, const NowFn& now, const WaitFn& wait) {
+    ReconnectRunReport report;
+
+    // The connection FSM: it has already progressed Disconnected→…→InWorld by the
+    // time the first session returns handshake_ok, so we prime it to InWorld to
+    // reflect that live state before considering a drop. (The full lifecycle is
+    // unit-proven in connection_fsm_test; here the FSM governs the RECONNECT loop.)
+    ConnectionFsm fsm(cfg.backoff, cfg.strategy);
+
+    // --- 1. Initial enter-world + move on the first transport. ---------------
+    report.first_session = run_world_session(*first_transport, grant, cfg.world);
+    if (report.first_session.handshake_ok) {
+        // Mirror the lifecycle into the FSM: Connect→Connected→AuthOk (login already
+        // happened upstream)→Entered = InWorld.
+        fsm.dispatch(ConnEvent::kConnect);
+        fsm.dispatch(ConnEvent::kConnected);
+        fsm.dispatch(ConnEvent::kAuthOk);
+        fsm.dispatch(ConnEvent::kEntered);
+    }
+    // The dropped transport is dead; release it before reconnecting.
+    first_transport.reset();
+
+    // --- 2. Decide whether a drop occurred. `inject_drop` lets a harness force a
+    //        transient drop AFTER a good first session (the "reconnect works" test);
+    //        a real client wires it to "the live transport reported a clean-EOF /
+    //        error while InWorld". No drop → nothing to reconnect; return. ---------
+    if (!fsm.in_world() || !inject_drop || !inject_drop()) {
+        report.final_state = fsm.state();
+        return report;
+    }
+    report.dropped = true;
+
+    // Hold the last successfully re-entered transport so the resumed session (step 3)
+    // can run on it. The re-establish seam stores it here on success.
+    std::unique_ptr<login::ILoginTransport> resumed_transport;
+    // For kFullRelogin, each attempt gets a fresh grant; capture the latest.
+    login::LoginResult live_grant = grant;
+
+    // --- 3. The re-establish seam the coordinator drives on each attempt. -------
+    auto reestablish = [&](std::uint32_t /*attempt_index*/,
+                           ReconnectStrategy strategy) -> ReEstablishOutcome {
+        // kFullRelogin: get a FRESH grant first (the working M0 path). A failed
+        // relogin that is unrecoverable (bad creds) is Fatal; a transient connect
+        // failure is retryable.
+        if (strategy == ReconnectStrategy::kFullRelogin) {
+            if (!relogin) return ReEstablishOutcome::kFatal;  // misconfigured
+            login::LoginResult fresh = relogin();
+            if (!fresh.ok()) {
+                // Distinguish a transport failure (retry) from an auth reject (fatal).
+                return (fresh.status == login::LoginStatus::kConnectFailed ||
+                        fresh.status == login::LoginStatus::kTransportClosed)
+                           ? ReEstablishOutcome::kConnectFailed
+                           : ReEstablishOutcome::kFatal;
+            }
+            live_grant = fresh;
+        }
+        // kResumeWithGrant keeps live_grant == the ORIGINAL grant (re-presenting it).
+
+        // Open a fresh worldd connection for this attempt.
+        std::unique_ptr<login::ILoginTransport> tr = connect ? connect() : nullptr;
+        if (!tr) return ReEstablishOutcome::kConnectFailed;  // transport down — retry
+
+        // Try to (re-)enter the world with the (fresh or re-presented) grant.
+        BotWorldConfig enter_cfg = cfg.world;
+        BotRunResult r = run_world_session(*tr, live_grant, enter_cfg);
+        if (r.handshake_ok) {
+            resumed_transport = std::move(tr);
+            report.resumed_session = r;
+            return ReEstablishOutcome::kEnteredWorld;
+        }
+        if (r.disconnected && r.disconnect_reason == 3 /*GRANT_INVALID*/) {
+            // The M0 single-use reality on kResumeWithGrant: worldd already consumed
+            // this grant → GRANT_INVALID. Retryable in the FSM sense (backoff/give
+            // up), but it will NEVER succeed under this strategy against real worldd.
+            return ReEstablishOutcome::kGrantRejected;
+        }
+        return ReEstablishOutcome::kConnectFailed;  // some other transient failure
+    };
+
+    // Run the coordinator's backoff/attempt loop. `drop_first` issues the FSM's
+    // kDropped (InWorld→Reconnecting) to open the episode.
+    report.reconnect = run_reconnect(fsm, reestablish, now, wait, /*drop_first=*/true);
+    report.final_state = fsm.state();
+    (void)resumed_transport;  // kept alive through the resumed_session capture above
+    return report;
+}
+
 }  // namespace meridian::bot

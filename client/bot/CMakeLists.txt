@@ -68,6 +68,8 @@ add_custom_target(meridian-bot-codegen DEPENDS ${MERIDIAN_BOT_GENERATED})
 add_library(meridian-bot-core STATIC
   bot_world_session.cpp
   bot_core.cpp
+  connection_fsm.cpp
+  reconnect_coordinator.cpp
   "${MERIDIAN_CLIENT_SRC}/login_core.cpp"
   "${MERIDIAN_CLIENT_SRC}/srp_client_core.cpp"
   "${MERIDIAN_CLIENT_SRC}/login_transport.cpp"
@@ -128,6 +130,8 @@ add_executable(bot-world-session-test
   test/bot_world_session_test.cpp
   bot_world_session.cpp
   bot_core.cpp
+  connection_fsm.cpp
+  reconnect_coordinator.cpp
   "${MERIDIAN_CLIENT_SRC}/login_core.cpp"
   "${MERIDIAN_CLIENT_SRC}/srp_client_core.cpp"
   "${MERIDIAN_CLIENT_SRC}/login_transport.cpp"
@@ -148,6 +152,26 @@ if(NOT MSVC)
   target_compile_options(bot-world-session-test PRIVATE -Wall -Wextra)
 endif()
 add_test(NAME bot-world-session COMMAND bot-world-session-test)
+
+# --- Connection state machine + reconnect coordinator test (#96) -------------
+# The reconnect FSM + policy is a PURE state machine: NO OpenSSL, NO FlatBuffers,
+# NO codegen, NO sockets. This test compiles only the two FSM/coordinator sources
+# + its driver, so it is the truly engine-free reconnect proof that runs in CI on
+# any C++17 toolchain (and does not depend on flatc being installed).
+add_executable(connection-fsm-test
+  test/connection_fsm_test.cpp
+  connection_fsm.cpp
+  reconnect_coordinator.cpp
+)
+target_include_directories(connection-fsm-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+set_target_properties(connection-fsm-test PROPERTIES
+  CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+if(MSVC)
+  target_compile_options(connection-fsm-test PRIVATE /W4)
+else()
+  target_compile_options(connection-fsm-test PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME connection-fsm COMMAND connection-fsm-test)
 
 # --- Live-worldd integration test (env-guarded, driven by the shell harness) --
 # The interop proof: the bot core + TlsLoginTransport driven over a REAL TLS

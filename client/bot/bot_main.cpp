@@ -18,10 +18,13 @@
 // movement when --path != idle and the run produced accepted server states);
 // non-zero = login/handshake/movement failure (the message says which).
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
+#include <thread>
 
 #include <openssl/ssl.h>
 
@@ -72,7 +75,16 @@ void usage(const char* prog) {
         "  --realm    R           realm id to select (default: first in range)\n"
         "  --duration S           movement-loop seconds (default 10; 20 Hz sim)\n"
         "  --path     P           scripted path: square (default) | idle\n"
-        "  --build    N           client build (default 1000; must be in realm range)\n",
+        "  --build    N           client build (default 1000; must be in realm range)\n"
+        "  --reconnect [MODE]     after the first session, force a transient drop and\n"
+        "                         exercise the #96 reconnect state machine. MODE:\n"
+        "                           relogin (default) — fresh authd login + re-enter\n"
+        "                                               (WORKS at M0; a re-login, not\n"
+        "                                               a token resume)\n"
+        "                           resume            — re-present the SAME grant to\n"
+        "                                               worldd (a true token resume;\n"
+        "                                               REJECTED at M0 — single-use\n"
+        "                                               grant. Proves the server gap.)\n",
         prog);
 }
 
@@ -92,6 +104,8 @@ int main(int argc, char** argv) {
     const char* duration_s = arg_after(argc, argv, "--duration");
     const char* path_s = arg_after(argc, argv, "--path");
     const char* build_s = arg_after(argc, argv, "--build");
+    const bool want_reconnect = has_flag(argc, argv, "--reconnect");
+    const char* reconnect_mode_s = arg_after(argc, argv, "--reconnect");  // optional MODE token
 
     if (!authd_s || !worldd_s || !user || !password) {
         std::fprintf(stderr, "meridian-bot: --authd, --worldd, --user, --password are required\n\n");
@@ -169,7 +183,7 @@ int main(int argc, char** argv) {
     wcfg.movement_ticks = movement_ticks;
 
     bot::BotRunResult run;
-    {
+    if (!want_reconnect) {
         login::TlsLoginTransport wtransport(worldd_host, worldd_port);
         if (!wtransport.ok()) {
             std::printf("  FAIL: could not connect to worldd (%s)\n", wtransport.error().c_str());
@@ -177,6 +191,105 @@ int main(int argc, char** argv) {
         }
         std::printf("  ok    connected to worldd (%s)\n", wtransport.tls_version().c_str());
         run = bot::run_world_session(wtransport, grant, wcfg);
+    } else {
+        // ===== 2r. #96 reconnect: enter world, force a transient drop, drive the
+        //           connection state machine's backoff/attempt loop over REAL TLS. =
+        const bool resume_mode =
+            reconnect_mode_s && std::strcmp(reconnect_mode_s, "resume") == 0;
+        std::printf("  reconnect: enabled (mode=%s)\n",
+                    resume_mode ? "resume (token; single-use grant -> REJECTED at M0)"
+                                : "relogin (fresh grant -> works at M0)");
+
+        bot::ReconnectConfig rc;
+        rc.strategy = resume_mode ? bot::ReconnectStrategy::kResumeWithGrant
+                                  : bot::ReconnectStrategy::kFullRelogin;
+        // Seed the reconnect window from the grant's server-owned reconnect_window_ms
+        // (#66) — the budget past which the grant is presumed expired (SAD §5.1).
+        rc.backoff.window_ms = grant.reconnect_window_ms;
+        rc.backoff.base_delay_ms = 250;
+        rc.backoff.max_delay_ms = 4000;
+        rc.backoff.max_attempts = 6;
+        rc.world = wcfg;
+
+        // A fresh worldd TLS connection per attempt (the dropped socket is dead).
+        auto connect = [&]() -> std::unique_ptr<login::ILoginTransport> {
+            auto t = std::make_unique<login::TlsLoginTransport>(worldd_host, worldd_port);
+            if (!t->ok()) return nullptr;
+            return t;
+        };
+        // A fresh authd login per relogin attempt (kFullRelogin — the working path).
+        static std::uint32_t s_realm2 = realm_id;
+        static bool s_want_realm2 = want_realm;
+        auto relogin = [&]() -> login::LoginResult {
+            login::TlsLoginTransport lt(authd_host, authd_port);
+            if (!lt.ok()) {
+                login::LoginResult r;
+                r.status = login::LoginStatus::kConnectFailed;
+                return r;
+            }
+            auto pick = [](const std::vector<login::RealmInfo>& realms,
+                           const login::LoginConfig&) -> std::uint32_t {
+                if (s_want_realm2) return s_realm2;
+                return realms.empty() ? 0 : realms.front().id;
+            };
+            return login::run_login(lt, cfg, user, password, pick, nullptr);
+        };
+        // The first connection for the initial enter-world.
+        auto first = std::make_unique<login::TlsLoginTransport>(worldd_host, worldd_port);
+        if (!first->ok()) {
+            std::printf("  FAIL: could not connect to worldd (%s)\n", first->error().c_str());
+            return 1;
+        }
+        std::printf("  ok    connected to worldd (%s)\n", first->tls_version().c_str());
+        // Force exactly one transient drop after the first session.
+        bool dropped_once = false;
+        auto inject_drop = [&dropped_once]() {
+            if (dropped_once) return false;
+            dropped_once = true;
+            return true;
+        };
+        // Real clock seams: steady_clock + a real sleep for the backoff.
+        auto now = []() -> std::uint64_t {
+            return static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count());
+        };
+        auto wait = [](std::uint32_t ms) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+        };
+
+        bot::ReconnectRunReport rr = bot::run_session_with_reconnect(
+            std::move(first), grant, rc, connect, relogin, inject_drop, now, wait);
+
+        run = rr.first_session;
+
+        std::printf("\n2r. reconnect episode report\n");
+        std::printf("  drop injected     : %s\n", rr.dropped ? "yes" : "no");
+        std::printf("  strategy          : %s\n", bot::to_string(rc.strategy));
+        std::printf("  attempts          : %u\n", rr.reconnect.attempts);
+        std::printf("  reconnect_ms      : %llu\n",
+                    static_cast<unsigned long long>(rr.reconnect.total_reconnect_ms));
+        std::printf("  reconnected       : %s\n", rr.reconnect.reconnected ? "yes" : "no");
+        std::printf("  resumed w/o relog : %s%s\n",
+                    rr.reconnect.resumed_without_relogin ? "YES" : "no",
+                    rr.reconnect.resumed_without_relogin
+                        ? " (true token-reconnect)"
+                        : " (server has no session-resume path at M0)");
+        std::printf("  final state       : %s\n", bot::to_string(rr.final_state));
+        std::printf("  detail            : %s\n", rr.reconnect.detail.c_str());
+        for (const auto& a : rr.reconnect.attempt_log) {
+            std::printf("    attempt %u (backoff %ums, +%llums): %s\n", a.attempt_index,
+                        a.backoff_ms, static_cast<unsigned long long>(a.elapsed_ms),
+                        bot::to_string(a.outcome));
+        }
+        if (rr.reconnect.reconnected) run = rr.resumed_session;
+        // Machine-readable line the reconnect harness greps.
+        std::printf("RECONNECT_RESULT dropped=%d reconnected=%d resumed_without_relogin=%d "
+                    "attempts=%u final_state=%s strategy=%s\n",
+                    rr.dropped ? 1 : 0, rr.reconnect.reconnected ? 1 : 0,
+                    rr.reconnect.resumed_without_relogin ? 1 : 0, rr.reconnect.attempts,
+                    bot::to_string(rr.final_state), bot::to_string(rc.strategy));
     }
 
     // ===== 3. HONEST run report ============================================
