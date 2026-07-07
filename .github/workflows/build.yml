@@ -43,12 +43,28 @@ jobs:
           sudo apt-get install -y cmake ninja-build g++-13
       - name: Configure
         run: cmake -S tools/mcc -B tools/mcc/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
-      - name: Build
+      # Build the CLI *and* the CTest-registered unit-test binaries (mcc-tests,
+      # mcc-check-file-tests, mcc-link-tests, mcc-emit-sql-tests, mcc-emit-sql-db-tests).
+      # A bare `cmake --build` builds all targets, so the ctest step below has
+      # every test executable available.
+      - name: Build (CLI + test targets)
         run: cmake --build tools/mcc/build
       - name: Smoke-run mcc --version
         run: ./tools/mcc/build/mcc --version
       - name: Smoke-run mcc --help
         run: ./tools/mcc/build/mcc --help
+      # mcc unit suite (#119): fmt idempotency/drift, single-file validation, the
+      # link stage + IF-9 idmap, and emit-sql (BLAKE3 vectors + world_manifest).
+      # Mirrors the `server` job's ctest step. The DB-backed mcc-emit-sql-db test is
+      # env-guarded and SKIPs (exit 0) here — no MERIDIAN_DB_* env, no MariaDB service.
+      - name: Test mcc (ctest)
+        run: ctest --test-dir tools/mcc/build --output-on-failure
+      # idmap drift guard (#119): run the link stage read-only against the content
+      # root. `--no-allocate-ids` never writes idmap.lock and fails (L015, exit 1) if
+      # any id is missing from the committed content/core/idmap.lock — so a stale lock
+      # can never land on green. Passes clean on the current content (exit 0).
+      - name: Idmap drift-check (read-only link, fails on stale idmap.lock)
+        run: ./tools/mcc/build/mcc link content --no-allocate-ids
 
   # libmeridian-db (#75): build + run its integration test against a real
   # MariaDB service — proves the connection + prepared-statement layer works,
