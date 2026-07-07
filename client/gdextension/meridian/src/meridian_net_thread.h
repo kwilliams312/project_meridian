@@ -32,6 +32,7 @@
 #include <memory>
 
 #include <godot_cpp/classes/ref_counted.hpp>
+#include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/string.hpp>
 
@@ -87,6 +88,28 @@ public:
 	bool send_control(const godot::PackedByteArray &frame);
 	bool send_movement_intent(const godot::PackedByteArray &frame);
 	bool send_bulk(const godot::PackedByteArray &frame);
+
+	// ── Entity-relay decode (the `sim`-layer handoff for the scene) ────────────
+	// Decode a raw entity_frame (opcode + FlatBuffer payload, as delivered by the
+	// `entity_frame` signal) into a scene-ready Dictionary using the SHARED clientnet
+	// entity codec (#301 — the same decode the headless probe uses). Positions are
+	// mapped from the wire (Z-UP: x/y ground, z height) to the Godot render frame
+	// (Y-UP: y = height), so the scene feeds `position` straight to
+	// MeridianRemoteInterpolator / a Node3D. Returns:
+	//   { "kind": "enter"|"update"|"leave"|"",   # "" if not an entity opcode / bad
+	//     "guid": int, "has_position": bool, "position": Vector3, "orientation": float,
+	//     "type_id": int (enter), "reason": int (leave) }
+	// A non-entity opcode or an undecodable payload returns { "kind": "" }.
+	godot::Dictionary decode_entity_frame(int opcode,
+			const godot::PackedByteArray &payload) const;
+
+	// Encode a MovementIntent (from MeridianMovementController.predict()) into a ready-
+	// to-send IF-2 frame, mapping the client Y-UP frame (x, y=height, z=ground) to the
+	// wire Z-UP frame and wrapping with the shared clientnet codec + wire_frame (#301 —
+	// the SAME encode the bot/probe use). `intent` is the predict() Dictionary
+	// (seq, state_flags, x, y, z, orientation, client_time_ms). Pass the result to
+	// send_movement_intent(). Returns an empty array on a malformed Dictionary.
+	godot::PackedByteArray build_movement_intent_frame(const godot::Dictionary &intent) const;
 
 	// ── Diagnostics (atomic counters from the core) ────────────────────────────
 	int64_t frames_sent() const;

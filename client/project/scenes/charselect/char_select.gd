@@ -35,11 +35,13 @@ extends Control
 ## here to send the world handshake / character-bind; at M0 we just load the test map.
 signal enter_world_requested(character: Dictionary)
 
-# The M0 "test map" the Enter World action hands off to. At M0 this is the third-person
-# camera sandbox (the only playable world scene); the real flow will instead open the realm
-# session (IF-2 WorldHello) bound to the selected character. Kept as a const so the handoff
-# target is obvious and easy to repoint.
-const WORLD_SCENE: String = "res://scenes/world/camera_demo.tscn"
+# The Enter World target. #301 makes this the REAL networked world scene (world.tscn):
+# it connects to the selected realm's worldd over the net thread and renders remote
+# entities moving. When there is NO session context (a warm-boot test / standalone open
+# with no login), we fall back to the standalone LOCAL camera sandbox so the scene is
+# still openable without a server.
+const WORLD_SCENE: String = "res://scenes/world/world.tscn"
+const LOCAL_DEMO_SCENE: String = "res://scenes/world/camera_demo.tscn"
 
 @onready var _account_label: Label = %AccountLabel
 @onready var _char_list: ItemList = %CharList
@@ -54,13 +56,18 @@ const WORLD_SCENE: String = "res://scenes/world/camera_demo.tscn"
 
 var _store: CharacterStore
 var _account: String = ""
+var _session: Dictionary = {}
 
 
 # Called by the login handoff BEFORE this scene is added to the tree so the account
 # context (and any pre-known characters) are set before _ready populates the UI.
 # `seed_rows` is optional and only used by tests / a warm boot without a server.
-func configure(account: String, seed_rows: Array = []) -> void:
+# `session` is the login session context (#301: grant + session_key + world_hello_frame
+# + worldd address:port) carried through so Enter World can open the world session; an
+# empty session runs the standalone local demo instead.
+func configure(account: String, seed_rows: Array = [], session: Dictionary = {}) -> void:
 	_account = account
+	_session = session if session != null else {}
 	if _store == null:
 		_store = CharacterStore.new()
 	for row in seed_rows:
@@ -173,17 +180,39 @@ func _on_enter_pressed() -> void:
 		_set_status("Select a character first.")
 		return
 	var character := _character_by_id(id)
-	# Announce the intent (a future net story binds the character to the world session /
-	# IF-2 handshake here) then load the M0 test map.
+	# Announce the intent, then hand off to the world scene. With a live session context
+	# (#301) the REAL networked world scene opens the worldd session bound to this
+	# character; without one we fall back to the standalone local camera demo.
 	enter_world_requested.emit(character)
-	print("[char_select] enter world as '%s' (race=%d class=%d) → %s"
+	var have_session := not _session.is_empty() and _session.has("world_hello_frame")
+	var target := WORLD_SCENE if have_session else LOCAL_DEMO_SCENE
+	print("[char_select] enter world as '%s' (race=%d class=%d) → %s%s"
 		% [String(character.get("name", "")), int(character.get("race", 0)),
-		   int(character.get("class", 0)), WORLD_SCENE])
+		   int(character.get("class", 0)), target,
+		   "" if have_session else " (no session — local demo)"])
 	_set_status("Entering world as %s…" % String(character.get("name", "")))
 	# Guard: only change scenes when actually inside a running SceneTree (a headless
 	# instantiation test builds this node without a current scene).
 	if is_inside_tree():
-		get_tree().change_scene_to_file(WORLD_SCENE)
+		if have_session:
+			_go_to_world(target, character)
+		else:
+			get_tree().change_scene_to_file(target)
+
+
+# Instantiate the networked world scene and hand it the session + character BEFORE it
+# enters the tree, so world.gd's _ready() connects to worldd with the right context.
+func _go_to_world(scene_path: String, character: Dictionary) -> void:
+	var packed: PackedScene = load(scene_path)
+	if packed == null:
+		_set_status("Could not load the world scene.")
+		return
+	var world := packed.instantiate()
+	world.configure(_session, character)
+	var tree := get_tree()
+	tree.root.add_child(world)
+	tree.current_scene = world
+	queue_free()
 
 
 func _character_by_id(id: int) -> Dictionary:

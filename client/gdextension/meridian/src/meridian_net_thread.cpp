@@ -14,8 +14,11 @@
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/object.hpp>  // MethodInfo / ADD_SIGNAL
 #include <godot_cpp/variant/dictionary.hpp>
+#include <godot_cpp/variant/vector3.hpp>
 
+#include "meridian/clientnet/codec.h"
 #include "meridian/clientnet/tls_client.h"
+#include "meridian/clientnet/wire_frame.h"
 #include "net_thread_messages.h"
 
 using namespace godot;
@@ -77,6 +80,11 @@ void MeridianNetThread::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("send_movement_intent", "frame"),
 	                     &MeridianNetThread::send_movement_intent);
 	ClassDB::bind_method(D_METHOD("send_bulk", "frame"), &MeridianNetThread::send_bulk);
+
+	ClassDB::bind_method(D_METHOD("decode_entity_frame", "opcode", "payload"),
+	                     &MeridianNetThread::decode_entity_frame);
+	ClassDB::bind_method(D_METHOD("build_movement_intent_frame", "intent"),
+	                     &MeridianNetThread::build_movement_intent_frame);
 
 	ClassDB::bind_method(D_METHOD("frames_sent"), &MeridianNetThread::frames_sent);
 	ClassDB::bind_method(D_METHOD("frames_received"), &MeridianNetThread::frames_received);
@@ -200,6 +208,70 @@ bool MeridianNetThread::send_movement_intent(const PackedByteArray &frame) {
 }
 bool MeridianNetThread::send_bulk(const PackedByteArray &frame) {
 	return core_ && core_->send(to_bytes(frame), net::SendPriority::kBulk);
+}
+
+Dictionary MeridianNetThread::decode_entity_frame(int opcode,
+		const PackedByteArray &payload) const {
+	Dictionary d;
+	d["kind"] = String("");
+	const net::Bytes buf = to_bytes(payload);
+	// Wire (Z-UP: x/y ground, z height) -> Godot render frame (Y-UP: y = height).
+	auto to_godot = [](float wx, float wy, float wz) {
+		return Vector3(wx, /*y=height*/ wz, /*z=ground*/ wy);
+	};
+
+	if (opcode == cn::kOpEntityEnter) {
+		auto e = cn::codec::decode_entity_enter(buf);
+		if (!e) return d;
+		d["kind"] = String("enter");
+		d["guid"] = static_cast<int64_t>(e->entity_guid);
+		d["type_id"] = static_cast<int64_t>(e->type_id);
+		d["has_position"] = true;
+		d["position"] = to_godot(e->x, e->y, e->z);
+		d["orientation"] = e->orientation;
+	} else if (opcode == cn::kOpEntityUpdate) {
+		auto u = cn::codec::decode_entity_update(buf);
+		if (!u) return d;
+		d["kind"] = String("update");
+		d["guid"] = static_cast<int64_t>(u->entity_guid);
+		d["has_position"] = u->has_position();
+		d["position"] = to_godot(u->x, u->y, u->z);
+		d["orientation"] = u->orientation;
+	} else if (opcode == cn::kOpEntityLeave) {
+		auto l = cn::codec::decode_entity_leave(buf);
+		if (!l) return d;
+		d["kind"] = String("leave");
+		d["guid"] = static_cast<int64_t>(l->entity_guid);
+		d["has_position"] = false;
+		d["reason"] = static_cast<int64_t>(l->reason);
+	}
+	return d;  // kind stays "" for a non-entity opcode / undecodable payload
+}
+
+PackedByteArray MeridianNetThread::build_movement_intent_frame(
+		const Dictionary &intent) const {
+	// The predict() Dictionary is in the client Y-UP frame (x, y=height, z=ground);
+	// map to the wire Z-UP frame exactly as the bot/probe do at the wire boundary.
+	if (!intent.has("seq") || !intent.has("x") || !intent.has("y") || !intent.has("z")) {
+		return PackedByteArray();
+	}
+	cn::codec::MovementIntent mi;
+	mi.seq = static_cast<std::uint32_t>(static_cast<int64_t>(intent["seq"]));
+	mi.state_flags = static_cast<std::uint32_t>(
+	    static_cast<int64_t>(intent.get("state_flags", 0)));
+	const float cx = static_cast<float>(static_cast<double>(intent["x"]));
+	const float cy = static_cast<float>(static_cast<double>(intent["y"]));  // height
+	const float cz = static_cast<float>(static_cast<double>(intent["z"]));  // ground Z
+	mi.x = cx;   // ground X
+	mi.y = cz;   // wire y = client ground Z
+	mi.z = cy;   // wire z = client height
+	mi.orientation = static_cast<float>(static_cast<double>(intent.get("orientation", 0.0)));
+	mi.client_time_ms =
+	    static_cast<std::uint64_t>(static_cast<int64_t>(intent.get("client_time_ms", 0)));
+
+	net::Bytes payload = cn::codec::encode_movement_intent(mi);
+	net::Bytes frame = cn::encode_world_frame(cn::kOpMovementIntent, mi.seq, payload);
+	return to_pba(frame);
 }
 
 int64_t MeridianNetThread::frames_sent() const {
