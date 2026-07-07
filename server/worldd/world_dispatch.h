@@ -45,9 +45,12 @@
 #include "meridian/db/connection.h"
 #include "meridian/net/tls_listener.h"
 
+#include <memory>
+
 #include "movement_validation.h"
 #include "world_generated.h"
 #include "world_session.h"
+#include "world_state.h"
 
 namespace meridian::worldd {
 
@@ -141,6 +144,18 @@ struct ConnCtx {
 
     std::optional<SessionMovementState> movement;  // authoritative movement (#86), post-auth
     MovementIntake intake;                          // ≤ 10/s intent-rate gate (#86)
+
+    // AoI relay (#87). `world` is the shared world-thread-owned session registry
+    // + grid (set by serve_connection; may be null in the DB-less dispatch smoke
+    // test, where no relay is wired and movement replies only to the mover).
+    // `egress` is THIS connection's serialized, WorldSession-sealed s2c write
+    // channel (created after a valid WORLD_HELLO). `slot`/`entered` track this
+    // session's registration in `world` so MOVEMENT_INTENT can relay and the
+    // serve loop can leave() on disconnect.
+    WorldState* world = nullptr;
+    std::shared_ptr<SessionEgress> egress;
+    SessionSlot slot = 0;
+    bool entered = false;
 
     bool disconnect = false;             // handler asks the serve loop to close
     net::DisconnectReason disconnect_reason = net::DisconnectReason::UNKNOWN;
@@ -291,6 +306,12 @@ public:
     // Test/diagnostic: how many WorldEvents the world thread has drained. Lets a
     // test assert the queue actually reached the world thread.
     std::uint64_t drained_count() const;
+
+    // The shared world-thread-owned session registry + AoI grid (#87). One per
+    // server, shared (thread-safe) across every serve_connection: a mover's
+    // authoritative MovementState is relayed through it to the OTHER sessions in
+    // range. Exposed for tests that inspect session_count().
+    WorldState& world_state();
 
 private:
     void world_thread_main();

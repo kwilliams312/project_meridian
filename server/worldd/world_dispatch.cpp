@@ -284,7 +284,7 @@ void Dispatcher::register_m0_stubs() {
            spawn.y = movement::kZoneMaxXY * 0.5f;
            spawn.z = movement::kFlatGroundZ;       // flat ground (D-19)
            ctx.movement.emplace(spawn, /*spawn_time_ms=*/0);
-           ctx.movement->set_entity_guid(pc.char_guid);
+           ctx.movement->set_entity_guid(pc.char_guid);  // may be refined below (AoI)
 
            log::info(kCat, "WORLD_HELLO accepted grant_id=" +
                                std::to_string(grant_id) + " account=" +
@@ -299,6 +299,37 @@ void Dispatcher::register_m0_stubs() {
            Bytes server_proof;  // empty M0 placeholder
            sess.write_frame(encode_frame(net::Opcode::HANDSHAKE_OK, f.seq,
                                          encode_handshake_ok(content_hash, server_proof)));
+
+           // 5. AoI ENTER (#87): register this session in the shared world state so
+           //    it is tracked spatially and relayed to/from the OTHER sessions in
+           //    range. Build its serialized, WorldSession-sealed s2c egress channel
+           //    (the relay writes to this socket from OTHER threads — the channel
+           //    serializes those with the serve loop's own writes; SAD §5.2/§6).
+           //    enter() sends this session an EntityEnter for anyone already in
+           //    range and sends THEM an EntityEnter for this one (bidirectional
+           //    visibility on login). Skipped when no world registry is wired (the
+           //    DB-less dispatch smoke test) — there movement still replies to the
+           //    mover, just without relay.
+           if (ctx.world != nullptr && ctx.session) {
+               ctx.egress = std::make_shared<SessionEgress>(sess, *ctx.session);
+               std::shared_ptr<SessionEgress> egress = ctx.egress;
+               EntityIdentity id;
+               id.entity_guid = pc.char_guid;
+               id.type_id = pc.class_id;  // M0: the placeholder class stands in for type_id
+               EnterResult er = ctx.world->enter(
+                   id, spawn,
+                   [egress](net::Opcode op, const Bytes& payload) {
+                       return egress->emit(op, payload);
+                   });
+               ctx.slot = er.slot;
+               ctx.entered = true;
+               // Stamp the EFFECTIVE guid the relay assigned (a unique synthetic
+               // guid for a 0 stub) onto the movement state so the mover's own
+               // MovementState echo and its relayed EntityEnter/Update all carry
+               // the same entity id — otherwise two placeholder sessions would
+               // both echo guid 0 and be indistinguishable to the client.
+               ctx.movement->set_entity_guid(er.entity_guid);
+           }
        });
 
     // CLOCK_SYNC (#65): the one M0 opcode with a natural echo. The client sends
@@ -380,11 +411,30 @@ void Dispatcher::register_m0_stubs() {
 
         // Send the authoritative MovementState back to the mover (accept =
         // advanced position; reject = snap-back correction to the last
-        // authoritative position). #87's AoI pass relays this same state to
-        // observers; here it goes to the mover for reconciliation / snap-back.
-        sess.write_frame(encode_frame(
+        // authoritative position). Routed through the egress channel when one is
+        // established so it serializes with the relay's s2c writes (SAD §5.2/§6);
+        // falls back to a direct write in the DB-less smoke test (no egress).
+        Bytes state_frame = encode_frame(
             net::Opcode::MOVEMENT_STATE, f.seq,
-            encode_movement_state(ctx.movement->entity_guid(), decision, server_time_ms)));
+            encode_movement_state(ctx.movement->entity_guid(), decision, server_time_ms));
+        if (ctx.egress) {
+            ctx.egress->emit_frame(state_frame);
+        } else {
+            sess.write_frame(state_frame);
+        }
+
+        // AoI RELAY (#87): on this authoritative MovementState, update the mover's
+        // grid position and relay EntityEnter/Update/Leave to the OTHER sessions
+        // in range (and this mover for the reciprocal enters/leaves). Only an
+        // ACCEPTED move advances the authoritative position; a snap-back keeps the
+        // last position, so relaying the (unchanged) authoritative position is
+        // still correct — it re-affirms where observers see the mover. The relay
+        // uses the authoritative position the validator committed.
+        if (ctx.entered && ctx.world != nullptr) {
+            const Position& auth = ctx.movement->authoritative();
+            ctx.world->on_movement(ctx.slot, auth, decision.ack_seq, decision.state_flags,
+                                   server_time_ms);
+        }
 
         if (decision.accepted) {
             log::debug(kCat, "MOVEMENT_INTENT seq=" + std::to_string(pod.seq) +
@@ -416,6 +466,10 @@ struct WorldServer::Impl {
     std::atomic<bool> running{false};
     std::atomic<bool> stop_requested{false};
     std::atomic<std::uint64_t> drained{0};
+
+    // Shared world state + AoI grid (#87). Thread-safe internally; shared across
+    // every serve_connection so a mover relays to the OTHER sessions in range.
+    WorldState world;
 };
 
 WorldServer::WorldServer(const Dispatcher& dispatcher, WorldServerConfig cfg)
@@ -450,6 +504,8 @@ void WorldServer::enqueue(WorldEvent ev) {
 }
 
 std::uint64_t WorldServer::drained_count() const { return impl_->drained.load(); }
+
+WorldState& WorldServer::world_state() { return impl_->world; }
 
 void WorldServer::world_thread_main() {
     // M0 TICK PLACEHOLDER (SAD §2.5): the real tick is
@@ -507,6 +563,7 @@ void WorldServer::serve_connection(net::Session sess) {
     // players (usable for --version / dispatch smoke tests without a DB).
     ConnCtx ctx;
     ctx.realm_id = cfg_.realm_id;
+    ctx.world = &impl_->world;  // shared AoI relay registry (#87)
     std::optional<db::Connection> auth_conn;
     std::optional<db::Connection> char_conn;
     if (!cfg_.auth_db.user.empty()) {
@@ -588,6 +645,17 @@ void WorldServer::serve_connection(net::Session sess) {
     } catch (const mn::TlsError& e) {
         log::warn(kCat, "connection " + peer + " transport error: " + e.what());
     }
+
+    // AoI world-leave (#87): if this session entered the world, tell everyone who
+    // saw it that it despawned and drop it from the grid, THEN stop the egress
+    // channel so no relay write races the socket close. Order matters: leave()
+    // may still emit EntityLeave frames to OTHER sessions (safe — those write to
+    // OTHER sockets), but no further write must target THIS socket after
+    // mark_closed(), and none can once we drop out of the registry.
+    if (ctx.entered && ctx.world != nullptr) {
+        ctx.world->leave(ctx.slot);
+    }
+    if (ctx.egress) ctx.egress->mark_closed();
 
     sess.close();
 }

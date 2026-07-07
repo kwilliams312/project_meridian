@@ -23,6 +23,8 @@ add_library(world-dispatch STATIC
   world_dispatch.cpp
   world_session.cpp
   movement_validation.cpp
+  aoi_grid.cpp
+  world_state.cpp
 )
 add_library(meridian::world-dispatch ALIAS world-dispatch)
 target_include_directories(world-dispatch
@@ -102,3 +104,40 @@ target_link_libraries(worldd-movement-test
 )
 set_target_properties(worldd-movement-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-movement COMMAND worldd-movement-test)
+
+# --- Grid / AoI engine v0 UNIT test (IT-M0 AoI core; #87). --------------------
+# PURE (no DB, no socket, no session): exercises the AoiGrid spatial index + the
+# interest-set query (enter / leave / hysteresis / membership / cell indexing)
+# directly. It always runs in the plain server ctest (no MERIDIAN_DB_* needed) —
+# the "pure grid+interest-set logic so the core runs in the plain server ctest"
+# ask (#87). The DB-backed two-session relay proof is worldd-relay-test (below).
+add_executable(worldd-aoi-test
+  test/aoi_grid_test.cpp
+)
+target_link_libraries(worldd-aoi-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-aoi-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-aoi COMMAND worldd-aoi-test)
+
+# --- Two-session AoI movement RELAY integration test (IT-M0 see-each-other-move;
+#     #87). ---------------------------------------------------------------------
+# The IT-M0 capstone: TWO real TLS clients connect + HandshakeOk + enter world
+# near each other; A moves (a legal MovementIntent) -> B receives A's EntityEnter
+# then EntityUpdate at A's new position (and vice versa); A then moves far out of
+# B's AoI radius -> B receives EntityLeave for A. Needs a live MariaDB with the
+# auth schema loaded (0001_init_auth.up.sql): two real sessions consume two
+# session_grant rows. Reads MERIDIAN_DB_* env and SKIPS (exit 0) when none are
+# set — inert in the plain server ctest, runs for real only in the worldd-session
+# CI job (mariadb service) or locally with env set.
+add_executable(worldd-relay-test
+  test/world_relay_test.cpp
+)
+target_link_libraries(worldd-relay-test
+  PRIVATE
+    meridian::world-dispatch
+    Threads::Threads
+)
+set_target_properties(worldd-relay-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-relay COMMAND worldd-relay-test)
