@@ -1,0 +1,32 @@
+; Meridian Forge `forge_core` GDExtension manifest (issue #134).
+;
+; forge_core is the native (C++20) half of the Forge editor plugin (Tools SAD §5),
+; built ISOLATED from the client extension (only godot-cpp — no client runtime
+; deps). Paths point at where the CMake build drops the compiled library
+; (client/gdextension/forge_core/CMakeLists.txt -> forge/project/bin/). Those
+; binaries are build artifacts and are gitignored; build before opening the project:
+;   cd client/gdextension/forge_core
+;   cmake -B build -DGODOTCPP_TARGET=editor && cmake --build build -j
+
+[configuration]
+entry_symbol = "forge_core_library_init"
+; Must match the pinned engine (client/ENGINE_VERSION: GODOT_VERSION=4.7-stable).
+compatibility_minimum = "4.7"
+reloadable = true
+
+[libraries]
+; Forge runs in the EDITOR host (it is an editor tool), so the editor variant is
+; the one that matters. Debug/release template rows are kept for parity with the
+; client manifest and any future non-editor host.
+
+; Editor host builds (what the editor loads when the Forge project is opened).
+macos.editor            = "res://bin/libforge_core.macos.editor.framework"
+windows.editor.x86_64   = "res://bin/libforge_core.windows.editor.x86_64.dll"
+
+; macOS Apple Silicon (arm64 only, Client SAD §9.6). Godot loads the .framework.
+macos.debug   = "res://bin/libforge_core.macos.template_debug.framework"
+macos.release = "res://bin/libforge_core.macos.template_release.framework"
+
+; Windows x86_64 (Forge's shipped platform, TD-08 / D-28).
+windows.debug.x86_64   = "res://bin/libforge_core.windows.template_debug.x86_64.dll"
+windows.release.x86_64 = "res://bin/libforge_core.windows.template_release.x86_64.dll"
