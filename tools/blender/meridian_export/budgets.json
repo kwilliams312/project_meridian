@@ -1,0 +1,58 @@
+{
+  "_comment": "Single source of truth for per-class budget ceilings and naming, shared by the meridian_export Blender addon and the CI validators (Art SAD §2.1 AR2). Numbers are direct Art PRD figures; ranges take the TOP of the band as the LOD0 ceiling. Kept in lockstep with tools/validate_content.py ASSET_BUDGETS.",
+  "classes": {
+    "character_model": {
+      "prefix": "sk_",
+      "lod0_tris": 60000,
+      "texture_max_px": 2048,
+      "vram_mb": 24,
+      "cite": "Art PRD §2.1 player character body 45-60k / §2.3 2048² ≤ 24 MB"
+    },
+    "creature_model": {
+      "prefix": "sk_",
+      "lod0_tris": 90000,
+      "texture_max_px": 4096,
+      "vram_mb": 64,
+      "cite": "Art PRD §2.1 large creature/boss 60-90k / §2.3 boss 4096² ≤ 64 MB"
+    },
+    "armor_model": {
+      "prefix": "sk_",
+      "lod0_tris": 8000,
+      "texture_max_px": 2048,
+      "vram_mb": 32,
+      "cite": "Art PRD §2.1 armor set piece 3-8k / §2.3 ≤ 32 MB"
+    },
+    "weapon_model": {
+      "prefix": "sm_",
+      "lod0_tris": 15000,
+      "texture_max_px": 2048,
+      "vram_mb": 6,
+      "cite": "Art PRD §2.1 weapon 6-12k, legendary 15k / §2.3 ≤ 6 MB"
+    },
+    "kit_piece": {
+      "prefix": "sm_",
+      "lod0_tris": 20000,
+      "texture_max_px": 2048,
+      "material_sets": 12,
+      "vram_mb": 224,
+      "cite": "Art PRD §2.1 env kit piece ≤ 20k / §2.3/§2.4 ≤ 12 sets ≤ 224 MB"
+    },
+    "prop": {
+      "prefix": "sm_",
+      "lod0_tris": 3000,
+      "texture_max_px": 1024,
+      "vram_mb": 4,
+      "cite": "Art PRD §2.1 prop, small 0.5-3k / §2.3 512²-1024² ≤ 4 MB"
+    },
+    "foliage": {
+      "prefix": "sm_",
+      "lod0_tris": 20000,
+      "cite": "Art PRD §2.1 foliage: tree 10-20k"
+    },
+    "hero_landmark": {
+      "prefix": "sm_",
+      "lod0_tris": 80000,
+      "cite": "Art PRD §2.1 hero landmark / POI piece 40-80k"
+    }
+  }
+}
