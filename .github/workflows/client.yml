@@ -334,3 +334,58 @@ jobs:
           path: build/export/macos/client-export.env
           retention-days: 90
           if-no-files-found: error
+
+  # --- macOS arm64 boot smoke (#114) -----------------------------------------
+  # The minimum "the exported client actually runs on a Mac" gate: take the
+  # client-export artifact from the job above, launch it, and prove it reaches
+  # its MAIN SCENE (the login screen — project.godot run/main_scene) without
+  # crashing (exit 0 + the deterministic MERIDIAN_BOOT_OK marker the login scene
+  # prints on _ready(); see client/project/scenes/login/login_screen.gd).
+  #
+  # The exported .app bakes its resources into the .pck, so there is NO editor
+  # import and NO .godot/ seed — the export path sidesteps the #283 MoltenVK
+  # cold-import abort entirely (proven on Apple M-series). scripts/boot-smoke-macos.sh
+  # does the launch + assertions.
+  #
+  # TWO boots, from safest to strongest:
+  #   1. headless (dummy driver) — window-server-free; proves the .app boots to
+  #      the main scene on ANY runner. Does NOT exercise Metal (--headless ignores
+  #      --rendering-driver, #283), so it is the always-green boot sanity.
+  #   2. metal (windowed, REAL device) — the actual "boots on Metal" gate (Metal
+  #      is the shipped default, TD-02 / D-28). Needs a window-server (GUI/Aqua)
+  #      session and a real Metal GPU — both present on the self-hosted M2 Max
+  #      runner. If this box were ever registered as a GUI-less LaunchDaemon the
+  #      windowed boot could not open a Metal surface; step 1 still proves the
+  #      boot, and this step's failure would point squarely at the runner session.
+  client-boot-smoke:
+    if: github.event_name != 'pull_request'
+    needs: client-export
+    runs-on: [self-hosted, macOS]
+    steps:
+      - uses: actions/checkout@v4
+        # No submodules / toolchain: this job only launches a prebuilt .app.
+      - name: Download macOS arm64 export
+        uses: actions/download-artifact@v4
+        with:
+          name: client-macos-arm64
+          path: build/export/macos
+      # ditto is signature-preserving (matches how the export zipped it). Unpack
+      # the runnable .app out of the retained zip.
+      - name: Unpack the exported .app
+        run: |
+          zip="build/export/macos/ProjectMeridian-macos-arm64.zip"
+          test -f "$zip" || { echo "::error::export zip missing: $zip"; exit 1; }
+          ditto -x -k "$zip" build/export/macos/unpacked
+          app="build/export/macos/unpacked/ProjectMeridian.app"
+          test -d "$app" || { echo "::error::unpacked .app not found: $app"; exit 1; }
+          echo "BOOT_APP=$app" >> "$GITHUB_ENV"
+          arch="$(lipo -archs "$(find "$app/Contents/MacOS" -maxdepth 1 -type f | head -1)")"
+          echo "exported engine arch: $arch"
+      # Sanity: the .app boots to the main scene under the dummy driver — works
+      # without a window server, so it is the reliable baseline signal.
+      - name: Boot smoke — headless (dummy driver, boot-to-main-scene)
+        run: arch -arm64 ./scripts/boot-smoke-macos.sh --app "$BOOT_APP" --driver headless --frames 120
+      # The real gate: a WINDOWED boot on the native Metal backend, on the runner's
+      # real M2 Max GPU. Asserts the boot marker's adapter=… is a real device.
+      - name: Boot smoke — Metal (windowed, real device)
+        run: arch -arm64 ./scripts/boot-smoke-macos.sh --app "$BOOT_APP" --driver metal --frames 120

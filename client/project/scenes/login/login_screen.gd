@@ -48,6 +48,18 @@ func _ready() -> void:
 	_login_button.pressed.connect(_on_login_pressed)
 	_set_status("Enter your account and press Login.")
 
+	# Boot-smoke marker (#114). A deterministic, greppable line proving the client
+	# reached its main scene (login) without crashing AND that the GDExtension
+	# loaded (LoginFlow.new() above would have aborted otherwise). The macOS boot
+	# smoke (scripts/boot-smoke-macos.sh) asserts this line plus a clean exit. The
+	# adapter name distinguishes a real-device boot (Metal, adapter non-empty — the
+	# shipped default per TD-02/D-28) from the headless dummy driver (adapter empty,
+	# because --headless ignores --rendering-driver and uses the dummy backend, #283).
+	print("[boot] MERIDIAN_BOOT_OK scene=login adapter=\"%s\" api=\"%s\"" % [
+		RenderingServer.get_video_adapter_name(),
+		RenderingServer.get_video_adapter_api_version(),
+	])
+
 
 func _on_login_pressed() -> void:
 	var host := _host.text.strip_edges()
