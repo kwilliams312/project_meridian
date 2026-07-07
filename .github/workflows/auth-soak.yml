@@ -55,6 +55,7 @@ jobs:
       # are used by the harness for port readiness + /metrics scraping.
       - name: Install toolchain + MariaDB server (harness boots its own instance)
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/*azure* /etc/apt/sources.list.d/*microsoft* 2>/dev/null || true
           sudo apt-get update
           sudo apt-get install -y \
             cmake ninja-build g++-13 \

@@ -64,6 +64,7 @@ jobs:
       # for libmeridian-proto, libssl-dev for srp, libmariadb-dev for db).
       - name: Install toolchain (cmake, ninja, g++-13, flatc, openssl, mariadb-dev)
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/*azure* /etc/apt/sources.list.d/*microsoft* 2>/dev/null || true
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build g++-13 \
             flatbuffers-compiler libflatbuffers-dev libssl-dev libmariadb-dev
