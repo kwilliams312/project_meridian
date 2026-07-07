@@ -1,0 +1,47 @@
+Project Meridian ({{ .Chart.Name }}-{{ .Chart.Version }}, app {{ .Chart.AppVersion }}) is installed as release "{{ .Release.Name }}".
+
+Deployed daemons (single-realm M0–M2 topology, D-30 §10):
+{{- if .Values.authd.enabled }}
+  • authd  — IF-1 login/realm-list/session-grant, TLS 1.3 on port {{ .Values.authd.port }}
+             Service: {{ include "meridian.fullname" . }}-authd:{{ .Values.authd.service.port | default .Values.authd.port }} (ClusterIP)
+{{- end }}
+{{- if .Values.worldd.enabled }}
+  • worldd — IF-2 shard worker / map simulation, TLS 1.3 on port {{ .Values.worldd.port }}
+             Service: {{ include "meridian.fullname" . }}-worldd:{{ .Values.worldd.service.port | default .Values.worldd.port }} (ClusterIP)
+{{- end }}
+
+Database: external MariaDB at {{ .Values.db.host }}:{{ .Values.db.port }}
+  (v0 does not bundle MariaDB — see README "Database". auth DB: {{ .Values.db.names.auth }})
+
+{{- if not .Values.tls.create }}
+{{- if not .Values.tls.existingSecret }}
+
+WARNING: tls.create=false and tls.existingSecret is empty. The daemons need a
+server.crt/server.key Secret mounted at /certs. Set tls.existingSecret to a
+Secret you provision (operator PKI / cert-manager), or install with
+  --set tls.create=true --set-file tls.cert=server.crt --set-file tls.key=server.key
+{{- end }}
+{{- end }}
+
+Check rollout:
+  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+{{- if .Values.authd.enabled }}
+  kubectl logs -l app.kubernetes.io/component=authd -l app.kubernetes.io/instance={{ .Release.Name }}
+{{- end }}
+
+Port-forward authd for a local client (IF-1 login):
+  kubectl port-forward svc/{{ include "meridian.fullname" . }}-authd {{ .Values.authd.port }}:{{ .Values.authd.service.port | default .Values.authd.port }}
+
+{{- if .Values.observability.enabled }}
+
+Observability (OPS-05) is ENABLED: each daemon serves Prometheus /metrics on
+port {{ .Values.observability.metricsPort }} (plain HTTP) with prometheus.io scrape annotations set.
+{{- else }}
+
+Observability (OPS-05) is disabled. Enable with --set observability.enabled=true
+to expose the in-process /metrics endpoint (port {{ .Values.observability.metricsPort }}) for an in-cluster
+Prometheus / otel-collector.
+{{- end }}
+
+This chart is the Kubernetes *option* (D-30 §10 rule 3). The reference / default
+deployment is docker compose (deploy/docker/) — see the chart README.

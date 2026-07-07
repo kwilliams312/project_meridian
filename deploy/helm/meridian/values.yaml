@@ -1,0 +1,217 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Project Meridian Helm chart v0 — default values.
+#
+# This mirrors the reference compose (deploy/docker/docker-compose.yml) 1:1 where
+# it can: the same GHCR images, the same ports (authd 7100 / worldd 7200), the
+# same MERIDIAN_DB_* env, the same read-only-rootfs + non-root uid 10001 posture,
+# and the same TLS cert mount at /certs. Everything a K8s operator would tune is
+# here; nothing daemon-side is K8s-specific (D-30 §10 rule 3).
+
+# ── Global image settings ───────────────────────────────────────────────────
+image:
+  # GHCR registry + repo prefix. The two daemon images are
+  # `${registry}/${repository}/authd` and `.../worldd` (cd.yml #175).
+  registry: ghcr.io
+  repository: kwilliams312/project_meridian
+  # Default tag applied to BOTH daemons unless overridden per-daemon below.
+  # "latest" matches the compose default; pin a short-SHA or release semver in
+  # production (D-30 §10 rule 1: images are tagged commit-SHA + latest).
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# imagePullSecrets: GHCR public images need none. For a private registry, create
+# a docker-registry secret and list its name here, e.g.:
+#   imagePullSecrets:
+#     - name: ghcr-pull
+imagePullSecrets: []
+
+# Override the generated resource-name prefix (defaults to the release name).
+nameOverride: ""
+fullnameOverride: ""
+
+# Extra labels/annotations applied to every rendered object.
+commonLabels: {}
+commonAnnotations: {}
+
+# ── TLS (IF-1 authd, IF-2 worldd — both TLS listeners at M0) ─────────────────
+# Both daemons read a server cert + key, mounted read-only at /certs, exactly as
+# the compose does (server.crt / server.key). By default the chart renders a
+# Secret from the PEM values below; for real deployments leave create=false and
+# reference an existing Secret provisioned by your realm operator PKI / cert-
+# manager (SAD §5.1: "server cert from realm operator PKI").
+tls:
+  # If true, the chart creates the Secret from tls.cert / tls.key below.
+  # If false, `tls.existingSecret` MUST name a Secret with keys server.crt /
+  # server.key (or the keys named in tls.certKey / tls.keyKey).
+  create: false
+  # Name of an existing TLS Secret to mount. Used when create=false.
+  existingSecret: ""
+  # Keys within the Secret holding the cert and key.
+  certKey: server.crt
+  keyKey: server.key
+  # PEM material (only read when create=true). Prefer --set-file for these:
+  #   helm install ... --set tls.create=true \
+  #     --set-file tls.cert=server.crt --set-file tls.key=server.key
+  cert: ""
+  key: ""
+
+# ── Database (external MariaDB — v0 assumes a managed/external DB) ────────────
+# D-30 §10 rule 3: charts are config-only consumers of the same 12-factor env.
+# v0 does NOT bundle MariaDB (no subchart dependency) — a real deploy points the
+# daemons at an mcc-emitted world DB and an operator-managed auth/characters DB
+# (SAD §4.3, deploy/docker/README.md). Set db.host to your MariaDB service.
+#
+# The 3-DB split (auth / characters / world) is honoured: each daemon gets its
+# own MERIDIAN_DB_NAME. authd → meridian_auth; worldd has no DB dependency at M0
+# (SAD §5.2 / compose) so its DB env is present-but-inert (set worldd.db.enabled
+# to false to omit it entirely).
+db:
+  host: meridian-mariadb            # external MariaDB host / K8s service name
+  port: 3306
+  user: meridian
+  # Password handling: by default the chart creates a Secret from db.password.
+  # For production, set db.existingSecret to a Secret you manage (e.g. from an
+  # external secrets operator) and leave db.password empty.
+  password: ""
+  # Name of an existing Secret carrying the DB password. When set, it takes
+  # precedence over db.password and the chart does NOT create its own db Secret.
+  existingSecret: ""
+  # Key within existingSecret holding the password.
+  passwordKey: MERIDIAN_DB_PASS
+  # Per-schema DB names (the 3-DB split, SAD §4.1/§4.2/§4.3).
+  names:
+    auth: meridian_auth
+    characters: meridian_characters
+    world: meridian_world
+
+# ── authd — login / realm-list / session-grant (IF-1, TLS 1.3, port 7100) ────
+authd:
+  enabled: true
+  replicaCount: 1
+  image:
+    # Empty → derived as ${image.repository}/authd. Override to pin authd apart.
+    repository: ""
+    tag: ""                         # empty → falls back to image.tag
+  # Game listen port (IF-1). Matches compose + Dockerfile EXPOSE.
+  port: 7100
+  bindAddress: "0.0.0.0"
+  db:
+    enabled: true                   # authd needs meridian_auth
+    name: ""                        # empty → db.names.auth
+  service:
+    type: ClusterIP
+    port: 7100                      # service port (defaults to authd.port)
+    annotations: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  # Probes use the daemon's own `--version` (the same signal the Dockerfile
+  # HEALTHCHECK uses: exit 0 ⇒ ELF + every runtime .so loads). A deeper TCP /
+  # /metrics probe lands with OPS-05 (Dockerfile comment; SAD). Toggle to a TCP
+  # probe on the game port via authd.probes.type=tcp once the listener is known
+  # to accept pre-handshake connects.
+  probes:
+    type: exec                      # exec | tcp
+    liveness:
+      initialDelaySeconds: 5
+      periodSeconds: 30
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readiness:
+      initialDelaySeconds: 3
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  extraArgs: []                     # appended to the daemon command line
+  extraEnv: []                      # extra env vars (list of {name,value})
+
+# ── worldd — shard worker / map simulation (IF-2, TLS 1.3 at M0, port 7200) ──
+worldd:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ""                  # empty → ${image.repository}/worldd
+    tag: ""
+  port: 7200
+  bindAddress: "0.0.0.0"
+  db:
+    # worldd has NO DB dependency at M0 (SAD §5.2 / compose). Off by default;
+    # set true (and db.name) if a future worldd build reads the world DB here.
+    enabled: false
+    name: ""                        # empty → db.names.world
+  service:
+    type: ClusterIP
+    port: 7200
+    annotations: {}
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: "1Gi"
+  probes:
+    type: exec
+    liveness:
+      initialDelaySeconds: 5
+      periodSeconds: 30
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readiness:
+      initialDelaySeconds: 3
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  extraArgs: []
+  extraEnv: []
+
+# ── Pod security (matches the Dockerfile: non-root uid/gid 10001) ────────────
+# The image already runs as USER 10001:10001 with a read-only-rootfs-friendly
+# daemon (writes only stdout/stderr, reads the ro cert mount). We assert that
+# posture at the K8s layer too (defense in depth). read_only rootfs is enabled;
+# an emptyDir tmpfs is available if a scratch dir is ever needed.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false   # == compose no-new-privileges:true
+  readOnlyRootFilesystem: true      # == compose read_only:true
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  capabilities:
+    drop:
+      - ALL
+
+# ── Observability toggle (OPS-05 — optional, D-29 §9) ────────────────────────
+# When enabled, each daemon starts its in-process Prometheus /metrics endpoint
+# (server/ops/README.md: port 9464, plain HTTP, --metrics-port/--metrics-bind/
+# --realm; env MERIDIAN_METRICS_PORT / _BIND / _REALM), a metrics port is added
+# to the Service, and prometheus.io scrape annotations are set on the pods so an
+# in-cluster Prometheus/otel-collector can discover them. The daemon degrades
+# gracefully when no collector runs (D-29 rule 6). Off by default — the stack is
+# an OPS-01 extension the operator opts into.
+observability:
+  enabled: false
+  metricsPort: 9464
+  metricsBind: "0.0.0.0"            # collector reaches it by service name
+  realm: ""                         # MERIDIAN_REALM label; empty → release name
+  # Add prometheus.io/{scrape,port,path} annotations to the pods for discovery.
+  podAnnotations: true
