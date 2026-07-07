@@ -27,3 +27,15 @@ target_compile_features(meridian-core PUBLIC cxx_std_20)
 set_target_properties(meridian-core PROPERTIES
   CXX_EXTENSIONS OFF
 )
+
+# --- Unit test: structured logger (OPS-05, #165). -----------------------------
+# Renders JSON + text records and parses the JSON back to assert the Loki schema
+# (realm/process/level/event/severity/logger/message/timestamp_ms), typed field
+# encoding, escaping, level filtering, and that concurrent threads produce
+# non-interleaved complete JSON objects. Pure (no DB, no socket) — runs in the
+# plain `server` CI job's ctest.
+find_package(Threads REQUIRED)
+add_executable(meridian-core-log-test test/log_test.cpp)
+target_link_libraries(meridian-core-log-test PRIVATE meridian::core Threads::Threads)
+set_target_properties(meridian-core-log-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME core-log COMMAND meridian-core-log-test)
