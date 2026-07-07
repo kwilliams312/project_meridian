@@ -23,6 +23,11 @@ Given a zone id it plays that zone's music **set**; on a state change it
 | `zone_music_config.json` | Zone→set→stem mapping + musical metadata. Data, not code (SAD §6.1). |
 | `zone_music_player_verify.gd` | Headless runtime verify (`SceneTree`, PASS/FAIL, exit 0/1). |
 | `music_timing_probe.gd` | TD-11 timing probe — drives a live player, emits framed JSON for the `GodotTimingSource` (#145 harness). |
+| `sfx_player.gd` | **`SfxPlayer`** node (#148) — the SFX trigger runtime: event → sfx-id → one-shot via the ID hook, category → bus routing, pooled `AudioStreamPlayer`s. |
+| `sfx_event_map.gd` | Engine-free event → sfx-id registry + category → bus/group routing from `sfx_config.json`. 1:1 mirror of the Python reference. |
+| `sfx_placeholder_factory.gd` | **PLACEHOLDER** procedural one-shot generator (stand-in for the #148 ID→resource hook). One-shots never loop. |
+| `sfx_config.json` | Event → sfx-id map + category → bus routing + ~10 placeholder one-shots. Data, not code (SAD §5). |
+| `sfx_player_verify.gd` | Headless SFX runtime verify (`SceneTree`, PASS/FAIL, exit 0/1). |
 
 ## Design (music SAD §2.1–2.4)
 
@@ -47,6 +52,34 @@ datastore (IF-5 pack manifest, `PackEntry.resource`) resolves each asset ID to a
 **same** JSON is loaded by the Python reference (`tools/zone_music`) so the two
 agree by construction.
 
+## The SFX trigger runtime & the ID hook path (#148)
+
+The SFX counterpart of ZoneMusicPlayer. Music resolves *zone → set → stem*; SFX
+resolves *event → sfx-id → one-shot*, through the **same** content-ID hook (music
+[SAD §5](../../../docs/sad/music-sad.md)). Two id sources feed one hook:
+
+- **Client-authored events** (footsteps by surface, UI clicks, the login sting)
+  have no content object, so `sfx_config.json`'s `events` table maps a stable
+  event key → `sfx.*` id.
+- **Content-carried ids** (an ability's `audio_visual.cast_sfx` / `impact_sfx`,
+  an NPC `sound_set`) already carry their `sfx.*` id in `/content` and resolve
+  through the *identical* hook — no parallel path.
+
+`SfxPlayer.play_event()` / `play_footstep()` / `play_sfx()` / `play_content_sfx()`
+resolve the id, run it through the placeholder factory (M0), and route it to its
+category's bus over the SAD §2.5 SFX/UI bus tree. The **same** `sfx_config.json`
+is loaded by the Python reference (`tools/zone_sfx`) so the two agree by
+construction.
+
+> ⚠️ **PLACEHOLDER AUDIO.** `sfx_placeholder_factory.gd` synthesizes short
+> enveloped one-shots (clicks/blips), **not** real sound effects. **M0 builds the
+> routing/trigger SYSTEM, not sound content.** No audio asset is committed.
+
+**Not in M0 scope** (deferred to M1, SAD §2.5 / §7): the voice manager
+(concurrency-group caps, priority eviction, own-action guarantee, occlusion) and
+spatial `AudioStreamPlayer3D` attenuation. The `cap` in the config is carried as
+data for that work but is not enforced at M0.
+
 ## The TD-11 timing seam (#145 / #147)
 
 `ZoneMusicPlayer` exposes the sample-domain seam the TD-11 harness measures
@@ -62,10 +95,11 @@ runs `--source godot` under the #111 bot fleet for the gate ruling.
 
 ```bash
 # Engine-free logic (runs anywhere — no Godot, no audio device):
-uv run pytest tests/test_zone_music.py -q
+uv run pytest tests/test_zone_music.py tests/test_zone_sfx.py -q
 
 # Headless runtime verify (needs a Godot 4.7 binary; Dummy audio driver, no device):
 godot --headless --path client/project --script res://audio/zone_music_player_verify.gd
+godot --headless --path client/project --script res://audio/sfx_player_verify.gd
 
 # Real-audio TD-11 measurement through the seam (needs Godot 4.7):
 GODOT_BIN=/path/to/godot PYTHONPATH=tools python3 -m td11_music_timing --source godot --out out/td11
