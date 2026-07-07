@@ -1,0 +1,66 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:Meridian.Codex.ViewModels"
+        mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="600"
+        x:Class="Meridian.Codex.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Width="900" Height="600"
+        Title="{Binding Title}">
+
+  <Design.DataContext>
+    <vm:MainWindowViewModel />
+  </Design.DataContext>
+
+  <DockPanel>
+
+    <!-- Menu bar stub. -->
+    <Menu DockPanel.Dock="Top">
+      <MenuItem Header="_File">
+        <MenuItem Header="_New" />
+        <MenuItem Header="_Open…" />
+        <Separator />
+        <MenuItem Header="E_xit" />
+      </MenuItem>
+      <MenuItem Header="_Help">
+        <MenuItem Header="_Model Info" Command="{Binding ShowModelInfoCommand}" />
+      </MenuItem>
+    </Menu>
+
+    <!-- Status bar stub. -->
+    <Border DockPanel.Dock="Bottom" Padding="8,4"
+            Background="{DynamicResource SystemControlBackgroundListLowBrush}">
+      <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" />
+    </Border>
+
+    <!-- Left editor rail + main content. -->
+    <Grid ColumnDefinitions="240,*">
+
+      <Border Grid.Column="0" Padding="8"
+              Background="{DynamicResource SystemControlBackgroundListLowBrush}">
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Top" Text="Editors" FontWeight="Bold" Margin="4,4,4,8" />
+          <ListBox ItemsSource="{Binding Editors}"
+                   SelectedItem="{Binding SelectedEditor}">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:EditorItem">
+                <TextBlock Text="{Binding Name}" />
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </Border>
+
+      <StackPanel Grid.Column="1" Margin="24" Spacing="12">
+        <TextBlock Text="{Binding SelectedEditor.Name}" FontSize="24" FontWeight="SemiBold" />
+        <TextBlock Text="{Binding SelectedEditor.Description}" Opacity="0.8" TextWrapping="Wrap" />
+        <TextBlock Text="{Binding Greeting}" TextWrapping="Wrap" Margin="0,12,0,0" />
+        <Button Content="Show model info" Command="{Binding ShowModelInfoCommand}" />
+      </StackPanel>
+
+    </Grid>
+
+  </DockPanel>
+
+</Window>

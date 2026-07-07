@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Meridian.Codex.Models — the typed content model for the Codex editor
+    (Tools SAD §6.1: "Models/ generated from /schema/content, same generator as
+    mcc's structs, C# target").
+
+    This project does NOT hand-author models. It CONSUMES the single generated
+    artifact produced by the schema-driven generator (tools/schema_gen, whose C#
+    emitter is tools/schema_gen/emit_csharp.py) from the /schema/content source of
+    truth. The generated file is linked in below; the GenerateContentModels target
+    refreshes it from the schema before every build when the Python toolchain is
+    available, and otherwise falls back to the checked-in file so a plain
+    `dotnet build` works with no Python present.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>12</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RollForward>Major</RollForward>
+    <RootNamespace>Meridian.Codex.Models</RootNamespace>
+    <AssemblyName>Meridian.Codex.Models</AssemblyName>
+    <!-- Generated file carries its own doc comments; don't fail on the few that are absent. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <!--
+    Consume the canonical generated file directly (no fork, no copy). The IR +
+    emitter live in tools/schema_gen; the output lands here and is compiled as if
+    it were a source file of this project.
+  -->
+  <ItemGroup>
+    <Compile Include="$(MSBuildProjectDirectory)/../../schema_gen/generated/csharp/ContentTypes.g.cs"
+             Link="Generated/ContentTypes.g.cs" />
+  </ItemGroup>
+
+  <!--
+    Regenerate the C# models from /schema/content before compiling. Best-effort:
+    on a box without `uv`/Python the ContinueOnError keeps the build green using
+    the checked-in generated file (which a CI drift guard, tests/schema_gen, keeps
+    honest). Repo root is three levels up from this project directory.
+  -->
+  <Target Name="GenerateContentModels" BeforeTargets="BeforeCompile;CoreCompile">
+    <PropertyGroup>
+      <_RepoRoot>$(MSBuildProjectDirectory)/../../..</_RepoRoot>
+    </PropertyGroup>
+    <Exec Command="uv run python -m tools.schema_gen.generate"
+          WorkingDirectory="$(_RepoRoot)"
+          ContinueOnError="true"
+          Condition="'$(SkipContentModelGen)' != 'true'" />
+  </Target>
+
+</Project>

@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Meridian.Codex — the Codex content-editor desktop shell (Tools SAD §6:
+    "C#/.NET 8 LTS + Avalonia 11, MVVM (CommunityToolkit.Mvvm). Zero engine
+    dependency.").
+
+    This is the M0 skeleton (issue #124): App + MainWindow + MainWindowViewModel +
+    ViewLocator + a placeholder shell. The NPC/Item editors (#128/#129) build their
+    per-editor ViewModels/Views on top of this foundation (SAD §6.1). Cross-platform
+    by construction — no platform is hardcoded; Avalonia.Desktop selects the backend
+    at runtime (macOS dev box, Windows/Linux CI).
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>12</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RollForward>Major</RollForward>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <RootNamespace>Meridian.Codex</RootNamespace>
+    <AssemblyName>Meridian.Codex</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.2.1" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.2.1" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.1" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.1" />
+    <!-- Developer inspector (F12) — Debug builds only. -->
+    <PackageReference Include="Avalonia.Diagnostics" Version="11.2.1"
+                      Condition="'$(Configuration)' == 'Debug'" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.3.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Meridian.Codex.Models\Meridian.Codex.Models.csproj" />
+  </ItemGroup>
+
+</Project>
