@@ -88,6 +88,21 @@ std::string op_name(std::uint16_t op) {
     return std::string(buf);
 }
 
+// Build a HandshakeOk payload (S→C). At M0 the content_hash is a placeholder
+// (IF-4 world-content hashing is a later story) and the server_proof is left
+// empty — the SAD's server proof over (nonce ∥ content_hash) with the
+// session_key binds the realm to the client (§5.2); wiring the HMAC is a small
+// follow-up once the client verifies it (A-11 protocol-design scope). The table
+// still round-trips as HandshakeOk, which is what the enter-world reply needs.
+Bytes encode_handshake_ok(const Bytes& content_hash, const Bytes& server_proof) {
+    fb::FlatBufferBuilder b;
+    auto ch = b.CreateVector(content_hash);
+    auto sp = b.CreateVector(server_proof);
+    auto ok = mn::CreateHandshakeOk(b, ch, sp);
+    b.Finish(ok);
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -147,7 +162,7 @@ bool Dispatcher::has_handler(net::Opcode opcode) const {
 }
 
 DispatchOutcome Dispatcher::dispatch(net::Session& sess, const Bytes& frame,
-                                     std::uint16_t& last_opcode,
+                                     ConnCtx& ctx, std::uint16_t& last_opcode,
                                      std::uint64_t& last_seq) const {
     last_opcode = 0;
     last_seq = 0;
@@ -174,30 +189,95 @@ DispatchOutcome Dispatcher::dispatch(net::Session& sess, const Bytes& frame,
         return DispatchOutcome::kBadPayload;
     }
 
-    it->second(sess, f);
+    it->second(sess, f, ctx);
     return DispatchOutcome::kHandled;
 }
 
 void Dispatcher::register_m0_stubs() {
     // --- 0x0xxx session / system ------------------------------------------
-    // WORLD_HELLO (#84): the session-grant handshake. At M0 we log receipt only;
-    // grant/session validation + HandshakeOk reply land in #84. The integration
-    // test asserts routing here by the observable log + the fact the connection
-    // is NOT disconnected (a routed, handled frame).
-    on(net::Opcode::WORLD_HELLO, [](net::Session& sess, const Frame& f) {
-        (void)sess;
-        const auto* hello = fb::GetRoot<mn::WorldHello>(f.payload);
-        log::info(kCat, "WORLD_HELLO grant_id=" +
-                            std::to_string(hello ? hello->grant_id() : 0) +
-                            " seq=" + std::to_string(f.seq) +
-                            " (stub — grant validation is #84)");
-    });
+    // WORLD_HELLO (#84): the IF-3 session-grant handshake — the authd→worldd
+    // handoff. Validate + atomically consume the grant, establish the AEAD
+    // session keyed by the grant's session_key, load the D-11 placeholder
+    // character, and reply HandshakeOk. Any grant failure -> ask the serve loop
+    // to send Disconnect{GRANT_INVALID} and close (SAD §5.3, §5.2).
+    on(net::Opcode::WORLD_HELLO,
+       [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+           const auto* hello = fb::GetRoot<mn::WorldHello>(f.payload);
+           const std::uint64_t grant_id = hello ? hello->grant_id() : 0;
+
+           auto reject = [&](const std::string& why) {
+               // Every grant failure is GRANT_INVALID on the wire (no oracle to
+               // the client which check failed); the reason is logged server-side.
+               log::warn(kCat, "WORLD_HELLO rejected grant_id=" +
+                                   std::to_string(grant_id) + ": " + why);
+               ctx.disconnect = true;
+               ctx.disconnect_reason = net::DisconnectReason::GRANT_INVALID;
+               ctx.disconnect_message = "grant invalid";
+           };
+
+           // A second WORLD_HELLO on an already-authenticated connection is a
+           // protocol error — the handshake happens exactly once.
+           if (ctx.authenticated) {
+               reject("duplicate WorldHello on an authenticated connection");
+               return;
+           }
+           // No auth DB wired -> cannot validate a grant. Reject (the daemon can
+           // run without a DB for smoke tests, but cannot admit players).
+           if (ctx.db == nullptr) {
+               reject("no auth DB configured (grant validation unavailable)");
+               return;
+           }
+
+           // 1. Validate + atomically consume the grant (single-use guarantee).
+           GrantReject gr = GrantReject::kUnknown;
+           std::optional<GrantConsumed> consumed =
+               validate_and_consume_grant(*ctx.db, grant_id, ctx.realm_id, gr);
+           if (!consumed) {
+               const char* why = "unknown grant";
+               switch (gr) {
+                   case GrantReject::kUnknown:         why = "unknown grant"; break;
+                   case GrantReject::kExpired:         why = "expired grant"; break;
+                   case GrantReject::kAlreadyConsumed: why = "already-consumed grant (replay)"; break;
+                   case GrantReject::kWrongRealm:      why = "grant for a different realm"; break;
+                   case GrantReject::kDbError:         why = "grant DB error"; break;
+               }
+               reject(why);
+               return;
+           }
+
+           // 2. Establish the AEAD session keyed by the grant's session_key.
+           try {
+               ctx.session.emplace(consumed->session_key);
+           } catch (const net::TlsError& e) {
+               reject(std::string("session key setup failed: ") + e.what());
+               return;
+           }
+           ctx.authenticated = true;
+
+           // 3. Enter world: load the D-11 placeholder character.
+           PlaceholderCharacter pc =
+               load_placeholder_character(ctx.char_db, consumed->account_id);
+           log::info(kCat, "WORLD_HELLO accepted grant_id=" +
+                               std::to_string(grant_id) + " account=" +
+                               std::to_string(consumed->account_id) + " realm=" +
+                               std::to_string(consumed->realm_id) + " char='" +
+                               pc.name + "' class=" + std::to_string(pc.class_id) +
+                               " -> HandshakeOk");
+
+           // 4. Reply HandshakeOk. content_hash is an M0 placeholder (IF-4 world
+           //    content hashing is later); server_proof empty (see encoder note).
+           Bytes content_hash;  // empty M0 placeholder
+           Bytes server_proof;  // empty M0 placeholder
+           sess.write_frame(encode_frame(net::Opcode::HANDSHAKE_OK, f.seq,
+                                         encode_handshake_ok(content_hash, server_proof)));
+       });
 
     // CLOCK_SYNC (#65): the one M0 opcode with a natural echo. The client sends
     // client_time_ms (server_time_ms = 0); the server echoes both. A real
     // monotonic server clock is a #65 detail — the stub fills server_time_ms with
     // a steady-clock reading so the echo is well-formed and testable.
-    on(net::Opcode::CLOCK_SYNC, [](net::Session& sess, const Frame& f) {
+    on(net::Opcode::CLOCK_SYNC, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+        (void)ctx;
         const auto* cs = fb::GetRoot<mn::ClockSync>(f.payload);
         std::uint64_t client_time = cs ? cs->client_time_ms() : 0;
         std::uint64_t server_time =
@@ -215,8 +295,9 @@ void Dispatcher::register_m0_stubs() {
     // MOVEMENT_INTENT (#86): the only client input the server trusts, and only
     // after OPS-03 validation (SAD §5.5). At M0 we log receipt; validation +
     // authoritative MovementState broadcast land in #86.
-    on(net::Opcode::MOVEMENT_INTENT, [](net::Session& sess, const Frame& f) {
+    on(net::Opcode::MOVEMENT_INTENT, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
         (void)sess;
+        (void)ctx;
         const auto* mi = fb::GetRoot<mn::MovementIntent>(f.payload);
         log::info(kCat, "MOVEMENT_INTENT seq=" +
                             std::to_string(mi ? mi->seq() : 0) +
@@ -319,10 +400,40 @@ void WorldServer::world_thread_main() {
 
 void WorldServer::serve_connection(net::Session sess) {
     // Runs on an IO worker. Owns the socket; never touches game state. Reads
-    // IF-2 frames, dispatches each, and on any non-kHandled outcome sends a
+    // IF-2 frames, dispatches each through a per-connection ConnCtx, and on any
+    // non-kHandled outcome (or a handler-requested ctx.disconnect) sends a
     // Disconnect and closes (SAD §5.2 reject-and-close policy).
     const std::string peer = sess.peer();
     log::info(kCat, "connection " + peer + " (" + sess.tls_version() + ")");
+
+    // Per-connection context. Open THIS worker's own DB connection(s) for grant
+    // validation + enter-world (like authd: one DB connection per served
+    // connection, never shared across threads — SAD §2.2). When no auth DB is
+    // configured (cfg_.auth_db.user empty), db stays null and a WORLD_HELLO is
+    // rejected GRANT_INVALID — the daemon still runs, it just cannot admit
+    // players (usable for --version / dispatch smoke tests without a DB).
+    ConnCtx ctx;
+    ctx.realm_id = cfg_.realm_id;
+    std::optional<db::Connection> auth_conn;
+    std::optional<db::Connection> char_conn;
+    if (!cfg_.auth_db.user.empty()) {
+        try {
+            auth_conn.emplace(cfg_.auth_db);
+            ctx.db = &*auth_conn;
+        } catch (const db::DbError& e) {
+            log::warn(kCat, "connection " + peer +
+                                ": auth DB connect failed (grants disabled): " + e.what());
+        }
+    }
+    if (!cfg_.char_db.user.empty()) {
+        try {
+            char_conn.emplace(cfg_.char_db);
+            ctx.char_db = &*char_conn;
+        } catch (const db::DbError& e) {
+            log::warn(kCat, "connection " + peer +
+                                ": characters DB connect failed (placeholder only): " + e.what());
+        }
+    }
 
     try {
         for (;;) {
@@ -336,7 +447,20 @@ void WorldServer::serve_connection(net::Session sess) {
 
             std::uint16_t op = 0;
             std::uint64_t seq = 0;
-            DispatchOutcome outcome = dispatcher_.dispatch(sess, frame, op, seq);
+            DispatchOutcome outcome = dispatcher_.dispatch(sess, frame, ctx, op, seq);
+
+            // A handler (e.g. WORLD_HELLO on a grant reject) can ask for a clean
+            // close even though dispatch itself succeeded (kHandled).
+            if (outcome == DispatchOutcome::kHandled && ctx.disconnect) {
+                log::warn(kCat, "disconnecting " + peer + ": " + ctx.disconnect_message);
+                try {
+                    sess.write_frame(
+                        make_disconnect(ctx.disconnect_reason, ctx.disconnect_message, seq));
+                } catch (const mn::TlsError&) {
+                    // Peer may already be gone; closing below is enough.
+                }
+                break;
+            }
 
             if (outcome == DispatchOutcome::kHandled) continue;
 

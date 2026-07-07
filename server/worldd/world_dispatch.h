@@ -42,9 +42,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include "meridian/db/connection.h"
 #include "meridian/net/tls_listener.h"
 
 #include "world_generated.h"
+#include "world_session.h"
 
 namespace meridian::worldd {
 
@@ -97,15 +99,47 @@ enum class DispatchOutcome {
     kMalformedFrame, // frame too short to hold the IF-2 header
 };
 
+// Per-connection context threaded through the dispatcher to each handler. It
+// holds the state a handler needs that is scoped to ONE connection (never shared
+// across connections, never on the stateless Dispatcher):
+//   - `db` / `char_db`: this connection's DB handles (a worldd IO worker owns its
+//     own DB connection, like authd — SAD §2.2). `db` is the auth DB (grants);
+//     `char_db` is the characters DB (nullable at M0 — enter-world falls back to
+//     a placeholder when absent). Either may be null in tests that stub the flow.
+//   - `realm_id`: the realm this worldd serves (grants are realm-bound, SAD §5.3).
+//   - `session`: the AEAD channel, established by the WORLD_HELLO handler after a
+//     valid grant. std::nullopt until the handshake completes; post-handshake
+//     frames are sealed/opened through it (the #82/#83 codec seam).
+//   - `authenticated`: set true once WORLD_HELLO validated a grant. A second
+//     WORLD_HELLO or a pre-handshake game opcode can be rejected on this.
+//   - `disconnect`: a handler sets this (with a reason/message) to ask the serve
+//     loop to send a Disconnect and close — the grant-reject path uses it so the
+//     handler does not have to own socket-close policy (SAD §5.2 keeps that in
+//     the serve loop).
+struct ConnCtx {
+    db::Connection* db = nullptr;        // auth DB (session_grant) — may be null in tests
+    db::Connection* char_db = nullptr;   // characters DB — nullable (placeholder fallback)
+    std::uint32_t realm_id = 0;          // realm this worldd serves (0 = accept any)
+
+    std::optional<WorldSession> session; // established on a valid WORLD_HELLO
+    bool authenticated = false;
+
+    bool disconnect = false;             // handler asks the serve loop to close
+    net::DisconnectReason disconnect_reason = net::DisconnectReason::UNKNOWN;
+    std::string disconnect_message;
+};
+
 // A handler processes one verified frame for a given opcode. It receives the
-// session (to write replies) and the decoded frame. Returning normally means the
+// session (to write replies), the decoded frame, and the per-connection context
+// (grant DB, realm, AEAD session — see ConnCtx). Returning normally means the
 // frame was handled; handlers throw meridian::net::TlsError only on a transport
-// failure (which the serve loop treats as connection loss).
+// failure (which the serve loop treats as connection loss). A handler may set
+// ctx.disconnect to ask the serve loop to send a Disconnect and close.
 //
-// M0 STUBS: the registered handlers log the opcode and, where a natural echo
-// exists (ClockSync), reply; otherwise they emit a not-yet-implemented marker.
-// The real bodies (grant validation, movement, AoI) land in #84/#86/#87.
-using Handler = std::function<void(net::Session&, const Frame&)>;
+// M0: WORLD_HELLO is the real IF-3 handshake (#84 — grant validation + AEAD
+// session + enter-world -> HandshakeOk). CLOCK_SYNC echoes; MOVEMENT_INTENT logs
+// (validation + broadcast is #86).
+using Handler = std::function<void(net::Session&, const Frame&, ConnCtx&)>;
 
 // The IF-2 opcode dispatcher: a table mapping u16 Opcode -> Handler. Decodes each
 // net frame's IF-2 header, verifies the payload table for the opcode, and routes
@@ -133,8 +167,10 @@ public:
     // here — the caller decides the Disconnect reason + message (so the serve
     // loop owns the socket-closing policy). `last_opcode`/`last_seq` are set for
     // the caller's logging + Disconnect echo even on the error paths (best
-    // effort; 0 when the frame was too short to read them).
-    DispatchOutcome dispatch(net::Session& sess, const Bytes& frame,
+    // effort; 0 when the frame was too short to read them). `ctx` carries the
+    // per-connection state (grant DB, realm, AEAD session) to the handler; a
+    // handler may set ctx.disconnect to request a clean close.
+    DispatchOutcome dispatch(net::Session& sess, const Bytes& frame, ConnCtx& ctx,
                              std::uint16_t& last_opcode, std::uint64_t& last_seq) const;
 
 private:
@@ -186,6 +222,23 @@ struct WorldServerConfig {
     // World-thread tick cadence placeholder. The real rate is 20 Hz / 50 ms
     // (SAD §2.5); at M0 the loop just drains the inbound queue at this cadence.
     unsigned tick_interval_ms = 50;
+
+    // IF-3 grant validation (#84). worldd consumes session_grant rows from the
+    // auth DB (worldd, not gatewayd, is client-facing until the M2 split — SAD
+    // §2.2/§5.3). Each IO worker opens its OWN auth-DB connection per served
+    // connection (like authd) so no connection is shared across threads.
+    //   - `auth_db`: connection params for the auth DB. When `user` is empty,
+    //     grant validation is DISABLED — serve_connection builds a ConnCtx with a
+    //     null DB, and a WORLD_HELLO with no DB is rejected (GRANT_INVALID). This
+    //     keeps the plain, DB-less `worldd --version`/dispatch test buildable and
+    //     the daemon usable without a DB (it simply cannot admit players).
+    //   - `char_db`: characters DB params for enter-world. Optional — when empty,
+    //     enter-world loads the D-11 placeholder stub (no characters DB needed).
+    //   - `realm_id`: the realm this worldd serves; grants for another realm are
+    //     rejected. 0 = accept a grant for any realm (single-realm M0 default).
+    db::ConnectParams auth_db;
+    db::ConnectParams char_db;
+    std::uint32_t realm_id = 0;
 };
 
 class WorldServer {

@@ -169,3 +169,49 @@ jobs:
           MERIDIAN_DB_PASS: ci
           MERIDIAN_DB_NAME: meridian_auth
         run: ./server/build/authd/authd-login-test
+
+  # worldd IF-3 session establishment (#84): the authd->worldd handoff. Builds +
+  # runs the session integration test against a real MariaDB service with the auth
+  # schema loaded. It seeds a session_grant row exactly as authd writes it, stands
+  # the REAL meridian-net TLS 1.3 listener + the REAL worldd serve loop / WORLD_HELLO
+  # handler on an ephemeral port, sends WorldHello{grant_id}, and asserts: the grant
+  # is validated + atomically consumed (single-use: consumed_at set once, unchanged
+  # on replay) and the server replies HandshakeOk; a replayed / expired / unknown /
+  # wrong-realm grant is rejected with Disconnect and no (second) consume; and the
+  # AEAD ChaCha20-Poly1305 session seals+opens a frame and rejects a tampered one.
+  # The plain `server` job's ctest runs only the pure AEAD half of this test (no
+  # MERIDIAN_DB_* env) — the grant-consume DB checks are inert there.
+  worldd-session:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: ci
+          MARIADB_DATABASE: meridian_auth
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain + deps (flatc, libssl-dev, libmariadb-dev, mariadb client)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++-13 flatbuffers-compiler libflatbuffers-dev libssl-dev libmariadb-dev mariadb-client
+      - name: Load auth schema (0001_init_auth.up.sql)
+        run: |
+          mariadb -h 127.0.0.1 -P 3306 -u root -pci meridian_auth < server/db/auth/migrations/0001_init_auth.up.sql
+      - name: Build worldd-session-test
+        run: |
+          cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
+          cmake --build server/build --target worldd worldd-session-test
+      - name: Run worldd IF-3 session establishment test (MariaDB service)
+        env:
+          MERIDIAN_DB_HOST: 127.0.0.1
+          MERIDIAN_DB_PORT: 3306
+          MERIDIAN_DB_USER: root
+          MERIDIAN_DB_PASS: ci
+          MERIDIAN_DB_NAME: meridian_auth
+        run: ./server/build/worldd/worldd-session-test
