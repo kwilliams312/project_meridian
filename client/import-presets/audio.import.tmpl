@@ -1,0 +1,12 @@
+; meridian import preset — audio (Art SAD §2.3 adjunct / Music SAD §4.2)
+; Applies to IF-8 classes: sfx, ui_sound, music_stem, music_stinger, ambience_bed,
+; ambience_emitter (.wav / .ogg sources).
+; Short SFX/UI kept as uncompressed PCM (edit/compress/mode=0) for low decode latency;
+; positional 3D sources force-mono so attenuation/panning is correct. Music/ambience
+; streams may ship as Ogg Vorbis; loop points authored per Music SAD.
+[params]
+
+force/8_bit=false
+force/mono=true
+edit/compress/mode=0
+edit/normalize=false

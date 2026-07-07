@@ -1,0 +1,14 @@
+; meridian import preset — env-kit (Art SAD §2.3)
+; Applies to IF-8 classes: kit_piece, hero_landmark (sm_env_*_kit_*).
+; Lightmap UV2 unwrap at a fixed texel size (deterministic, §8.1), occluder node
+; conversion (occ_*), static collision from col_* meshes (PRD §2.4/§6.1), importer LOD
+; generation OFF — kit LOD chains are hand-authored with vertex-snapped borders (PRD §2.1).
+[params]
+
+meshes/lightmap_texel_size=0.2
+meshes/generate_lods=false
+meshes/create_shadow_meshes=true
+meshes/ensure_tangents=true
+meshes/light_baking=2
+nodes/generate_occluder_meshes=true
+_subresources={}

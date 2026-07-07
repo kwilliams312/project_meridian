@@ -1,0 +1,14 @@
+; meridian import preset — texture-std (Art SAD §2.3)
+; Applies to IF-8 classes: texture_set (t_* base color/ORM/normal), icon (UI).
+; BC-class VRAM compression (compress/mode=2) — resident-VRAM budget on the 6 GB 1060,
+; no engine texture streaming (PRD §2.3). Mipmaps on (mipped on import). sRGB for _bc
+; base color, linear for _orm/_n data maps (roughness/metallic/normal must not sRGB-decode).
+; UI icons override to lossless + no mipmaps (screen-space, never minified) — see README.
+[params]
+
+compress/mode=2
+compress/high_quality=false
+compress/hdr_compression=1
+mipmaps/generate=true
+process/hdr_as_srgb=false
+_srgb_note="_bc => flags/srgb=1 (enabled); _orm/_n/_rough/_metal => flags/srgb=2 (disabled)"
