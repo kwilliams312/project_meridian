@@ -33,6 +33,8 @@
 //
 // Clean-room: implemented from the SAD, no GPL source consulted (CONTRIBUTING).
 
+#include "meridian/core/config.hpp"
+#include "meridian/core/config_loader.hpp"
 #include "meridian/core/log.hpp"
 #include "meridian/core/version.hpp"
 #include "meridian/db/connection.h"
@@ -60,8 +62,11 @@ namespace {
 
 constexpr const char* kDaemonName = "worldd";
 
-// Runtime configuration, assembled from flags + env (same shape as authd's
-// AuthdConfig: flags override env override defaults; no config file yet).
+// Runtime configuration, resolved from the layered loader (issue #90):
+//   in-code defaults < config file < environment < command line   (highest wins)
+// Same shape as authd: the daemon overlays defaults, a --config/MERIDIAN_CONFIG
+// file, the MERIDIAN_* environment, and CLI flags into a meridian::core::Config,
+// then reads effective values into this struct for the serve path.
 struct WorlddConfig {
     // TLS listener (meridian-net ListenConfig fields).
     std::string cert_path;
@@ -105,8 +110,6 @@ struct WorlddConfig {
     std::string log_level;
 };
 
-const char* env(const char* k) { return std::getenv(k); }
-
 void print_help() {
     std::printf(
         "%s — Project Meridian shard worker / map simulation daemon\n"
@@ -114,6 +117,9 @@ void print_help() {
         "Usage: %s [options]\n"
         "\n"
         "Options:\n"
+        "  --config PATH      Layered config file (TOML/INI subset). Also\n"
+        "                     MERIDIAN_CONFIG. Precedence: defaults < file < env\n"
+        "                     < flags. Any key also settable as --<key>=<value>.\n"
         "  --cert PATH        TLS server certificate (PEM). Required to serve.\n"
         "  --key PATH         TLS private key (PEM). Required to serve.\n"
         "  --bind ADDR        Bind address (default 0.0.0.0).\n"
@@ -157,7 +163,19 @@ void print_version() {
 
 int main(int argc, char** argv) {
     WorlddConfig cfg;
-    bool io_workers_set = false;
+
+    // --- Layered config (issue #90) --------------------------------------------
+    // Build a meridian::core::Config from defaults < file < env < flags. Named
+    // flags map to the SAME keys the MERIDIAN_* env vars map to, so the documented
+    // env vars keep working while flags take precedence. See authd for the model.
+    namespace core = meridian::core;
+    core::Config c;
+    c.set("bind", "0.0.0.0", core::ConfigLayer::Default);
+    c.set("port", "7200", core::ConfigLayer::Default);         // IF-2 (SAD §5.2)
+    c.set("metrics.port", "9464", core::ConfigLayer::Default);
+    c.set("metrics.bind", "127.0.0.1", core::ConfigLayer::Default);
+    c.set("realm", "reference", core::ConfigLayer::Default);
+    c.set("trace.sample_ratio", "1.0", core::ConfigLayer::Default);
 
     for (int i = 1; i < argc; ++i) {
         auto next = [&](const char* flag) -> const char* {
@@ -167,71 +185,95 @@ int main(int argc, char** argv) {
             }
             return argv[++i];
         };
+        const auto cl = core::ConfigLayer::CommandLine;
         if (std::strcmp(argv[i], "--version") == 0) { print_version(); return 0; }
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             print_help(); return 0;
         }
-        if (std::strcmp(argv[i], "--cert") == 0) { cfg.cert_path = next("--cert"); continue; }
-        if (std::strcmp(argv[i], "--key") == 0) { cfg.key_path = next("--key"); continue; }
-        if (std::strcmp(argv[i], "--bind") == 0) { cfg.bind_addr = next("--bind"); continue; }
-        if (std::strcmp(argv[i], "--port") == 0) {
-            cfg.port = static_cast<std::uint16_t>(std::atoi(next("--port"))); continue;
-        }
-        if (std::strcmp(argv[i], "--io-workers") == 0) {
-            int n = std::atoi(next("--io-workers"));
-            if (n > 0) { cfg.world.io_workers = static_cast<unsigned>(n); io_workers_set = true; }
-            continue;
-        }
-        if (std::strcmp(argv[i], "--metrics-port") == 0) {
-            cfg.metrics_port = static_cast<std::uint16_t>(std::atoi(next("--metrics-port")));
-            continue;
-        }
-        if (std::strcmp(argv[i], "--metrics-bind") == 0) {
-            cfg.metrics_bind = next("--metrics-bind"); continue;
-        }
-        if (std::strcmp(argv[i], "--otlp-endpoint") == 0) {
-            cfg.otlp_endpoint = next("--otlp-endpoint"); continue;
-        }
-        if (std::strcmp(argv[i], "--trace-sample-ratio") == 0) {
-            cfg.trace_sample_ratio = std::atof(next("--trace-sample-ratio")); continue;
-        }
-        if (std::strcmp(argv[i], "--realm") == 0) {
-            cfg.world.labels.realm = next("--realm"); continue;
-        }
-        if (std::strcmp(argv[i], "--log-format") == 0) { cfg.log_format = next("--log-format"); continue; }
-        if (std::strcmp(argv[i], "--log-level") == 0) { cfg.log_level = next("--log-level"); continue; }
+        if (std::strcmp(argv[i], "--config") == 0) { c.set("config", next("--config"), cl); continue; }
+        if (std::strcmp(argv[i], "--cert") == 0) { c.set("tls.cert", next("--cert"), cl); continue; }
+        if (std::strcmp(argv[i], "--key") == 0) { c.set("tls.key", next("--key"), cl); continue; }
+        if (std::strcmp(argv[i], "--bind") == 0) { c.set("bind", next("--bind"), cl); continue; }
+        if (std::strcmp(argv[i], "--port") == 0) { c.set("port", next("--port"), cl); continue; }
+        if (std::strcmp(argv[i], "--io-workers") == 0) { c.set("io.workers", next("--io-workers"), cl); continue; }
+        if (std::strcmp(argv[i], "--metrics-port") == 0) { c.set("metrics.port", next("--metrics-port"), cl); continue; }
+        if (std::strcmp(argv[i], "--metrics-bind") == 0) { c.set("metrics.bind", next("--metrics-bind"), cl); continue; }
+        if (std::strcmp(argv[i], "--otlp-endpoint") == 0) { c.set("otlp.endpoint", next("--otlp-endpoint"), cl); continue; }
+        if (std::strcmp(argv[i], "--trace-sample-ratio") == 0) { c.set("trace.sample_ratio", next("--trace-sample-ratio"), cl); continue; }
+        if (std::strcmp(argv[i], "--realm") == 0) { c.set("realm", next("--realm"), cl); continue; }
+        if (std::strcmp(argv[i], "--log-format") == 0) { c.set("log.format", next("--log-format"), cl); continue; }
+        if (std::strcmp(argv[i], "--log-level") == 0) { c.set("log.level", next("--log-level"), cl); continue; }
+        if (std::strncmp(argv[i], "--", 2) == 0 && std::strchr(argv[i], '=') != nullptr) continue;
         std::fprintf(stderr, "%s: unknown option '%s' (try --help)\n", kDaemonName, argv[i]);
         return 2;
     }
+    core::load_args_kv(c, argc, argv);        // CommandLine: --key=value form
+    core::load_env_prefixed(c);               // Environment: MERIDIAN_* -> keys
+    // Legacy alias: MERIDIAN_WORLDD_PORT (generic map -> "worldd.port") also feeds
+    // the canonical "port" key so the documented env var keeps working.
+    if (auto v = c.get_string("worldd.port")) c.set("port", *v, core::ConfigLayer::Environment);
+    core::load_config_file(c, c.get_string_or("config", ""));  // File (from --config/MERIDIAN_CONFIG)
 
-    // OPS-05 logging (#165): env defaults first, flags override below.
-    meridian::core::log::configure_from_env();
-    meridian::core::log::set_process(kDaemonName);
+    // Resolve effective values.
+    cfg.cert_path = c.get_string_or("tls.cert", "");
+    cfg.key_path = c.get_string_or("tls.key", "");
+    cfg.bind_addr = c.get_string_or("bind", "0.0.0.0");
+    cfg.port = static_cast<std::uint16_t>(c.get_int_or("port", 7200));
+    cfg.metrics_port = static_cast<std::uint16_t>(c.get_int_or("metrics.port", 9464));
+    cfg.metrics_bind = c.get_string_or("metrics.bind", "127.0.0.1");
+    cfg.otlp_endpoint = c.get_string_or("otlp.endpoint", "");
+    cfg.trace_sample_ratio = std::atof(c.get_string_or("trace.sample_ratio", "1.0").c_str());
+    cfg.world.labels.realm = c.get_string_or("realm", "reference");
+    cfg.log_format = c.get_string_or("log.format", "");
+    cfg.log_level = c.get_string_or("log.level", "");
 
-    // Default IO pool size from hardware concurrency (leave headroom for the
-    // world thread + acceptor). The SAD's "M ≈ cores − 3" sizing is a later
-    // concern; at M0 a small pool suffices.
-    if (!io_workers_set) {
+    // IO pool size (--io-workers / io.workers). When set (>0) it wins; otherwise
+    // default from hardware concurrency, leaving headroom for the world thread +
+    // acceptor (SAD's "M ≈ cores − 3" sizing is a later concern; M0 small pool).
+    if (auto v = c.get_int("io.workers"); v && *v > 0) {
+        cfg.world.io_workers = static_cast<unsigned>(*v);
+    } else {
         unsigned hc = std::thread::hardware_concurrency();
         cfg.world.io_workers = (hc > 3) ? (hc - 3) : 1;
     }
-    if (const char* p = env("MERIDIAN_WORLDD_PORT")) {
-        cfg.port = static_cast<std::uint16_t>(std::atoi(p));
+
+    // Auth DB for IF-3 grant validation (#84) — MERIDIAN_DB_* -> db.*. Only assign
+    // when present so ConnectParams internal defaults survive when unset (grant
+    // validation is then disabled; WorldHello -> GRANT_INVALID). Characters DB
+    // (MERIDIAN_CHARDB_* -> chardb.*) is optional (absent -> D-11 stub).
+    if (auto v = c.get_string("db.socket")) cfg.world.auth_db.unix_socket = *v;
+    if (auto v = c.get_string("db.host")) cfg.world.auth_db.host = *v;
+    if (auto v = c.get_int("db.port")) cfg.world.auth_db.port = static_cast<unsigned>(*v);
+    if (auto v = c.get_string("db.user")) cfg.world.auth_db.user = *v;
+    if (auto v = c.get_string("db.pass")) cfg.world.auth_db.password = *v;
+    if (auto v = c.get_string("db.name")) cfg.world.auth_db.database = *v;
+
+    if (auto v = c.get_string("chardb.socket")) cfg.world.char_db.unix_socket = *v;
+    if (auto v = c.get_string("chardb.host")) cfg.world.char_db.host = *v;
+    if (auto v = c.get_int("chardb.port")) cfg.world.char_db.port = static_cast<unsigned>(*v);
+    if (auto v = c.get_string("chardb.user")) cfg.world.char_db.user = *v;
+    if (auto v = c.get_string("chardb.pass")) cfg.world.char_db.password = *v;
+    if (auto v = c.get_string("chardb.name")) cfg.world.char_db.database = *v;
+
+    // World content DB (IF-4 boot; #89) — its own MERIDIAN_WORLDDB_* -> worlddb.*
+    // so it can point at a different host than the auth DB (SAD §2.2 3-DB split).
+    if (auto v = c.get_string("worlddb.socket")) cfg.world_db.unix_socket = *v;
+    if (auto v = c.get_string("worlddb.host")) cfg.world_db.host = *v;
+    if (auto v = c.get_int("worlddb.port")) cfg.world_db.port = static_cast<unsigned>(*v);
+    if (auto v = c.get_string("worlddb.user")) cfg.world_db.user = *v;
+    if (auto v = c.get_string("worlddb.pass")) cfg.world_db.password = *v;
+    if (auto v = c.get_string("worlddb.name")) cfg.world_db.database = *v;
+    if (auto v = c.get_string("worlddb.expected.hash")) cfg.expected_content_hash = *v;
+
+    // MERIDIAN_WORLDD_REALM_ID -> "worldd.realm.id".
+    if (auto v = c.get_int("worldd.realm.id")) {
+        cfg.world.realm_id = static_cast<std::uint32_t>(*v);
     }
 
-    // OPS-05 metrics endpoint + realm label env fallbacks (flags override).
-    if (const char* p = env("MERIDIAN_METRICS_PORT")) {
-        cfg.metrics_port = static_cast<std::uint16_t>(std::atoi(p));
-    }
-    if (const char* b = env("MERIDIAN_METRICS_BIND")) cfg.metrics_bind = b;
-    if (const char* r = env("MERIDIAN_REALM")) cfg.world.labels.realm = r;
-    // OPS-05 trace endpoint env fallback (flag overrides). Same var authd uses.
-    if (const char* e = env("MERIDIAN_OTLP_ENDPOINT")) {
-        if (cfg.otlp_endpoint.empty()) cfg.otlp_endpoint = e;
-    }
-
-    // Realm label -> the log `realm` field (unifies metric + log grouping);
-    // then the log-format/level flags override any env/default.
+    // OPS-05 logging (#165): env baseline first, then the layered realm + log
+    // flags override. set_process stamps every record with this daemon's identity.
+    meridian::core::log::configure_from_env();
+    meridian::core::log::set_process(kDaemonName);
     meridian::core::log::set_realm(cfg.world.labels.realm);
     if (!cfg.log_format.empty()) {
         meridian::core::log::set_format(
@@ -240,42 +282,6 @@ int main(int argc, char** argv) {
     if (!cfg.log_level.empty()) {
         meridian::core::log::set_level(
             meridian::core::log::level_from_string(cfg.log_level));
-    }
-
-    // Auth DB connection for IF-3 grant validation (#84). worldd consumes
-    // session_grant rows to admit players (worldd is client-facing until the M2
-    // gateway split — SAD §2.2/§5.3). Read the same MERIDIAN_DB_* vars authd/db
-    // use. When unset (no user), grant validation is disabled — the daemon still
-    // serves (dispatcher, clock-sync) but a WorldHello is rejected GRANT_INVALID.
-    // The characters DB (MERIDIAN_CHARDB_*) is optional: absent -> enter-world
-    // uses the D-11 placeholder stub.
-    if (const char* s = env("MERIDIAN_DB_SOCKET")) cfg.world.auth_db.unix_socket = s;
-    if (const char* h = env("MERIDIAN_DB_HOST")) cfg.world.auth_db.host = h;
-    if (const char* p = env("MERIDIAN_DB_PORT")) cfg.world.auth_db.port = static_cast<unsigned>(std::atoi(p));
-    if (const char* u = env("MERIDIAN_DB_USER")) cfg.world.auth_db.user = u;
-    if (const char* pw = env("MERIDIAN_DB_PASS")) cfg.world.auth_db.password = pw;
-    if (const char* n = env("MERIDIAN_DB_NAME")) cfg.world.auth_db.database = n;
-
-    if (const char* s = env("MERIDIAN_CHARDB_SOCKET")) cfg.world.char_db.unix_socket = s;
-    if (const char* h = env("MERIDIAN_CHARDB_HOST")) cfg.world.char_db.host = h;
-    if (const char* p = env("MERIDIAN_CHARDB_PORT")) cfg.world.char_db.port = static_cast<unsigned>(std::atoi(p));
-    if (const char* u = env("MERIDIAN_CHARDB_USER")) cfg.world.char_db.user = u;
-    if (const char* pw = env("MERIDIAN_CHARDB_PASS")) cfg.world.char_db.password = pw;
-    if (const char* n = env("MERIDIAN_CHARDB_NAME")) cfg.world.char_db.database = n;
-
-    // World content DB (IF-4 boot; #89). Its own MERIDIAN_WORLDDB_* env so it can
-    // point at a different DB/host than the auth DB (the world DB is the mcc
-    // artifact; the auth DB is operational state — SAD §2.2 3-DB split).
-    if (const char* s = env("MERIDIAN_WORLDDB_SOCKET")) cfg.world_db.unix_socket = s;
-    if (const char* h = env("MERIDIAN_WORLDDB_HOST")) cfg.world_db.host = h;
-    if (const char* p = env("MERIDIAN_WORLDDB_PORT")) cfg.world_db.port = static_cast<unsigned>(std::atoi(p));
-    if (const char* u = env("MERIDIAN_WORLDDB_USER")) cfg.world_db.user = u;
-    if (const char* pw = env("MERIDIAN_WORLDDB_PASS")) cfg.world_db.password = pw;
-    if (const char* n = env("MERIDIAN_WORLDDB_NAME")) cfg.world_db.database = n;
-    if (const char* eh = env("MERIDIAN_WORLDDB_EXPECTED_HASH")) cfg.expected_content_hash = eh;
-
-    if (const char* r = env("MERIDIAN_WORLDD_REALM_ID")) {
-        cfg.world.realm_id = static_cast<std::uint32_t>(std::atoi(r));
     }
 
     if (cfg.cert_path.empty() || cfg.key_path.empty()) {
