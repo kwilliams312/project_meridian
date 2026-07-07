@@ -9,8 +9,8 @@
 [configuration]
 entry_symbol = "meridian_library_init"
 ; Minimum engine this extension targets — must match the pinned engine
-; (client/ENGINE_VERSION: GODOT_VERSION=4.6-stable).
-compatibility_minimum = "4.6"
+; (client/ENGINE_VERSION: GODOT_VERSION=4.7-stable).
+compatibility_minimum = "4.7"
 reloadable = true
 
 [libraries]

@@ -1,6 +1,6 @@
 # `/client` — Meridian game client
 
-Godot 4.6 Forward+ game client for **Windows x64 (D3D12)** and **macOS Apple Silicon
+Godot 4.7 Forward+ game client for **Windows x64 (D3D12)** and **macOS Apple Silicon
 (Metal)** (TD-01/TD-02, D-28). Hot path in C++ GDExtension; UI/flow in GDScript behind
 an MVVM boundary. The client is a *predictor and presenter* — server is law.
 
@@ -70,20 +70,22 @@ godot-cpp is **vendored** at the commit whose `extension_api.json` matches the e
 exactly. Upgrade only at milestone boundaries. The machine-readable copy of this table
 lives in [`ENGINE_VERSION`](./ENGINE_VERSION); keep the two in sync.
 
-### Godot engine — `4.6-stable`
+### Godot engine — `4.7-stable`
 
-Confirmed against the SAD/PRD ("Godot 4.6"). Renderer: Forward+ on **D3D12 (Windows x64)**
+Owner-decided bump 4.6 → 4.7 (issue #262): 4.7 matches the local install and godot-cpp's
+mainline (there is no 4.6 release branch/tag upstream — the prior pin was a bare `master`
+commit). See `../docs/01-SYNC-DECISIONS.md`. Renderer: Forward+ on **D3D12 (Windows x64)**
 and native **Metal (macOS Apple Silicon)** per TD-02 / D-28; Vulkan/MoltenVK stays
 buildable as a diagnostic fallback only.
 
 | Asset | Filename | SHA-512 |
 |---|---|---|
-| Windows x64 editor | `Godot_v4.6-stable_win64.exe.zip` | `3b2f0b4b…77877081b` |
-| macOS universal editor | `Godot_v4.6-stable_macos.universal.zip` | `589ac663…ce130ef` |
-| Export templates (both platforms) | `Godot_v4.6-stable_export_templates.tpz` | `88bb7c3a…9088d19` |
+| Windows x64 editor | `Godot_v4.7-stable_win64.exe.zip` | `41645a90…ba0522b9` |
+| macOS universal editor | `Godot_v4.7-stable_macos.universal.zip` | `0d5d635e…b8f79229` |
+| Export templates (both platforms) | `Godot_v4.7-stable_export_templates.tpz` | `1035dfde…138c1120e` |
 
 Full 128-char sums are in [`ENGINE_VERSION`](./ENGINE_VERSION). Downloads come from
-`https://github.com/godotengine/godot/releases/download/4.6-stable/`.
+`https://github.com/godotengine/godot/releases/download/4.7-stable/`.
 
 > **Note (`.universal` on macOS):** the pinned macOS *editor* zip is universal (Intel +
 > Apple Silicon) because that is the only editor build the Godot project ships. The
@@ -91,20 +93,21 @@ Full 128-char sums are in [`ENGINE_VERSION`](./ENGINE_VERSION). Downloads come f
 > the toolchain on a dev Mac. Apple Silicon is the only supported client target (no Intel
 > Macs, D-28 rule 2).
 
-### godot-cpp — commit `58d1de720b8ffe9f8ffcdfe3a85148582cfd2e74`
+### godot-cpp — commit `5ffd70e34d0ab87009a9f0ffa3361bc8f4b09731`
 
 Vendored as a **git submodule** at `client/godot-cpp`.
 
 This is the godot-cpp `master` commit *"gdextension: Sync with upstream commit
-`89cea14…` (4.6-stable)"* — its `extension_api.json` reads **`Godot Engine
-v4.6.stable.official`**, the exact match to the pinned engine (that `89cea14…` upstream
-hash is the engine's own `4.6-stable` tag).
+`5b4e0cb…` (4.7-stable)"* — its `extension_api.json` reads **`Godot Engine
+v4.7.stable.official`**, the exact match to the pinned engine (that `5b4e0cb…` upstream
+hash is the engine's own `4.7-stable` tag, and the local editor reports
+`4.7.stable.official.5b4e0cb0f`).
 
-**Why a commit and not a branch/tag:** godot-cpp has **no `4.6` branch and no
-`godot-4.6-stable` tag** upstream yet — the newest release branch/tag is `4.5`, and
-`master` has already advanced its `extension_api` to **4.7**. Pinning `master` would
-build against a 4.7 API (mismatch); pinning `godot-4.5-stable` would be behind. The
-per-commit pin above is the only ref that is exactly 4.6.
+**Why a commit and not a branch/tag:** godot-cpp has **no `4.7` branch and no
+`godot-4.7-stable` tag** upstream yet — the newest release tag is `godot-4.5-stable`, and
+`master` carries the 4.7 `extension_api`. This per-commit pin is the exact `master` sync
+commit for 4.7 (the direct analog of the prior 4.6 pin) and the only ref that is exactly
+4.7.
 
 ---
 
@@ -173,7 +176,7 @@ scons platform=macos arch=arm64 target=template_debug
 # From client/, with the pinned editor on PATH as `godot`:
 godot --headless --path project \
   --eval 'print(MeridianClient.new().get_version())'
-# → meridian-client 0.0.1 (godot 4.6-stable)
+# → meridian-client 0.0.1 (godot 4.7-stable)
 ```
 
 ---

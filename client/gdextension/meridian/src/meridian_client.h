@@ -2,7 +2,7 @@
 //
 // MeridianClient is a trivial exported class whose only job in this bootstrap PR
 // is to prove the client GDExtension compiles and links against the pinned
-// godot-cpp (client/godot-cpp @ 4.6-stable). It exposes a single method,
+// godot-cpp (client/godot-cpp @ 4.7-stable). It exposes a single method,
 // get_version(), returning a build/version string. The real hot-path modules
 // (net / sim / stream / datastore, Client SAD §2) land in later issues
 // (e.g. the C++ movement controller, #102); this class is scaffolding only.
