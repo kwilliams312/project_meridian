@@ -8,6 +8,10 @@ nightly test realm tracks `main`") and issue #94.
 
 - **Script:** [`deploy/scripts/redeploy.sh`](../../deploy/scripts/redeploy.sh) — the deploy → smoke → rollback logic.
 - **Workflow:** [`.github/workflows/nightly-redeploy.yml`](../../.github/workflows/nightly-redeploy.yml) — the nightly `schedule:` + manual `workflow_dispatch`.
+- **Manifest (#62):** the redeploy consumes the nightly **build manifest** to pin
+  the coherent nightly (exact image tag + content + client export). See
+  [`docs/ops/artifact-retention.md`](artifact-retention.md); pass it with
+  `redeploy.sh --manifest=<file>` (`.server.tag` selects the tag to deploy).
 
 Feeds off / complements: **#175** (GHCR autopublish of `authd`/`worldd` — the
 images this deploys), **#177** (the reference compose stack it runs on the host),

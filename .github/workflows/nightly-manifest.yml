@@ -1,0 +1,196 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Nightly build-manifest — the pipeline glue that ties the three artifact streams
+# into ONE "what is this nightly made of" record (#62).
+#
+# WHAT: once a night (before the test-realm redeploy at 07:17) build/collect the
+# three streams and emit a single JSON build manifest
+# (schema/build-manifest/build-manifest.schema.json) pinning, for this nightly:
+#   * server  — the authd + worldd GHCR images (#175-177): tag + immutable digest,
+#   * content — the mcc pipeline outputs (#120/#121): the IF-4 <-> IF-5 BLAKE3
+#               content_hash (Tools SAD 2.6) + world.sql checksum + pack metadata,
+#   * client  — the Godot client export (#113): 'pending' placeholder until #113's
+#               client-export CI lands (fill --client-version/--client-hash then),
+#   plus the git SHA + a timestamp.
+#
+# The manifest is uploaded as a retained artifact (docs/ops/artifact-retention.md)
+# and consumed by the nightly test-realm redeploy (#94): redeploy.sh --manifest
+# reads .server.tag to stand up exactly the tag this manifest pins — so the
+# deployed images, content pack, and (later) client export are one coherent set,
+# not three independently-moving `latest`s.
+#
+# Content coordinates are NEVER invented: scripts/build-manifest.sh reads them out
+# of the mcc-emitted pack.manifest.json / world.sql and re-asserts the IF-4<->IF-5
+# tie before pinning (a mismatch fails the job).
+
+name: nightly-manifest
+
+on:
+  schedule:
+    # 07:05 UTC — after cd.yml has published the day's images, and BEFORE the
+    # nightly-redeploy at 07:17 that consumes this manifest.
+    - cron: "5 7 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Server image tag to pin (default: the git short SHA)"
+        required: false
+        default: ""
+      client_version:
+        description: "Client export version to pin (optional; #113)"
+        required: false
+        default: ""
+      client_hash:
+        description: "Client export hash to pin (optional; #113)"
+        required: false
+        default: ""
+
+# Least-privilege: read the repo + read GHCR packages (to resolve image digests).
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: nightly-manifest
+  cancel-in-progress: true
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same C++20 toolchain content-ci uses; yaml-cpp is NOT installed system-wide
+      # so mcc's pinned FetchContent fallback is exercised. jq is preinstalled on
+      # ubuntu-latest (used by scripts/build-manifest.sh).
+      - name: Install C++ toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++-13
+
+      # Build the content stream — the exact repeatable build content-ci runs.
+      # Produces build/content-out/{world.sql, pck/meridian/core/*} and asserts the
+      # IF-4 <-> IF-5 content-hash tie + determinism.
+      - name: Build content (scripts/content-build.sh)
+        env:
+          CXX: g++-13
+        run: |
+          cmake -S tools/mcc -B tools/mcc/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
+          cmake --build tools/mcc/build --target mcc
+          NO_COLOR=1 ./scripts/content-build.sh --skip-mcc-build
+
+      # uv provides the jsonschema dep for scripts/build-manifest.sh --validate.
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Log in to GHCR (to resolve image digests)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Resolve the server stream: for each daemon, inspect the target tag's
+      # immutable OCI digest. Default tag = the git short SHA cd.yml published
+      # (#175); if that tag is not resolvable (e.g. CD hasn't published this SHA
+      # yet), fall back to `latest` and pin THAT tag so tag<->digest stay coherent.
+      - name: Resolve server image digests (GHCR)
+        id: server
+        env:
+          REGISTRY: ghcr.io/kwilliams312/project_meridian
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          short="${GIT_SHA:0:7}"
+          tag="${INPUT_TAG:-$short}"
+
+          resolve() { # $1=image ref -> prints digest or empty
+            docker buildx imagetools inspect "$1" --format '{{ .Manifest.Digest }}' 2>/dev/null || true
+          }
+
+          authd_digest="$(resolve "${REGISTRY}/authd:${tag}")"
+          worldd_digest="$(resolve "${REGISTRY}/worldd:${tag}")"
+
+          # Fallback: if the short-SHA tag isn't published, pin `latest`.
+          if [ -z "${authd_digest}" ] && [ "${tag}" != "latest" ]; then
+            echo "::notice::tag '${tag}' not resolvable on GHCR — falling back to 'latest'"
+            tag="latest"
+            authd_digest="$(resolve "${REGISTRY}/authd:latest")"
+            worldd_digest="$(resolve "${REGISTRY}/worldd:latest")"
+          fi
+
+          {
+            echo "tag=${tag}"
+            echo "authd_digest=${authd_digest}"
+            echo "worldd_digest=${worldd_digest}"
+          } >> "$GITHUB_OUTPUT"
+          echo "resolved tag=${tag} authd=${authd_digest:-<none>} worldd=${worldd_digest:-<none>}"
+
+      # Assemble + validate the manifest. Digest flags are omitted when empty so
+      # the generator records them as null (never a fabricated digest).
+      - name: Generate build manifest
+        env:
+          GIT_SHA: ${{ github.sha }}
+          GIT_REF: ${{ github.ref }}
+          TAG: ${{ steps.server.outputs.tag }}
+          AUTHD_DIGEST: ${{ steps.server.outputs.authd_digest }}
+          WORLDD_DIGEST: ${{ steps.server.outputs.worldd_digest }}
+          CLIENT_VERSION: ${{ github.event.inputs.client_version }}
+          CLIENT_HASH: ${{ github.event.inputs.client_hash }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          args=(
+            --content-out build/content-out
+            --git-sha "${GIT_SHA}"
+            --git-ref "${GIT_REF}"
+            --kind nightly
+            --tag "${TAG}"
+            --workflow "nightly-manifest"
+            --run-id "${GITHUB_RUN_ID:-}"
+            --run-url "${RUN_URL}"
+            --out build/content-out/build-manifest.json
+            --validate
+          )
+          [ -n "${AUTHD_DIGEST}" ]   && args+=(--authd-digest "${AUTHD_DIGEST}")
+          [ -n "${WORLDD_DIGEST}" ]  && args+=(--worldd-digest "${WORLDD_DIGEST}")
+          [ -n "${CLIENT_VERSION}" ] && args+=(--client-version "${CLIENT_VERSION}")
+          [ -n "${CLIENT_HASH}" ]    && args+=(--client-hash "${CLIENT_HASH}")
+          ./scripts/build-manifest.sh "${args[@]}"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Nightly build manifest :package:"
+            echo ""
+            echo '```json'
+            cat build/content-out/build-manifest.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Retention: keep nightly manifests for 90 days (docs/ops/artifact-retention.md).
+      # The manifest is tiny; 90 days gives ample audit/rollback headroom while
+      # still bounding storage. The redeploy (#94) downloads this artifact.
+      - name: Upload build manifest (retained 90 days)
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-build-manifest
+          path: build/content-out/build-manifest.json
+          retention-days: 90
+          if-no-files-found: error
+
+      # Also retain the full content artifacts (world.sql + pack) the manifest
+      # pins, so a redeploy can load exactly these bits. Shorter window — these are
+      # larger and reproducible from the pinned git SHA if needed.
+      - name: Upload content artifacts (retained 30 days)
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-content
+          path: |
+            build/content-out/world.sql
+            build/content-out/pck/**
+          retention-days: 30
+          if-no-files-found: error

@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-meridian/schema/build-manifest@1",
+  "title": "Meridian nightly build manifest",
+  "description": "The 'what is this nightly made of' record (#62). One JSON document that pins, for a single nightly (or release/adhoc) build, the exact coordinates of the three artifact streams — server images (authd/worldd), client export, and mcc content artifacts (world DB SQL + client pack) — together with the git SHA and a timestamp. This is the contract the test-realm redeploy (#94) consumes to know exactly WHICH image tag + content pack + client export make up one coherent nightly. The content-hash fields reuse the existing IF-4 <-> IF-5 BLAKE3 content-hash agreement (Tools SAD 2.6); nothing here invents a parallel hashing scheme.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "kind", "built_at", "git", "server", "content", "client"],
+  "properties": {
+    "schema": {
+      "description": "Schema id + version tag, mirroring the meridian/<name>@<n> convention used by pack-manifest (schema/pack.schema.yaml).",
+      "const": "meridian/build-manifest@1"
+    },
+    "kind": {
+      "description": "What produced this manifest. 'nightly' = the scheduled main-tracking build (#62/#94); 'release' = a tagged semver release (#179); 'adhoc' = a manual workflow_dispatch run.",
+      "enum": ["nightly", "release", "adhoc"]
+    },
+    "built_at": {
+      "description": "UTC timestamp the manifest was generated (RFC 3339 / ISO 8601).",
+      "type": "string",
+      "format": "date-time"
+    },
+    "git": {
+      "description": "The exact source revision this nightly was cut from. The nightly tracks main (D-30 10 rule 5), so sha is the tip of main at build time.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha", "short_sha"],
+      "properties": {
+        "sha": {
+          "description": "Full 40-hex commit SHA.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "short_sha": {
+          "description": "Short SHA — the immutable server image tag cd.yml publishes (#175).",
+          "type": "string",
+          "pattern": "^[0-9a-f]{7,12}$"
+        },
+        "ref": {
+          "description": "Git ref the build was cut from, e.g. refs/heads/main.",
+          "type": "string"
+        }
+      }
+    },
+    "server": {
+      "description": "Server build stream — the authd + worldd GHCR images (#175-177) the redeploy stands up. tag pins the mutable coordinate; each image also carries its immutable digest so the deploy binds to exact bits, not a movable tag.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry", "tag", "images"],
+      "properties": {
+        "registry": {
+          "description": "GHCR image path prefix, e.g. ghcr.io/kwilliams312/project_meridian.",
+          "type": "string"
+        },
+        "tag": {
+          "description": "The image tag this nightly deploys. Conventionally the git short_sha (cd.yml publishes both <short-sha> and latest for the same digest).",
+          "type": "string"
+        },
+        "images": {
+          "description": "One entry per daemon image (authd, worldd).",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "image", "tag", "digest"],
+            "properties": {
+              "name": {
+                "description": "Daemon name.",
+                "enum": ["authd", "worldd"]
+              },
+              "image": {
+                "description": "Fully-qualified image repository (registry + name).",
+                "type": "string"
+              },
+              "tag": {
+                "description": "The tag resolved for this image.",
+                "type": "string"
+              },
+              "digest": {
+                "description": "Immutable OCI content digest (sha256:...), or null when not yet resolved (e.g. a locally-generated sample with no GHCR access — the nightly workflow always resolves it).",
+                "type": ["string", "null"],
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "content": {
+      "description": "Content stream — the mcc pipeline outputs (emit-sql #120 -> world DB SQL + world_manifest; emit-pck #121 -> client pack). content_hash is the single BLAKE3 hash both IF-4 (world_manifest.content_hash) and IF-5 (pack.manifest.content_hash) agree on (the three-way tie, Tools SAD 2.6). world_sql.sha256 is a plain file-integrity checksum of the emitted world.sql for transport verification.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hash_algo", "content_hash", "pack_namespace", "pack_version", "content_schema_version", "mcc_version", "world_sql", "pack_manifest"],
+      "properties": {
+        "hash_algo": {
+          "description": "The content-hash algorithm. BLAKE3, matching the mcc pipeline (Tools SAD 2.6).",
+          "const": "blake3"
+        },
+        "content_hash": {
+          "description": "The IF-4 <-> IF-5 BLAKE3 content hash (64 hex). The single source of truth for 'which content is this nightly'.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "pack_namespace": {
+          "description": "Pack namespace, e.g. core.",
+          "type": "string"
+        },
+        "pack_version": {
+          "description": "Pack semver from pack.manifest.json.",
+          "type": "string"
+        },
+        "content_schema_version": {
+          "description": "Content schema version (world_manifest.schema_version).",
+          "type": "integer",
+          "minimum": 1
+        },
+        "mcc_version": {
+          "description": "The mcc compiler version that emitted the artifacts.",
+          "type": "string"
+        },
+        "world_sql": {
+          "description": "The IF-4 world DB SQL artifact (loads into meridian_world).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": {
+            "path": {
+              "description": "Path of the artifact relative to the content build output root.",
+              "type": "string"
+            },
+            "sha256": {
+              "description": "SHA-256 file checksum of world.sql (transport-integrity; the semantic content identity lives in content_hash).",
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "pack_manifest": {
+          "description": "The IF-5 client pack manifest (pack.manifest.json).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "content_hash"],
+          "properties": {
+            "path": {
+              "description": "Path of pack.manifest.json relative to the content build output root.",
+              "type": "string"
+            },
+            "content_hash": {
+              "description": "The pack.manifest content_hash. MUST equal content.content_hash (the IF-4 <-> IF-5 tie).",
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        }
+      }
+    },
+    "client": {
+      "description": "Client export stream — the Godot client export version + hash (#113). Client-export CI does not exist yet, so this coordinate is a reserved placeholder: status 'pending' with null version/hash until #113 lands, at which point the nightly resolves it to status 'resolved'. Kept in the schema now so the manifest shape is stable and the follow-up is a fill-in, not a schema change.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "description": "'pending' = client export CI (#113) not wired yet; 'resolved' = a real export was pinned.",
+          "enum": ["pending", "resolved"]
+        },
+        "version": {
+          "description": "Client export version (e.g. a build number or semver), or null when pending.",
+          "type": ["string", "null"]
+        },
+        "export_hash": {
+          "description": "Hash of the client export bundle, or null when pending.",
+          "type": ["string", "null"]
+        },
+        "note": {
+          "description": "Human-readable status note.",
+          "type": "string"
+        }
+      }
+    },
+    "provenance": {
+      "description": "Optional CI provenance for the run that produced this manifest.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workflow": { "type": "string" },
+        "run_id": { "type": "string" },
+        "run_url": { "type": "string" }
+      }
+    }
+  }
+}

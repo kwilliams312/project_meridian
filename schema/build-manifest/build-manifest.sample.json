@@ -1,0 +1,50 @@
+{
+  "schema": "meridian/build-manifest@1",
+  "kind": "nightly",
+  "built_at": "2026-07-07T21:39:38Z",
+  "git": {
+    "sha": "0e83f2a65512a59b6488defe1c8233873fd1dee3",
+    "short_sha": "0e83f2a",
+    "ref": "refs/heads/main"
+  },
+  "server": {
+    "registry": "ghcr.io/kwilliams312/project_meridian",
+    "tag": "0e83f2a",
+    "images": [
+      {
+        "name": "authd",
+        "image": "ghcr.io/kwilliams312/project_meridian/authd",
+        "tag": "0e83f2a",
+        "digest": null
+      },
+      {
+        "name": "worldd",
+        "image": "ghcr.io/kwilliams312/project_meridian/worldd",
+        "tag": "0e83f2a",
+        "digest": null
+      }
+    ]
+  },
+  "content": {
+    "hash_algo": "blake3",
+    "content_hash": "3866e1af351061e11b918637b92c882ba2141b1feff8e2cbfb4326378f4ed3b8",
+    "pack_namespace": "core",
+    "pack_version": "0.1.0",
+    "content_schema_version": 1,
+    "mcc_version": "0.0.0",
+    "world_sql": {
+      "path": "world.sql",
+      "sha256": "e923cabbab1bcc5d1a666244847d2949fb499b96abdd7403879797930ea7008e"
+    },
+    "pack_manifest": {
+      "path": "pck/meridian/core/pack.manifest.json",
+      "content_hash": "3866e1af351061e11b918637b92c882ba2141b1feff8e2cbfb4326378f4ed3b8"
+    }
+  },
+  "client": {
+    "status": "pending",
+    "version": null,
+    "export_hash": null,
+    "note": "client export CI (#113) not wired yet; coordinate reserved"
+  }
+}

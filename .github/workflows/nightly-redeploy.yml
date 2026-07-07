@@ -54,11 +54,13 @@ on:
         required: false
         default: "latest"
 
-# Least-privilege: this workflow only reads the repo (to get redeploy.sh). It
-# does NOT publish images, write packages, or mint OIDC tokens — the deploy uses
-# SSH creds from secrets, scoped to the test-realm host.
+# Least-privilege: this workflow reads the repo (to get redeploy.sh) and reads
+# Actions artifacts (to fetch the nightly build manifest, #62). It does NOT
+# publish images, write packages, or mint OIDC tokens — the deploy uses SSH creds
+# from secrets, scoped to the test-realm host.
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   # Never let two redeploys race the same test realm; a new run cancels a
@@ -96,6 +98,38 @@ jobs:
       - name: Checkout (for deploy/scripts/redeploy.sh)
         uses: actions/checkout@v4
 
+      # ── Consume the nightly build manifest (#62). ───────────────────────────
+      # Download the latest successful nightly-manifest run's manifest artifact so
+      # the deploy pins EXACTLY the tag that nightly recorded (coherent images +
+      # content + client export), not a bare `latest`. Best-effort: if no manifest
+      # exists yet (first nights, or nightly-manifest hasn't run), MANIFEST_PATH
+      # stays empty and redeploy.sh falls back to its normal tag selection.
+      - name: Fetch nightly build manifest
+        id: manifest
+        # A manual workflow_dispatch tag override bypasses the manifest (the user
+        # explicitly chose a tag); scheduled nightlies always consume the manifest.
+        if: ${{ github.event.inputs.tag == '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          run_id="$(gh run list --workflow nightly-manifest.yml --status success \
+                      --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+          if [ -z "${run_id}" ] || [ "${run_id}" = "null" ]; then
+            echo "::notice::No successful nightly-manifest run found — deploying without a pinned manifest."
+            echo "path=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if gh run download "${run_id}" -n nightly-build-manifest -D manifest 2>/dev/null \
+             && [ -f manifest/build-manifest.json ]; then
+            echo "path=$(pwd)/manifest/build-manifest.json" >> "$GITHUB_OUTPUT"
+            echo "Fetched build manifest from nightly-manifest run ${run_id}:"
+            cat manifest/build-manifest.json
+          else
+            echo "::notice::nightly-manifest run ${run_id} had no manifest artifact — deploying without a pinned manifest."
+            echo "path=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up SSH to the test-realm host
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -114,6 +148,9 @@ jobs:
         env:
           DEPLOY_TARGET: ${{ secrets.DEPLOY_TARGET }}
           MERIDIAN_TAG: ${{ github.event.inputs.tag || vars.MERIDIAN_TAG || 'latest' }}
+          # Build manifest (#62): when present, redeploy.sh reads .server.tag from
+          # it to pin the coherent nightly. Empty => normal MERIDIAN_TAG selection.
+          MANIFEST: ${{ steps.manifest.outputs.path }}
           COMPOSE_DIR: ${{ vars.COMPOSE_DIR }}
           BOT_BIN: ${{ vars.BOT_BIN }}
           BOT_USER: ${{ secrets.BOT_USER }}
