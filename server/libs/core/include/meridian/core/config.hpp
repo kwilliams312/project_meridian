@@ -6,12 +6,17 @@
 // "protocol version and client_build floor from config", §2.3 OPS-01 tunables)
 // and PRD §6 category log levels. No GPL source consulted. See CONTRIBUTING.md.
 //
-// This is an M0 STUB expressing the *idea* of layered config: defaults are
-// overlaid by later layers (file, then environment, then CLI flags), last write
-// wins. The real implementation will parse TOML/YAML + env + flags and validate
-// against typed schemas per subsystem. The Config surface below is deliberately
-// tiny — string key/value with typed getters — so callers can be written now and
-// the backend upgraded without touching call sites.
+// This header is the typed key/value STORE at the heart of the layered config:
+// defaults are overlaid by later layers (file, then environment, then CLI flags),
+// with the highest layer winning (see the ConfigLayer precedence rule below).
+// The Config surface is deliberately tiny — string key/value with typed getters —
+// so call sites stay stable.
+//
+// The layered LOADER that fills a Config from the four sources (a TOML/INI-subset
+// file, the MERIDIAN_* environment, and "--key=value" flags) lives in the
+// companion header config_loader.hpp (issue #90). Typed per-subsystem schema
+// validation remains a later concern; today the daemons read typed values with
+// documented defaults (see docs/ops/server-config.md for the key catalog).
 
 #ifndef MERIDIAN_CORE_CONFIG_HPP
 #define MERIDIAN_CORE_CONFIG_HPP
