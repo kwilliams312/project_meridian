@@ -34,6 +34,31 @@ endif()
 
 add_test(NAME movement-controller COMMAND movement-controller-test)
 
+# --- Prediction reconciliation SMOOTHING core (#103) ---
+# The engine-free error-offset decay + snap layer on top of the #102 ring-buffer
+# rewind/re-simulate: a small server correction is absorbed as a render offset that
+# decays to zero over the 100–200 ms window (monotonic, converges); a large one
+# snaps. Same engine-free discipline: no godot-cpp, plain C++17; time injected so
+# the decay is asserted deterministically. Links the SAME movement_controller.cpp
+# core the #102 test uses — client prediction and re-simulation share ONE code path.
+add_executable(prediction-reconcile-test
+  prediction_reconcile_test.cpp
+  "${SRC}/movement_controller.cpp"
+)
+target_include_directories(prediction-reconcile-test PRIVATE "${SRC}")
+set_target_properties(prediction-reconcile-test PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+if(MSVC)
+  target_compile_options(prediction-reconcile-test PRIVATE /W4)
+else()
+  target_compile_options(prediction-reconcile-test PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME prediction-reconcile COMMAND prediction-reconcile-test)
+
 # --- Remote-entity interpolation + clock-sync estimator core (#104) ---
 # The engine-free REMOTE-side smoothing core (remote_interpolation.*): buffers
 # remote EntityUpdate snapshots and renders an interpolated position at
