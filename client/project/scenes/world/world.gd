@@ -94,6 +94,7 @@ func _ready() -> void:
 		print("[world.move] MERIDIAN_MOVE_DEBUG on — logging local-player input/render once per second")
 	_build_environment()
 	_build_ground()
+	_build_landmarks()
 	_build_player_and_camera()
 	_remotes = Node3D.new()
 	_remotes.name = "Remotes"
@@ -226,9 +227,15 @@ func _emit_move_debug(key_w: bool, key_a: bool, key_s: bool, key_d: bool,
 	_last_move_debug_ms = _client_ms
 	var render: Vector3 = _mover.get_render_position()
 	var pred: Vector3 = _mover.get_predicted_position()
-	print("[world.move] W=%s A=%s S=%s D=%s yaw=%.3f move=(%.2f,%.2f,%.2f) render=(%.2f,%.2f,%.2f) pred=(%.2f,%.2f,%.2f) last_err=%.3f srv_tick=%d"
+	# world = the capsule's ACTUAL drawn transform (_player.position is set from the
+	# render position each frame). With the landmark grid on screen, comparing this
+	# world coordinate tick-to-tick tells the owner whether the capsule really moves
+	# in world space when W is held — the ground truth behind the parallax they see.
+	var world: Vector3 = _player.position if _player != null else render
+	print("[world.move] W=%s A=%s S=%s D=%s yaw=%.3f move=(%.2f,%.2f,%.2f) world=(%.2f,%.2f,%.2f) render=(%.2f,%.2f,%.2f) pred=(%.2f,%.2f,%.2f) last_err=%.3f srv_tick=%d"
 		% [key_w, key_a, key_s, key_d, yaw,
 			move.x, move.y, move.z,
+			world.x, world.y, world.z,
 			render.x, render.y, render.z,
 			pred.x, pred.y, pred.z,
 			_mover.last_error_magnitude(), _last_server_tick])
@@ -446,6 +453,92 @@ func _build_ground() -> void:
 	add_child(ground)
 
 
+# --- Reference geometry (#303 aid) -------------------------------------------
+# Static, brightly-coloured landmarks at KNOWN spawn-relative coordinates plus a
+# subtle ground grid. PURELY VISUAL — plain MeshInstance3D with no physics body,
+# so they never touch the net/movement/camera-collision path. Their only job is
+# to give the eye a fixed reference frame: with fixed posts + grid lines around
+# spawn, even a metre or two of local-player motion is obvious by parallax, so
+# "am I moving, or is that just the bot?" is answerable at a glance (the whole
+# reason WASD "felt" dead on a featureless plane, #303). Post labels carry the
+# WIRE-frame coordinate (x = ground east, y = ground north) so they line up with
+# the server MovementState / move-debug the owner reads.
+func _build_landmarks() -> void:
+	_build_ground_grid()
+
+	# Cardinal cross around the (64,64) spawn + scattered corner posts. Each row
+	# is (wire_x, wire_y, colour, tag). Godot maps wire (x, y) -> (x, z); y=height.
+	var posts := [
+		[54.0, 64.0, Color(0.90, 0.25, 0.25), "W (54,64)"],
+		[74.0, 64.0, Color(0.95, 0.55, 0.15), "E (74,64)"],
+		[64.0, 54.0, Color(0.95, 0.82, 0.20), "S (64,54)"],
+		[64.0, 74.0, Color(0.35, 0.55, 0.95), "N (64,74)"],
+		[44.0, 44.0, Color(0.80, 0.35, 0.85), "(44,44)"],
+		[84.0, 84.0, Color(0.35, 0.80, 0.85), "(84,84)"],
+		[44.0, 84.0, Color(0.55, 0.35, 0.90), "(44,84)"],
+		[84.0, 44.0, Color(0.85, 0.45, 0.55), "(84,44)"],
+	]
+	for p in posts:
+		_add_pillar(float(p[0]), float(p[1]), p[2] as Color, String(p[3]))
+
+
+func _add_pillar(wire_x: float, wire_y: float, colour: Color, tag: String) -> void:
+	var pillar := MeshInstance3D.new()
+	pillar.name = "Landmark_%s" % tag
+	var bm := BoxMesh.new()
+	bm.size = Vector3(1.5, 6.0, 1.5)
+	pillar.mesh = bm
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = colour
+	mat.emission_enabled = true            # a gentle glow so posts read at distance
+	mat.emission = colour * 0.35
+	pillar.material_override = mat
+	# Godot: wire x -> x, wire y -> z. Sit the 6 m pillar on the ground (base y=0).
+	pillar.position = Vector3(wire_x, 3.0, wire_y)
+
+	var label := Label3D.new()
+	label.text = tag
+	label.position = Vector3(0, 4.0, 0)
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.no_depth_test = true
+	label.modulate = colour
+	pillar.add_child(label)
+	add_child(pillar)
+
+
+func _build_ground_grid() -> void:
+	# Thin dark stripes every 4 m across a 64 m span centred on spawn. Spaced box
+	# meshes (no shader / no asset) so any lateral motion visibly slides the
+	# capsule across the lines. Lifted a hair above the ground plane (y ~= 0.02).
+	var grid := Node3D.new()
+	grid.name = "GroundGrid"
+	var span := 64.0
+	var step := 4.0
+	var half := span / 2.0
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.16, 0.20, 0.26)
+	var n := int(span / step)
+	for i in range(n + 1):
+		var off := -half + float(i) * step
+		# Stripe running along Z (wire-north) at x = spawn.x + off.
+		var lx := MeshInstance3D.new()
+		var bx := BoxMesh.new()
+		bx.size = Vector3(0.08, 0.02, span)
+		lx.mesh = bx
+		lx.material_override = mat
+		lx.position = Vector3(SPAWN.x + off, 0.02, SPAWN.z)
+		grid.add_child(lx)
+		# Stripe running along X (wire-east) at z = spawn.z + off.
+		var lz := MeshInstance3D.new()
+		var bz := BoxMesh.new()
+		bz.size = Vector3(span, 0.02, 0.08)
+		lz.mesh = bz
+		lz.material_override = mat
+		lz.position = Vector3(SPAWN.x, 0.02, SPAWN.z + off)
+		grid.add_child(lz)
+	add_child(grid)
+
+
 func _build_player_and_camera() -> void:
 	_player = Node3D.new()
 	_player.name = "Player"
@@ -459,8 +552,13 @@ func _build_player_and_camera() -> void:
 	capsule.radius = 0.35
 	(_body as MeshInstance3D).mesh = capsule
 	_body.position = Vector3(0, 0.9, 0)
+	# The LOCAL player: a bright, glowing GREEN capsule — deliberately unmistakable
+	# against the warm-orange remote capsules (see _spawn_remote) so the owner can
+	# instantly tell which one is theirs (the #303 "which capsule am I?" confusion).
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.3, 0.55, 0.85)
+	mat.albedo_color = Color(0.20, 0.90, 0.35)
+	mat.emission_enabled = true
+	mat.emission = Color(0.10, 0.55, 0.20)
 	(_body as MeshInstance3D).material_override = mat
 	var nose := MeshInstance3D.new()
 	var nm := BoxMesh.new()
@@ -468,9 +566,15 @@ func _build_player_and_camera() -> void:
 	nose.mesh = nm
 	nose.position = Vector3(0, 0.2, -0.5)
 	_body.add_child(nose)
+	# A big floating "YOU" tag (green, to match the capsule), distinct from the
+	# remote "guid …" labels. Keeps the character name when one is known.
+	var who := String(_character.get("name", ""))
 	var name_label := Label3D.new()
-	name_label.text = String(_character.get("name", "You"))
-	name_label.position = Vector3(0, 1.4, 0)
+	name_label.text = "YOU" if who.is_empty() else "YOU — %s" % who
+	name_label.modulate = Color(0.25, 1.0, 0.45)
+	name_label.font_size = 48
+	name_label.outline_size = 12
+	name_label.position = Vector3(0, 1.6, 0)
 	name_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	name_label.no_depth_test = true
 	_body.add_child(name_label)
