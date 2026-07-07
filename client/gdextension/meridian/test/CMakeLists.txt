@@ -13,6 +13,9 @@ enable_testing()
 
 set(SRC "${CMAKE_CURRENT_SOURCE_DIR}/../src")
 
+# The SPSC ring + net-thread core tests use std::thread.
+find_package(Threads REQUIRED)
+
 add_executable(movement-controller-test
   movement_controller_test.cpp
   "${SRC}/movement_controller.cpp"
@@ -220,4 +223,49 @@ if(OpenSSL_FOUND AND DEFINED MERIDIAN_FLATC)
 else()
   message(STATUS
     "login-core-test SKIPPED: needs OpenSSL + flatc (OpenSSL_FOUND=${OpenSSL_FOUND}).")
+endif()
+
+# --- Lock-free SPSC ring core (#97) ---
+# The header-only single-producer/single-consumer ring (spsc_ring.h) — the ONE
+# cross-thread channel between the net thread and the Godot main thread. Engine-free
+# and net-core-free: it links nothing but the threading runtime, so it always builds
+# in the plain MERIDIAN_CLIENT_TESTS suite. The test asserts FIFO/full/empty,
+# wrap-around, and CONCURRENT producer/consumer correctness (no lost/duplicated msgs).
+add_executable(spsc-ring-test spsc_ring_test.cpp)
+target_include_directories(spsc-ring-test PRIVATE "${SRC}")
+target_link_libraries(spsc-ring-test PRIVATE Threads::Threads)
+set_target_properties(spsc-ring-test PROPERTIES
+  CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+if(MSVC)
+  target_compile_options(spsc-ring-test PRIVATE /W4)
+else()
+  target_compile_options(spsc-ring-test PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME spsc-ring COMMAND spsc-ring-test)
+
+# --- Net-thread core integration (#97) ---
+# Drives net::NetThreadCore against a MOCK clientnet::ITransport over the dedicated
+# thread (login->world->move, priority send order, connect-failure lifecycle). Needs
+# the #95 net core (meridian-clientnet) for the framing/wire_frame/codec/AEAD stack,
+# so it builds ONLY when that target exists (configure with BOTH -DMERIDIAN_CLIENT_TESTS=ON
+# and -DMERIDIAN_CLIENT_NET=ON). Without the net core it is skipped (the SPSC test above
+# still covers the lock-free primitive in a plain tests-only build).
+if(TARGET meridian-clientnet)
+  add_executable(net-thread-core-test
+    net_thread_core_test.cpp
+    "${SRC}/net_thread_core.cpp"
+  )
+  target_include_directories(net-thread-core-test PRIVATE "${SRC}")
+  target_link_libraries(net-thread-core-test PRIVATE meridian-clientnet Threads::Threads)
+  set_target_properties(net-thread-core-test PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+  if(MSVC)
+    target_compile_options(net-thread-core-test PRIVATE /W4)
+  else()
+    target_compile_options(net-thread-core-test PRIVATE -Wall -Wextra)
+  endif()
+  add_test(NAME net-thread-core COMMAND net-thread-core-test)
+else()
+  message(STATUS
+    "net-thread-core-test SKIPPED: needs meridian-clientnet (-DMERIDIAN_CLIENT_NET=ON).")
 endif()

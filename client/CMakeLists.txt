@@ -43,11 +43,14 @@ option(MERIDIAN_CLIENT_NET "Build the engine-agnostic client net core + its test
 
 if(MERIDIAN_CLIENT_TESTS OR MERIDIAN_BOT OR MERIDIAN_CLIENT_NET)
 	enable_testing()
-	if(MERIDIAN_CLIENT_TESTS)
-		add_subdirectory(gdextension/meridian/test)
-	endif()
+	# Add the net core FIRST so its `meridian-clientnet` target exists when the client
+	# test subdir configures — the #97 net-thread-core test links it when present
+	# (built with both -DMERIDIAN_CLIENT_TESTS=ON and -DMERIDIAN_CLIENT_NET=ON).
 	if(MERIDIAN_CLIENT_NET)
 		add_subdirectory(net)
+	endif()
+	if(MERIDIAN_CLIENT_TESTS)
+		add_subdirectory(gdextension/meridian/test)
 	endif()
 	if(MERIDIAN_BOT)
 		add_subdirectory(bot)
@@ -78,6 +81,18 @@ file(GLOB_RECURSE MERIDIAN_SOURCES CONFIGURE_DEPENDS
 target_sources(${TARGET_NAME} PRIVATE ${MERIDIAN_SOURCES})
 
 target_link_libraries(${TARGET_NAME} PRIVATE godot-cpp)
+
+# --- Engine-agnostic client NET CORE, linked into the GDExtension (#97) ---
+# The dedicated net-thread module (net_thread_core.* / meridian_net_thread.*) binds
+# the #95 net core (meridian-clientnet — framing, the IF-2 wire_frame codec, the
+# FlatBuffers codec, the AEAD WorldSession) so the extension speaks the SAME wire
+# stack as the bot/servers. The net-core subdir is normally gated behind
+# -DMERIDIAN_CLIENT_NET (tests/bot builds); the extension build force-enables it and
+# links the library so the net thread has its net stack. meridian-clientnet exposes
+# its include dir PUBLIC, so the net-thread sources resolve <meridian/clientnet/*>.
+set(MERIDIAN_CLIENT_NET ON)
+add_subdirectory(net)
+target_link_libraries(${TARGET_NAME} PRIVATE meridian-clientnet)
 
 # --- IF-1/IF-2 login core deps (#99) ---
 # The login core (login_core.* / srp_client_core.* / login_transport.*) — the

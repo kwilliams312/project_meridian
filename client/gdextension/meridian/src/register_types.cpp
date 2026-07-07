@@ -7,6 +7,9 @@
 // handshake — the client half of IT-M0 auth, over TLS 1.3 + SRP-6a.
 // #104 adds the REMOTE-entity interpolation + clock-sync estimator
 // (MeridianRemoteInterpolator): smooth rendering of OTHER players' movement.
+// #97 adds the dedicated NET THREAD (MeridianNetThread): owns the IF-2 world
+// session on its own std::thread, hands decoded messages to the main thread over a
+// lock-free SPSC ring drained at the pre-sim sync point, with a priority send queue.
 // Later issues add the remaining net / stream / datastore classes (Client SAD §2).
 
 #include "register_types.h"
@@ -20,6 +23,7 @@
 #include "meridian_client.h"
 #include "meridian_login.h"
 #include "meridian_movement_controller.h"
+#include "meridian_net_thread.h"
 #include "meridian_pack_mount.h"
 #include "meridian_remote_interpolator.h"
 #include "meridian_telemetry.h"
@@ -37,6 +41,7 @@ void initialize_meridian_module(ModuleInitializationLevel p_level) {
 	GDREGISTER_CLASS(meridian::MeridianPackMount);
 	GDREGISTER_CLASS(meridian::MeridianLogin);
 	GDREGISTER_CLASS(meridian::MeridianRemoteInterpolator);
+	GDREGISTER_CLASS(meridian::MeridianNetThread);
 }
 
 void uninitialize_meridian_module(ModuleInitializationLevel p_level) {
