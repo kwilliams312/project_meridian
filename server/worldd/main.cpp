@@ -141,6 +141,31 @@ int main(int argc, char** argv) {
         cfg.port = static_cast<std::uint16_t>(std::atoi(p));
     }
 
+    // Auth DB connection for IF-3 grant validation (#84). worldd consumes
+    // session_grant rows to admit players (worldd is client-facing until the M2
+    // gateway split — SAD §2.2/§5.3). Read the same MERIDIAN_DB_* vars authd/db
+    // use. When unset (no user), grant validation is disabled — the daemon still
+    // serves (dispatcher, clock-sync) but a WorldHello is rejected GRANT_INVALID.
+    // The characters DB (MERIDIAN_CHARDB_*) is optional: absent -> enter-world
+    // uses the D-11 placeholder stub.
+    if (const char* s = env("MERIDIAN_DB_SOCKET")) cfg.world.auth_db.unix_socket = s;
+    if (const char* h = env("MERIDIAN_DB_HOST")) cfg.world.auth_db.host = h;
+    if (const char* p = env("MERIDIAN_DB_PORT")) cfg.world.auth_db.port = static_cast<unsigned>(std::atoi(p));
+    if (const char* u = env("MERIDIAN_DB_USER")) cfg.world.auth_db.user = u;
+    if (const char* pw = env("MERIDIAN_DB_PASS")) cfg.world.auth_db.password = pw;
+    if (const char* n = env("MERIDIAN_DB_NAME")) cfg.world.auth_db.database = n;
+
+    if (const char* s = env("MERIDIAN_CHARDB_SOCKET")) cfg.world.char_db.unix_socket = s;
+    if (const char* h = env("MERIDIAN_CHARDB_HOST")) cfg.world.char_db.host = h;
+    if (const char* p = env("MERIDIAN_CHARDB_PORT")) cfg.world.char_db.port = static_cast<unsigned>(std::atoi(p));
+    if (const char* u = env("MERIDIAN_CHARDB_USER")) cfg.world.char_db.user = u;
+    if (const char* pw = env("MERIDIAN_CHARDB_PASS")) cfg.world.char_db.password = pw;
+    if (const char* n = env("MERIDIAN_CHARDB_NAME")) cfg.world.char_db.database = n;
+
+    if (const char* r = env("MERIDIAN_WORLDD_REALM_ID")) {
+        cfg.world.realm_id = static_cast<std::uint32_t>(std::atoi(r));
+    }
+
     if (cfg.cert_path.empty() || cfg.key_path.empty()) {
         std::fprintf(stderr,
                      "%s: --cert and --key are required to serve (try --help)\n",

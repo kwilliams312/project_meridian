@@ -277,8 +277,9 @@ int main() {
         world.start();
 
         dispatcher.on(mn::Opcode::WORLD_HELLO,
-                      [&](net::Session& sess, const mw::Frame& f) {
+                      [&](net::Session& sess, const mw::Frame& f, mw::ConnCtx& ctx) {
                           (void)sess;
+                          (void)ctx;
                           const auto* h = fb::GetRoot<mn::WorldHello>(f.payload);
                           if (h) seen_hello_grant.store(h->grant_id());
                           hello_calls.fetch_add(1);
