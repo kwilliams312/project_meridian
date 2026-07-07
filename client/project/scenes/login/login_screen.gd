@@ -26,6 +26,11 @@
 
 extends Control
 
+# The char-select scene the login hands off to on success (boot flow:
+# Boot/Login → CharSelect → World, issue #110). Instantiated + configured with the
+# logged-in account before it replaces this scene.
+const CHAR_SELECT_SCENE: String = "res://scenes/charselect/char_select.tscn"
+
 @onready var _host: LineEdit = %HostEdit
 @onready var _port: LineEdit = %PortEdit
 @onready var _account: LineEdit = %AccountEdit
@@ -75,6 +80,25 @@ func _on_login_succeeded(result: Dictionary) -> void:
 	var world_hello := _flow.build_world_hello_frame()
 	print("[login] grant_id=%d session_key=%d bytes world_hello=%d bytes → IF-2 kickoff"
 		% [_flow.grant_id(), _flow.session_key().size(), world_hello.size()])
+
+	# Advance the boot flow: Login → CharSelect (issue #110). The char-select screen
+	# lists this account's characters and, on Enter World, hands off to the world map.
+	_go_to_char_select(_account.text.strip_edges())
+
+
+# Replace this scene with the character-select screen, seeding it with the logged-in
+# account. Configured BEFORE it enters the tree so its _ready() shows the right account.
+func _go_to_char_select(account: String) -> void:
+	var packed: PackedScene = load(CHAR_SELECT_SCENE)
+	if packed == null:
+		_set_status("Could not load character select.")
+		return
+	var char_select := packed.instantiate()
+	char_select.configure(account)
+	var tree := get_tree()
+	tree.root.add_child(char_select)
+	tree.current_scene = char_select
+	queue_free()
 
 
 func _on_login_failed(status: int, detail: String) -> void:
