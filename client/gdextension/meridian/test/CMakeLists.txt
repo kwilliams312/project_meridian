@@ -34,6 +34,29 @@ endif()
 
 add_test(NAME movement-controller COMMAND movement-controller-test)
 
+# --- Schema/protocol VERSION COMPAT core (#98) ---
+# The engine-free version-compare rule (version_compat.*): pure logic, ZERO deps (no
+# godot-cpp, no OpenSSL, no flatc), so it always builds in a plain ctest. Proves the
+# exact-match proto rule (out-of-date on any diff), the advisory content-hash arm
+# (warn at M0 / reject under a hard-fail policy), and safe malformed/absent handling.
+add_executable(version-compat-test
+  version_compat_test.cpp
+  "${SRC}/version_compat.cpp"
+)
+target_include_directories(version-compat-test PRIVATE "${SRC}")
+set_target_properties(version-compat-test PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+if(MSVC)
+  target_compile_options(version-compat-test PRIVATE /W4)
+else()
+  target_compile_options(version-compat-test PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME version-compat COMMAND version-compat-test)
+
 # --- Prediction reconciliation SMOOTHING core (#103) ---
 # The engine-free error-offset decay + snap layer on top of the #102 ring-buffer
 # rewind/re-simulate: a small server correction is absorbed as a render offset that
@@ -264,6 +287,7 @@ if(OpenSSL_FOUND AND DEFINED MERIDIAN_FLATC)
     "${SRC}/login_core.cpp"
     "${SRC}/srp_client_core.cpp"
     "${SRC}/login_transport.cpp"      # compiled for coverage (not run: no live socket)
+    "${SRC}/version_compat.cpp"       # #98 schema-version compat (login_core dep)
     "${MERIDIAN_SRP_SRC}/src/srp.cpp" # server-side ServerSession for the mock
   )
   add_dependencies(login-core-test login-core-codegen)
@@ -304,6 +328,7 @@ if(OpenSSL_FOUND AND DEFINED MERIDIAN_FLATC)
     "${SRC}/login_core.cpp"
     "${SRC}/srp_client_core.cpp"
     "${SRC}/login_transport.cpp"
+    "${SRC}/version_compat.cpp"  # #98 schema-version compat (login_core dep)
   )
   add_dependencies(authd-login-it login-core-codegen)
   target_include_directories(authd-login-it PRIVATE

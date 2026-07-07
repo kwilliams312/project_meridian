@@ -74,6 +74,7 @@ add_library(meridian-bot-core STATIC
   "${MERIDIAN_CLIENT_SRC}/srp_client_core.cpp"
   "${MERIDIAN_CLIENT_SRC}/login_transport.cpp"
   "${MERIDIAN_CLIENT_SRC}/movement_controller.cpp"
+  "${MERIDIAN_CLIENT_SRC}/version_compat.cpp"  # #98 schema-version compat (login_core dep)
 )
 add_dependencies(meridian-bot-core meridian-bot-codegen)
 target_include_directories(meridian-bot-core PUBLIC
@@ -136,6 +137,7 @@ add_executable(bot-world-session-test
   "${MERIDIAN_CLIENT_SRC}/srp_client_core.cpp"
   "${MERIDIAN_CLIENT_SRC}/login_transport.cpp"
   "${MERIDIAN_CLIENT_SRC}/movement_controller.cpp"
+  "${MERIDIAN_CLIENT_SRC}/version_compat.cpp"  # #98 schema-version compat (login_core dep)
 )
 add_dependencies(bot-world-session-test meridian-bot-codegen)
 target_include_directories(bot-world-session-test PRIVATE

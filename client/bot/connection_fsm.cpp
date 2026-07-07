@@ -21,6 +21,7 @@ const char* to_string(ConnState s) {
         case ConnState::kInWorld:        return "InWorld";
         case ConnState::kReconnecting:   return "Reconnecting";
         case ConnState::kFailed:         return "Failed";
+        case ConnState::kOutOfDate:      return "OutOfDate";
     }
     return "?";
 }
@@ -36,6 +37,7 @@ const char* to_string(ConnEvent e) {
         case ConnEvent::kReconnectFailed:  return "ReconnectFailed";
         case ConnEvent::kGaveUp:           return "GaveUp";
         case ConnEvent::kFatal:            return "Fatal";
+        case ConnEvent::kVersionMismatch:  return "VersionMismatch";
         case ConnEvent::kReset:            return "Reset";
     }
     return "?";
@@ -91,6 +93,19 @@ bool ConnectionFsm::dispatch(ConnEvent ev, std::uint64_t elapsed_reconnect_ms) {
     if (ev == ConnEvent::kFatal) {
         if (state_ == ConnState::kFailed || state_ == ConnState::kDisconnected) return false;
         state_ = ConnState::kFailed;
+        next_backoff_ms_ = 0;
+        return true;
+    }
+
+    // A version mismatch discovered at connect (#98) drops the session to the DISTINCT
+    // terminal kOutOfDate — mirrors kFatal (terminal from any live/handshaking/
+    // reconnecting state) but is user-actionable "client out of date", not a network
+    // error. Ignored if already terminal or cleanly Disconnected (nothing to fail).
+    if (ev == ConnEvent::kVersionMismatch) {
+        if (state_ == ConnState::kFailed || state_ == ConnState::kOutOfDate ||
+            state_ == ConnState::kDisconnected)
+            return false;
+        state_ = ConnState::kOutOfDate;
         next_backoff_ms_ = 0;
         return true;
     }
@@ -194,6 +209,11 @@ bool ConnectionFsm::dispatch(ConnEvent ev, std::uint64_t elapsed_reconnect_ms) {
 
         case ConnState::kFailed:
             // Terminal. Only Reset (handled above) leaves it.
+            return false;
+
+        case ConnState::kOutOfDate:
+            // Terminal (#98). Only Reset (handled above) leaves it — a fresh session
+            // after the user updates the client.
             return false;
     }
     return false;

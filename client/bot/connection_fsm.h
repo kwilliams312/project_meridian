@@ -69,6 +69,10 @@ enum class ConnState : std::uint8_t {
     kInWorld,            // HandshakeOk received — the live in-world session
     kReconnecting,       // a transient drop; retrying (backoff) within the window
     kFailed,             // gave up (window expired / attempts exhausted / fatal)
+    kOutOfDate,          // schema/protocol version mismatch — "client out of date"
+                         // (issue #98). A DISTINCT terminal state from kFailed: it is
+                         // user-actionable (update the client), NOT a network error, so
+                         // the UX prompts an update rather than a retry/"try again".
 };
 
 const char* to_string(ConnState s);
@@ -87,6 +91,9 @@ enum class ConnEvent : std::uint8_t {
     kReconnectFailed,    // that attempt failed (→ schedule next backoff, or give up)
     kGaveUp,             // window expired / attempts exhausted (→ Failed) — explicit
     kFatal,              // an unrecoverable error (bad credentials, protocol) (→ Failed)
+    kVersionMismatch,    // schema/protocol version check failed at connect (issue #98):
+                         // the client is out of date (→ OutOfDate, a DISTINCT terminal
+                         // from Failed — an update is required, not a reconnect)
     kReset,              // return to Disconnected (clean teardown / new session)
 };
 
@@ -154,7 +161,17 @@ public:
     // the coordinator distinguish "dropped from InWorld" (resume) from "never got
     // in" (a login failure is not a reconnect case).
     bool ever_in_world() const { return ever_in_world_; }
-    bool is_terminal() const { return state_ == ConnState::kFailed; }
+    // Terminal = no further transition without a Reset. BOTH kFailed (gave up / fatal)
+    // and kOutOfDate (client out of date, #98) are terminal — the caller tears the
+    // session down — but they mean different things to the UX (retry-exhausted vs
+    // update-required), so is_out_of_date() distinguishes them.
+    bool is_terminal() const {
+        return state_ == ConnState::kFailed || state_ == ConnState::kOutOfDate;
+    }
+    // True iff the session ended because the client's schema/protocol version was
+    // rejected (#98). The UX shows "client out of date — please update", NOT a network
+    // error — this is how a version mismatch is kept distinct from kFailed.
+    bool is_out_of_date() const { return state_ == ConnState::kOutOfDate; }
     bool in_world() const { return state_ == ConnState::kInWorld; }
 
     // Apply `ev`. `elapsed_reconnect_ms` is the time spent reconnecting since the
