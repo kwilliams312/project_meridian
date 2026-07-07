@@ -6,7 +6,7 @@
 # without SCons; both build the same sources into client/project/bin/.
 #
 # godot-cpp is vendored as a submodule at client/godot-cpp, pinned to the
-# 4.6-stable sync commit (client/ENGINE_VERSION: GODOT_CPP_COMMIT). Run
+# 4.7-stable sync commit (client/ENGINE_VERSION: GODOT_CPP_COMMIT). Run
 # `git submodule update --init --recursive` first, then e.g.:
 #   scons platform=windows target=template_debug
 #   scons platform=macos arch=arm64 target=template_debug

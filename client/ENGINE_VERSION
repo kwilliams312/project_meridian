@@ -10,24 +10,24 @@
 # client/README.md ("Pinned toolchain"). Keep the two in sync when bumping.
 
 # --- Godot engine (editor + export templates) ---
-GODOT_VERSION=4.6-stable
-GODOT_ENGINE_COMMIT=89cea143987d564363e15d207438530651d943ac
+GODOT_VERSION=4.7-stable
+GODOT_ENGINE_COMMIT=5b4e0cb0fd279832bbdd69fed5354d4e5ad26f88
 # Renderer backends per TD-02 / D-28: Forward+ on D3D12 (Windows x64) and native
 # Metal (macOS Apple Silicon). Vulkan/MoltenVK kept buildable as a diagnostic
 # fallback only — never the shipped default.
 GODOT_PLATFORMS=windows-x86_64,macos-arm64
 
 # --- godot-cpp GDExtension bindings (vendored submodule at client/godot-cpp) ---
-# Pinned to the master commit that synced godot-cpp to 4.6-stable
-# ("Sync with upstream commit 89cea14...(4.6-stable)"). There is no
-# `godot-4.6-stable` godot-cpp tag or `4.6` branch upstream yet; master has
-# already advanced to the 4.7 extension_api. This commit is the exact, verified
-# 4.6 match (extension_api.json => "Godot Engine v4.6.stable.official").
-GODOT_CPP_COMMIT=58d1de720b8ffe9f8ffcdfe3a85148582cfd2e74
+# Pinned to the master commit that synced godot-cpp to 4.7-stable
+# ("Sync with upstream commit 5b4e0cb...(4.7-stable)"). There is no
+# `godot-4.7-stable` godot-cpp tag or `4.7` branch upstream yet; this is the
+# exact master sync commit for 4.7, the direct analog of the prior 4.6 pin.
+# Verified 4.7 match (extension_api.json => "Godot Engine v4.7.stable.official").
+GODOT_CPP_COMMIT=5ffd70e34d0ab87009a9f0ffa3361bc8f4b09731
 
 # --- Pinned download SHA-512 sums (from the release SHA512-SUMS.txt) ---
 # Do NOT commit these multi-GB binaries. `scripts/fetch-deps.sh` downloads and
 # verifies them against these sums into client/.godot-bin/ (gitignored).
-SHA512_WIN64_EDITOR=3b2f0b4b3c490cb1a78db8fd2afc924412edab996b436c08e38957388976e9dfaf203cb50a8916036bc810f68da3dd6b9f16561e6549062ef225b4a97877081b
-SHA512_MACOS_EDITOR=589ac663552253e93dc34d741bbc280f9e23e050f5cd79ec6bb8586d55114fbb71539d0e630d0af6c0f7fb4352e562a5b0666b3c7cb5d4bef9f7514fdce130ef
-SHA512_EXPORT_TEMPLATES=88bb7c3a98e9a1e43c98796c99ac8a4ac8a82a15d8c9b049fe478e8e6a43522067559400f799949c1a43ecb1702a8eb02aa7bed506babccf177f0cb509088d19
+SHA512_WIN64_EDITOR=41645a908eb3181d6f2d1201ed7b6d6f095f6a23aaed8903d5d255277cc8d142814f3e6817f865b3cac142c39b8aff99280091d3bbdaa301517730b3ba0522b9
+SHA512_MACOS_EDITOR=0d5d635e6d78d4c2b1286586ca62af249609c2f70815b35437049f08476714d08b913faaf8c10f37313c932ee24c4f87a829899c84fa248f788fb612b8f79229
+SHA512_EXPORT_TEMPLATES=1035dfde4edcc2472bb0c0b9610ce3ee9302642c2b9957e9066372f9f6bb759ab250c8887551a66f0bc5f51bbd9a58bb45e33a0f29844e97615a9b1138c1120e

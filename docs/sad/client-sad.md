@@ -1,7 +1,7 @@
 # Client Software Architecture Document — Project Meridian
 
-**Track:** Client (Godot 4.6+ game client — Windows x64 + macOS Apple Silicon)
-**Version:** 0.3 — 2026-07-04 (v0.3: macOS per D-28/Baseline v0.5 — per-platform rendering backend, arm64 GDExtension builds, notarized distribution + dSYM pipeline, §9.6 platform decision row. v0.2: A-13 sharded-realm pass per D-23/Baseline v0.4 — IF-2 `0x8xxx` shard-message handling in `sim`, WLD-04 UX architecture §5.6, bot-fleet numbers updated. v0.1: initial draft)
+**Track:** Client (Godot 4.7+ game client — Windows x64 + macOS Apple Silicon)
+**Version:** 0.4 — 2026-07-07 (v0.4: engine pin bumped 4.6 → 4.7-stable (#262, owner decision) — the M0 GDExtension toolchain now builds + loads against Godot 4.7-stable / godot-cpp `5ffd70e` (4.7-stable sync); §9.7 engine-pin row added; no API breaks in the client cores. v0.3: macOS per D-28/Baseline v0.5 — per-platform rendering backend, arm64 GDExtension builds, notarized distribution + dSYM pipeline, §9.6 platform decision row. v0.2: A-13 sharded-realm pass per D-23/Baseline v0.4 — IF-2 `0x8xxx` shard-message handling in `sim`, WLD-04 UX architecture §5.6, bot-fleet numbers updated. v0.1: initial draft)
 **Status:** Draft for cross-track review
 **Zooms into:** the Client container of the [System Architecture Overview](../02-ARCHITECTURE-OVERVIEW.md) §1.
 **Reads with:** [Client PRD v0.4](../prd/client-prd.md), [Sync Decisions v1.5](../01-SYNC-DECISIONS.md) (D-01..D-28), [Content Schema v1](../../schema/content/README.md).
@@ -10,7 +10,7 @@
 
 ## 1. Purpose & scope
 
-This SAD specifies the internal architecture of the Meridian game client: a Godot 4.6+ Forward+ application — D3D12 on Windows, native Metal on macOS Apple Silicon (TD-02, D-28) — whose hot path — networking, prediction, entity mirroring, zone streaming, content lookup — lives in C++ GDExtension modules (built per platform: win-x64, macos-arm64), and whose UI/flow layer lives in GDScript behind an MVVM boundary (PRD §1.1). The client is a *predictor and presenter*: server is law (Principle 1); the client predicts only its own movement (CHR-02) and the GCD/cast start (D-10), and reconciles on correction.
+This SAD specifies the internal architecture of the Meridian game client: a Godot 4.7+ Forward+ application — D3D12 on Windows, native Metal on macOS Apple Silicon (TD-02, D-28) — whose hot path — networking, prediction, entity mirroring, zone streaming, content lookup — lives in C++ GDExtension modules (built per platform: win-x64, macos-arm64), and whose UI/flow layer lives in GDScript behind an MVVM boundary (PRD §1.1). The client is a *predictor and presenter*: server is law (Principle 1); the client predicts only its own movement (CHR-02) and the GCD/cast start (D-10), and reconciles on correction.
 
 In scope: all client-process components, the headless bot client (same binary, `--headless`), and the client side of every interface below. Out of scope: server internals (server SAD), the chunk *export* pipeline and pack *production* (tools SAD — the client only consumes), sound design and adaptive-music resources (music SAD — the client provides mount points only).
 
@@ -416,6 +416,34 @@ Forward+/D3D12 with buildable Vulkan diagnostic fallback (TD-02); FSR2 over vend
 | Upscaler on Mac | MetalFX temporal default, FSR2 neutral fallback | FSR2 only | MetalFX is the platform-tuned path on Apple GPUs (Godot 4.4+); FSR2 stays as the cross-platform constant for A/B and CI parity |
 | Binary shape | Per-platform GDExtension builds (win-x64 + macos-arm64 in one `.gdextension` manifest); engine-agnostic C++ cores unchanged | Universal2 (x86_64+arm64) Mac binaries | No Intel Macs in scope — universal binaries double artifact size for a platform we don't ship |
 | Content packs | One `.pck` set for both platforms | Per-platform packs | Apple Silicon Metal supports BC-class textures, so the compressed texture set is shared; keeps IF-5, `mcc` determinism, and the content-hash tie single-track (D-28 rule 4) |
+
+### 9.7 Engine pin — Godot `4.7-stable` (bumped from 4.6, #262)
+
+Per R4, the engine is **pinned per milestone** and godot-cpp is **vendored** at the
+commit whose `extension_api.json` matches the engine exactly. The M0 pin is now
+**Godot `4.7-stable`** (engine commit `5b4e0cb`), with godot-cpp vendored at commit
+**`5ffd70e`** — the `master` "Sync with upstream commit `5b4e0cb…` (4.7-stable)" commit
+whose `extension_api.json` reads `Godot Engine v4.7.stable.official`. The machine-readable
+pin (versions + download SHA-512s) is `client/ENGINE_VERSION`; the human table is
+`client/README.md`.
+
+| | Was | Now |
+|---|---|---|
+| Godot engine | `4.6-stable` (`89cea14`) | `4.7-stable` (`5b4e0cb`) |
+| godot-cpp submodule | `58d1de7` (4.6-stable sync) | `5ffd70e` (4.7-stable sync) |
+| `compatibility_minimum` | `4.6` | `4.7` |
+
+**Rationale (owner decision, D-* recorded in Sync Decisions §12):** 4.7 matches the local
+developer install and godot-cpp's mainline `extension_api`; there is **no 4.6 release
+branch or `godot-4.6-stable` tag** upstream (the prior pin was a bare `master` commit),
+whereas the 4.7-stable sync commit is the exact, verifiable ref. The bump is a **minor**
+engine step: rebuilding all M0 GDExtension modules (`meridian_client`, movement, telemetry,
+pack-mount, login, remote-interpolation, `register_types`) against 4.7 godot-cpp required
+**no source changes** — the cores are engine-agnostic and the thin godot-cpp adapters saw
+no API breaks. Proven by a headless load against the local `4.7.stable.official.5b4e0cb0f`
+editor: the extension loads and all registered classes are available. **Why a commit and
+not a tag:** identical to the 4.6 situation (§ prior) — no `4.7` branch/tag exists in
+godot-cpp yet, so the `master` sync commit is the only exact 4.7 ref.
 
 ---
 

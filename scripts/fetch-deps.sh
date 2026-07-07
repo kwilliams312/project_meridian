@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Project Meridian — fetch & verify the pinned Godot engine binaries (issue #158).
 #
-# Downloads the pinned Godot 4.6-stable editor + export templates for the host
+# Downloads the pinned Godot 4.7-stable editor + export templates for the host
 # platform into client/.godot-bin/ (gitignored) and verifies each against the
 # SHA-512 sums pinned in client/ENGINE_VERSION. Multi-GB binaries are NEVER
 # committed — this script is how a dev/CI obtains them reproducibly.

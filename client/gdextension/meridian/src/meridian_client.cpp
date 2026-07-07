@@ -10,7 +10,7 @@ using namespace godot;
 namespace meridian {
 
 // Bootstrap version string. Bumped alongside the client/ENGINE_VERSION pin.
-static const char *MERIDIAN_CLIENT_VERSION = "meridian-client 0.0.1 (godot 4.6-stable)";
+static const char *MERIDIAN_CLIENT_VERSION = "meridian-client 0.0.1 (godot 4.7-stable)";
 
 MeridianClient::MeridianClient() {}
 

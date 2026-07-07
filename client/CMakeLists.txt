@@ -9,7 +9,7 @@
 #   cmake --build build -j
 #
 # godot-cpp is vendored as a submodule at client/godot-cpp, pinned to the
-# 4.6-stable sync commit (client/ENGINE_VERSION: GODOT_CPP_COMMIT). Run
+# 4.7-stable sync commit (client/ENGINE_VERSION: GODOT_CPP_COMMIT). Run
 # `git submodule update --init --recursive` first.
 
 cmake_minimum_required(VERSION 3.22)
@@ -133,12 +133,19 @@ set_target_properties(
 		PDB_OUTPUT_DIRECTORY "$<1:${OUTPUT_DIR}>"
 )
 
-# macOS: Godot loads a .framework bundle (arm64 only per SAD §9.6).
+# macOS: Godot loads a .framework bundle (arm64 only per SAD §9.6). Godot's
+# macOS loader dlopen()s the `.framework` directory declared in
+# project/meridian.gdextension and resolves the inner binary by the framework's
+# own stem (`<name>.framework/<name>`). So the binary inside must be named
+# `libmeridian.macos.<target>` — WITHOUT the arch suffix that GODOTCPP_SUFFIX
+# carries — otherwise dlopen fails with "not a file" and the extension never
+# loads. (Matches the SCons build's framework layout.)
 if(CMAKE_SYSTEM_NAME STREQUAL Darwin)
 	set_target_properties(
 		${TARGET_NAME}
 		PROPERTIES
 			SUFFIX ""
+			OUTPUT_NAME "meridian.macos.${GODOTCPP_TARGET}"
 			LIBRARY_OUTPUT_DIRECTORY
 				"${OUTPUT_DIR}/libmeridian.macos.${GODOTCPP_TARGET}.framework"
 	)
