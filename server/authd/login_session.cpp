@@ -28,6 +28,9 @@
 
 #include "auth_generated.h"
 #include "meridian/metrics/catalog.h"
+#include "meridian/trace/session_flow.h"
+#include "meridian/trace/span.h"
+#include "meridian/trace/tracer.h"
 
 namespace meridian::authd {
 namespace {
@@ -77,6 +80,74 @@ private:
     std::string realm_;
     const LoginResult& result_;
     std::chrono::steady_clock::time_point start_;
+};
+
+// RAII: on construction stamp the span start (UNIX-ns); on destruction build the
+// "authd.login" session-flow span from the final LoginResult and hand it to the
+// exporter. This is the AUTH → GRANT leg of the session-flow trace (D-29 §9 rule
+// 5; docs/telemetry-architecture.md §5.3). Like LoginMetricsScope it reads the
+// result BY REFERENCE, so it captures whatever outcome run_login ends on at any
+// early return — no per-return span calls. No-op when no exporter is configured.
+class LoginTraceScope {
+public:
+    LoginTraceScope(meridian::trace::Exporter* exporter, const std::string& realm,
+                    LoginResult& result)
+        : exporter_(exporter), realm_(realm), result_(result),
+          start_ns_(meridian::trace::now_unix_nano()) {}
+
+    ~LoginTraceScope() {
+        namespace tr = meridian::trace;
+        if (exporter_ == nullptr || !exporter_->active()) return;
+
+        tr::Span span;
+        // On a GRANTED login, derive the span ids from the grant_id so the worldd
+        // enter-world hop stitches into the SAME trace without a wire change (D-29
+        // §9 rule 5). The authd span IS the parent worldd points at, so we stamp it
+        // with the derived parent span_id. On a non-granted outcome there is no
+        // grant to stitch on -> a fresh, self-contained root trace.
+        if (result_.outcome == LoginOutcome::kGranted && result_.grant_id != 0) {
+            tr::SpanContext ctx = tr::flow::trace_context_from_grant(result_.grant_id);
+            span.trace_id = ctx.trace_id;
+            span.span_id = ctx.span_id;  // == the parent worldd derives + points at
+        } else {
+            tr::fill_random(span.trace_id);
+            tr::fill_random(span.span_id);
+        }
+        // parent_span_id stays all-zero: at M0 the authd login span is the root of
+        // the session-flow trace (no upstream service before authd).
+        span.name = tr::flow::kAuthdLogin;
+        span.kind = tr::SpanKind::kServer;
+        span.start_unix_nano = start_ns_;
+        span.end_unix_nano = tr::now_unix_nano();
+
+        span.set(tr::attr(tr::flow::kAttrRealm, realm_));
+        span.set(tr::attr(tr::flow::kAttrOutcome, std::string(outcome_label(result_.outcome))));
+        span.set(tr::attr(tr::flow::kAttrGrantIssued, result_.grant_id != 0));
+        if (result_.account_id != 0) {
+            span.set(tr::attr("meridian.account_id",
+                              static_cast<std::int64_t>(result_.account_id)));
+        }
+        // Status: a granted login is Ok; any rejection/protocol/transport outcome
+        // is Error (the failure point the trace makes visible), with the detail as
+        // the status message.
+        if (result_.outcome == LoginOutcome::kGranted) {
+            span.set_status(tr::StatusCode::kOk);
+        } else {
+            span.set_status(tr::StatusCode::kError, result_.detail);
+        }
+
+        // Publish the span's ids for the caller's log↔trace correlation (#165).
+        result_.trace_id = tr::to_hex(span.trace_id);
+        result_.span_id = tr::to_hex(span.span_id);
+
+        exporter_->export_span(std::move(span));
+    }
+
+private:
+    meridian::trace::Exporter* exporter_;
+    std::string realm_;
+    LoginResult& result_;
+    std::uint64_t start_ns_;
 };
 
 using net::Bytes;
@@ -256,6 +327,11 @@ LoginResult run_login(net::Session& sess, db::Connection& db,
     // flow ends on) record the outcome + server-side SRP handshake duration
     // (meridian_auth_{attempts,results}_total + meridian_auth_srp_duration_seconds).
     LoginMetricsScope metrics_scope(cfg.realm_label, result);
+
+    // OPS-05 traces (#166): on scope exit, emit the "authd.login" session-flow span
+    // (SRP verify → grant issue) to the OTLP exporter, if one is configured. No-op
+    // otherwise — the login flow itself is untouched (graceful degradation).
+    LoginTraceScope trace_scope(cfg.tracer_exporter, cfg.realm_label, result);
 
     // ---- 1. ClientHello -> ServerHello | Error ------------------------------
     Bytes frame;

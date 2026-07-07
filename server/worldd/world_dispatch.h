@@ -44,6 +44,7 @@
 
 #include "meridian/db/connection.h"
 #include "meridian/net/tls_listener.h"
+#include "meridian/trace/exporter.h"
 
 #include <memory>
 
@@ -139,6 +140,14 @@ struct ConnCtx {
     db::Connection* db = nullptr;        // auth DB (session_grant) — may be null in tests
     db::Connection* char_db = nullptr;   // characters DB — nullable (placeholder fallback)
     std::uint32_t realm_id = 0;          // realm this worldd serves (0 = accept any)
+
+    // OPS-05 session-flow traces (#166). When set, the WORLD_HELLO handler emits a
+    // "worldd.enter_world" span (grant validate → session establish → HandshakeOk)
+    // parented onto the authd login span via the grant-derived trace context
+    // (trace::flow::trace_context_from_grant) — the two hops stitch into ONE
+    // session-flow trace (D-29 §9 rule 5). NULL => no tracing (graceful
+    // degradation; the handshake is unaffected). Borrowed; set by serve_connection.
+    meridian::trace::Exporter* tracer = nullptr;
 
     // OPS-05 map-scoped metric labels (#164). Stamped by serve_connection from the
     // WorldServerConfig; every handler's metric call uses this so the emitted
@@ -290,6 +299,12 @@ struct WorldServerConfig {
     // so every worldd metric carries the {realm,zone,shard,map} the dashboards
     // query. main() fills `labels.realm` from --realm / MERIDIAN_REALM.
     MetricsLabels labels;
+
+    // OPS-05 session-flow trace exporter (#166). Borrowed pointer (main() owns the
+    // Exporter for the process lifetime); copied onto each ConnCtx by
+    // serve_connection so the WORLD_HELLO handler can emit the enter-world span.
+    // NULL => tracing off. Never dereferenced without an active() check.
+    meridian::trace::Exporter* tracer = nullptr;
 };
 
 class WorldServer {

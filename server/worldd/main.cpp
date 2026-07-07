@@ -39,6 +39,7 @@
 #include "meridian/metrics/catalog.h"
 #include "meridian/metrics/exposer.h"
 #include "meridian/net/tls_listener.h"
+#include "meridian/trace/exporter.h"
 
 #include "world_boot.h"
 #include "world_dispatch.h"
@@ -90,6 +91,13 @@ struct WorlddConfig {
     std::uint16_t metrics_port = 9464;
     std::string metrics_bind = "127.0.0.1";
 
+    // OPS-05 session-flow traces (#166; docs/telemetry-architecture.md §5.3). The
+    // OTLP/HTTP endpoint the "worldd.enter_world" spans are POSTed to (the OTel
+    // collector, server/ops — OTLP/HTTP on :4318). Empty => tracing OFF (graceful
+    // degradation; the handshake is unaffected). Sample-all at M0 (D-29 §9 rule 7).
+    std::string otlp_endpoint;
+    double trace_sample_ratio = 1.0;
+
     // OPS-05 structured logging (#165). json (Loki JSON on stdout, prod default)
     // or text (readable stderr, dev). Env MERIDIAN_LOG_FORMAT / _LEVEL apply
     // first, then these flags override. Empty = leave env/default.
@@ -113,6 +121,9 @@ void print_help() {
         "  --io-workers N     Size of the map/IO worker pool (default: auto).\n"
         "  --metrics-port N   Prometheus /metrics port (default 9464; 0=off).\n"
         "  --metrics-bind ADDR  /metrics bind address (default 127.0.0.1).\n"
+        "  --otlp-endpoint URL  OTLP/HTTP endpoint for session-flow trace spans\n"
+        "                     (e.g. http://otel-collector:4318). Empty = tracing off.\n"
+        "  --trace-sample-ratio R  head-sample ratio 0..1 for traces (default 1.0).\n"
         "  --realm NAME       realm label for metrics + logs (default 'reference').\n"
         "  --log-format FMT   log output: json (prod, Loki JSON on stdout) or\n"
         "                     text (dev, readable on stderr). Default json.\n"
@@ -178,6 +189,12 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--metrics-bind") == 0) {
             cfg.metrics_bind = next("--metrics-bind"); continue;
         }
+        if (std::strcmp(argv[i], "--otlp-endpoint") == 0) {
+            cfg.otlp_endpoint = next("--otlp-endpoint"); continue;
+        }
+        if (std::strcmp(argv[i], "--trace-sample-ratio") == 0) {
+            cfg.trace_sample_ratio = std::atof(next("--trace-sample-ratio")); continue;
+        }
         if (std::strcmp(argv[i], "--realm") == 0) {
             cfg.world.labels.realm = next("--realm"); continue;
         }
@@ -208,6 +225,10 @@ int main(int argc, char** argv) {
     }
     if (const char* b = env("MERIDIAN_METRICS_BIND")) cfg.metrics_bind = b;
     if (const char* r = env("MERIDIAN_REALM")) cfg.world.labels.realm = r;
+    // OPS-05 trace endpoint env fallback (flag overrides). Same var authd uses.
+    if (const char* e = env("MERIDIAN_OTLP_ENDPOINT")) {
+        if (cfg.otlp_endpoint.empty()) cfg.otlp_endpoint = e;
+    }
 
     // Realm label -> the log `realm` field (unifies metric + log grouping);
     // then the log-format/level flags override any env/default.
@@ -331,6 +352,30 @@ int main(int argc, char** argv) {
             exposer.reset();
         }
     }
+
+    // --- OPS-05 session-flow trace exporter (#166) -----------------------------
+    // Start the async OTLP/HTTP span exporter before serving. A no-op when
+    // --otlp-endpoint is empty (tracing off, handshake unaffected — graceful
+    // degradation, D-29 §9 rule 6). Wired onto WorldServerConfig so every
+    // connection's WORLD_HELLO handler can emit the "worldd.enter_world" span
+    // (stitched to authd's login span via the grant). Owned here for the process
+    // lifetime; serve_connection copies the pointer onto each ConnCtx.
+    meridian::trace::ExporterConfig tec;
+    tec.endpoint = cfg.otlp_endpoint;
+    tec.service_name = kDaemonName;
+    tec.realm = cfg.world.labels.realm;
+    meridian::trace::Exporter trace_exporter(tec);
+    trace_exporter.start();
+    if (trace_exporter.active()) {
+        cfg.world.tracer = &trace_exporter;
+        meridian::core::log::info(
+            kDaemonName, "session-flow traces -> OTLP " +
+                             meridian::trace::traces_url_for(cfg.otlp_endpoint));
+    } else {
+        meridian::core::log::info(kDaemonName,
+                                  "session-flow traces disabled (no --otlp-endpoint)");
+    }
+    (void)cfg.trace_sample_ratio;  // M0: sample-all; ratio wired for M1 volume
 
     meridian::net::ListenConfig lc;
     lc.cert_path = cfg.cert_path;

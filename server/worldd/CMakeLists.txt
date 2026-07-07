@@ -38,6 +38,7 @@ target_link_libraries(world-dispatch
     meridian::proto
     meridian::db
     meridian::metrics  # OPS-05 session/opcode/movement/tick/disconnect metrics (#164)
+    meridian::trace    # OPS-05 session-flow trace: the worldd.enter_world span (#166)
     Threads::Threads
 )
 target_compile_features(world-dispatch PUBLIC cxx_std_20)

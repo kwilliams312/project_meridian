@@ -55,6 +55,12 @@ add_subdirectory(libs/core)
 # dependency-free (BSD sockets + the exposition-format spec). authd + worldd link
 # it to expose the SAD §8.5 metric set the server/ops dashboards query.
 add_subdirectory(libs/metrics)
+# trace: OPS-05 session-flow tracing (#166) — clean-room span model + a hand-
+# rolled OTLP/HTTP-JSON exporter (D-29 §9 rule 5; docs/telemetry-architecture.md
+# §5.3). The TRACES leg of the OPS-05 triple beside metrics (#164) + logs (#165).
+# Dependency-light (BSD sockets + the OTLP-JSON wire shape; no OTel SDK/protobuf).
+# authd + worldd link it to emit the session-flow trace (login -> enter-world).
+add_subdirectory(libs/trace)
 add_subdirectory(libs/proto)
 # srp: SRP-6a authentication (#78) — clean-room from RFC 5054; needs OpenSSL.
 add_subdirectory(libs/srp)

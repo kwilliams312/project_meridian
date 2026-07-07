@@ -27,6 +27,7 @@
 #include "meridian/db/connection.h"
 #include "meridian/net/tls_listener.h"
 #include "meridian/srp/srp.h"
+#include "meridian/trace/exporter.h"
 
 namespace meridian::authd {
 
@@ -57,6 +58,15 @@ struct LoginConfig {
     // realm-agnostic (it serves the realm LIST), so this is the operator's realm
     // name for grouping; defaults to "reference" (matching the ops stack labels).
     std::string realm_label = "reference";
+
+    // OPS-05 session-flow trace exporter (#166; docs/telemetry-architecture.md
+    // §5.3). When set, run_login emits an "authd.login" span (SRP verify → grant
+    // issue) with outcome/realm attributes to this exporter; on a granted login the
+    // span's ids are DERIVED from the grant_id (trace::flow::trace_context_from_
+    // grant) so the worldd enter-world span stitches into the same trace (D-29 §9
+    // rule 5). NULL => no tracing (graceful degradation — the login is unaffected).
+    // Borrowed, not owned; must outlive the run_login call (main() owns it).
+    meridian::trace::Exporter* tracer_exporter = nullptr;
 };
 
 // Outcome of one login attempt — for the caller's logging / metrics and for the
@@ -77,6 +87,15 @@ struct LoginResult {
     std::uint64_t grant_id = 0;   // set iff kGranted
     std::uint64_t account_id = 0; // resolved account (0 if never resolved)
     std::string detail;           // human-readable note for logs
+
+    // OPS-05 log↔trace correlation (#166 + #165). When a trace exporter is
+    // configured, run_login stamps these with the lower-hex ids of the emitted
+    // "authd.login" span so the caller can put them in the structured log's
+    // `trace_id`/`span_id` fields — one grep pivots from a Loki log line to the
+    // matching span in the trace backend (docs/telemetry-architecture.md §5.2/§5.3).
+    // Empty when tracing is off.
+    std::string trace_id;   // 32 lower-hex chars, or empty
+    std::string span_id;    // 16 lower-hex chars, or empty
 };
 
 // Drive the full IF-1 login flow for one client over `sess`, using `db` for the
