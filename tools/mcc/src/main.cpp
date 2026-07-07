@@ -20,6 +20,7 @@
 
 #include "stages/check.h"
 #include "stages/format.h"
+#include "stages/index.h"
 #include "stages/stages.h"
 
 #ifndef MCC_VERSION
@@ -199,6 +200,86 @@ int cmd_link(const std::vector<std::string>& args) {
     if (!parse_check_flags("link", check_args, content_dir, format)) return 2;
     return mcc::stages::link_content(content_dir, format, allocate_ids, report,
                                      std::cout, std::cerr);
+}
+
+// Shared flag parse for the index-family commands (index/pickable/refs): an
+// optional positional content directory plus `--json`. `pos_wanted` is the count
+// of NON-dir positional arguments the command requires (the id/type argument):
+// pickable/refs want 1, index wants 0. Fills `positional` (in order) and
+// `content_dir` (the LAST positional beyond `pos_wanted`, or the default).
+// Returns false on an unknown flag or wrong positional count (message on stderr).
+bool parse_index_flags(std::string_view prog_sub, const std::vector<std::string>& args,
+                       std::size_t pos_wanted, std::vector<std::string>& positional,
+                       std::string& content_dir, bool& as_json) {
+    content_dir = std::string(kDefaultContentDir);
+    as_json = false;
+    positional.clear();
+    std::vector<std::string> pos;  // all non-flag args in order
+    for (const auto& a : args) {
+        if (a == "--json") {
+            as_json = true;
+        } else if (a == "--diag-format=json") {
+            // Accept the check/build spelling too: index JSON is on stdout.
+            as_json = true;
+        } else if (!a.empty() && a[0] == '-') {
+            std::cerr << kProg << " " << prog_sub << ": unknown flag '" << a << "'\n";
+            return false;
+        } else {
+            pos.push_back(a);
+        }
+    }
+    // The required argument(s) come first; an OPTIONAL trailing positional is the
+    // content dir. So valid arities are pos_wanted or pos_wanted+1.
+    if (pos.size() < pos_wanted) {
+        std::cerr << kProg << " " << prog_sub << ": missing required argument\n";
+        return false;
+    }
+    if (pos.size() > pos_wanted + 1) {
+        std::cerr << kProg << " " << prog_sub << ": unexpected extra argument '"
+                  << pos[pos_wanted + 1] << "'\n";
+        return false;
+    }
+    for (std::size_t i = 0; i < pos_wanted; ++i) positional.push_back(pos[i]);
+    if (pos.size() == pos_wanted + 1) content_dir = pos[pos_wanted];
+    return true;
+}
+
+// mcc index [dir] [--json]
+//   Surface the link stage's ID index (Tools SAD §2.3/§6): all content+asset ids
+//   grouped by type, each with its IF-9 numeric id + source file. `--json` emits
+//   the stable editor-consumable contract (meridian/id-index@1) on stdout.
+int cmd_index(const std::vector<std::string>& args) {
+    std::vector<std::string> pos;
+    std::string content_dir;
+    bool as_json = false;
+    if (!parse_index_flags("index", args, 0, pos, content_dir, as_json)) return 2;
+    return mcc::stages::index_content(content_dir, as_json, std::cout, std::cerr);
+}
+
+// mcc pickable <ref-type> [dir] [--json]
+//   Typed reference picker (Tools SAD §2.3/§6, TLS-03): for a ref field of type
+//   <ref-type> (npc|item|quest|ability|loot|vendor|zone or art|mus|sfx|amb; the
+//   schema `*Ref` $defs, "itemRef" or "item" both accepted), list the VALID
+//   target ids — the candidates a picker would show. `--json` emits
+//   meridian/pickable@1 on stdout.
+int cmd_pickable(const std::vector<std::string>& args) {
+    std::vector<std::string> pos;
+    std::string content_dir;
+    bool as_json = false;
+    if (!parse_index_flags("pickable", args, 1, pos, content_dir, as_json)) return 2;
+    return mcc::stages::pickable_content(content_dir, pos[0], as_json, std::cout, std::cerr);
+}
+
+// mcc refs <id> [dir] [--json]
+//   Backlinks / find-usages (Tools SAD §2.3/§6): for a content/asset id, list who
+//   references it (the reverse graph #119 built), each with the referencing field
+//   path. Empty for an unreferenced id. `--json` emits meridian/backlinks@1.
+int cmd_refs(const std::vector<std::string>& args) {
+    std::vector<std::string> pos;
+    std::string content_dir;
+    bool as_json = false;
+    if (!parse_index_flags("refs", args, 1, pos, content_dir, as_json)) return 2;
+    return mcc::stages::refs_content(content_dir, pos[0], as_json, std::cout, std::cerr);
 }
 
 // mcc emit-sql [dir] [--out <file>] [--built-at "<ts>"] [--diag-format=...]
@@ -416,6 +497,9 @@ const Command kCommands[] = {
     {"build",     "check then compile /content -> IF-4 SQL + IF-5 .pck (--full, --watch)", cmd_build},
     {"check",     "validate /content (or --file <p>): structural lints (L001-L011)", cmd_check},
     {"link",      "resolve refs + backlinks + allocate IF-9 ids (--report, --no-allocate-ids)", cmd_link},
+    {"index",     "list the ID index: all ids by type + IF-9 numeric id (--json)",              cmd_index},
+    {"pickable",  "typed ref picker: valid target ids for a ref type (pickable <type> --json)", cmd_pickable},
+    {"refs",      "find-usages / backlinks for an id (refs <id> --json)",                        cmd_refs},
     {"emit-sql",  "emit IF-4 world DB SQL + world_manifest (--out <file>, --built-at)",         cmd_emit_sql},
     {"emit-pck",  "emit IF-5 client pack + pack.manifest.json (--out <dir>, --built-at)",       cmd_emit_pck},
     {"fmt",       "canonically format /content YAML; --check for CI/pre-commit",       cmd_fmt},
@@ -470,6 +554,19 @@ void print_help() {
            "  --no-allocate-ids    read-only: never write idmap.lock; fail on L015\n"
            "                       drift (the CI contract). Default allocates +\n"
            "                       writes idmap.lock (editor-invoked builds).\n\n"
+           "INDEX / PICKER / BACKLINK OPTIONS (SAD §2.3/§6, TLS-03):\n"
+           "  index [dir] [--json]      the ID index — all content+asset ids grouped\n"
+           "                            by type, each with its IF-9 numeric id + file\n"
+           "                            (\"list all items\", id->numeric resolution).\n"
+           "  pickable <type> [dir]     typed reference picker — the VALID target ids\n"
+           "         [--json]           for a ref field of the given type (npc|item|\n"
+           "                            quest|ability|loot|vendor|zone|art|mus|sfx|amb;\n"
+           "                            \"itemRef\" or \"item\" both accepted).\n"
+           "  refs <id> [dir] [--json]  find-usages / backlinks — who references <id>\n"
+           "                            (the reverse graph), with each field path.\n"
+           "                            All three run link read-only (no idmap write)\n"
+           "                            and emit stable JSON with --json (deterministic,\n"
+           "                            editor-consumable).\n\n"
            "EMIT-SQL OPTIONS (IF-4, SAD §2.6):\n"
            "  [dir]                content root to emit (default: ./content)\n"
            "  --out <file>         write the world DB SQL to <file> (default: stdout).\n"
@@ -492,7 +589,8 @@ void print_help() {
            "                       At M0 the pack payload is a documented directory\n"
            "                       manifest; the Godot-native .pck binary is a follow-up.\n\n"
            "NOTE: discover/parse, the structural lints (L001-L011), the link stage\n"
-           "(reference graph + backlinks + IF-9 idmap), emit-sql (IF-4 world DB SQL +\n"
+           "(reference graph + backlinks + IF-9 idmap), the ID index / typed pickers /\n"
+           "backlinks surface (index/pickable/refs), emit-sql (IF-4 world DB SQL +\n"
            "world_manifest), and emit-pck (IF-5 pack.manifest.json + M0 pack) are\n"
            "implemented; JSON Schema validation, semantic lints, bake, and the\n"
            "Godot-native .pck binary land in later M0 tasks (they report as stubs).\n";

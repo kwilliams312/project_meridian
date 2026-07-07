@@ -62,6 +62,7 @@ add_library(mcc_stages STATIC
     src/stages/format.cpp
     src/stages/idmap.cpp
     src/stages/link.cpp
+    src/stages/index.cpp
     src/stages/content_hash.cpp
     src/stages/emit_sql.cpp
     src/stages/emit_pck.cpp
@@ -141,6 +142,22 @@ else()
 endif()
 
 add_test(NAME mcc-link-unit COMMAND mcc-link-tests)
+
+# ID index + typed reference pickers + backlinks tests (SAD §2.3/§6, #127):
+# id-by-type grouping + id->numeric/type/file resolution, typed pickers returning
+# only valid-type candidates (schema `*Ref` grounding), find-usages backlinks
+# (with field path; empty for orphans, unresolved for unknown ids), and stable +
+# parseable JSON contracts (id-index/pickable/backlinks).
+add_executable(mcc-index-tests
+    tests/test_index.cpp)
+target_link_libraries(mcc-index-tests PRIVATE mcc_stages)
+if(MSVC)
+    target_compile_options(mcc-index-tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(mcc-index-tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_test(NAME mcc-index-unit COMMAND mcc-index-tests)
 
 # emit-sql stage + vendored BLAKE3 tests (SAD §2.6, IF-4): BLAKE3 correctness vs
 # published vectors, well-formed world DB SQL + a world_manifest row (64-hex
