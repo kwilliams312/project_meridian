@@ -37,22 +37,35 @@ the `libmeridian-core` audit stream). Signals that are declared in the catalog b
 not yet instrumented at M0 are **NOT** charted on `realm-overview`/`worldd`/`audit`
 (they would read "No data"); they are tracked as gaps below.
 
-### Known instrumentation gaps (M0)
+### Instrumentation gaps — closed in #297
 
-These catalog names exist but have **no live series** yet, so no panel on the three
-new dashboards queries them. The older `realm-health`/`player-experience`/`errors`
-dashboards keep forward-looking panels on some of them (they render "No data" until
-the signal lands, as their panel descriptions note).
+The dashboards + alerts no longer route around declared-but-unemitted metrics.
+Every panel query and alert expression now references a metric that is **actually
+emitted** by an M0 daemon — the rest were removed from the catalog + dashboards or
+marked as clearly-labelled future name reservations that no panel/alert queries.
 
-| Signal | Status | Where it would land |
-|--------|--------|---------------------|
-| `meridian_action_rtt_seconds` | declared, not emitted | worldd action apply loop (M1) |
-| `meridian_reconnects_total` | declared, not emitted | session reconnect path (M1) |
-| `meridian_db_queue_depth` | declared, not emitted | DB write-queue seam |
-| `meridian_grids_active` / `meridian_instances_active` / `meridian_saves_batched_total` | declared, not emitted | worldd grid/instance/persistence (M1) |
-| `meridian_client_crash_total` | declared, not emitted | client crash sink (Sentry-compatible, **not this stack** — privacy §4) |
-| `meridian_client_log_ingest_total` | emitted by **telemetryd**, but `telemetryd:9464` is **not** in the collector scrape config | add the scrape target in `otel-collector/config.yml` to light up the `errors` client-ingest panels |
-| worldd **IO-worker** count / utilization | not a metric at all | `meridian_io_workers` + `_busy` gauges (#278). Until then, `worldd.json` uses **CCU per shard** as the saturation proxy — at M0 `max CCU/worldd ≈ io_workers` (set `--io-workers ≥ expected CCU`). |
+**Now emitted (with tests):**
+
+| Signal | Resolution |
+|--------|------------|
+| `meridian_rss_bytes` | **Emitted live** by `RssSampler` (authd + worldd) — portable macOS+Linux RSS read, sampled every 10 s. Was a startup `0` placeholder; now the RSS panels + `ProcessMemoryGrowth` alert have data. |
+| `meridian_io_workers` / `meridian_io_workers_busy` | **Emitted** from worldd's IO-worker pool (pool size + in-flight). worldd dashboard charts real `busy/pool` utilization; `IOWorkerSaturation` alert replaces the old CCU stand-in proxy (#278). |
+| `meridian_client_log_ingest_total` | telemetryd emits it; **`telemetryd:9464` is now a scrape target** in `otel-collector/config.yml`, so the `errors` client-ingest panel lights up. |
+
+**Removed at M0** (no emit path; would be permanent "No data" / never-firing rules — re-add with the feature):
+
+| Signal | Why removed |
+|--------|-------------|
+| `meridian_action_rtt_seconds` | No client→apply→client action loop until M1. |
+| `meridian_reconnects_total` | Reconnect is client-side (#96); no server-side resume path to count. |
+| `meridian_db_queue_depth` | M0 DB layer is synchronous — no write queue to measure (async pool is M1). |
+
+**Future name reservations** (kept in the catalog, queried by no dashboard/alert):
+
+| Signal | Blocked on |
+|--------|-----------|
+| `meridian_grids_active` / `meridian_instances_active` / `meridian_saves_batched_total` | worldd grid/instance/persistence work (M1). |
+| `meridian_client_crash_total` | client crash handler (crashpad, #109); crash **sink** is Sentry-compatible, **not this stack** (privacy §4). |
 
 ## Run it
 

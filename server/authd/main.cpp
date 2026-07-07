@@ -28,6 +28,7 @@
 #include "meridian/db/connection.h"
 #include "meridian/metrics/catalog.h"
 #include "meridian/metrics/exposer.h"
+#include "meridian/metrics/rss_sampler.h"
 #include "meridian/net/tls_listener.h"
 #include "meridian/trace/exporter.h"
 
@@ -373,9 +374,13 @@ int main(int argc, char** argv) {
     // Start the plain-HTTP /metrics exposer BEFORE accepting logins so the OTel
     // collector can scrape from the first request. A bind failure (e.g. port in
     // use) is logged and the daemon continues WITHOUT metrics — the endpoint is an
-    // OPS-01 extension the daemon degrades gracefully around (D-29 §9 rule 6). Seed
-    // the process RSS gauge label so the series exists even before a sampler runs.
+    // OPS-01 extension the daemon degrades gracefully around (D-29 §9 rule 6). A
+    // periodic RssSampler (#297) stamps meridian_rss_bytes{realm,process=authd}
+    // so the process-memory / RSS-growth alerts + dashboard panels have live data
+    // (previously the gauge only held a startup 0). Owned for the process lifetime
+    // alongside the exposer.
     std::optional<meridian::metrics::Exposer> exposer;
+    std::optional<meridian::metrics::RssSampler> rss_sampler;
     if (cfg.metrics_port != 0) {
         meridian::metrics::ExposerConfig ec;
         ec.port = cfg.metrics_port;
@@ -383,7 +388,9 @@ int main(int argc, char** argv) {
         try {
             exposer.emplace(ec, meridian::metrics::default_registry());
             exposer->start();
-            meridian::metrics::catalog::rss_bytes().with({cfg.realm_label, kDaemonName}).set(0.0);
+            rss_sampler.emplace(
+                meridian::metrics::catalog::rss_bytes().with({cfg.realm_label, kDaemonName}));
+            rss_sampler->start();
             meridian::core::log::info(
                 kDaemonName, "metrics /metrics on http://" + cfg.metrics_bind + ":" +
                                  std::to_string(exposer->port()));
@@ -391,6 +398,7 @@ int main(int argc, char** argv) {
             meridian::core::log::warn(
                 kDaemonName, std::string("metrics endpoint disabled: ") + e.what());
             exposer.reset();
+            rss_sampler.reset();
         }
     }
 

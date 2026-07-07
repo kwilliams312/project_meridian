@@ -42,6 +42,11 @@ receivers:
             - targets:
                 - "authd:9464"
                 - "worldd:9464"
+                # telemetryd exposes the client-ingest counters
+                # (meridian_client_log_ingest_total) on its own /metrics port
+                # (#297) — without this target the Errors dashboard's client-ingest
+                # panel stays empty even though telemetryd emits the series.
+                - "telemetryd:9464"
               labels:
                 realm: reference
           # M2+: add gatewayd:9464, servicesd:9464, coordd:9464 targets here.
