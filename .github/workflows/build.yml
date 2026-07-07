@@ -273,10 +273,10 @@ jobs:
           mariadb -h 127.0.0.1 -P 3306 -u root -pci -e "CREATE DATABASE IF NOT EXISTS meridian_world"
           ( echo "SET FOREIGN_KEY_CHECKS=0;"; cat schema/sql/world/*.sql ) \
             | mariadb -h 127.0.0.1 -P 3306 -u root -pci meridian_world
-      - name: Build worldd-session-test + worldd-grant-test + worldd-relay-test + worldd-boot-db-test
+      - name: Build worldd-session-test + worldd-grant-test + worldd-relay-test + worldd-boot-db-test + worldd-char-mgmt-test
         run: |
           cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
-          cmake --build server/build --target worldd worldd-session-test worldd-grant-test worldd-relay-test worldd-boot-db-test
+          cmake --build server/build --target worldd worldd-session-test worldd-grant-test worldd-relay-test worldd-boot-db-test worldd-char-mgmt-test
       - name: Run worldd IF-3 session establishment test (MariaDB service)
         env:
           MERIDIAN_DB_HOST: 127.0.0.1
@@ -329,3 +329,21 @@ jobs:
           MERIDIAN_WORLDDB_PASS: ci
           MERIDIAN_WORLDDB_NAME: meridian_world
         run: ./server/build/worldd/worldd-boot-db-test
+      # worldd character management over the session (#286 / D-35): CHAR_LIST/
+      # CREATE/DELETE over a REAL authenticated world session, backed by the
+      # meridian-characters CRUD. Seeds + consumes a session_grant via the real
+      # WORLD_HELLO handler (auth schema above) and CREATE-TABLE-IF-NOT-EXISTS the
+      # `character` table in the SAME DB it points char_db at (the table stands
+      # alone, no FK — §4.4). Proves the #286 acceptance list end-to-end: pre-auth
+      # rejection, list-empty -> create -> list-shows-it, duplicate/invalid-race/
+      # invalid-class rejection, ownership-scoped delete (another account's
+      # character is REFUSED, the row survives), own-delete succeeds. Inert (SKIP)
+      # in the plain `server` ctest (no MERIDIAN_DB_* env).
+      - name: Run worldd character-management test (MariaDB service)
+        env:
+          MERIDIAN_DB_HOST: 127.0.0.1
+          MERIDIAN_DB_PORT: 3306
+          MERIDIAN_DB_USER: root
+          MERIDIAN_DB_PASS: ci
+          MERIDIAN_DB_NAME: meridian_auth
+        run: ./server/build/worldd/worldd-char-mgmt-test
