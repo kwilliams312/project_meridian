@@ -105,6 +105,44 @@ constexpr float server_speed(MoveMode mode) {
 }
 
 // ===========================================================================
+// 2b. state_flags WIRE BIT LAYOUT — CANONICAL, shared client (#102) + server (#86)
+// ===========================================================================
+// The SERVER's copy of the canonical MovementIntent/MovementState.state_flags
+// layout (schema/net/world.fbs, uint32). This MUST match the client's copy in
+// client/gdextension/meridian/src/movement_constants.h §2b byte-for-byte — same
+// documented-sync-point + static_assert discipline as the numeric constants above
+// (#247 canonical encoding). CANONICAL layout:
+//
+//   bits 0..2  (mask kStateFlagsModeMask = 0x7) : MoveMode (Idle=0/Walk=1/Run=2/
+//                                       Jump=3). mode_from_flags() reads THIS field.
+//   bit  3  fwd | bit 4 back | bit 5 strafeL | bit 6 strafeR : direction
+//   bit  7  jump | bit 8 walk-toggle : the remaining M0 movement flags
+//   bits 9..31 : reserved (0) — swim/sit/… at M1.
+//
+// The low 3 bits are the mode selector — exactly the `state_flags & 0x7` read
+// mode_from_flags() performs. Before #247 the client put DIRECTION bits in the low
+// 3 (so a forward run decoded to Walk), and the bot #111 stamped the mode in at the
+// wire boundary to compensate; the client now encodes THIS canonical layout so the
+// server decodes the right mode directly.
+inline constexpr std::uint32_t kStateFlagsModeMask = 0x7u;   // low 3 bits = MoveMode
+
+// Extract the MoveMode the low 3 bits encode — the shared canonical decode the
+// validator's mode_from_flags() delegates to (must match the client header §2b
+// mode_from_state_flags byte-for-byte). Unknown values (only 4..7 fit in 3 bits;
+// 4=Swim is M1-reserved) fall back to Run — the SAFEST default (largest M0
+// ground-speed budget, so an unrecognised value never spuriously rejects a legal
+// move; the cap only tightens for Walk/Idle).
+constexpr MoveMode mode_from_state_flags(std::uint32_t state_flags) {
+    switch (state_flags & kStateFlagsModeMask) {
+        case static_cast<std::uint32_t>(MoveMode::Idle): return MoveMode::Idle;
+        case static_cast<std::uint32_t>(MoveMode::Walk): return MoveMode::Walk;
+        case static_cast<std::uint32_t>(MoveMode::Run):  return MoveMode::Run;
+        case static_cast<std::uint32_t>(MoveMode::Jump): return MoveMode::Jump;
+        default:                                         return MoveMode::Run;
+    }
+}
+
+// ===========================================================================
 // 4. Acceleration — [SPIKE-LOCKED]
 // ===========================================================================
 // #101 locks INSTANT acceleration (0 == step to target speed). Keeps the §5.5
@@ -197,6 +235,16 @@ static_assert(server_speed(MoveMode::Run) == kRunSpeed,    "server_speed(Run) mu
 static_assert(server_speed(MoveMode::Walk) == kWalkSpeed,  "server_speed(Walk) must return kWalkSpeed");
 static_assert(server_speed(MoveMode::Jump) == kRunSpeed,   "server_speed(Jump) must cap at run speed");
 static_assert(server_speed(MoveMode::Idle) == 0.0f,        "server_speed(Idle) must be 0");
+
+// #247 canonical state_flags layout: the low 3 bits ARE the MoveMode selector, and
+// the mode mask must be exactly 0x7. If the client shifts the mode field or widens
+// the mask without a matching two-file PR, the round-trip fixture (test) flips —
+// this pins the mode-bit contract at compile time (mirrors the client header §2b).
+static_assert(kStateFlagsModeMask == 0x7u,                 "state_flags mode mask drift vs #247 (must be low 3 bits)");
+static_assert(static_cast<std::uint32_t>(MoveMode::Idle) == 0u, "MoveMode::Idle must occupy state_flags value 0");
+static_assert(static_cast<std::uint32_t>(MoveMode::Walk) == 1u, "MoveMode::Walk must occupy state_flags value 1");
+static_assert(static_cast<std::uint32_t>(MoveMode::Run)  == 2u, "MoveMode::Run must occupy state_flags value 2");
+static_assert(static_cast<std::uint32_t>(MoveMode::Jump) == 3u, "MoveMode::Jump must occupy state_flags value 3");
 
 }  // namespace meridian::worldd::movement
 

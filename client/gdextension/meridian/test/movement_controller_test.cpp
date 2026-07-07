@@ -231,6 +231,70 @@ int main() {
 		check("forward not walk bit", (f & mv::flags::kWalk) == 0);
 	}
 
+	// =======================================================================
+	// 4. CANONICAL state_flags ENCODING (#247) — cross-track round-trip.
+	// =======================================================================
+	// The client encodes the active MoveMode into the LOW 3 BITS (the field the
+	// server #86 reads with `state_flags & 0x7`), with direction/jump/walk flags
+	// ABOVE them. This test asserts:
+	//   (a) the low 3 bits equal the MoveMode value the client passed;
+	//   (b) mode_from_state_flags (the shared decode the server's mode_from_flags
+	//       delegates to) recovers that SAME mode from the client's encoding — the
+	//       encode→decode round-trip both build trees must agree on (movement-
+	//       spike.md §4 discipline, mirrored on the server track);
+	//   (c) the direction/jump/walk flags survive ABOVE the mode field intact.
+	std::printf("[4] canonical state_flags encoding: cross-track round-trip\n");
+	{
+		struct Combo { mv::MoveMode mode; float mx; float mz; bool jump; bool walk; };
+		const Combo combos[] = {
+		    {mv::MoveMode::Idle, 0.0f, 0.0f, false, false},
+		    {mv::MoveMode::Run,  0.0f, 1.0f, false, false},   // forward run
+		    {mv::MoveMode::Run,  0.0f, -1.0f, false, false},  // backpedal
+		    {mv::MoveMode::Walk, 1.0f, 0.0f, false, true},    // strafe-right walk
+		    {mv::MoveMode::Run,  -1.0f, 1.0f, false, false},  // fwd + strafe-left
+		    {mv::MoveMode::Jump, 0.0f, 1.0f, true, false},    // forward jump
+		};
+		int rt_ok = 0;
+		const int n = static_cast<int>(sizeof(combos) / sizeof(combos[0]));
+		for (const Combo& c : combos) {
+			mv::MovementInput in;
+			in.move_x = c.mx;
+			in.move_z = c.mz;
+			in.jump   = c.jump;
+			in.walk   = c.walk;
+			const uint32_t enc = mv::encode_state_flags(in, c.mode);
+
+			// (a) low 3 bits == the mode value.
+			const bool low3_is_mode =
+			    (enc & mv::kStateFlagsModeMask) == static_cast<uint32_t>(c.mode);
+			// (b) shared decode recovers the same mode.
+			const bool decodes_back = mv::mode_from_state_flags(enc) == c.mode;
+			// (c) direction/jump/walk flags land ABOVE the mode bits, intact.
+			bool dirs_ok = true;
+			if (c.mz > 0.0f) dirs_ok = dirs_ok && (enc & mv::flags::kForward);
+			if (c.mz < 0.0f) dirs_ok = dirs_ok && (enc & mv::flags::kBack);
+			if (c.mx > 0.0f) dirs_ok = dirs_ok && (enc & mv::flags::kStrafeR);
+			if (c.mx < 0.0f) dirs_ok = dirs_ok && (enc & mv::flags::kStrafeL);
+			if (c.jump)      dirs_ok = dirs_ok && (enc & mv::flags::kJump);
+			if (c.walk)      dirs_ok = dirs_ok && (enc & mv::flags::kWalk);
+			// The direction flags must NOT bleed into the low 3 mode bits.
+			const bool no_dir_in_mode =
+			    ((mv::flags::kForward | mv::flags::kBack | mv::flags::kStrafeL |
+			      mv::flags::kStrafeR | mv::flags::kJump | mv::flags::kWalk) &
+			     mv::kStateFlagsModeMask) == 0u;
+
+			if (low3_is_mode && decodes_back && dirs_ok && no_dir_in_mode) ++rt_ok;
+		}
+		check("all mode+direction combos round-trip encode->decode", rt_ok == n);
+
+		// Static-ish layout check: the direction bit block and the mode mask are
+		// disjoint (the compile-time contract both build trees encode against).
+		check("direction flags are disjoint from the mode mask",
+		      ((mv::flags::kForward | mv::flags::kBack | mv::flags::kStrafeL |
+		        mv::flags::kStrafeR | mv::flags::kJump | mv::flags::kWalk) &
+		       mv::kStateFlagsModeMask) == 0u);
+	}
+
 	std::printf(g_fail == 0 ? "\nALL MOVEMENT CONTROLLER TESTS PASSED\n"
 	                        : "\n%d MOVEMENT CONTROLLER TEST(S) FAILED\n", g_fail);
 	return g_fail == 0 ? 0 : 1;

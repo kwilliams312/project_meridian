@@ -120,6 +120,49 @@ inline constexpr std::array<GoldenVector, 6> kGoldenVectors = {{
     },
 }};
 
+// ===========================================================================
+// #247 — canonical state_flags encoding mirror (cross-track round-trip proof).
+// ===========================================================================
+// The CLIENT (movement_controller.cpp #102 encode_state_flags) builds state_flags
+// with the active MoveMode in the LOW 3 BITS and direction/jump/walk flags ABOVE
+// them (movement_constants.h §2b). The two build trees cannot share the client's
+// encoder, so this function MIRRORS the client's canonical bit layout exactly —
+// the same "documented sync point + fixture" discipline the numeric constants use.
+// The server movement test feeds a flags value built HERE to mode_from_flags and
+// asserts it decodes to the same mode: proof the server decodes the client's REAL
+// encoding (no wire-boundary workaround). If the client layout drifts, this mirror
+// (and the client's own round-trip test) diverge and a test fails loudly.
+namespace client_flags {
+// Direction/jump/walk bits — MUST match client movement_controller.h `flags::`.
+inline constexpr std::uint32_t kFwd     = 1u << 3;
+inline constexpr std::uint32_t kBack    = 1u << 4;
+inline constexpr std::uint32_t kStrafeL = 1u << 5;
+inline constexpr std::uint32_t kStrafeR = 1u << 6;
+inline constexpr std::uint32_t kJump    = 1u << 7;
+inline constexpr std::uint32_t kWalk    = 1u << 8;
+}  // namespace client_flags
+
+// The direction-flag block MUST be disjoint from the mode mask — the compile-time
+// contract that guarantees a direction flag never bleeds into the mode selector.
+static_assert(((client_flags::kFwd | client_flags::kBack | client_flags::kStrafeL |
+               client_flags::kStrafeR | client_flags::kJump | client_flags::kWalk) &
+              movement::kStateFlagsModeMask) == 0u,
+              "#247: client direction flags must not overlap the state_flags mode mask");
+
+// Mirror of the client's encode_state_flags(in, mode) canonical layout.
+inline std::uint32_t client_encode_state_flags(movement::MoveMode mode, float move_x,
+                                               float move_z, bool jump, bool walk) {
+    std::uint32_t f =
+        static_cast<std::uint32_t>(mode) & movement::kStateFlagsModeMask;  // low 3 = mode
+    if (move_z > 0.0f) f |= client_flags::kFwd;
+    if (move_z < 0.0f) f |= client_flags::kBack;
+    if (move_x > 0.0f) f |= client_flags::kStrafeR;
+    if (move_x < 0.0f) f |= client_flags::kStrafeL;
+    if (jump)          f |= client_flags::kJump;
+    if (walk)          f |= client_flags::kWalk;
+    return f;
+}
+
 }  // namespace meridian::worldd::fixture
 
 #endif  // MERIDIAN_WORLDD_MOVEMENT_FIXTURE_H

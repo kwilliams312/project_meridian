@@ -114,6 +114,54 @@ constexpr float server_speed(MoveMode mode) {
 }
 
 // ===========================================================================
+// 2b. state_flags WIRE BIT LAYOUT — CANONICAL, shared client (#102) + server (#86)
+// ===========================================================================
+// THE ONE authoritative definition of how MovementIntent/MovementState.state_flags
+// (schema/net/world.fbs, a uint32) is packed. Both the CLIENT encoder (#102
+// encode_state_flags) and the SERVER decoder (#86 mode_from_flags) key off THIS
+// layout; a well-behaved client encodes it and the server decodes the SAME bits to
+// the SAME MoveMode, so no wire-boundary fix-up is needed (#247 — the encoding
+// mismatch this replaces; previously the bot #111 stamped the mode at the wire
+// boundary).
+//
+//   ┌──────────────── uint32 state_flags ────────────────┐
+//   │ bits 31..6 reserved (0) │ 5 walk │ 4 jump │ 3 strafeR │ 2 strafeL │ 1 back │ 0 fwd │  ← NO
+//   └─────────────────────────────────────────────────────┘
+// NO — that was the pre-#247 client layout (direction in the low bits) which the
+// server misread as a mode. CANONICAL layout instead:
+//
+//   bits 0..2  (mask kModeMask = 0x7) : MoveMode enum (Idle=0/Walk=1/Run=2/Jump=3).
+//                                       The server reads `state_flags & 0x7` here to
+//                                       pick server_speed(mode). THIS is the field
+//                                       the #247 fix makes both sides agree on.
+//   bit  3     (kFwd)     : forward     (move_z > 0)
+//   bit  4     (kBack)    : backward    (move_z < 0)
+//   bit  5     (kStrafeL) : strafe left (move_x < 0)
+//   bit  6     (kStrafeR) : strafe right(move_x > 0)
+//   bit  7     (kJump)    : jump requested this tick
+//   bit  8     (kWalk)    : walk toggle active (redundant with mode==Walk, kept for
+//                           the richer S→C broadcast layout / future observers)
+//   bits 9..31 : reserved (0) — swim/sit/… land here at M1 (CHR-02).
+//
+// The low 3 bits are the mode selector, matching the server's `& 0x7` read
+// (movement_validation.cpp mode_from_flags) and the MoveMode enum values above.
+inline constexpr std::uint32_t kStateFlagsModeMask = 0x7u;   // low 3 bits = MoveMode
+
+// Extract the MoveMode the low 3 bits encode. Unknown values (only 4..7 are
+// possible in 3 bits, and 4=Swim is M1-reserved) fall back to Run — the SAFEST
+// default: it grants the LARGEST M0 ground-speed budget, so an unrecognised value
+// never spuriously rejects a legal move (the cap only tightens for Walk/Idle).
+constexpr MoveMode mode_from_state_flags(std::uint32_t state_flags) {
+	switch (state_flags & kStateFlagsModeMask) {
+		case static_cast<std::uint32_t>(MoveMode::Idle): return MoveMode::Idle;
+		case static_cast<std::uint32_t>(MoveMode::Walk): return MoveMode::Walk;
+		case static_cast<std::uint32_t>(MoveMode::Run):  return MoveMode::Run;
+		case static_cast<std::uint32_t>(MoveMode::Jump): return MoveMode::Jump;
+		default:                                         return MoveMode::Run;
+	}
+}
+
+// ===========================================================================
 // 4. Acceleration — [SPIKE-LOCKED]
 // ===========================================================================
 // Not authored anywhere. For M0 the spike locks INSTANT acceleration to top
