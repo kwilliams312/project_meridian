@@ -1,0 +1,25 @@
+; Project Meridian — Terrain3D spike (issue #132).
+;
+; SELF-CONTAINED, ISOLATED FROM THE CLIENT BOOT. This is its own Godot project
+; under client/forge/spike/ so vendoring/loading Terrain3D never touches the
+; game client's project (client/project). It exists only to validate the A-09
+; "fork-and-vendor Terrain3D" decision (docs/terrain-eval.md, Sync Decisions §11)
+; against a real integration behind the ITerrainBackend seam (Tools SAD §5.2).
+;
+; Engine pinned to 4.7-stable to match client/ENGINE_VERSION. The Terrain3D
+; GDExtension (addons/terrain_3d/) is built from the vendored fork
+; (terrain3d_src/) against the SAME pinned godot-cpp 4.7 commit — see
+; build_terrain3d.sh and PROVENANCE.md.
+
+config_version=5
+
+[application]
+
+config/name="Meridian Terrain3D Spike (#132)"
+config/features=PackedStringArray("4.7", "Forward Plus")
+run/main_scene="res://spike/spike_scene.tscn"
+
+[rendering]
+
+; Match the client: Forward+ (D3D12 on Windows, native Metal on macOS-arm64), TD-02.
+renderer/rendering_method="forward_plus"

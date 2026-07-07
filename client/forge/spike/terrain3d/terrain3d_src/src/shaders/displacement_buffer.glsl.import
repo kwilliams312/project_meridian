@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://vt6dfdju7v8l"
+path="res://.godot/imported/displacement_buffer.glsl-b11a253fb39b71824c9fb84233945d9f.res"
+
+[deps]
+
+source_file="res://terrain3d_src/src/shaders/displacement_buffer.glsl"
+dest_files=["res://.godot/imported/displacement_buffer.glsl-b11a253fb39b71824c9fb84233945d9f.res"]
+
+[params]
+

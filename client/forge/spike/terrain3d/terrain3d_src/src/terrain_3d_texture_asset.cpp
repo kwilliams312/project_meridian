@@ -1,0 +1,274 @@
+// Copyright © 2023-2026 Cory Petkovsek, Roope Palmroos, and Contributors.
+
+#include <godot_cpp/classes/engine.hpp>
+#include <godot_cpp/classes/image.hpp>
+
+#include "logger.h"
+#include "terrain_3d.h"
+#include "terrain_3d_texture_asset.h"
+
+///////////////////////////
+// Private Functions
+///////////////////////////
+
+// Note a null texture is considered a valid format
+bool Terrain3DTextureAsset::_is_valid_format(const Ref<Texture2D> &p_texture) const {
+	if (p_texture.is_null()) {
+		LOG(DEBUG, "Provided texture is null.");
+		return true;
+	}
+	Ref<Image> img = p_texture->get_image();
+	Image::Format format = Image::FORMAT_MAX;
+	if (img.is_valid()) {
+		format = img->get_format();
+	}
+	if (format < 0 || format >= Image::FORMAT_MAX) {
+		LOG(ERROR, "Invalid texture format. See documentation for format specification.");
+		return false;
+	}
+	return true;
+}
+
+///////////////////////////
+// Public Functions
+///////////////////////////
+
+void Terrain3DTextureAsset::initialize() {
+	LOG(INFO, _id, ": ", _name, ": initializing asset");
+}
+
+void Terrain3DTextureAsset::clear() {
+	LOG(INFO, "Clearing TextureAsset");
+	_name = "New Texture";
+	_id = 0;
+	_highlighted = false;
+	_highlight_color = Color();
+	_albedo_color = Color(1.0f, 1.0f, 1.0f, 1.0f);
+	_albedo_texture.unref();
+	_normal_texture.unref();
+	_thumbnail.unref();
+
+	_normal_depth = 1.0f;
+	_ao_strength = 0.5f;
+	_ao_light_affect = 0.0f;
+	_roughness = 0.f;
+	_displacement_scale = 0.f;
+	_displacement_offset = 0.f;
+	_uv_scale = 0.1f;
+	_detiling_rotation = 0.0f;
+	_detiling_shift = 0.0f;
+}
+
+void Terrain3DTextureAsset::set_name(const String &p_name) {
+	if (p_name.length() > 96) {
+		LOG(WARN, "Name too long, truncating to 96 characters");
+	}
+	SET_IF_DIFF(_name, p_name.left(96));
+	LOG(INFO, "Setting name: ", _name);
+	LOG(DEBUG, "Emitting setting_changed");
+	emit_signal("setting_changed");
+}
+
+void Terrain3DTextureAsset::set_id(const int p_new_id) {
+	int old_id = _id;
+	SET_IF_DIFF(_id, CLAMP(p_new_id, 0, Terrain3DAssets::MAX_TEXTURES - 1));
+	LOG(INFO, "Setting texture id: ", _id);
+	LOG(DEBUG, "Emitting id_changed, TYPE_TEXTURE, ", old_id, ", ", _id);
+	emit_signal("id_changed", Terrain3DAssets::TYPE_TEXTURE, old_id, _id);
+}
+
+void Terrain3DTextureAsset::set_highlighted(const bool p_highlighted) {
+	SET_IF_DIFF(_highlighted, p_highlighted);
+	LOG(INFO, "Set mesh ID ", _id, " highlight: ", p_highlighted);
+	real_t random_float = real_t(rand()) / real_t(RAND_MAX);
+	_highlight_color.set_hsv(random_float, 1.f, 1.f, 1.f);
+	LOG(DEBUG, "Emitting setting_changed");
+	emit_signal("setting_changed");
+}
+
+void Terrain3DTextureAsset::set_albedo_color(const Color &p_color) {
+	SET_IF_DIFF(_albedo_color, p_color);
+	LOG(INFO, "Setting color: ", p_color);
+	LOG(DEBUG, "Emitting setting_changed");
+	emit_signal("setting_changed");
+}
+
+void Terrain3DTextureAsset::set_albedo_texture(const Ref<Texture2D> &p_texture) {
+	if (_is_valid_format(p_texture)) {
+		SET_IF_DIFF(_albedo_texture, p_texture);
+		LOG(INFO, "Setting albedo texture: ", p_texture);
+		if (p_texture.is_valid()) {
+			String filename = p_texture->get_path().get_file().get_basename();
+			if (_name == "New Texture" && !p_texture->get_path().contains("::") && !filename.is_empty()) {
+				_name = filename;
+				LOG(INFO, "Setting name based on filename: ", _name);
+			}
+			Ref<Image> img = p_texture->get_image();
+			if (!img->has_mipmaps()) {
+				LOG(WARN, "Albedo texture '", filename, "' has no mipmaps. Change on the Import panel if desired.");
+			}
+			if (img->get_width() != img->get_height()) {
+				LOG(WARN, "Albedo texture '", filename, "' is not square. Mipmaps might have artifacts.");
+			}
+			if (!is_power_of_2(img->get_width()) || !is_power_of_2(img->get_height())) {
+				LOG(WARN, "Albedo texture '", filename, "' size is not power of 2. This is sub-optimal.");
+			}
+			if (IS_EDITOR) {
+				img = img->duplicate();
+				img->decompress();
+				img->resize(512, 512, Image::INTERPOLATE_LANCZOS);
+				img->convert(Image::FORMAT_RGB8);
+				_thumbnail = ImageTexture::create_from_image(img);
+			}
+		} else {
+			_thumbnail.unref();
+		}
+		LOG(DEBUG, "Emitting file_changed");
+		emit_signal("file_changed");
+	}
+}
+
+void Terrain3DTextureAsset::set_normal_texture(const Ref<Texture2D> &p_texture) {
+	if (_is_valid_format(p_texture)) {
+		SET_IF_DIFF(_normal_texture, p_texture);
+		LOG(INFO, "Setting normal texture: ", p_texture);
+		if (p_texture.is_valid()) {
+			String filename = p_texture->get_path().get_file().get_basename();
+			Ref<Image> img = p_texture->get_image();
+			if (!img->has_mipmaps()) {
+				LOG(WARN, "Normal texture '", filename, "' has no mipmaps. Change on the Import panel if desired.");
+			}
+			if (img->get_width() != img->get_height()) {
+				LOG(WARN, "Normal texture '", filename, "' is not square. Not recommended. Mipmaps might have artifacts.");
+			}
+			if (!is_power_of_2(img->get_width()) || !is_power_of_2(img->get_height())) {
+				LOG(WARN, "Normal texture '", filename, "' dimensions are not power of 2. This is sub-optimal.");
+			}
+		}
+		LOG(DEBUG, "Emitting file_changed");
+		emit_signal("file_changed");
+	}
+}
+
+void Terrain3DTextureAsset::set_normal_depth(const real_t p_normal_depth) {
+	SET_IF_DIFF(_normal_depth, CLAMP(p_normal_depth, 0.0f, 2.0f));
+	LOG(INFO, "Setting normal_depth: ", _normal_depth);
+	LOG(DEBUG, "Emitting setting_changed");
+	emit_signal("setting_changed");
+}
+
+void Terrain3DTextureAsset::set_roughness(const real_t p_roughness) {
+	SET_IF_DIFF(_roughness, CLAMP(p_roughness, -1.0f, 1.0f));
+	LOG(INFO, "Setting roughness modifier: ", _roughness);
+	LOG(DEBUG, "Emitting setting_changed");
+	emit_signal("setting_changed");
+}
+
+void Terrain3DTextureAsset::set_ao_strength(const real_t p_ao_strength) {
+	SET_IF_DIFF(_ao_strength, CLAMP(p_ao_strength, 0.0f, 1.0f));
+	LOG(INFO, "Setting ao_strength: ", _ao_strength);
+	LOG(DEBUG, "Emitting setting_changed");
+	emit_signal("setting_changed");
+}
+
+void Terrain3DTextureAsset::set_ao_light_affect(const real_t p_ao_light_affect) {
+	SET_IF_DIFF(_ao_light_affect, CLAMP(p_ao_light_affect, 0.0f, 1.0f));
+	LOG(INFO, "Setting ao_light_affect: ", _ao_light_affect);
+	LOG(DEBUG, "Emitting setting_changed");
+	emit_signal("setting_changed");
+}
+
+void Terrain3DTextureAsset::set_displacement_scale(const real_t p_displacement_scale) {
+	SET_IF_DIFF(_displacement_scale, CLAMP(p_displacement_scale, 0.0f, 2.0f));
+	LOG(INFO, "Setting displacement_scale: ", _displacement_scale);
+	LOG(DEBUG, "Emitting setting_changed");
+	emit_signal("setting_changed");
+}
+
+void Terrain3DTextureAsset::set_displacement_offset(const real_t p_displacement_offset) {
+	SET_IF_DIFF(_displacement_offset, CLAMP(p_displacement_offset, -1.0f, 1.0f));
+	LOG(INFO, "Setting displacement_offset: ", _displacement_offset);
+	LOG(DEBUG, "Emitting setting_changed");
+	emit_signal("setting_changed");
+}
+
+void Terrain3DTextureAsset::set_uv_scale(const real_t p_scale) {
+	SET_IF_DIFF(_uv_scale, CLAMP(p_scale, 0.001f, 100.0f));
+	LOG(INFO, "Setting uv_scale: ", _uv_scale);
+	LOG(DEBUG, "Emitting setting_changed");
+	emit_signal("setting_changed");
+}
+
+void Terrain3DTextureAsset::set_detiling_rotation(const real_t p_detiling_rotation) {
+	SET_IF_DIFF(_detiling_rotation, CLAMP(p_detiling_rotation, 0.0f, 1.0f));
+	LOG(INFO, "Setting detiling_rotation: ", _detiling_rotation);
+	LOG(DEBUG, "Emitting setting_changed");
+	emit_signal("setting_changed");
+}
+
+void Terrain3DTextureAsset::set_detiling_shift(const real_t p_detiling_shift) {
+	SET_IF_DIFF(_detiling_shift, CLAMP(p_detiling_shift, 0.0f, 1.0f));
+	LOG(INFO, "Setting detiling_shift: ", _detiling_shift);
+	LOG(DEBUG, "Emitting setting_changed");
+	emit_signal("setting_changed");
+}
+
+///////////////////////////
+// Protected Functions
+///////////////////////////
+
+void Terrain3DTextureAsset::_bind_methods() {
+	ADD_SIGNAL(MethodInfo("id_changed"));
+	ADD_SIGNAL(MethodInfo("file_changed"));
+	ADD_SIGNAL(MethodInfo("setting_changed"));
+
+	ClassDB::bind_method(D_METHOD("clear"), &Terrain3DTextureAsset::clear);
+	ClassDB::bind_method(D_METHOD("set_name", "name"), &Terrain3DTextureAsset::set_name);
+	ClassDB::bind_method(D_METHOD("get_name"), &Terrain3DTextureAsset::get_name);
+	ClassDB::bind_method(D_METHOD("set_id", "id"), &Terrain3DTextureAsset::set_id);
+	ClassDB::bind_method(D_METHOD("get_id"), &Terrain3DTextureAsset::get_id);
+	ClassDB::bind_method(D_METHOD("set_highlighted", "enabled"), &Terrain3DTextureAsset::set_highlighted);
+	ClassDB::bind_method(D_METHOD("is_highlighted"), &Terrain3DTextureAsset::is_highlighted);
+	ClassDB::bind_method(D_METHOD("get_highlight_color"), &Terrain3DTextureAsset::get_highlight_color);
+	ClassDB::bind_method(D_METHOD("get_thumbnail"), &Terrain3DTextureAsset::get_thumbnail);
+	ClassDB::bind_method(D_METHOD("set_albedo_color", "color"), &Terrain3DTextureAsset::set_albedo_color);
+	ClassDB::bind_method(D_METHOD("get_albedo_color"), &Terrain3DTextureAsset::get_albedo_color);
+	ClassDB::bind_method(D_METHOD("set_albedo_texture", "texture"), &Terrain3DTextureAsset::set_albedo_texture);
+	ClassDB::bind_method(D_METHOD("get_albedo_texture"), &Terrain3DTextureAsset::get_albedo_texture);
+	ClassDB::bind_method(D_METHOD("set_normal_texture", "texture"), &Terrain3DTextureAsset::set_normal_texture);
+	ClassDB::bind_method(D_METHOD("get_normal_texture"), &Terrain3DTextureAsset::get_normal_texture);
+	ClassDB::bind_method(D_METHOD("set_normal_depth", "normal_depth"), &Terrain3DTextureAsset::set_normal_depth);
+	ClassDB::bind_method(D_METHOD("get_normal_depth"), &Terrain3DTextureAsset::get_normal_depth);
+	ClassDB::bind_method(D_METHOD("set_ao_strength", "ao_strength"), &Terrain3DTextureAsset::set_ao_strength);
+	ClassDB::bind_method(D_METHOD("get_ao_strength"), &Terrain3DTextureAsset::get_ao_strength);
+	ClassDB::bind_method(D_METHOD("set_ao_light_affect", "ao_light_affect"), &Terrain3DTextureAsset::set_ao_light_affect);
+	ClassDB::bind_method(D_METHOD("get_ao_light_affect"), &Terrain3DTextureAsset::get_ao_light_affect);
+	ClassDB::bind_method(D_METHOD("set_roughness", "roughness"), &Terrain3DTextureAsset::set_roughness);
+	ClassDB::bind_method(D_METHOD("get_roughness"), &Terrain3DTextureAsset::get_roughness);
+	ClassDB::bind_method(D_METHOD("set_displacement_scale", "displacement_scale"), &Terrain3DTextureAsset::set_displacement_scale);
+	ClassDB::bind_method(D_METHOD("get_displacement_scale"), &Terrain3DTextureAsset::get_displacement_scale);
+	ClassDB::bind_method(D_METHOD("set_displacement_offset", "displacement_offset"), &Terrain3DTextureAsset::set_displacement_offset);
+	ClassDB::bind_method(D_METHOD("get_displacement_offset"), &Terrain3DTextureAsset::get_displacement_offset);
+	ClassDB::bind_method(D_METHOD("set_uv_scale", "scale"), &Terrain3DTextureAsset::set_uv_scale);
+	ClassDB::bind_method(D_METHOD("get_uv_scale"), &Terrain3DTextureAsset::get_uv_scale);
+	ClassDB::bind_method(D_METHOD("set_detiling_rotation", "detiling_rotation"), &Terrain3DTextureAsset::set_detiling_rotation);
+	ClassDB::bind_method(D_METHOD("get_detiling_rotation"), &Terrain3DTextureAsset::get_detiling_rotation);
+	ClassDB::bind_method(D_METHOD("set_detiling_shift", "detiling_shift"), &Terrain3DTextureAsset::set_detiling_shift);
+	ClassDB::bind_method(D_METHOD("get_detiling_shift"), &Terrain3DTextureAsset::get_detiling_shift);
+
+	ADD_PROPERTY(PropertyInfo(Variant::STRING, "name", PROPERTY_HINT_NONE), "set_name", "get_name");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "id", PROPERTY_HINT_NONE), "set_id", "get_id");
+	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "albedo_color", PROPERTY_HINT_COLOR_NO_ALPHA), "set_albedo_color", "get_albedo_color");
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "albedo_texture", PROPERTY_HINT_RESOURCE_TYPE, "ImageTexture,CompressedTexture2D"), "set_albedo_texture", "get_albedo_texture");
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "normal_texture", PROPERTY_HINT_RESOURCE_TYPE, "ImageTexture,CompressedTexture2D"), "set_normal_texture", "get_normal_texture");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "normal_depth", PROPERTY_HINT_RANGE, "0.0, 2.0"), "set_normal_depth", "get_normal_depth");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ao_strength", PROPERTY_HINT_RANGE, "0.0, 1.0"), "set_ao_strength", "get_ao_strength");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ao_light_affect", PROPERTY_HINT_RANGE, "0.0, 1.0"), "set_ao_light_affect", "get_ao_light_affect");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "roughness", PROPERTY_HINT_RANGE, "-1.0, 1.0"), "set_roughness", "get_roughness");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "displacement_scale", PROPERTY_HINT_RANGE, "0.0, 2.0"), "set_displacement_scale", "get_displacement_scale");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "displacement_offset", PROPERTY_HINT_RANGE, "-1.0, 1.0"), "set_displacement_offset", "get_displacement_offset");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "uv_scale", PROPERTY_HINT_RANGE, "0.001, 2.0, or_greater"), "set_uv_scale", "get_uv_scale");
+	ADD_GROUP("Detiling", "");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "detiling_rotation", PROPERTY_HINT_RANGE, "0.0, 1.0"), "set_detiling_rotation", "get_detiling_rotation");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "detiling_shift", PROPERTY_HINT_RANGE, "0.0, 1.0"), "set_detiling_shift", "get_detiling_shift");
+}
