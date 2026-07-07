@@ -52,3 +52,27 @@ else()
 endif()
 
 add_test(NAME telemetry-log-capture COMMAND telemetry-log-capture-test)
+
+# --- IF-5 pack-manifest verify core (#107) ---
+# The engine-free client boot-scene pack-mount manifest verifier (Client SAD §2.3
+# / §5.2; the client counterpart to worldd's #89 world-DB boot check). Same
+# engine-free discipline: no godot-cpp, plain C++17, hand-rolled JSON reader. The
+# round-trip test reads a REAL emit-pck manifest fixture (test/fixtures/), so the
+# verifier and the mcc emitter are proven to agree on the exact JSON shape.
+add_executable(pack-manifest-core-test
+  pack_manifest_core_test.cpp
+  "${SRC}/pack_manifest_core.cpp"
+)
+target_include_directories(pack-manifest-core-test PRIVATE "${SRC}")
+set_target_properties(pack-manifest-core-test PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+if(MSVC)
+  target_compile_options(pack-manifest-core-test PRIVATE /W4)
+else()
+  target_compile_options(pack-manifest-core-test PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME pack-manifest-core COMMAND pack-manifest-core-test)
