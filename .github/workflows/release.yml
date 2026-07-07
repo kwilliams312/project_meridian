@@ -1,0 +1,279 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Release CD — semver tag -> GitHub Release + versioned GHCR images
+# (#179, D-30 §10 rule 5: "a semver tag produces a GitHub Release with pinned
+# image digests + checksums; public/community realms track releases").
+#
+# RELATION TO #175's cd.yml (autopublish on green main):
+#   cd.yml fires on every green push to `main` and publishes `latest` + the short
+#   SHA — the moving, bleeding-edge images the nightly test realm tracks. THIS
+#   workflow is the complementary half: it fires ONLY on a pushed semver TAG
+#   (v1.2.3), cuts a versioned, immutable Release with pinned image refs +
+#   checksums, and publishes the same authd/worldd images tagged with the semver.
+#   Same registry, same Dockerfile, same Buildx pattern as cd.yml — reused, not
+#   forked, so the two stay in lock-step.
+#
+# TRIGGER: push of a tag matching v*.*.* (semver — see the `tags:` filter). A
+#   plain commit to a branch never triggers this; only an annotated/lightweight
+#   tag whose name is v<major>.<minor>.<patch> does.
+#
+# GATE (why a `validate` job, not a workflow_run dependency): a tag can be pushed
+#   at ANY commit, including one that never went green on main. Rather than trust
+#   a prior CI run for that ref (fragile: the run may not exist, may be stale, or
+#   the tagged commit may differ), we RE-RUN the authoritative build+test here as
+#   a hard prerequisite. `build` (validate) -> `publish` (images) -> `release`
+#   (GitHub Release) is a strict `needs:` chain: if validate fails, no image is
+#   pushed and no Release is cut. A broken tag CANNOT produce a release. This
+#   mirrors build.yml's `server` job (compile Release + smoke-run + ctest) — the
+#   same gate CI enforces on main, applied to the tagged commit.
+#
+# IMAGE TAGS cut per daemon (authd, worldd):
+#   :v1.2.3   full semver (the tag, verbatim)
+#   :1.2      major.minor rolling pointer (moves to the newest 1.2.x patch)
+#   :<sha>    immutable 7-char commit SHA (the pinned, digest-equivalent ref)
+#   All three are produced by docker/metadata-action's semver patterns + a raw
+#   SHA tag — no hand-rolled string surgery in shell (robust vs. edge cases like
+#   v1.10.0 where naive `cut` on dots would mis-derive "1.1").
+#
+# PERMISSIONS (least-privilege): contents: write (create the Release) +
+#   packages: write (push to GHCR via the built-in GITHUB_TOKEN). Nothing else.
+
+name: release
+
+on:
+  push:
+    tags:
+      # Semver only: v<major>.<minor>.<patch>. Pre-release/build-metadata
+      # suffixes (v1.2.3-rc.1) are intentionally NOT matched here — M1 scope is
+      # clean semver releases; loosen this glob when pre-release tags are wanted.
+      - "v*.*.*"
+
+# Least-privilege for the whole workflow. Jobs that need less are further scoped.
+permissions:
+  contents: read
+
+jobs:
+  # ── Gate: re-run the authoritative server build + tests on the TAGGED commit.
+  #    Mirrors build.yml's `server` job. If this fails, `needs:` blocks publish
+  #    and release — a broken tag cannot cut a release.
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Same toolchain/deps as build.yml's `server` job (flatc + libflatbuffers
+      # for libmeridian-proto, libssl-dev for srp, libmariadb-dev for db).
+      - name: Install toolchain (cmake, ninja, g++-13, flatc, openssl, mariadb-dev)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++-13 \
+            flatbuffers-compiler libflatbuffers-dev libssl-dev libmariadb-dev
+      - name: Configure
+        run: >-
+          cmake -S server -B server/build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
+      - name: Build
+        run: cmake --build server/build
+      - name: Smoke-run authd
+        run: ./server/build/authd/authd --version
+      - name: Smoke-run worldd
+        run: ./server/build/worldd/worldd --version
+      # SRP-6a crypto correctness (RFC 5054 vectors) — same gate CI runs on main.
+      - name: Test (ctest)
+        run: ctest --test-dir server/build --output-on-failure
+
+  # ── Publish the versioned authd/worldd images to GHCR. Reuses cd.yml's
+  #    Buildx + metadata-action + build-push pattern verbatim; only the tag
+  #    scheme differs (semver instead of latest+sha). Runs ONLY after validate.
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        daemon: [authd, worldd]
+    env:
+      REGISTRY: ghcr.io
+      IMAGE: ghcr.io/kwilliams312/project_meridian/${{ matrix.daemon }}
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Semver-aware tags from the git ref. metadata-action parses the `vX.Y.Z`
+      # tag and emits both the full semver and the major.minor pointer; we add
+      # the immutable short SHA as a raw tag. No shell string surgery.
+      - name: Derive tags + OCI labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern=v{{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=,format=short
+          labels: |
+            org.opencontainers.image.title=meridian-${{ matrix.daemon }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - name: Build + push ${{ matrix.daemon }} image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          build-args: |
+            DAEMON=${{ matrix.daemon }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.daemon }}
+          cache-to: type=gha,scope=${{ matrix.daemon }},mode=max
+
+      # Persist the immutable digest as a per-daemon artifact. We deliberately
+      # do NOT use matrix job `outputs:` for this: with a 2-leg matrix both legs
+      # write the SAME output map, and GitHub merges them nondeterministically —
+      # the non-matching leg's empty value can clobber the real digest. A named
+      # per-daemon artifact is race-free; the `release` job downloads both.
+      - name: Write digest file
+        run: |
+          mkdir -p digest
+          printf '%s' "${{ steps.build.outputs.digest }}" \
+            > "digest/${{ matrix.daemon }}.digest"
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.daemon }}
+          path: digest/${{ matrix.daemon }}.digest
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Summary
+        run: |
+          {
+            echo "### Published \`${{ matrix.daemon }}\` @ \`${{ github.ref_name }}\` :package:"
+            echo ""
+            echo "- **image:** \`${{ env.IMAGE }}\`"
+            echo "- **tags:** \`${{ github.ref_name }}\`, major.minor, short SHA"
+            echo "- **digest:** \`${{ steps.build.outputs.digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Cut the GitHub Release: generated notes + pinned image refs + a checksums
+  #    artifact + the compose file. Runs ONLY after images are published.
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the Release
+    env:
+      IMAGE_BASE: ghcr.io/kwilliams312/project_meridian
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@v4
+
+      # Pull the per-daemon digest artifacts the publish legs uploaded. Merged
+      # flat into ./digests (digest-authd/authd.digest -> digests/authd.digest).
+      - name: Download digest artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+
+      # Assemble the release body + the attached artifacts (a checksums file over
+      # the compose bundle + a machine-readable images.txt with pinned digests).
+      - name: Assemble release notes + artifacts
+        id: notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          authd_digest="$(cat digests/authd.digest)"
+          worldd_digest="$(cat digests/worldd.digest)"
+
+          authd_ref="${IMAGE_BASE}/authd:${TAG}"
+          worldd_ref="${IMAGE_BASE}/worldd:${TAG}"
+          authd_pinned="${IMAGE_BASE}/authd@${authd_digest}"
+          worldd_pinned="${IMAGE_BASE}/worldd@${worldd_digest}"
+
+          # Pre-release for the whole v0.x series (unstable API); stable at v1+.
+          case "$TAG" in
+            v0.*) echo "prerelease=true"  >> "$GITHUB_OUTPUT" ;;
+            *)    echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+          # Machine-readable pinned refs (attached as an artifact + consumed by
+          # operators pinning immutable digests, D-30 §10 rule 5).
+          {
+            echo "${authd_pinned}"
+            echo "${worldd_pinned}"
+          } > dist/images.txt
+
+          # Ship the compose file so operators get a runnable stack pinned to
+          # this release (MERIDIAN_TAG=<tag> selects these images).
+          cp deploy/docker/docker-compose.yml dist/docker-compose.yml
+
+          # Checksums over the attached artifacts (D-30 §10 rule 5: "+ checksums").
+          ( cd dist && sha256sum images.txt docker-compose.yml > SHA256SUMS.txt )
+
+          # Human-readable release body.
+          {
+            echo "## Project Meridian ${TAG}"
+            echo ""
+            echo "Versioned container images published to GHCR. The nightly test"
+            echo "realm tracks \`main\`; public/community realms track releases"
+            echo "(D-30 §10 rule 5)."
+            echo ""
+            echo "### Container images (GHCR)"
+            echo ""
+            echo "| Daemon | Pull by tag | Pinned digest |"
+            echo "|--------|-------------|---------------|"
+            echo "| authd  | \`${authd_ref}\` | \`${authd_pinned}\` |"
+            echo "| worldd | \`${worldd_ref}\` | \`${worldd_pinned}\` |"
+            echo ""
+            echo "Also tagged \`:major.minor\` (rolling patch pointer) and the"
+            echo "immutable short commit SHA."
+            echo ""
+            echo "### Run this release"
+            echo ""
+            echo '```sh'
+            echo "MERIDIAN_TAG=${TAG} docker compose \\"
+            echo "  -f deploy/docker/docker-compose.yml up -d"
+            echo '```'
+            echo ""
+            echo "Compose file + \`SHA256SUMS.txt\` + \`images.txt\` (pinned"
+            echo "digests) are attached below. See"
+            echo "[deploy/docker/](https://github.com/${{ github.repository }}/tree/${TAG}/deploy/docker)."
+            echo ""
+            echo "### Changelog"
+          } > dist/BODY.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: dist/BODY.md
+          # Append the auto-generated commit/PR changelog under the "Changelog"
+          # heading in BODY.md above.
+          generate_release_notes: true
+          prerelease: ${{ steps.notes.outputs.prerelease }}
+          files: |
+            dist/docker-compose.yml
+            dist/images.txt
+            dist/SHA256SUMS.txt
