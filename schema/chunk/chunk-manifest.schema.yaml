@@ -1,0 +1,166 @@
+# IF-6 — zone chunk grid MANIFEST (`<zone>.chunks.json`, Tools/Forge owns).
+# Emitted by Forge, consumed by mcc / Client (streamer) / Server (Tools SAD §3.3).
+# The index/metadata over a zone's chunks: grid definition + one sparse entry per
+# existing chunk (holes allowed). The per-chunk PAYLOADS are separate artifacts —
+# the client scene (`.scn`) + proxy, and the server FlatBuffers file (chunk.fbs).
+#
+# Contract:  docs/sad/tools-sad.md §3.3 (manifest) + §3.1 (coords) + §3.2 (grid numbers),
+#            as amended by the A-08 requirements walk (docs/reviews/a08-terrain-walk.md):
+#              C2 — scene/proxy/server are asset-ID / ID-derived refs, never raw res:// paths.
+#              C3 — an existing chunk with no proxy sets `proxy: null` (explicit none).
+#              C4 — optional per-chunk `priority` load-order hint.
+#              C5 — per-chunk `aabb` for pre-load visibility / priority scoring.
+# Narrative: schema/chunk/chunk-payload.md (manifest ↔ payload relationship, endianness).
+# Reserved by: schema/content/zone.schema.yaml `chunk_manifest` (points here once A-08 signs).
+#
+# Format: JSON Schema draft 2020-12 stored as YAML (same idiom as schema/content/*.schema.yaml).
+# This file validates the v1 manifest; a `format_version` major bump is a NEW schema file
+# (re-export event — Tools SAD §3.4, A-08 second half). The grid numbers (chunk_size_m,
+# far_ring) are manifest FIELDS, not constants, so consumers read them (Tools SAD §10.2 TS-3).
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/chunk/chunk-manifest.schema.yaml"
+title: "Meridian zone chunk grid manifest v1 (IF-6)"
+type: object
+additionalProperties: false
+required: [format_version, zone, chunk_size_m, origin, grid, far_ring, chunks]
+properties:
+  format_version:
+    description: Manifest/format major version. Loaders reject unknown majors (Tools SAD §3.4). v1 here.
+    const: 1
+  zone:
+    description: Owning zone content id (Tools SAD §3.3 — e.g. "core:zone.zone01").
+    $ref: "#/$defs/zoneId"
+  chunk_size_m:
+    description: Chunk edge length in metres. v1 baseline 128 (Tools SAD §3.2); a FIELD, not a constant (TS-3).
+    type: integer
+    minimum: 1
+  origin:
+    description: >-
+      Zone-local origin of the chunk grid, in metres, on the XZ plane (Tools SAD §3.1/§3.3).
+      World→cell transform is implicit: cx = floor((x − origin.x)/chunk_size_m), likewise cz (walk C1).
+    $ref: "#/$defs/originXZ"
+  grid:
+    description: Inclusive chunk-index bounds of the zone (Tools SAD §3.3). Indices may be negative (§3.1).
+    $ref: "#/$defs/gridBounds"
+  far_ring:
+    description: >-
+      Chunk-distance ring beyond which chunks are unloaded (terrain clipmap only) — Tools SAD §3.2,
+      default 6. A format field; the client streamer may tighten rings at runtime (§3.2).
+    type: integer
+    minimum: 0
+    default: 6
+  chunks:
+    description: Sparse list of existing chunks (holes allowed — Tools SAD §3.3). One entry per chunk.
+    type: array
+    items: { $ref: "#/$defs/chunkEntry" }
+
+$defs:
+  # --- Identifier grammars (mirror schema/content/common.defs.yaml exactly) --------------------
+  zoneId:
+    description: Fully-qualified zone content id (namespace required).
+    type: string
+    pattern: "^[a-z][a-z0-9_]{1,31}:zone\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+
+  assetId:
+    description: Fully-qualified IF-8 asset id (namespace required) — for `deps` prefetch.
+    type: string
+    pattern: "^[a-z][a-z0-9_]{1,31}:(art|mus|sfx|amb)\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+
+  resourceRef:
+    description: >-
+      Asset-ID or ID-derived logical resource reference (A-08 amendment C2; Tools SAD §4.2).
+      MUST NOT be a raw `res://` or filesystem path — the concrete res:// path is derived from
+      the id at load time. Uses the same `<namespace>:<dotted.id>` grammar as content/asset ids.
+    type: string
+    pattern: "^[a-z][a-z0-9_]{1,31}:[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+
+  # --- Value shapes -----------------------------------------------------------------------------
+  originXZ:
+    description: Grid origin on the XZ plane, zone-local metres.
+    type: object
+    additionalProperties: false
+    required: [x, z]
+    properties:
+      x: { type: number }
+      z: { type: number }
+
+  gridBounds:
+    description: Inclusive chunk-index rectangle. min ≤ max is enforced by lint (JSON Schema cannot express it).
+    type: object
+    additionalProperties: false
+    required: [min_cx, min_cz, max_cx, max_cz]
+    properties:
+      min_cx: { type: integer }
+      min_cz: { type: integer }
+      max_cx: { type: integer }
+      max_cz: { type: integer }
+
+  vec3:
+    description: Zone-local position in metres (Godot axes — Y-up, X east, −Z north; Tools SAD §3.1).
+    type: object
+    additionalProperties: false
+    required: [x, y, z]
+    properties:
+      x: { type: number }
+      y: { type: number }
+      z: { type: number }
+
+  aabb:
+    description: Axis-aligned bounding box in zone-local metres (A-08 amendment C5).
+    type: object
+    additionalProperties: false
+    required: [min, max]
+    properties:
+      min: { $ref: "#/$defs/vec3" }
+      max: { $ref: "#/$defs/vec3" }
+
+  contentHash:
+    description: BLAKE3-256 content hash (Tools SAD §10.1) over BOTH payloads (§3.3), hex.
+    type: string
+    pattern: "^blake3:[0-9a-f]{64}$"
+
+  chunkEntry:
+    description: One existing chunk (Tools SAD §3.3 + walk amendments C2/C3/C4/C5).
+    type: object
+    additionalProperties: false
+    required: [cx, cz, hash, scene, proxy, server, aabb]
+    properties:
+      cx:
+        description: Chunk grid X index (may be negative — Tools SAD §3.1).
+        type: integer
+      cz:
+        description: Chunk grid Z index (may be negative — Tools SAD §3.1).
+        type: integer
+      hash:
+        description: Content hash covering both payloads for incremental invalidation + pack verify (§3.3, walk C5/C8).
+        $ref: "#/$defs/contentHash"
+      scene:
+        description: Client Godot scene ref (ID-derived, A-08 amendment C2). Never a raw res:// path.
+        $ref: "#/$defs/resourceRef"
+      proxy:
+        description: >-
+          LOD proxy-mesh ref (Tools SAD §3.2 — a proxy is guaranteed per chunk). `null` is the
+          explicit "no proxy" form for a present chunk (A-08 amendment C3).
+        oneOf:
+          - { $ref: "#/$defs/resourceRef" }
+          - { type: "null" }
+      server:
+        description: Server FlatBuffers payload ref (schema/chunk/chunk.fbs), ID-derived (C2). Never a raw path.
+        $ref: "#/$defs/resourceRef"
+      deps:
+        description: Shared IF-8 asset ids for pack-installer / streamer prefetch (Tools SAD §3.3, walk C4 dep-half).
+        type: array
+        items: { $ref: "#/$defs/assetId" }
+        default: []
+      priority:
+        description: >-
+          Optional per-chunk load-order hint (A-08 amendment C4). Lower loads first; the streamer
+          orders stream-in by it. Absent = default cadence. Ordinal; the client owns the policy.
+        type: integer
+        minimum: 0
+      aabb:
+        description: >-
+          Per-chunk world-space AABB in zone-local metres (A-08 amendment C5). The client scores
+          visibility / load priority from it BEFORE loading the scene; derivable at export from
+          terrain bounds + placements.
+        $ref: "#/$defs/aabb"
