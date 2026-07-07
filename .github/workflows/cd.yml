@@ -30,10 +30,14 @@ on:
     workflows: ["build"]   # must match build.yml's `name:`
     types: [completed]
 
-# Least-privilege: read the repo, write packages (GHCR). No other scopes.
+# Least-privilege: read the repo, write packages (GHCR). id-token: write is
+# required for cosign KEYLESS signing — it lets the job mint a short-lived OIDC
+# token that Sigstore's Fulcio exchanges for an ephemeral signing certificate
+# bound to this workflow's identity. No long-lived signing key is stored.
 permissions:
   contents: read
   packages: write
+  id-token: write
 
 jobs:
   publish:
@@ -90,6 +94,7 @@ jobs:
             org.opencontainers.image.licenses=Apache-2.0
 
       - name: Build + push ${{ matrix.daemon }} image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -103,6 +108,58 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.daemon }}
           cache-to: type=gha,scope=${{ matrix.daemon }},mode=max
 
+      # ── Supply chain (D-30 §10 rule 4): SBOM + keyless signature per image ──
+      # Everything below runs AFTER push and targets the immutable digest
+      # (steps.build.outputs.digest), never a mutable tag — a tag can be moved,
+      # a digest cannot, so the attestation/signature binds to exactly these bits.
+      - name: Pin the published image by digest
+        id: ref
+        run: echo "image=${IMAGE}@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+      # SBOM: Syft (via anchore/sbom-action) generates a CycloneDX SBOM of the
+      # pushed image and uploads it as a workflow artifact. The image is addressed
+      # by digest so the SBOM describes exactly the published bits.
+      - name: Generate SBOM (Syft -> CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.ref.outputs.image }}
+          format: cyclonedx-json
+          artifact-name: sbom-${{ matrix.daemon }}.cdx.json
+          output-file: sbom-${{ matrix.daemon }}.cdx.json
+
+      # Install the cosign CLI for keyless signing + attestation.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Keyless (Sigstore/OIDC) signature over the image DIGEST. cosign mints the
+      # OIDC token from the id-token: write permission, Fulcio issues an ephemeral
+      # cert, and the signature + cert are logged to the Rekor transparency log.
+      # No private key exists — provenance is the workflow identity itself.
+      - name: Sign image (cosign keyless)
+        env:
+          COSIGN_YES: "true"
+        run: cosign sign --yes "${{ steps.ref.outputs.image }}"
+
+      # Attach the SBOM to the image as a signed CycloneDX attestation (also
+      # keyless). Consumers can `cosign verify-attestation` to fetch a
+      # provenance-bound bill of materials for the exact digest.
+      - name: Attest SBOM (cosign attest, keyless)
+        env:
+          COSIGN_YES: "true"
+        run: >-
+          cosign attest --yes
+          --type cyclonedx
+          --predicate sbom-${{ matrix.daemon }}.cdx.json
+          "${{ steps.ref.outputs.image }}"
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.daemon }}
+          path: sbom-${{ matrix.daemon }}.cdx.json
+          retention-days: 30
+          if-no-files-found: error
+
       - name: Summary
         run: |
           {
@@ -110,5 +167,7 @@ jobs:
             echo ""
             echo "- **image:** \`${{ env.IMAGE }}\`"
             echo "- **tags:** \`latest\`, \`${{ steps.sha.outputs.short }}\`"
+            echo "- **digest:** \`${{ steps.build.outputs.digest }}\`"
             echo "- **revision:** \`${{ github.event.workflow_run.head_sha }}\`"
+            echo "- **supply chain:** CycloneDX SBOM + cosign keyless signature & SBOM attestation (by digest)"
           } >> "$GITHUB_STEP_SUMMARY"
