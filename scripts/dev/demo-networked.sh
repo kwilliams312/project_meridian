@@ -54,9 +54,14 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # --- 1. Build server + bot + editor GDExtension. -----------------------------
+# `build.sh --client` builds the server/mcc AND the **editor** GDExtension framework
+# (libmeridian.macos.editor.framework) — the exact variant run-client.sh dlopen()s
+# below. Rebuilding it here keeps the demo self-contained + reproducible: a stale
+# framework (the class of failure that once needed a hand rebuild, #300) can never
+# silently break the demo again. MERIDIAN_DEMO_NO_BUILD=1 skips the whole build.
 if [ "${MERIDIAN_DEMO_NO_BUILD:-0}" != "1" ]; then
-  log "building server + editor GDExtension (scripts/dev/build.sh)"
-  "${SELF_DIR}/build.sh"
+  log "building server + editor GDExtension (scripts/dev/build.sh --client)"
+  "${SELF_DIR}/build.sh" --client
 fi
 
 BOT_BIN=""
@@ -129,7 +134,10 @@ $(ok "READY — watch the bot move in the GUI")
 
 EOF
 
-log "launching the GUI client (scripts/dev/run-client.sh, windowed Metal)"
-"${SELF_DIR}/run-client.sh" || true
+log "launching the GUI client into the LOGIN flow (scripts/dev/run-client.sh, windowed Metal)"
+# Boot the login screen (the project main_scene), NOT the default camera_demo — the
+# login → char-select → Enter World chain is what hands world.tscn its real session
+# (grant + worldd addr + session_key) so it connects to worldd and renders the bot.
+"${SELF_DIR}/run-client.sh" --scene res://scenes/login/login_screen.tscn || true
 
 ok "client closed — cleaning up"

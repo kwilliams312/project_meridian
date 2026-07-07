@@ -153,6 +153,7 @@ log "Launching authd (IF-1) on 127.0.0.1:${AUTHD_PORT}"
 env MERIDIAN_DB_HOST=127.0.0.1 MERIDIAN_DB_PORT="${MERIDIAN_DEV_DB_PORT}" \
     MERIDIAN_DB_USER=root MERIDIAN_DB_NAME=meridian_auth \
   "$AUTHD" --cert "$CERT" --key "$KEY" --bind 127.0.0.1 --port "${AUTHD_PORT}" \
+    --login.grant_ttl_seconds="${MERIDIAN_GRANT_TTL_SECONDS:-600}" \
     --log-format text \
   >"${RUN_DIR}/authd.log" 2>&1 &
 AUTHD_PID=$!

@@ -97,8 +97,16 @@ case "$GOT_VERSION" in
 esac
 
 # --- Preflight: the compiled GDExtension must be present (map uses C++ nodes). -
-if ! ls "${PROJECT}/bin/"libmeridian.macos.*.framework >/dev/null 2>&1; then
-  die "GDExtension not built. Run: (cd client && cmake -B build -DGODOTCPP_TARGET=editor && cmake --build build -j)"
+# This script boots the Godot EDITOR (for the #283 windowed seed), which loads the
+# **editor** framework variant declared in project/meridian.gdextension
+# (macos.debug.editor = libmeridian.macos.editor.framework). Require THAT specific
+# variant + its inner binary — a template_debug-only build would pass a loose
+# glob check here and then fail at dlopen with a confusing error (#300).
+EDITOR_FW="${PROJECT}/bin/libmeridian.macos.editor.framework"
+if [ ! -f "${EDITOR_FW}/libmeridian.macos.editor" ]; then
+  die "editor GDExtension not built (need ${EDITOR_FW}/libmeridian.macos.editor).
+   Build it with: scripts/dev/build.sh --client
+   (or directly: cd client && cmake -B build-editor -DGODOTCPP_TARGET=editor -DCMAKE_OSX_ARCHITECTURES=arm64 && cmake --build build-editor -j)"
 fi
 
 # --- Seed .godot/ with a one-time WINDOWED import (never headless, #283). -----
