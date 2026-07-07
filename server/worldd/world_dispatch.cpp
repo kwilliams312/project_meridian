@@ -16,6 +16,9 @@
 
 #include "meridian/core/log.hpp"
 #include "meridian/metrics/catalog.h"
+#include "meridian/trace/session_flow.h"
+#include "meridian/trace/span.h"
+#include "meridian/trace/tracer.h"
 
 namespace meridian::worldd {
 namespace {
@@ -24,8 +27,59 @@ namespace fb = flatbuffers;
 namespace mn = meridian::net;
 namespace log = meridian::core::log;
 namespace metrics = meridian::metrics::catalog;
+namespace tr = meridian::trace;
 
 constexpr const char* kCat = "worldd";
+
+// OPS-05 (#166): the "worldd.enter_world" session-flow span (grant validate →
+// session establish → HandshakeOk). Parented onto the authd login span via the
+// grant-derived trace context so the two hops stitch into ONE trace (D-29 §9 rule
+// 5). `ctx` carries the exporter + realm; `grant_id` derives the trace ids;
+// `start_ns` is the handler's start time; `ok` is the handshake result; `reject`
+// is the server-side reject classification (empty on success). Fills `out_trace`/
+// `out_span` with the emitted span's lower-hex ids for log correlation (#165).
+// No-op when no exporter is configured. Kept as a free helper so BOTH the reject
+// lambda and the success tail can emit exactly one span per WORLD_HELLO.
+void emit_enter_world_span(ConnCtx& ctx, std::uint64_t grant_id, std::uint64_t start_ns,
+                           bool ok, const std::string& reject_reason,
+                           std::string& out_trace, std::string& out_span) {
+    if (ctx.tracer == nullptr || !ctx.tracer->active()) return;
+
+    tr::Span span;
+    if (grant_id != 0) {
+        // Same grant → same trace_id as the authd login span; parent onto the
+        // authd-derived span_id (D-29 §9 rule 5 stitching).
+        tr::SpanContext parent = tr::flow::trace_context_from_grant(grant_id);
+        span.trace_id = parent.trace_id;
+        span.parent_span_id = parent.span_id;   // the authd.login span
+        tr::fill_random(span.span_id);          // this hop's own span
+    } else {
+        // No grant on the frame (malformed WorldHello) — a self-contained root.
+        tr::fill_random(span.trace_id);
+        tr::fill_random(span.span_id);
+    }
+    span.name = tr::flow::kWorlddEnterWorld;
+    span.kind = tr::SpanKind::kServer;
+    span.start_unix_nano = start_ns;
+    span.end_unix_nano = tr::now_unix_nano();
+
+    span.set(tr::attr(tr::flow::kAttrRealm, ctx.labels.realm));
+    span.set(tr::attr(tr::flow::kAttrHandshake, ok));
+    if (grant_id != 0) {
+        span.set(tr::attr("meridian.grant_id", static_cast<std::int64_t>(grant_id)));
+    }
+    if (ok) {
+        span.set(tr::attr(tr::flow::kAttrRealmId, static_cast<std::int64_t>(ctx.realm_id)));
+        span.set_status(tr::StatusCode::kOk);
+    } else {
+        span.set(tr::attr(tr::flow::kAttrGrantReject, reject_reason));
+        span.set_status(tr::StatusCode::kError, reject_reason);
+    }
+
+    out_trace = tr::to_hex(span.trace_id);
+    out_span = tr::to_hex(span.span_id);
+    ctx.tracer->export_span(std::move(span));
+}
 
 // ---- little-endian scalar read/write (frame header codec) ------------------
 // The IF-2 in-frame header (u16 opcode ‖ u64 seq) is little-endian on the wire,
@@ -236,12 +290,26 @@ void Dispatcher::register_m0_stubs() {
            const auto* hello = fb::GetRoot<mn::WorldHello>(f.payload);
            const std::uint64_t grant_id = hello ? hello->grant_id() : 0;
 
+           // OPS-05 (#166): start of the "worldd.enter_world" span. Stamp the
+           // start now; the span is emitted (once) at whichever exit this handler
+           // takes — a reject or a successful HandshakeOk.
+           const std::uint64_t trace_start_ns = tr::now_unix_nano();
+
            auto reject = [&](const std::string& why) {
+               // OPS-05 traces: emit the enter-world span as a FAILURE at the
+               // reject point (this is the failure point the trace surfaces).
+               std::string trace_id, span_id;
+               emit_enter_world_span(ctx, grant_id, trace_start_ns, /*ok=*/false, why,
+                                     trace_id, span_id);
                // Every grant failure is GRANT_INVALID on the wire (no oracle to
                // the client which check failed); the reason is logged server-side.
-               log::warn(kCat, "WORLD_HELLO rejected",
-                         {log::field("grant_id", grant_id),
-                          log::field("reason", why)});
+               log::Fields wf{log::field("grant_id", grant_id),
+                              log::field("reason", why)};
+               if (!trace_id.empty()) {
+                   wf.push_back(log::field("trace_id", trace_id));
+                   wf.push_back(log::field("span_id", span_id));
+               }
+               log::warn(kCat, "WORLD_HELLO rejected", wf);
                // OPS-05: a rejected handshake is a WORLD_HELLO error (Errors dash).
                metrics::opcode_errors_total()
                    .with(ctx.labels.rzs_opcode(opcode_label(
@@ -323,15 +391,26 @@ void Dispatcher::register_m0_stubs() {
            ctx.movement.emplace(spawn, /*spawn_time_ms=*/0);
            ctx.movement->set_entity_guid(pc.char_guid);  // may be refined below (AoI)
 
-           log::info(kCat, "WORLD_HELLO accepted -> HandshakeOk",
-                     {log::field("grant_id", grant_id),
-                      log::field("account_id",
-                                 static_cast<std::int64_t>(consumed->account_id)),
-                      log::field("realm_id",
-                                 static_cast<std::int64_t>(consumed->realm_id)),
-                      log::field("character", pc.name),
-                      log::field("class_id",
-                                 static_cast<std::int64_t>(pc.class_id))});
+           // OPS-05 traces (#166): emit the enter-world span as a SUCCESS (grant
+           // validated → AEAD session established → about to reply HandshakeOk),
+           // stitched to the authd login span via the grant. Carry its ids into
+           // the accept log so the log line pivots to the trace (#165).
+           std::string trace_id, span_id;
+           emit_enter_world_span(ctx, grant_id, trace_start_ns, /*ok=*/true,
+                                 /*reject_reason=*/{}, trace_id, span_id);
+           log::Fields af{log::field("grant_id", grant_id),
+                          log::field("account_id",
+                                     static_cast<std::int64_t>(consumed->account_id)),
+                          log::field("realm_id",
+                                     static_cast<std::int64_t>(consumed->realm_id)),
+                          log::field("character", pc.name),
+                          log::field("class_id",
+                                     static_cast<std::int64_t>(pc.class_id))};
+           if (!trace_id.empty()) {
+               af.push_back(log::field("trace_id", trace_id));
+               af.push_back(log::field("span_id", span_id));
+           }
+           log::info(kCat, "WORLD_HELLO accepted -> HandshakeOk", af);
 
            // 4. Reply HandshakeOk. content_hash is an M0 placeholder (IF-4 world
            //    content hashing is later); server_proof empty (see encoder note).
@@ -640,6 +719,7 @@ void WorldServer::serve_connection(net::Session sess) {
     ConnCtx ctx;
     ctx.realm_id = cfg_.realm_id;
     ctx.labels = cfg_.labels;   // OPS-05: stamp {realm,zone,shard,map} on metrics
+    ctx.tracer = cfg_.tracer;   // OPS-05: session-flow trace exporter (#166)
     ctx.world = &impl_->world;  // shared AoI relay registry (#87)
     std::optional<db::Connection> auth_conn;
     std::optional<db::Connection> char_conn;

@@ -26,6 +26,7 @@
 #include "meridian/metrics/catalog.h"
 #include "meridian/metrics/exposer.h"
 #include "meridian/net/tls_listener.h"
+#include "meridian/trace/exporter.h"
 
 #include "login_session.h"
 
@@ -68,6 +69,15 @@ struct AuthdConfig {
     std::string metrics_bind = "127.0.0.1";
     std::string realm_label = "reference";
 
+    // OPS-05 session-flow traces (#166; docs/telemetry-architecture.md §5.3). The
+    // OTLP/HTTP endpoint the "authd.login" spans are POSTed to (the OTel collector,
+    // server/ops/otel-collector — OTLP/HTTP on :4318). Empty (default) => tracing
+    // is OFF (graceful degradation; login is unaffected). `trace_sample_ratio` is
+    // the M0 head-sampling ratio (1.0 = sample all; the session-flow volume is
+    // tiny so sample-all loses nothing — D-29 §9 rule 7).
+    std::string otlp_endpoint;
+    double trace_sample_ratio = 1.0;
+
     // OPS-05 structured logging (#165). Prod default: JSON (one Loki-ingestable
     // object per line on stdout, matching telemetryd's #167 sink). Dev/run-local
     // sets text for a readable stderr line. Env MERIDIAN_LOG_FORMAT /
@@ -92,6 +102,9 @@ void print_help() {
         "  --build-floor N    Reject client builds below N (default 0 = none).\n"
         "  --metrics-port N   Prometheus /metrics port (default 9464; 0=off).\n"
         "  --metrics-bind ADDR  /metrics bind address (default 127.0.0.1).\n"
+        "  --otlp-endpoint URL  OTLP/HTTP endpoint for session-flow trace spans\n"
+        "                     (e.g. http://otel-collector:4318). Empty = tracing off.\n"
+        "  --trace-sample-ratio R  head-sample ratio 0..1 for traces (default 1.0).\n"
         "  --realm NAME       realm label for metrics + logs (default 'reference').\n"
         "  --log-format FMT   log output: json (prod, Loki JSON on stdout) or\n"
         "                     text (dev, readable on stderr). Default json.\n"
@@ -140,15 +153,21 @@ void handle_connection(meridian::net::Session sess, meridian::db::ConnectParams 
         meridian::db::Connection db(db_params);
         meridian::authd::LoginResult r =
             meridian::authd::run_login(sess, db, login);
-        meridian::core::log::info(
-            kDaemonName, "login processed",
-            {meridian::core::log::field("peer", peer),
-             meridian::core::log::field("outcome",
-                                        static_cast<int>(r.outcome)),
-             meridian::core::log::field("account_id",
-                                        static_cast<std::int64_t>(r.account_id)),
-             meridian::core::log::field("grant_issued", r.grant_id != 0),
-             meridian::core::log::field("detail", r.detail)});
+        // OPS-05 (#166 + #165): carry the session-flow span's trace/span ids into
+        // the log fields so a Loki log line pivots to the matching trace (empty
+        // when tracing is off). trace_id/span_id are low-cardinality per-login.
+        meridian::core::log::Fields fields{
+            meridian::core::log::field("peer", peer),
+            meridian::core::log::field("outcome", static_cast<int>(r.outcome)),
+            meridian::core::log::field("account_id",
+                                       static_cast<std::int64_t>(r.account_id)),
+            meridian::core::log::field("grant_issued", r.grant_id != 0),
+            meridian::core::log::field("detail", r.detail)};
+        if (!r.trace_id.empty()) {
+            fields.push_back(meridian::core::log::field("trace_id", r.trace_id));
+            fields.push_back(meridian::core::log::field("span_id", r.span_id));
+        }
+        meridian::core::log::info(kDaemonName, "login processed", fields);
     } catch (const std::exception& e) {
         meridian::core::log::warn(
             kDaemonName, "connection failed",
@@ -196,6 +215,12 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--metrics-bind") == 0) {
             cfg.metrics_bind = next("--metrics-bind"); continue;
         }
+        if (std::strcmp(argv[i], "--otlp-endpoint") == 0) {
+            cfg.otlp_endpoint = next("--otlp-endpoint"); continue;
+        }
+        if (std::strcmp(argv[i], "--trace-sample-ratio") == 0) {
+            cfg.trace_sample_ratio = std::atof(next("--trace-sample-ratio")); continue;
+        }
         if (std::strcmp(argv[i], "--realm") == 0) { cfg.realm_label = next("--realm"); continue; }
         if (std::strcmp(argv[i], "--log-format") == 0) { cfg.log_format = next("--log-format"); continue; }
         if (std::strcmp(argv[i], "--log-level") == 0) { cfg.log_level = next("--log-level"); continue; }
@@ -215,6 +240,11 @@ int main(int argc, char** argv) {
     }
     if (const char* b = env("MERIDIAN_METRICS_BIND")) cfg.metrics_bind = b;
     if (const char* r = env("MERIDIAN_REALM")) cfg.realm_label = r;
+    // OPS-05 trace endpoint env fallback (flag overrides). MERIDIAN_OTLP_ENDPOINT
+    // is the same var worldd + the compose stack use.
+    if (const char* e = env("MERIDIAN_OTLP_ENDPOINT")) {
+        if (cfg.otlp_endpoint.empty()) cfg.otlp_endpoint = e;
+    }
     cfg.login.realm_label = cfg.realm_label;
 
     // Realm label -> the log `realm` field too (unifies metric + log grouping).
@@ -278,6 +308,29 @@ int main(int argc, char** argv) {
             exposer.reset();
         }
     }
+
+    // --- OPS-05 session-flow trace exporter (#166) -----------------------------
+    // Start the async OTLP/HTTP span exporter before serving. When --otlp-endpoint
+    // is empty it is a NO-OP (no thread, no socket) — tracing simply off, login
+    // unaffected (graceful degradation, D-29 §9 rule 6). When set, each login emits
+    // an "authd.login" span (SRP verify → grant issue) whose ids derive from the
+    // grant so worldd's enter-world span stitches into the same trace.
+    meridian::trace::ExporterConfig tec;
+    tec.endpoint = cfg.otlp_endpoint;
+    tec.service_name = kDaemonName;
+    tec.realm = cfg.realm_label;
+    meridian::trace::Exporter trace_exporter(tec);
+    trace_exporter.start();
+    if (trace_exporter.active()) {
+        cfg.login.tracer_exporter = &trace_exporter;
+        meridian::core::log::info(
+            kDaemonName, "session-flow traces -> OTLP " +
+                             meridian::trace::traces_url_for(cfg.otlp_endpoint));
+    } else {
+        meridian::core::log::info(kDaemonName,
+                                  "session-flow traces disabled (no --otlp-endpoint)");
+    }
+    (void)cfg.trace_sample_ratio;  // M0: sample-all; ratio wired for M1 volume
 
     meridian::net::ListenConfig lc;
     lc.cert_path = cfg.cert_path;
