@@ -162,6 +162,34 @@ if(OpenSSL_FOUND AND DEFINED MERIDIAN_FLATC)
   endif()
 
   add_test(NAME login-core COMMAND login-core-test)
+
+  # --- Live-authd integration test (#99) ---
+  # THE interop proof: the client login CORE + TlsLoginTransport driven over a
+  # REAL TLS socket against a RUNNING authd (client/test/run_authd_login_it.sh
+  # boots MariaDB on a UNIQUE socket/port, seeds an account+realm, launches the
+  # real authd, and runs this pointed at it). Inert (SKIP, exit 0) without the
+  # harness's --host/--port args, so it is safe in a plain ctest. Registered as a
+  # ctest only for `ctest -R authd-login-it` from the harness; the harness passes
+  # the connection args, so the ctest registration here is a no-arg SKIP.
+  add_executable(authd-login-it
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../test/authd_login_it.cpp"
+    "${SRC}/login_core.cpp"
+    "${SRC}/srp_client_core.cpp"
+    "${SRC}/login_transport.cpp"
+  )
+  add_dependencies(authd-login-it login-core-codegen)
+  target_include_directories(authd-login-it PRIVATE
+    "${SRC}" "${MERIDIAN_LOGIN_GEN_DIR}")
+  if(TARGET flatbuffers::flatbuffers)
+    target_link_libraries(authd-login-it PRIVATE flatbuffers::flatbuffers)
+  endif()
+  target_link_libraries(authd-login-it PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+  set_target_properties(authd-login-it PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+  if(NOT MSVC)
+    target_compile_options(authd-login-it PRIVATE -Wall -Wextra)
+  endif()
+  add_test(NAME authd-login-it COMMAND authd-login-it)  # no args -> SKIP
 else()
   message(STATUS
     "login-core-test SKIPPED: needs OpenSSL + flatc (OpenSSL_FOUND=${OpenSSL_FOUND}).")
