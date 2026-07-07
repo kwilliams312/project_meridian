@@ -41,7 +41,19 @@ option(MERIDIAN_BOT "Build the headless bot client (meridian-bot) + its tests" O
 # -DMERIDIAN_CLIENT_NET=ON (default OFF). Builds in any C++17 toolchain.
 option(MERIDIAN_CLIENT_NET "Build the engine-agnostic client net core + its tests" OFF)
 
-if(MERIDIAN_CLIENT_TESTS OR MERIDIAN_BOT OR MERIDIAN_CLIENT_NET)
+# --- Headless client-world probe (#301) ---
+# meridian-client-probe drives the GUI client's WORLD-SESSION net path (the #97
+# net-thread core + the meridian-clientnet stack — the SAME code scenes/world/world.gd
+# runs) against a real authd + worldd with NO Godot, and reports the #87 AoI relay
+# frames it receives about a bot: the see-a-bot-move proof for the GUI net path
+# (client/test/run_client_sees_bot_it.sh). It needs the net core, so enabling it
+# force-enables MERIDIAN_CLIENT_NET below. Default OFF.
+option(MERIDIAN_CLIENT_PROBE "Build the headless client-world probe (meridian-client-probe)" OFF)
+if(MERIDIAN_CLIENT_PROBE)
+	set(MERIDIAN_CLIENT_NET ON)
+endif()
+
+if(MERIDIAN_CLIENT_TESTS OR MERIDIAN_BOT OR MERIDIAN_CLIENT_NET OR MERIDIAN_CLIENT_PROBE)
 	enable_testing()
 	# Add the net core FIRST so its `meridian-clientnet` target exists when the client
 	# test subdir configures — the #97 net-thread-core test links it when present
@@ -54,6 +66,11 @@ if(MERIDIAN_CLIENT_TESTS OR MERIDIAN_BOT OR MERIDIAN_CLIENT_NET)
 	endif()
 	if(MERIDIAN_BOT)
 		add_subdirectory(bot)
+	endif()
+	# The probe rides meridian-clientnet (added above); configure it last so the
+	# target exists. Same engine-free discipline — no godot-cpp needed.
+	if(MERIDIAN_CLIENT_PROBE)
+		add_subdirectory(probe)
 	endif()
 	# Tests/bot-only configure: skip the godot-cpp-dependent GDExtension target so a
 	# CI test / bot job needs no Godot toolchain.
