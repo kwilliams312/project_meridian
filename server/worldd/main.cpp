@@ -89,6 +89,12 @@ struct WorlddConfig {
     // (the port the OTel collector scrapes) bound to loopback. 0 disables it.
     std::uint16_t metrics_port = 9464;
     std::string metrics_bind = "127.0.0.1";
+
+    // OPS-05 structured logging (#165). json (Loki JSON on stdout, prod default)
+    // or text (readable stderr, dev). Env MERIDIAN_LOG_FORMAT / _LEVEL apply
+    // first, then these flags override. Empty = leave env/default.
+    std::string log_format;
+    std::string log_level;
 };
 
 const char* env(const char* k) { return std::getenv(k); }
@@ -107,7 +113,10 @@ void print_help() {
         "  --io-workers N     Size of the map/IO worker pool (default: auto).\n"
         "  --metrics-port N   Prometheus /metrics port (default 9464; 0=off).\n"
         "  --metrics-bind ADDR  /metrics bind address (default 127.0.0.1).\n"
-        "  --realm NAME       realm label for metrics (default 'reference').\n"
+        "  --realm NAME       realm label for metrics + logs (default 'reference').\n"
+        "  --log-format FMT   log output: json (prod, Loki JSON on stdout) or\n"
+        "                     text (dev, readable on stderr). Default json.\n"
+        "  --log-level LVL    min log level: trace|debug|info|warn|error (info).\n"
         "  --version          Print version and build info, then exit.\n"
         "  --help, -h         Print this help, then exit.\n"
         "\n"
@@ -118,7 +127,12 @@ void print_help() {
         "Metrics (OPS-05, #164): worldd exposes a plain-HTTP Prometheus /metrics\n"
         "endpoint on the metrics port (SEPARATE from the game TLS port) — the\n"
         "internal scrape surface for the OTel collector (server/ops). Env:\n"
-        "MERIDIAN_METRICS_PORT, MERIDIAN_METRICS_BIND, MERIDIAN_REALM.\n",
+        "MERIDIAN_METRICS_PORT, MERIDIAN_METRICS_BIND, MERIDIAN_REALM.\n"
+        "\n"
+        "Logging (OPS-05 #165): structured JSON logs (one Loki-ingestable object\n"
+        "per line on stdout) share telemetryd's #167 schema — realm/process/level/\n"
+        "event/severity/logger/message/timestamp_ms. Env: MERIDIAN_LOG_FORMAT,\n"
+        "MERIDIAN_LOG_LEVEL (flags override).\n",
         kDaemonName, kDaemonName);
 }
 
@@ -167,9 +181,15 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--realm") == 0) {
             cfg.world.labels.realm = next("--realm"); continue;
         }
+        if (std::strcmp(argv[i], "--log-format") == 0) { cfg.log_format = next("--log-format"); continue; }
+        if (std::strcmp(argv[i], "--log-level") == 0) { cfg.log_level = next("--log-level"); continue; }
         std::fprintf(stderr, "%s: unknown option '%s' (try --help)\n", kDaemonName, argv[i]);
         return 2;
     }
+
+    // OPS-05 logging (#165): env defaults first, flags override below.
+    meridian::core::log::configure_from_env();
+    meridian::core::log::set_process(kDaemonName);
 
     // Default IO pool size from hardware concurrency (leave headroom for the
     // world thread + acceptor). The SAD's "M ≈ cores − 3" sizing is a later
@@ -188,6 +208,18 @@ int main(int argc, char** argv) {
     }
     if (const char* b = env("MERIDIAN_METRICS_BIND")) cfg.metrics_bind = b;
     if (const char* r = env("MERIDIAN_REALM")) cfg.world.labels.realm = r;
+
+    // Realm label -> the log `realm` field (unifies metric + log grouping);
+    // then the log-format/level flags override any env/default.
+    meridian::core::log::set_realm(cfg.world.labels.realm);
+    if (!cfg.log_format.empty()) {
+        meridian::core::log::set_format(
+            meridian::core::log::format_from_string(cfg.log_format));
+    }
+    if (!cfg.log_level.empty()) {
+        meridian::core::log::set_level(
+            meridian::core::log::level_from_string(cfg.log_level));
+    }
 
     // Auth DB connection for IF-3 grant validation (#84). worldd consumes
     // session_grant rows to admit players (worldd is client-facing until the M2

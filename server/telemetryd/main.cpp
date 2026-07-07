@@ -66,6 +66,13 @@ struct TelemetrydConfig {
     std::string   metrics_bind = "127.0.0.1";
 
     std::string realm_label = "reference";
+
+    // OPS-05 structured logging for telemetryd's OWN daemon logs (#165). The
+    // client-ingest sink already emits Loki JSON (forward_event_json); this
+    // governs telemetryd's process logs (startup/metrics/errors) so they share
+    // the same schema. json (stdout, prod) or text (stderr, dev).
+    std::string log_format;
+    std::string log_level;
 };
 
 const char* env(const char* k) { return std::getenv(k); }
@@ -90,12 +97,16 @@ void print_help() {
         "  --metrics-port N    Prometheus /metrics port (default 9464; 0=off).\n"
         "  --metrics-bind ADDR /metrics bind address (default 127.0.0.1).\n"
         "  --realm NAME        realm label for metrics + log lines (default 'reference').\n"
+        "  --log-format FMT    daemon log output: json (Loki JSON on stdout) or\n"
+        "                      text (readable on stderr). Default json.\n"
+        "  --log-level LVL     min log level: trace|debug|info|warn|error (info).\n"
         "  --version           Print version and build info, then exit.\n"
         "  --help, -h          Print this help, then exit.\n"
         "\n"
         "Env fallbacks: MERIDIAN_INGEST_PORT, MERIDIAN_INGEST_BIND,\n"
         "MERIDIAN_INGEST_PATH, MERIDIAN_METRICS_PORT, MERIDIAN_METRICS_BIND,\n"
-        "MERIDIAN_REALM (flags override env override defaults).\n",
+        "MERIDIAN_REALM, MERIDIAN_LOG_FORMAT, MERIDIAN_LOG_LEVEL\n"
+        "(flags override env override defaults).\n",
         kDaemonName, kDaemonName);
 }
 
@@ -141,9 +152,15 @@ int main(int argc, char** argv) {
         }
         if (std::strcmp(argv[i], "--metrics-bind") == 0) { cfg.metrics_bind = next("--metrics-bind"); continue; }
         if (std::strcmp(argv[i], "--realm") == 0) { cfg.realm_label = next("--realm"); continue; }
+        if (std::strcmp(argv[i], "--log-format") == 0) { cfg.log_format = next("--log-format"); continue; }
+        if (std::strcmp(argv[i], "--log-level") == 0) { cfg.log_level = next("--log-level"); continue; }
         std::fprintf(stderr, "%s: unknown option '%s' (try --help)\n", kDaemonName, argv[i]);
         return 2;
     }
+
+    // OPS-05 logging (#165): env defaults first, flags override below.
+    meridian::core::log::configure_from_env();
+    meridian::core::log::set_process(kDaemonName);
 
     // Env fallbacks (flags already applied override these).
     if (const char* p = env("MERIDIAN_INGEST_PORT")) {
@@ -156,6 +173,17 @@ int main(int argc, char** argv) {
     }
     if (const char* b = env("MERIDIAN_METRICS_BIND")) cfg.metrics_bind = b;
     if (const char* r = env("MERIDIAN_REALM")) cfg.realm_label = r;
+
+    // Realm label -> the daemon-log `realm` field; then log flags override.
+    meridian::core::log::set_realm(cfg.realm_label);
+    if (!cfg.log_format.empty()) {
+        meridian::core::log::set_format(
+            meridian::core::log::format_from_string(cfg.log_format));
+    }
+    if (!cfg.log_level.empty()) {
+        meridian::core::log::set_level(
+            meridian::core::log::level_from_string(cfg.log_level));
+    }
 
     // --- /metrics endpoint (client-ingest counts; SAD §8.5). ------------------
     // Start it BEFORE the ingest so the very first accepted batch's counter is

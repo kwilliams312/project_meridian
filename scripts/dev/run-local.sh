@@ -22,6 +22,12 @@
 #   authd   IF-1  127.0.0.1:7100 (TLS 1.3)
 #   worldd  IF-2  127.0.0.1:7200 (TLS 1.3)
 #   MariaDB       127.0.0.1:3307 (throwaway, socket /tmp/mmdb.sock)
+#
+# Logging (OPS-05 #165): the daemons default to structured JSON logs (one Loki-
+# ingestable object per line on stdout). This script launches them with
+# `--log-format text` so the .dev-run/*.log files stay human-readable for local
+# development. Drop the flag (or set MERIDIAN_LOG_FORMAT=json) to see the prod
+# JSON shape. `--log-level trace|debug|info|warn|error` sets the floor.
 set -euo pipefail
 
 # shellcheck source=scripts/dev/_common.sh
@@ -147,6 +153,7 @@ log "Launching authd (IF-1) on 127.0.0.1:${AUTHD_PORT}"
 env MERIDIAN_DB_HOST=127.0.0.1 MERIDIAN_DB_PORT="${MERIDIAN_DEV_DB_PORT}" \
     MERIDIAN_DB_USER=root MERIDIAN_DB_NAME=meridian_auth \
   "$AUTHD" --cert "$CERT" --key "$KEY" --bind 127.0.0.1 --port "${AUTHD_PORT}" \
+    --log-format text \
   >"${RUN_DIR}/authd.log" 2>&1 &
 AUTHD_PID=$!
 echo "$AUTHD_PID" > "${AUTHD_PIDFILE}"
@@ -157,6 +164,7 @@ env MERIDIAN_DB_HOST=127.0.0.1 MERIDIAN_DB_PORT="${MERIDIAN_DEV_DB_PORT}" \
     MERIDIAN_CHARDB_HOST=127.0.0.1 MERIDIAN_CHARDB_PORT="${MERIDIAN_DEV_DB_PORT}" \
     MERIDIAN_CHARDB_USER=root MERIDIAN_CHARDB_NAME=meridian_characters \
   "$WORLDD" --cert "$CERT" --key "$KEY" --bind 127.0.0.1 --port "${WORLDD_PORT}" \
+    --log-format text \
   >"${RUN_DIR}/worldd.log" 2>&1 &
 WORLDD_PID=$!
 echo "$WORLDD_PID" > "${WORLDD_PIDFILE}"

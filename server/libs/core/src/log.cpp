@@ -13,6 +13,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <mutex>
 #include <string>
@@ -173,6 +174,18 @@ void set_process(std::string_view process) {
 void set_realm(std::string_view realm) {
     std::lock_guard<std::mutex> guard(g_label_mutex);
     g_realm.assign(realm.data(), realm.size());
+}
+
+void configure_from_env() {
+    if (const char* f = std::getenv("MERIDIAN_LOG_FORMAT")) {
+        set_format(format_from_string(f));
+    }
+    if (const char* l = std::getenv("MERIDIAN_LOG_LEVEL")) {
+        set_level(level_from_string(l));
+    }
+    if (const char* r = std::getenv("MERIDIAN_REALM")) {
+        set_realm(r);
+    }
 }
 
 // --- Rendering --------------------------------------------------------------

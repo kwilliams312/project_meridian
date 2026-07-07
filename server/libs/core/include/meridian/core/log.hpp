@@ -123,6 +123,13 @@ void set_process(std::string_view process);
 // "reference".
 void set_realm(std::string_view realm);
 
+// Apply logging config from the environment (the 12-factor override path the
+// daemons and compose stack use, before flags): MERIDIAN_LOG_FORMAT
+// (json|text) and MERIDIAN_LOG_LEVEL (trace..error). Unset vars leave the
+// current value. Called at daemon startup; explicit --log-format/--log-level
+// flags override afterwards.
+void configure_from_env();
+
 // Emit one record. `category` is the subsystem tag (rendered as the JSON
 // `logger` field and the text `[category]` tag). `fields` are typed structured
 // key-values placed in the JSON body. Thread-safe: the whole line is written
