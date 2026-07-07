@@ -62,6 +62,7 @@ add_library(mcc_stages STATIC
     src/stages/format.cpp
     src/stages/idmap.cpp
     src/stages/link.cpp
+    src/stages/index.cpp
     src/stages/content_hash.cpp
     src/stages/emit_sql.cpp
     src/stages/emit_pck.cpp
