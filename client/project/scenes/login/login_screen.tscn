@@ -1,0 +1,70 @@
+; SPDX-License-Identifier: Apache-2.0
+;
+; Project Meridian — minimal login screen scene (issue #99).
+; A plain Control tree wired to login_screen.gd: host/port/account/password
+; fields, a Login button, and a status label. Intentionally minimal — the #99
+; deliverable is the login FLOW + net core, not skinned UI (a later UI story
+; skins this). Nodes use unique names (%Name) so the script's @onready lookups
+; resolve regardless of layout.
+
+[gd_scene load_steps=2 format=3 uid="uid://bmeridianlogin099"]
+
+[ext_resource type="Script" path="res://scenes/login/login_screen.gd" id="1_login"]
+
+[node name="LoginScreen" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1_login")
+
+[node name="VBox" type="VBoxContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -160.0
+offset_top = -110.0
+offset_right = 160.0
+offset_bottom = 110.0
+
+[node name="Title" type="Label" parent="VBox"]
+layout_mode = 2
+text = "Project Meridian — Login"
+
+[node name="HostEdit" type="LineEdit" parent="VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "127.0.0.1"
+placeholder_text = "Login server host"
+
+[node name="PortEdit" type="LineEdit" parent="VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "7100"
+placeholder_text = "Port (IF-1 default 7100)"
+
+[node name="AccountEdit" type="LineEdit" parent="VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "Account"
+
+[node name="PasswordEdit" type="LineEdit" parent="VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+secret = true
+placeholder_text = "Password"
+
+[node name="LoginButton" type="Button" parent="VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Login"
+
+[node name="StatusLabel" type="Label" parent="VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+autowrap_mode = 2
+text = ""
