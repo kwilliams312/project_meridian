@@ -254,3 +254,20 @@ Action tracked in M3 (epic **#266**):
 | #271 | **Cross-repo integration-test strategy** — pinned-SHA super-repo, only if go | Contingent on #270 = go |
 
 **Status:** deferred to M3. No baseline change; no code impact now. The next concrete step is the in-monorepo `meridian-protocol` extraction (#267); the split itself is not committed and is re-decided at the #270 go/no-go point.
+
+---
+
+## 14. Character management rides the world session — M0 (2026-07-07, no baseline change)
+
+**Decision D-35: character management (list/create/delete) rides the authenticated WORLD session (worldd, WoW-style), and it is M0 — implement now.** Project-owner direction, recorded on issue **#286**. This is an intentional, authorized additive extension to the previously-frozen M0 world protocol (IF-2, `schema/net/world.fbs`). No baseline matrix change and no new feature ID — it discharges the CHR-01 stub's (D-11) missing wire surface, which #110 had to work around with a client-local in-memory stub.
+
+Binding rules:
+
+1. **On the world session, not a separate service.** The three ops are IF-2 messages carried over the same authenticated, post-grant worldd session as movement/entity/clock — mirroring WoW's realm/world connection, where character management happens before entering world. No new daemon, port, or interface number; the messages are additive opcodes in the session/system range (`0x0010`–`0x0015`), leaving the frozen movement (`0x1xxx`) / entity (`0x2xxx`) / clock (`0x0004`) shapes untouched and backward-compatible.
+2. **The account is always the session's own.** Every op acts on `ConnCtx.account_id` — the account the IF-3 grant authenticated this session as — never an account named in the message (no `account_id` field appears in any of the three request tables). A client can therefore only ever list/create/delete its OWN characters. Ownership is additionally enforced at the DB by the meridian-characters CRUD's `WHERE id = ? AND account_id = ?` predicate (the soft-ref rule, server SAD §4.4), so deleting or listing another account's characters is impossible by construction.
+3. **Backed by the existing CRUD, not a reimplementation.** worldd's handlers call the merged `meridian-characters` library (#85) — `list_characters` / `create_character` / `delete_character` — mapping its typed create exceptions (`DuplicateName` / `InvalidRace` / `InvalidClass` / `InvalidName`) 1:1 onto typed wire statuses. The D-11 M0-frozen race/class roster (`roster.h`) is the validation source. The char-DB read/write runs synchronously on the IO worker, exactly like enter-world's grant consume + placeholder load (no world-thread involvement).
+4. **Guarded by the golden conformance corpus (#68) + determinism gate (#122).** Six golden fixtures (one per new message) decode-assert + semantically round-trip in the proto-conformance gate; the additive schema change keeps every existing IF-1/IF-2 golden byte-identical.
+
+Scope landed with this decision (issue **#286**): the six messages + opcode wiring, the three worldd handlers on the CRUD, a DB-backed integration test over a real authenticated session (in the `worldd-session` CI job), and the conformance fixtures.
+
+**Client wiring is a scoped follow-up, not part of this decision's server landing.** The #110 char-select store (`client/project/scenes/charselect/character_store.gd`) remains a local in-memory stub for now: replacing it with real requests over the net thread (#279) is a client-track change that cannot be verified headlessly on the M0 client (the MoltenVK/Apple-Silicon caveat, #283), so it is deferred rather than shipped unverified. The store was authored specifically so only that one file changes when the wiring lands — its create/delete validation already mirrors the server's failure taxonomy, which now has a wire home.

@@ -4,26 +4,30 @@
 #
 # ⚠ THIS IS A LOCAL, IN-MEMORY STUB — NOT the real character list.
 #
-# WHY A STUB: at M0 there is NO character-management wire message. The world
-# protocol (schema/net/world.fbs) freezes the M0 opcode set to session/system,
-# movement, entity-state and clock-sync ONLY; the 0x2xxx+ ranges that would carry
-# a char-list / char-create / char-delete op are reserved-but-undefined ("Do NOT
-# define those tables until their milestone"). The SERVER already has the CRUD
-# (server/characters/ — list/create/delete, #85) as a library, but it is not yet
-# exposed over any IF the client can call. Rather than invent a wire format, this
-# script keeps the account's characters in memory so the char-select flow (#110)
-# is buildable and testable end-to-end now.
+# WHY STILL A STUB: the char-management WIRE MESSAGES now exist on the server side
+# (decision D-35 / #286): schema/net/world.fbs carries CharList/CharCreate/CharDelete
+# request+response over the authenticated world session (opcodes 0x0010–0x0015), and
+# worldd implements the three handlers backed by the meridian-characters CRUD (#85),
+# scoped to the session's own account. What is NOT yet done is the CLIENT wiring —
+# sending these messages over the net thread (#279) and rendering the responses.
+# That is deferred (a scoped follow-up), not shipped here, because the M0 client
+# cannot be verified headlessly (the MoltenVK/Apple-Silicon caveat, #283), so
+# unverified transport code must not land. Until then this store keeps the account's
+# characters in memory so the char-select flow (#110) stays buildable + testable.
 #
 # The validation here deliberately MIRRORS the server's create_character rules
-# (server/characters/src/characters.h) so behaviour matches once the real op lands:
+# (server/characters/src/characters.h → CharCreateStatus) so behaviour matches once
+# the client wiring lands:
 #   1. name non-empty and <= MAX_NAME_LEN (VARCHAR(32))    -> "invalid_name"
 #   2. race id in the M0-frozen roster (MeridianRoster)     -> "invalid_race"
 #   3. class id in the M0-frozen roster (MeridianRoster)    -> "invalid_class"
 #   4. name unique, case-insensitive (uq_character_name)    -> "duplicate_name"
 #
-# MIGRATION: when the char-management IF lands, replace the three CRUD methods here
-# with calls over the session (the net thread / MeridianNetThread) — the char_select
-# view calls this store, not the transport, so only this file changes.
+# TODO(#286 client wiring): replace the three CRUD methods below with calls over the
+# session (the net thread / MeridianNetThread) — send CHAR_LIST_REQUEST on entering
+# char-select, CHAR_CREATE_REQUEST / CHAR_DELETE_REQUEST for create/delete, and map
+# the CharCreateStatus / CharDeleteStatus reply enums onto the error codes above. The
+# char_select view calls this store, not the transport, so only this file changes.
 
 extends RefCounted
 class_name CharacterStore

@@ -32,6 +32,17 @@ enum Opcode : uint16 {
   DISCONNECT     = 0x0003,   // S→C  server-initiated close with reason
   CLOCK_SYNC     = 0x0004,   // C↔S  ISSUE #65 — clock offset/ping sample (client SAD §5.1)
 
+  // --- 0x0xxx  character management  (M0, ISSUE #286 — decision D-35) ---
+  // WoW-style: list/create/delete ride the AUTHENTICATED world session, acting on
+  // the session's own account (grant-derived, IF-3). Backed by meridian-characters
+  // (#85). Request opcodes are C→S; each has a paired S→C response.
+  CHAR_LIST_REQUEST    = 0x0010,  // C→S  list this account's characters
+  CHAR_LIST_RESPONSE   = 0x0011,  // S→C  the account's character roster
+  CHAR_CREATE_REQUEST  = 0x0012,  // C→S  create a character (name + race + class, D-11)
+  CHAR_CREATE_RESPONSE = 0x0013,  // S→C  minted id or a typed rejection
+  CHAR_DELETE_REQUEST  = 0x0014,  // C→S  delete one owned character by id
+  CHAR_DELETE_RESPONSE = 0x0015,  // S→C  ok / refused (ownership-checked)
+
   // --- 0x1xxx  movement  (M0) ---
   MOVEMENT_INTENT = 0x1001,  // C→S  client movement intent (validated OPS-03)
   MOVEMENT_STATE  = 0x1002,  // S→C  authoritative movement state broadcast
@@ -170,6 +181,82 @@ enum LeaveReason : uint16 {
 table EntityLeave {
   entity_guid:uint64;
   reason:LeaveReason = OUT_OF_RANGE;
+}
+
+// ===========================================================================
+// 0x0xxx — character management  (M0, ISSUE #286 / decision D-35)
+// ===========================================================================
+// WoW-style character management over the AUTHENTICATED world session. The
+// account is ALWAYS the session's own (grant-derived, IF-3, server SAD §5.3) —
+// never a field in these messages — so a client can only ever list/create/delete
+// its OWN characters. Backed by the meridian-characters CRUD (#85), which enforces
+// ownership at the DB with `WHERE id=? AND account_id=?` (soft-ref rule, §4.4).
+// The race/class ids are the M0-frozen roster (server/characters/src/roster.h).
+// Additive to the frozen M0 session/movement/entity/clock set (decision D-35).
+
+/// C→S. List the characters owned by this session's account. Intentionally an
+/// EMPTY table (no fields) — the account is the session's, never client-supplied.
+/// The response echoes the request seq.
+table CharListRequest {}
+
+/// One roster row in a CharListResponse (the character-select screen shape).
+table CharListEntry {
+  character_id:uint64;   // server-minted character.id (BIGINT UNSIGNED)
+  name:string;           // character.name (unique, case-insensitive)
+  race:uint8;            // M0-frozen race id (roster.h)
+  char_class:uint8;      // M0-frozen class id (roster.h) — `class` is a reserved word
+  level:uint16;          // character.level
+}
+
+/// S→C. The account's characters, in creation order (may be empty).
+table CharListResponse {
+  characters:[CharListEntry];
+}
+
+/// C→S. Create a character for this session's account (CHR-01 stub / D-11 fields:
+/// name + race + class over one placeholder model — no appearance customization).
+table CharCreateRequest {
+  name:string;           // desired character name
+  race:uint8;            // M0-frozen race id (validated against the roster)
+  char_class:uint8;      // M0-frozen class id (validated against the roster)
+}
+
+/// Typed outcome of a create attempt. Mirrors the meridian-characters create
+/// exceptions 1:1 so the client can surface the exact rejection (matches the
+/// #110 char-select stub's failure taxonomy).
+enum CharCreateStatus : uint16 {
+  OK             = 0,   // created — character_id is the minted id
+  DUPLICATE_NAME = 1,   // name already taken (uq_character_name, case-insensitive)
+  INVALID_RACE   = 2,   // race not in the M0-frozen roster
+  INVALID_CLASS  = 3,   // class not in the M0-frozen roster
+  INVALID_NAME   = 4,   // name empty or exceeds VARCHAR(32)
+  INTERNAL       = 5,   // server/DB error (no characters DB, or a DB failure)
+}
+
+/// S→C. Result of a CharCreateRequest. On OK, character_id is the minted id;
+/// otherwise character_id is 0 and status names the typed rejection.
+table CharCreateResponse {
+  status:CharCreateStatus = OK;
+  character_id:uint64;
+}
+
+/// C→S. Delete one of this session's characters by id. Ownership is enforced
+/// server-side (the CRUD's `WHERE id=? AND account_id=?`) — deleting another
+/// account's character (or a non-existent id) is a no-op that returns REFUSED.
+table CharDeleteRequest {
+  character_id:uint64;
+}
+
+/// Typed outcome of a delete attempt.
+enum CharDeleteStatus : uint16 {
+  OK       = 0,   // a character owned by this account was deleted
+  REFUSED  = 1,   // not owned by this account / no such character (ownership)
+  INTERNAL = 2,   // server/DB error (no characters DB, or a DB failure)
+}
+
+/// S→C. Result of a CharDeleteRequest.
+table CharDeleteResponse {
+  status:CharDeleteStatus = OK;
 }
 
 // ===========================================================================

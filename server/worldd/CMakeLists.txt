@@ -37,6 +37,7 @@ target_link_libraries(world-dispatch
     meridian::net
     meridian::proto
     meridian::db
+    meridian::characters  # char-management handlers: list/create/delete CRUD (#286 / D-35)
     meridian::metrics  # OPS-05 session/opcode/movement/tick/disconnect metrics (#164)
     meridian::trace    # OPS-05 session-flow trace: the worldd.enter_world span (#166)
     Threads::Threads
@@ -180,6 +181,30 @@ target_link_libraries(worldd-boot-test
 )
 set_target_properties(worldd-boot-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-boot COMMAND worldd-boot-test)
+
+# --- Character-management over the session INTEGRATION test (#286 / D-35). -----
+# Drives CHAR_LIST/CREATE/DELETE over a REAL authenticated world session (TLS +
+# the real serve loop + the real handlers, backed by the meridian-characters
+# CRUD). Needs a live MariaDB with the auth schema loaded (it seeds + consumes a
+# session_grant via the real WORLD_HELLO handler) and CREATE-TABLE-IF-NOT-EXISTS
+# the `character` table in the same DB (which it points char_db at). Proves the
+# #286 acceptance list end-to-end: pre-auth rejection, list-empty -> create ->
+# list-shows-it, duplicate/invalid-race/invalid-class rejection, ownership-scoped
+# delete (another account's character is REFUSED, the row survives), own-delete
+# succeeds. Reads MERIDIAN_DB_* env and SKIPS (exit 0) when none are set — inert in
+# the plain server ctest, runs for real only in the worldd-session CI job (or
+# locally, scripts/dev/test.sh --db).
+add_executable(worldd-char-mgmt-test
+  test/char_mgmt_test.cpp
+)
+target_link_libraries(worldd-char-mgmt-test
+  PRIVATE
+    meridian::world-dispatch
+    meridian::characters
+    Threads::Threads
+)
+set_target_properties(worldd-char-mgmt-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-char-mgmt COMMAND worldd-char-mgmt-test)
 
 # --- World-DB boot: DB-backed boot INTEGRATION test (IF-4; #89). ---------------
 # Loads the real world DDL (schema/sql/world/*.sql) into a live MariaDB, seeds a
