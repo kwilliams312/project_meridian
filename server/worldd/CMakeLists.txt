@@ -22,6 +22,7 @@ find_package(Threads REQUIRED)
 add_library(world-dispatch STATIC
   world_dispatch.cpp
   world_session.cpp
+  world_boot.cpp
   movement_validation.cpp
   aoi_grid.cpp
   world_state.cpp
@@ -141,3 +142,39 @@ target_link_libraries(worldd-relay-test
 )
 set_target_properties(worldd-relay-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-relay COMMAND worldd-relay-test)
+
+# --- World-DB boot: manifest verify UNIT test (IT-M0 content contract; #89). ---
+# PURE (no DB, no socket): exercises verify_world_manifest directly — a good
+# manifest is OK, a missing/empty manifest hard-fails, a malformed content hash
+# hard-fails, a schema-version mismatch hard-fails, and a pinned-hash mismatch is
+# a soft warn (bootable). It always runs in the plain server ctest (no
+# MERIDIAN_* env needed) — the "pure hash/verify logic must be DB-free
+# unit-testable" ask (#89). The DB-backed boot proof is worldd-boot-db-test.
+add_executable(worldd-boot-test
+  test/world_boot_test.cpp
+)
+target_link_libraries(worldd-boot-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-boot-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-boot COMMAND worldd-boot-test)
+
+# --- World-DB boot: DB-backed boot INTEGRATION test (IF-4; #89). ---------------
+# Loads the real world DDL (schema/sql/world/*.sql) into a live MariaDB, seeds a
+# world_manifest row, and asserts read_world_manifest + boot_world_db over a real
+# meridian::db::Connection: a valid manifest boots OK (verdict kOk, resolved
+# version/hash logged); a truncated manifest (deleted row) fails-fast
+# (kMissingManifest); a schema-version bump fails-fast (kSchemaMismatch). Needs a
+# live MariaDB with the world DDL loaded; reads MERIDIAN_WORLDDB_* env and SKIPS
+# (exit 0) when none are set — inert in the plain server ctest, runs for real only
+# in the worldd-session CI job (mariadb service) or locally with env set.
+add_executable(worldd-boot-db-test
+  test/world_boot_db_test.cpp
+)
+target_link_libraries(worldd-boot-db-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-boot-db-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-boot-db COMMAND worldd-boot-db-test)

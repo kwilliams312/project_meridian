@@ -34,6 +34,16 @@ SET FOREIGN_KEY_CHECKS = 0;   -- tables are declared in dependency order, but
 --   boot, refuses to start on a schema_version mismatch, and logs/propagates
 --   content_hash (sent in HandshakeOk so client .pck and server data are
 --   provably the same compile).
+--
+--   IF-4 PRODUCER SIDE (follow-up, tracked with #89): worldd's boot-time READ +
+--   VERIFY of these columns is implemented (server/worldd/world_boot.*). The
+--   PRODUCER — mcc `emit-sql` populating this table (one INSERT per pack with the
+--   BLAKE3 content_hash, pack_version, id_band, schema_version, mcc_version,
+--   built_at) — is not yet implemented: tools/mcc's emit-sql/bake stages are
+--   declared (tools/mcc/src/stages/stages.h) but stubbed. worldd reads exactly
+--   these seven columns; mcc must emit exactly these seven columns. The
+--   content-schema major mcc stamps here MUST equal
+--   worldd's kSupportedContentSchemaVersion (currently 1 — the world DDL v1).
 -- ---------------------------------------------------------------------
 CREATE TABLE world_manifest (
   pack_namespace  VARCHAR(32)  NOT NULL,                  -- pack.namespace; owns an ID band
