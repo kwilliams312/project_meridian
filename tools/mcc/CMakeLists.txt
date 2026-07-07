@@ -76,6 +76,10 @@ find_package(Threads REQUIRED)
 target_include_directories(mcc_stages PUBLIC src)
 target_link_libraries(mcc_stages PUBLIC yaml-cpp::yaml-cpp Threads::Threads)
 
+# The stage objects are also linked into libmccore (a SHARED library, below), so
+# they must be position-independent. Harmless for the static CLI/test links.
+set_target_properties(mcc_stages PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # ---- The single `mcc` executable -------------------------------------------
 add_executable(mcc src/main.cpp)
 
@@ -95,6 +99,42 @@ else()
 endif()
 
 install(TARGETS mcc RUNTIME DESTINATION bin)
+
+# ---- libmccore: the C ABI shared library (TLS-03/04, #125) -----------------
+# A stable C-linkage (`extern "C"`) surface over the same pipeline stages the
+# CLI uses, so the Codex editor (.NET/Avalonia, #124) can drive
+# validate/index/pickable/backlinks IN-PROCESS via P/Invoke instead of shelling
+# out to `mcc` (SAD §2 "libmccore", §6). It links the SAME `mcc_stages` objects
+# — no reimplementation, so editor and CI can never disagree (SAD §6.4). The mcc
+# CLI is unaffected: this is an additional target that shares the stage code.
+add_library(mccore SHARED
+    libmccore/mccore.cpp)
+
+target_link_libraries(mccore PRIVATE mcc_stages)
+# The public header lives beside the source; consumers include just "mccore.h".
+target_include_directories(mccore PUBLIC libmccore)
+
+# Stamp the CLI's version into the library's build string (mccore_version_string).
+target_compile_definitions(mccore PRIVATE
+    MCC_VERSION="${PROJECT_VERSION}")
+
+# Hide everything except the MCCORE_API-annotated `extern "C"` entry points, so
+# the ABI surface is exactly the documented functions (and the C++ stage symbols
+# do not leak / clash). MCCORE_BUILDING_DLL selects dllexport on Windows.
+set_target_properties(mccore PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
+    C_VISIBILITY_PRESET hidden)
+target_compile_definitions(mccore PRIVATE MCCORE_BUILDING_DLL)
+
+if(MSVC)
+    target_compile_options(mccore PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(mccore PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+install(TARGETS mccore LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
+install(FILES libmccore/mccore.h DESTINATION include)
 
 # ---- Unit tests (mcc-tests) ------------------------------------------------
 # A dependency-light, self-contained test binary (no GoogleTest — keeps the
@@ -212,3 +252,32 @@ target_compile_definitions(mcc-emit-sql-db-tests PRIVATE
     MCC_SAMPLE_CONTENT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../content")
 
 add_test(NAME mcc-emit-sql-db COMMAND mcc-emit-sql-db-tests)
+
+# ---- libmccore C ABI smoke test (#125) -------------------------------------
+# A PURE C (C11) translation unit linked against the libmccore shared library.
+# Being C-only, it proves the ABI is callable across the C boundary (no C++
+# headers, no name mangling): it would fail to link if the surface were not
+# genuinely `extern "C"`. It opens the real `content/` root and asserts the
+# validate/index/pickable/backlinks/resolve answers match `mcc check/index/
+# pickable/refs`, plus alloc/free discipline. Registered with CTest so the #232
+# mcc CI job (which runs ctest) exercises it — no workflow edits needed.
+enable_language(C)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+
+add_executable(mccore-smoke
+    libmccore/tests/smoke.c)
+target_link_libraries(mccore-smoke PRIVATE mccore)
+
+# The content ROOT is the repo's top-level content/ dir (which contains the
+# `core` pack). Resolved at configure time so the test needs no argv/cwd.
+target_compile_definitions(mccore-smoke PRIVATE
+    MCCORE_TEST_CONTENT_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/../../content")
+
+if(MSVC)
+    target_compile_options(mccore-smoke PRIVATE /W4)
+else()
+    target_compile_options(mccore-smoke PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_test(NAME mccore-abi-smoke COMMAND mccore-smoke)
