@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Meridian.Yaml.Cst — CST-preserving YAML layer for the Codex editor (tools-sad.md §6.2).
+
+    Targets .NET 8 LTS per the Codex SAD (§6). The library builds and runs on any
+    installed .NET 8+ runtime; on machines that only ship a newer runtime (e.g. the
+    macOS dev box with net9), RollForward=Major lets the net8 assemblies run cleanly.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>12</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RollForward>Major</RollForward>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- CS1591: don't require doc comments on self-evident enum members / ctors. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <RootNamespace>Meridian.Yaml.Cst</RootNamespace>
+    <AssemblyName>Meridian.Yaml.Cst</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- YamlDotNet's low-level Scanner (skipComments:false) is the token source; see §6.2. -->
+    <PackageReference Include="YamlDotNet" Version="16.2.1" />
+  </ItemGroup>
+
+</Project>
