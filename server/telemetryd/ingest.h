@@ -104,13 +104,14 @@ const char* severity_str(IngestSeverity s);
 // ===========================================================================
 // The event kinds the D-29 client-triple permits (privacy §2a).
 // ===========================================================================
-// #168 currently ships only log events (the ERROR/CRITICAL channel). Crash and
-// missing-content events are named by the contract and the parser classifies
-// them by their item-header `type` so the endpoint accepts them the moment the
-// client emits them — but ANY other `type` is rejected.
+// #168 ships log events (the ERROR/CRITICAL channel); #109 adds crash reports.
+// Both arrive as Sentry "event" items — the parser classifies them by a payload
+// marker (`event_kind`) / the drop-summary field. Missing-content events are
+// named by the contract for later. ANY other item `type` is rejected.
 enum class EventKind : std::uint8_t {
     kLog,             // "event" item carrying an ERROR/CRITICAL log payload
     kRateLimitDrop,   // "event" item carrying the client rate-limit drop summary
+    kCrash,           // "event" item carrying a client CRASH report (#109)
 };
 
 // ===========================================================================
@@ -126,6 +127,7 @@ struct ParsedEvent {
     std::string    logger;                 // optional source tag
     std::uint64_t  timestamp_ms = 0;       // client wall-clock at capture
     std::uint32_t  rate_limited_dropped = 0;  // set on a kRateLimitDrop event
+    std::string    frames;                 // set on a kCrash event: space-joined backtrace
 };
 
 // ===========================================================================

@@ -5,13 +5,11 @@
 
 #include "meridian_telemetry.h"
 
+#include "godot_http_transport.h"
 #include "telemetry_log_core.h"
 
-#include <godot_cpp/classes/http_client.hpp>
 #include <godot_cpp/classes/time.hpp>
-#include <godot_cpp/classes/worker_thread_pool.hpp>
 #include <godot_cpp/core/class_db.hpp>
-#include <godot_cpp/variant/packed_string_array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include <string>
@@ -26,137 +24,6 @@ namespace {
 std::string to_std(const String &s) {
 	return std::string(s.utf8().get_data());
 }
-
-// ---------------------------------------------------------------------------
-// GodotHttpTransport — ships an envelope to a Sentry-compatible endpoint over
-// HTTP, OFF the main/game thread via the engine's WorkerThreadPool.
-// ---------------------------------------------------------------------------
-// "never block the game loop (async/queued)" (issue): ship() enqueues the POST
-// on a worker task and returns immediately with Ok (fire-and-forget from the
-// caller's perspective). Back-off on failure is intentionally simple here — the
-// worker retries a bounded number of times with a growing delay; harder retry
-// policy is deferred (the ingest #167 does not exist yet, so this transport is
-// exercised against a live endpoint only once #167 lands). The RETRY ACCOUNTING
-// that re-queues a failed batch lives in the core; this transport reports Failed
-// synchronously only when it can tell up-front it cannot send (parse/URL error).
-class GodotHttpTransport final : public telemetry::ITransport {
-public:
-	explicit GodotHttpTransport(const String &url) : url_(url) {
-		// Split the URL into host / port / path / tls once. A malformed URL leaves
-		// has_endpoint() false so the pipeline treats it as no-sink.
-		parse_url(url);
-	}
-
-	telemetry::ShipResult ship(const std::string &envelope) override {
-		if (!valid_) {
-			return telemetry::ShipResult::NoSink;
-		}
-		// Enqueue off-thread so the game loop never blocks on network IO. We copy
-		// the envelope + connection params into the task. Fire-and-forget: the
-		// task owns its own HTTPClient lifetime.
-		String host = host_;
-		int port = port_;
-		bool tls = tls_;
-		String path = path_;
-		String body = String::utf8(envelope.c_str());
-
-		WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
-		if (pool == nullptr) {
-			return telemetry::ShipResult::Failed;
-		}
-		// Capture by value into the callable task.
-		Callable task = callable_mp_static(&GodotHttpTransport::post_task)
-		                    .bind(host, port, tls, path, body);
-		pool->add_task(task, /*high_priority=*/false, "meridian.telemetry.ship");
-		return telemetry::ShipResult::Ok;
-	}
-
-	bool has_endpoint() const override { return valid_; }
-
-private:
-	// Worker-thread POST. Static so it needs no `this` lifetime guarantees on the
-	// pool. Best-effort with a small bounded retry; failures are logged, not
-	// surfaced back (the batch was already handed off — the core's re-queue path
-	// handles synchronous failures, which this fire-and-forget path does not hit).
-	static void post_task(String host, int port, bool tls, String path, String body) {
-		Ref<HTTPClient> http = memnew(HTTPClient);
-		Error err = http->connect_to_host(host, port,
-		                                  tls ? Ref<TLSOptions>() : Ref<TLSOptions>());
-		if (err != OK) {
-			return;
-		}
-		// Poll until connected (bounded).
-		for (int i = 0; i < 1000; ++i) {
-			http->poll();
-			HTTPClient::Status st = http->get_status();
-			if (st == HTTPClient::STATUS_CONNECTED) break;
-			if (st == HTTPClient::STATUS_CANT_CONNECT ||
-			    st == HTTPClient::STATUS_CANT_RESOLVE ||
-			    st == HTTPClient::STATUS_CONNECTION_ERROR) {
-				return;
-			}
-			OS_delay(1);
-		}
-		if (http->get_status() != HTTPClient::STATUS_CONNECTED) {
-			return;
-		}
-
-		PackedStringArray headers;
-		headers.push_back("Content-Type: application/x-sentry-envelope");
-		headers.push_back("Accept: application/json");
-		http->request(HTTPClient::METHOD_POST, path, headers, body);
-
-		// Drive the request to completion (bounded) — fire-and-forget; we do not
-		// inspect the response beyond letting it finish.
-		for (int i = 0; i < 2000; ++i) {
-			http->poll();
-			HTTPClient::Status st = http->get_status();
-			if (st == HTTPClient::STATUS_BODY || st == HTTPClient::STATUS_CONNECTED) break;
-			if (st == HTTPClient::STATUS_DISCONNECTED ||
-			    st == HTTPClient::STATUS_CONNECTION_ERROR) {
-				return;
-			}
-			OS_delay(1);
-		}
-		http->close();
-	}
-
-	// Small sleep helper without pulling OS singleton on the hot path.
-	static void OS_delay(int ms) {
-		(void)ms;   // WorkerThreadPool tasks yield naturally; avoid a hard sleep dep.
-	}
-
-	void parse_url(const String &url) {
-		// Accept http(s)://host[:port]/path. Minimal parse — the endpoint is a
-		// project-config value, not user input.
-		String u = url.strip_edges();
-		if (u.is_empty()) { valid_ = false; return; }
-		if (u.begins_with("https://")) { tls_ = true; u = u.substr(8); }
-		else if (u.begins_with("http://")) { tls_ = false; u = u.substr(7); }
-		else { valid_ = false; return; }
-
-		int slash = u.find("/");
-		String authority = slash < 0 ? u : u.substr(0, slash);
-		path_ = slash < 0 ? String("/") : u.substr(slash);
-
-		int colon = authority.find(":");
-		if (colon < 0) {
-			host_ = authority;
-			port_ = tls_ ? 443 : 80;
-		} else {
-			host_ = authority.substr(0, colon);
-			port_ = authority.substr(colon + 1).to_int();
-		}
-		valid_ = !host_.is_empty();
-	}
-
-	String url_;
-	String host_;
-	String path_ = "/";
-	int    port_ = 0;
-	bool   tls_  = false;
-	bool   valid_ = false;
-};
 
 } // namespace
 

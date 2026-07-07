@@ -447,12 +447,23 @@ IngestResult parse_and_validate(const std::string& body) {
             ev.timestamp_ms = ts->num;
         }
 
-        // Classify: a payload with rate_limited_dropped is the synthetic drop
-        // summary; otherwise a normal log/crash event.
+        // Classify by payload marker:
+        //   • rate_limited_dropped present → the synthetic drop summary,
+        //   • event_kind == "crash"        → a #109 crash report,
+        //   • otherwise                    → a normal ERROR/CRITICAL log event.
         if (const JsonValue* dropped = payload.find("rate_limited_dropped");
             dropped != nullptr && dropped->type == JsonValue::Type::kNumber) {
             ev.kind = EventKind::kRateLimitDrop;
             ev.rate_limited_dropped = static_cast<std::uint32_t>(dropped->num);
+        } else if (const JsonValue* kind = payload.find("event_kind");
+                   kind != nullptr && kind->type == JsonValue::Type::kString &&
+                   kind->str == "crash") {
+            ev.kind = EventKind::kCrash;
+            // The backtrace rides as a space-joined string (#109) — forward it too.
+            if (const JsonValue* fr = payload.find("frames");
+                fr != nullptr && fr->type == JsonValue::Type::kString) {
+                ev.frames = fr->str;
+            }
         } else {
             ev.kind = EventKind::kLog;
         }
@@ -581,9 +592,10 @@ std::string forward_event_json(const std::string& realm, const IngestContext& ct
     kv(out, "realm", realm, true);
     kv(out, "process", "telemetryd", true);
     kv(out, "level", severity_str(ev.severity), true);
-    kv(out, "event",
-       ev.kind == EventKind::kRateLimitDrop ? "client_rate_limit_drop" : "client_log_ingest",
-       true);
+    const char* event_name = "client_log_ingest";
+    if (ev.kind == EventKind::kRateLimitDrop) event_name = "client_rate_limit_drop";
+    else if (ev.kind == EventKind::kCrash)    event_name = "client_crash_ingest";
+    kv(out, "event", event_name, true);
     kv(out, "severity", severity_str(ev.severity), true);
     kv(out, "build", ctx.build, true);
     kv(out, "platform", ctx.platform, true);
@@ -598,6 +610,10 @@ std::string forward_event_json(const std::string& realm, const IngestContext& ct
         json_escape(out, "rate_limited_dropped");
         out.push_back(':');
         out += std::to_string(ev.rate_limited_dropped);
+    }
+    if (ev.kind == EventKind::kCrash) {
+        out.push_back(',');
+        kv(out, "frames", ev.frames, false);
     }
     out.push_back('}');
     return out;

@@ -321,6 +321,17 @@ void IngestServer::handle_client(int client_fd, const std::string& peer_ip) {
                 .with({cfg_.realm_label, severity_str(ev.severity), batch.context.build,
                        batch.context.platform})
                 .inc();
+        } else if (registry_ != nullptr && ev.kind == EventKind::kCrash) {
+            // meridian_client_crash_total{realm,build,platform} — the #297 name
+            // reservation made real once the client crash channel (#109) ships.
+            // Count only (privacy §4: the crash SINK is the Sentry-compatible
+            // endpoint, NOT this Prometheus stack — this is the received-count).
+            registry_
+                ->counter("meridian_client_crash_total",
+                          "Client crash reports received (count only)",
+                          {"realm", "build", "platform"})
+                .with({cfg_.realm_label, batch.context.build, batch.context.platform})
+                .inc();
         }
     }
     sink_.flush();

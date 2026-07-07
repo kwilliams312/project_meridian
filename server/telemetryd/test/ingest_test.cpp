@@ -74,6 +74,31 @@ std::string valid_envelope() {
     return env;
 }
 
+// A crash envelope EXACTLY as the client serialize_crash_envelope() (#109)
+// produces: one "event" item, level "fatal", logger "crash", event_kind "crash",
+// a space-joined frames STRING, and the no-PII context tags.
+std::string crash_payload(const std::string& session, const std::string& build,
+                          const std::string& platform) {
+    std::string p = "{";
+    p += "\"level\":\"fatal\",";
+    p += "\"message\":\"SIGSEGV (signal 11) at 0x0 — 3 frames\",";
+    p += "\"timestamp\":1720000000123,";
+    p += "\"logger\":\"crash\",";
+    p += "\"event_kind\":\"crash\",";
+    p += "\"frames\":\"0x1000 0x2000 0x3abc\",";
+    p += "\"tags\":{\"session_id\":\"" + session + "\",\"build\":\"" + build +
+         "\",\"platform\":\"" + platform + "\"}";
+    p += "}\n";
+    return p;
+}
+
+std::string crash_envelope() {
+    std::string env = kSdkHeader;
+    env += kItemHeader;
+    env += crash_payload("sess-crash", "meridian-client 0.1.0+abcd", "macos-arm64");
+    return env;
+}
+
 }  // namespace
 
 int main() {
@@ -238,6 +263,34 @@ int main() {
         // After the window elapses, the same key is allowed again.
         check("window reset re-allows", rl.allow(build, ip, /*now_ms=*/1200));
         check("one key per (build,ip); 3 keys tracked", rl.tracked_keys() == 3);
+    }
+
+    // ── (e) Crash report (#109): classified kCrash, frames forwarded ─────────
+    std::printf("[e] #109 crash envelope → accepted + kCrash + frames forwarded\n");
+    {
+        IngestResult r = parse_and_validate(crash_envelope());
+        check("crash envelope accepted", r.accepted());
+        if (r.batch) {
+            check("one crash event parsed", r.batch->events.size() == 1);
+            check("crash event kind is kCrash",
+                  r.batch->events[0].kind == EventKind::kCrash);
+            check("crash event is fatal", r.batch->events[0].severity == IngestSeverity::kFatal);
+            check("crash frames extracted",
+                  r.batch->events[0].frames == "0x1000 0x2000 0x3abc");
+            check("crash context session", r.batch->context.session_id == "sess-crash");
+
+            // Forwarded sink line names the crash stream + carries the backtrace.
+            std::string line =
+                forward_event_json("reference", r.batch->context, r.batch->events[0]);
+            check("crash sink line event name",
+                  contains(line, "\"event\":\"client_crash_ingest\""));
+            check("crash sink line has frames",
+                  contains(line, "\"frames\":\"0x1000 0x2000 0x3abc\""));
+            check("crash sink line has build",
+                  contains(line, "\"build\":\"meridian-client 0.1.0+abcd\""));
+            // Structural no-PII: only the permitted context fields.
+            check("crash sink line NO email", !contains(line, "email"));
+        }
     }
 
     if (g_fail == 0) {

@@ -15,6 +15,9 @@
 // #108 adds the client settings store + first-run auto-benchmark skeleton
 // (MeridianSettings): typed graphics/audio/input/network settings persisted to
 // user://, with a first-run CPU-probe benchmark that picks a starting quality tier.
+// #109 adds the client crash channel (MeridianCrashReporter, D-29): a minimal
+// fatal-signal handler writes a report at crash time, shipped on the next launch
+// through the SAME #167/#168 telemetry transport (Crashpad seam left for later).
 // Later issues add the remaining net / stream / datastore classes (Client SAD §2).
 
 #include "register_types.h"
@@ -26,6 +29,7 @@
 #include <godot_cpp/godot.hpp>
 
 #include "meridian_client.h"
+#include "meridian_crash_reporter.h"
 #include "meridian_login.h"
 #include "meridian_movement_controller.h"
 #include "meridian_net_thread.h"
@@ -51,6 +55,7 @@ void initialize_meridian_module(ModuleInitializationLevel p_level) {
 	GDREGISTER_CLASS(meridian::MeridianNetThread);
 	GDREGISTER_CLASS(meridian::MeridianTpsCamera);
 	GDREGISTER_CLASS(meridian::MeridianSettings);
+	GDREGISTER_CLASS(meridian::MeridianCrashReporter);
 }
 
 void uninitialize_meridian_module(ModuleInitializationLevel p_level) {

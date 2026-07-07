@@ -13,6 +13,8 @@
 
 #include "ingest_http.h"
 
+#include "meridian/metrics/registry.h"
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -46,6 +48,17 @@ std::string one_event_envelope() {
     env += "{\"level\":\"error\",\"message\":\"connect failed\",\"timestamp\":1720000000000,"
            "\"logger\":\"net\",\"tags\":{\"session_id\":\"sess-1\",\"build\":\"client-0.1\","
            "\"platform\":\"macos-arm64\"}}\n";
+    return env;
+}
+
+// A #109 crash envelope — level fatal + event_kind crash + a frames string.
+std::string crash_envelope() {
+    std::string env = kSdkHeader;
+    env += kItemHeader;
+    env += "{\"level\":\"fatal\",\"message\":\"SIGSEGV (signal 11) at 0x0 — 2 frames\","
+           "\"timestamp\":1720000000123,\"logger\":\"crash\",\"event_kind\":\"crash\","
+           "\"frames\":\"0x1000 0x2abc\",\"tags\":{\"session_id\":\"sess-2\","
+           "\"build\":\"client-0.1\",\"platform\":\"macos-arm64\"}}\n";
     return env;
 }
 
@@ -194,6 +207,42 @@ int main() {
         check("exactly cap requests accepted", ok_count == 3);
         check("the flood was throttled (429)", throttled == 7);
         flood_server.stop();
+    }
+
+    // ── (e) #109 crash report → 200 + client_crash_ingest + metric incremented ─
+    // A fresh server WITH a metrics registry: a crash POST must forward a crash
+    // sink line AND bump meridian_client_crash_total{realm,build,platform} — the
+    // #297 reservation made real.
+    std::printf("[e] crash report → forwarded + meridian_client_crash_total++\n");
+    {
+        std::ostringstream sink3;
+        meridian::metrics::Registry reg;
+        IngestServerConfig cc;
+        cc.port = 0;
+        cc.bind_addr = "127.0.0.1";
+        cc.ingest_path = "/api/1/store/";
+        cc.realm_label = "reference";
+        cc.rate_limit.max_requests = 100;
+        cc.rate_limit.window_ms = 60'000;
+        IngestServer crash_server(cc, sink3, &reg);
+        crash_server.start();
+        std::uint16_t cport = crash_server.port();
+
+        std::string resp = http_post(cport, "/api/1/store/", crash_envelope());
+        check("crash POST → 200", resp.rfind("HTTP/1.1 200", 0) == 0);
+        std::string forwarded = sink3.str();
+        check("crash sink line is client_crash_ingest",
+              contains(forwarded, "\"event\":\"client_crash_ingest\""));
+        check("crash sink line has frames", contains(forwarded, "\"frames\":\"0x1000 0x2abc\""));
+        check("crash sink line NO PII", !contains(forwarded, "email"));
+
+        std::string metrics = reg.render();
+        check("meridian_client_crash_total present",
+              contains(metrics, "meridian_client_crash_total"));
+        check("crash metric counts 1 for this build/platform",
+              contains(metrics, "meridian_client_crash_total{realm=\"reference\","
+                                "build=\"client-0.1\",platform=\"macos-arm64\"} 1"));
+        crash_server.stop();
     }
 
     server.stop();
