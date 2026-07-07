@@ -78,6 +78,12 @@ add_subdirectory(libs/db)
 # net: TLS 1.3 listener + IF-1 length framing for authd (#77) — clean-room from
 # SAD §5.1/§2.1; needs OpenSSL (BSD sockets, no Asio at M0).
 add_subdirectory(libs/net)
+# characters: the M0 character-stub CRUD (CHR-01 stub, D-11; #85). Composes
+# meridian::db over the characters DB `character` table (SAD §4.2/§4.4) — list /
+# create / delete with the account_id soft-ref rule + the M0-frozen race/class
+# roster. A library the enter-world / character-select flow links; ships a
+# DB-backed integration test that self-SKIPs without MERIDIAN_DB_*.
+add_subdirectory(characters)
 
 # --- Daemons (server/README.md process table; SAD §2.1 / §2.5). --------------
 add_subdirectory(authd)
