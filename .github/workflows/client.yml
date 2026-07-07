@@ -69,7 +69,7 @@ jobs:
       # a no-op when already present; `|| true` swallows the nonzero some brew
       # versions return for "already installed".
       - name: Ensure build tools (arm64 Homebrew)
-        run: brew install flatbuffers openssl@3 || true
+        run: HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install flatbuffers openssl@3 || true
       - uses: actions/checkout@v4
         # No submodules: the engine-agnostic cores never touch godot-cpp.
       # Runs in the runner's own (Rosetta x86_64) process on purpose, so the log
@@ -146,7 +146,7 @@ jobs:
           echo "/opt/homebrew/sbin" >> "$GITHUB_PATH"
       # Same self-sufficiency as client-cores: install the toolchain, don't assume it.
       - name: Ensure build tools (arm64 Homebrew)
-        run: brew install flatbuffers openssl@3 || true
+        run: HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install flatbuffers openssl@3 || true
       - uses: actions/checkout@v4
         with:
           submodules: recursive   # client/godot-cpp at its pinned 4.7 commit
