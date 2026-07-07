@@ -35,8 +35,10 @@
 
 #include "meridian/core/log.hpp"
 #include "meridian/core/version.hpp"
+#include "meridian/db/connection.h"
 #include "meridian/net/tls_listener.h"
 
+#include "world_boot.h"
 #include "world_dispatch.h"
 
 #include <atomic>
@@ -66,6 +68,19 @@ struct WorlddConfig {
 
     // World-process scaffold sizing (WorldServerConfig).
     meridian::worldd::WorldServerConfig world;
+
+    // World content DB (IF-4; #89). The read-only mcc artifact worldd boots from:
+    // it reads the `world_manifest` (content version + BLAKE3 hash mcc recorded)
+    // and refuses to boot on a schema-version mismatch / missing manifest (SAD
+    // §4.3). Same MERIDIAN_*DB_* env shape as the auth/char DBs. When `user` is
+    // empty (no MERIDIAN_WORLDDB_* set), the boot check is SKIPPED — the daemon
+    // still serves (dispatcher, session path) without a world DB wired, which
+    // keeps the DB-less smoke run / dispatch test runnable at M0.
+    meridian::db::ConnectParams world_db;
+    // Optional operator-pinned expected content hash (SAD §5.4.3 content-hash
+    // tie). When set + it disagrees with the loaded hash -> a loud WARNING at
+    // M0–M1 (bootable), not a refusal. Empty -> the tie is not checked.
+    std::string expected_content_hash;
 };
 
 const char* env(const char* k) { return std::getenv(k); }
@@ -162,6 +177,17 @@ int main(int argc, char** argv) {
     if (const char* pw = env("MERIDIAN_CHARDB_PASS")) cfg.world.char_db.password = pw;
     if (const char* n = env("MERIDIAN_CHARDB_NAME")) cfg.world.char_db.database = n;
 
+    // World content DB (IF-4 boot; #89). Its own MERIDIAN_WORLDDB_* env so it can
+    // point at a different DB/host than the auth DB (the world DB is the mcc
+    // artifact; the auth DB is operational state — SAD §2.2 3-DB split).
+    if (const char* s = env("MERIDIAN_WORLDDB_SOCKET")) cfg.world_db.unix_socket = s;
+    if (const char* h = env("MERIDIAN_WORLDDB_HOST")) cfg.world_db.host = h;
+    if (const char* p = env("MERIDIAN_WORLDDB_PORT")) cfg.world_db.port = static_cast<unsigned>(std::atoi(p));
+    if (const char* u = env("MERIDIAN_WORLDDB_USER")) cfg.world_db.user = u;
+    if (const char* pw = env("MERIDIAN_WORLDDB_PASS")) cfg.world_db.password = pw;
+    if (const char* n = env("MERIDIAN_WORLDDB_NAME")) cfg.world_db.database = n;
+    if (const char* eh = env("MERIDIAN_WORLDDB_EXPECTED_HASH")) cfg.expected_content_hash = eh;
+
     if (const char* r = env("MERIDIAN_WORLDD_REALM_ID")) {
         cfg.world.realm_id = static_cast<std::uint32_t>(std::atoi(r));
     }
@@ -171,6 +197,48 @@ int main(int argc, char** argv) {
                      "%s: --cert and --key are required to serve (try --help)\n",
                      kDaemonName);
         return 2;
+    }
+
+    // --- World-DB boot: manifest check + content hash (IF-4; #89) --------------
+    // BEFORE accepting connections. Connect to the world content DB, read the
+    // manifest mcc recorded, verify it (schema this binary serves + a well-formed
+    // content hash), and log the loaded content version. Policy (SAD §4.3 / §5.4.3):
+    //   * missing / malformed manifest OR a schema-version mismatch -> FAIL-FAST:
+    //     the daemon refuses to boot (exit 3). Serving a corrupt / un-serveable
+    //     world DB is worse than not serving.
+    //   * a pinned expected-hash disagreement -> loud WARNING, boots anyway
+    //     (advisory content-hash tie at M0–M1; becomes a hard fail on the test
+    //     realm from M1).
+    // When no world DB is wired (MERIDIAN_WORLDDB_* unset -> empty user), the
+    // check is SKIPPED — the daemon serves without content (dispatcher / session
+    // path only), which keeps the DB-less smoke run + dispatch test runnable.
+    if (!cfg.world_db.user.empty()) {
+        std::optional<std::string> expected;
+        if (!cfg.expected_content_hash.empty()) expected = cfg.expected_content_hash;
+        try {
+            meridian::db::Connection world_db(cfg.world_db);
+            meridian::worldd::BootReport boot =
+                meridian::worldd::boot_world_db(world_db, expected);
+            if (boot.hard_fail) {
+                std::fprintf(stderr,
+                             "%s: world-DB boot refused [%s]: %s\n", kDaemonName,
+                             meridian::worldd::boot_verdict_name(boot.verdict),
+                             boot.reason.c_str());
+                return 3;
+            }
+        } catch (const meridian::db::DbError& e) {
+            // Could not even connect to the world DB. A world DB was explicitly
+            // configured, so a connect failure is a hard boot failure, not a skip.
+            std::fprintf(stderr,
+                         "%s: world-DB boot refused: cannot connect to world DB: %s\n",
+                         kDaemonName, e.what());
+            return 3;
+        }
+    } else {
+        meridian::core::log::warn(
+            kDaemonName,
+            "no world DB configured (MERIDIAN_WORLDDB_* unset) — serving without "
+            "content; IF-4 manifest check skipped");
     }
 
     meridian::net::ListenConfig lc;

@@ -203,10 +203,21 @@ jobs:
       - name: Load auth schema (0001_init_auth.up.sql)
         run: |
           mariadb -h 127.0.0.1 -P 3306 -u root -pci meridian_auth < server/db/auth/migrations/0001_init_auth.up.sql
-      - name: Build worldd-session-test + worldd-relay-test
+      # World content DB for the IF-4 boot test (#89): a separate DB loaded from
+      # the mcc-produced world DDL (schema/sql/world/*.sql). worldd reads the
+      # world_manifest table from here at boot. FOREIGN_KEY_CHECKS is disabled for
+      # the whole load because the DDL files reference each other across files (the
+      # 00_manifest.sql preamble only affects its own connection, so we set it here
+      # for the single combined load).
+      - name: Load world schema (schema/sql/world/*.sql)
+        run: |
+          mariadb -h 127.0.0.1 -P 3306 -u root -pci -e "CREATE DATABASE IF NOT EXISTS meridian_world"
+          ( echo "SET FOREIGN_KEY_CHECKS=0;"; cat schema/sql/world/*.sql ) \
+            | mariadb -h 127.0.0.1 -P 3306 -u root -pci meridian_world
+      - name: Build worldd-session-test + worldd-relay-test + worldd-boot-db-test
         run: |
           cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
-          cmake --build server/build --target worldd worldd-session-test worldd-relay-test
+          cmake --build server/build --target worldd worldd-session-test worldd-relay-test worldd-boot-db-test
       - name: Run worldd IF-3 session establishment test (MariaDB service)
         env:
           MERIDIAN_DB_HOST: 127.0.0.1
@@ -230,3 +241,18 @@ jobs:
           MERIDIAN_DB_PASS: ci
           MERIDIAN_DB_NAME: meridian_auth
         run: ./server/build/worldd/worldd-relay-test
+      # worldd world-DB boot: manifest check + content hash (#89, IF-4). Reads the
+      # world_manifest from the world DB loaded above (MERIDIAN_WORLDDB_* points at
+      # meridian_world), asserts a valid manifest boots (kOk, version/hash logged),
+      # a truncated/omitted manifest fails-fast (kMissingManifest), a schema bump
+      # fails-fast (kSchemaMismatch), and a pinned-hash mismatch is an advisory
+      # SoftWarn. The pure verify half runs DB-free in the `server` job's ctest
+      # (worldd-boot).
+      - name: Run worldd world-DB boot test (MariaDB service)
+        env:
+          MERIDIAN_WORLDDB_HOST: 127.0.0.1
+          MERIDIAN_WORLDDB_PORT: 3306
+          MERIDIAN_WORLDDB_USER: root
+          MERIDIAN_WORLDDB_PASS: ci
+          MERIDIAN_WORLDDB_NAME: meridian_world
+        run: ./server/build/worldd/worldd-boot-db-test
