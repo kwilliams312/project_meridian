@@ -239,8 +239,9 @@ void Dispatcher::register_m0_stubs() {
            auto reject = [&](const std::string& why) {
                // Every grant failure is GRANT_INVALID on the wire (no oracle to
                // the client which check failed); the reason is logged server-side.
-               log::warn(kCat, "WORLD_HELLO rejected grant_id=" +
-                                   std::to_string(grant_id) + ": " + why);
+               log::warn(kCat, "WORLD_HELLO rejected",
+                         {log::field("grant_id", grant_id),
+                          log::field("reason", why)});
                // OPS-05: a rejected handshake is a WORLD_HELLO error (Errors dash).
                metrics::opcode_errors_total()
                    .with(ctx.labels.rzs_opcode(opcode_label(
@@ -322,12 +323,15 @@ void Dispatcher::register_m0_stubs() {
            ctx.movement.emplace(spawn, /*spawn_time_ms=*/0);
            ctx.movement->set_entity_guid(pc.char_guid);  // may be refined below (AoI)
 
-           log::info(kCat, "WORLD_HELLO accepted grant_id=" +
-                               std::to_string(grant_id) + " account=" +
-                               std::to_string(consumed->account_id) + " realm=" +
-                               std::to_string(consumed->realm_id) + " char='" +
-                               pc.name + "' class=" + std::to_string(pc.class_id) +
-                               " -> HandshakeOk");
+           log::info(kCat, "WORLD_HELLO accepted -> HandshakeOk",
+                     {log::field("grant_id", grant_id),
+                      log::field("account_id",
+                                 static_cast<std::int64_t>(consumed->account_id)),
+                      log::field("realm_id",
+                                 static_cast<std::int64_t>(consumed->realm_id)),
+                      log::field("character", pc.name),
+                      log::field("class_id",
+                                 static_cast<std::int64_t>(pc.class_id))});
 
            // 4. Reply HandshakeOk. content_hash is an M0 placeholder (IF-4 world
            //    content hashing is later); server_proof empty (see encoder note).

@@ -67,6 +67,13 @@ struct AuthdConfig {
     std::uint16_t metrics_port = 9464;
     std::string metrics_bind = "127.0.0.1";
     std::string realm_label = "reference";
+
+    // OPS-05 structured logging (#165). Prod default: JSON (one Loki-ingestable
+    // object per line on stdout, matching telemetryd's #167 sink). Dev/run-local
+    // sets text for a readable stderr line. Env MERIDIAN_LOG_FORMAT /
+    // MERIDIAN_LOG_LEVEL apply first, then these flags override.
+    std::string log_format;  // empty = leave env/default (json)
+    std::string log_level;   // empty = leave env/default (info)
 };
 
 const char* env(const char* k) { return std::getenv(k); }
@@ -85,12 +92,20 @@ void print_help() {
         "  --build-floor N    Reject client builds below N (default 0 = none).\n"
         "  --metrics-port N   Prometheus /metrics port (default 9464; 0=off).\n"
         "  --metrics-bind ADDR  /metrics bind address (default 127.0.0.1).\n"
-        "  --realm NAME       realm label for metrics (default 'reference').\n"
+        "  --realm NAME       realm label for metrics + logs (default 'reference').\n"
+        "  --log-format FMT   log output: json (prod, Loki JSON on stdout) or\n"
+        "                     text (dev, readable on stderr). Default json.\n"
+        "  --log-level LVL    min log level: trace|debug|info|warn|error (info).\n"
         "  --version          Print version and build info, then exit.\n"
         "  --help, -h         Print this help, then exit.\n"
         "\n"
         "DB connection is read from the environment (MERIDIAN_DB_HOST, _PORT,\n"
         "_USER, _PASS, _NAME, or _SOCKET). authd needs a live auth DB to serve.\n"
+        "\n"
+        "Logging (OPS-05 #165): structured JSON logs (one Loki-ingestable object\n"
+        "per line on stdout) share telemetryd's #167 schema — realm/process/level/\n"
+        "event/severity/logger/message/timestamp_ms. Env: MERIDIAN_LOG_FORMAT,\n"
+        "MERIDIAN_LOG_LEVEL (flags override).\n"
         "\n"
         "Metrics: authd exposes a plain-HTTP Prometheus /metrics endpoint on the\n"
         "metrics port (SEPARATE from the game TLS port) — the internal scrape\n"
@@ -126,13 +141,19 @@ void handle_connection(meridian::net::Session sess, meridian::db::ConnectParams 
         meridian::authd::LoginResult r =
             meridian::authd::run_login(sess, db, login);
         meridian::core::log::info(
-            kDaemonName,
-            "login " + peer + " -> outcome=" + std::to_string(static_cast<int>(r.outcome)) +
-                " account=" + std::to_string(r.account_id) +
-                (r.grant_id ? " grant issued" : "") + " (" + r.detail + ")");
+            kDaemonName, "login processed",
+            {meridian::core::log::field("peer", peer),
+             meridian::core::log::field("outcome",
+                                        static_cast<int>(r.outcome)),
+             meridian::core::log::field("account_id",
+                                        static_cast<std::int64_t>(r.account_id)),
+             meridian::core::log::field("grant_issued", r.grant_id != 0),
+             meridian::core::log::field("detail", r.detail)});
     } catch (const std::exception& e) {
-        meridian::core::log::warn(kDaemonName,
-                                  "connection " + peer + " failed: " + e.what());
+        meridian::core::log::warn(
+            kDaemonName, "connection failed",
+            {meridian::core::log::field("peer", peer),
+             meridian::core::log::field("error", std::string(e.what()))});
     }
     sess.close();
     // OPS-05 net signal: this connection is now closed (SAD §8.5 accept/close).
@@ -176,9 +197,17 @@ int main(int argc, char** argv) {
             cfg.metrics_bind = next("--metrics-bind"); continue;
         }
         if (std::strcmp(argv[i], "--realm") == 0) { cfg.realm_label = next("--realm"); continue; }
+        if (std::strcmp(argv[i], "--log-format") == 0) { cfg.log_format = next("--log-format"); continue; }
+        if (std::strcmp(argv[i], "--log-level") == 0) { cfg.log_level = next("--log-level"); continue; }
         std::fprintf(stderr, "%s: unknown option '%s' (try --help)\n", kDaemonName, argv[i]);
         return 2;
     }
+
+    // OPS-05 logging (#165): env defaults first (MERIDIAN_LOG_FORMAT/_LEVEL/
+    // _REALM), then the flags below override. set_process stamps every JSON
+    // record with this daemon's identity.
+    meridian::core::log::configure_from_env();
+    meridian::core::log::set_process(kDaemonName);
 
     // Env fallbacks for the metrics endpoint + realm label (flags override).
     if (const char* p = env("MERIDIAN_METRICS_PORT")) {
@@ -187,6 +216,17 @@ int main(int argc, char** argv) {
     if (const char* b = env("MERIDIAN_METRICS_BIND")) cfg.metrics_bind = b;
     if (const char* r = env("MERIDIAN_REALM")) cfg.realm_label = r;
     cfg.login.realm_label = cfg.realm_label;
+
+    // Realm label -> the log `realm` field too (unifies metric + log grouping).
+    meridian::core::log::set_realm(cfg.realm_label);
+    if (!cfg.log_format.empty()) {
+        meridian::core::log::set_format(
+            meridian::core::log::format_from_string(cfg.log_format));
+    }
+    if (!cfg.log_level.empty()) {
+        meridian::core::log::set_level(
+            meridian::core::log::level_from_string(cfg.log_level));
+    }
 
     load_db_env(cfg.db);
 

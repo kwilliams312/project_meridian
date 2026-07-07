@@ -66,6 +66,15 @@ scripts/dev/run-local.sh                # start in background (Stop: --stop)
 Build trees land under `build/` (gitignored). Throwaway DB datadirs and daemon
 logs land under `.dev-run/` (gitignored).
 
+**Logging (OPS-05 #165).** The daemons emit structured JSON logs by default —
+one Loki-ingestable object per line on stdout, sharing telemetryd's schema
+(`realm/process/level/event/severity/logger/message/timestamp_ms` + typed
+fields). `run-local.sh` launches them with `--log-format text` so the
+`.dev-run/*.log` files stay human-readable (`2026-… WARN [worldd] …`). To see the
+prod JSON shape locally, run a daemon directly (e.g. `worldd … ` — JSON is the
+default) or set `MERIDIAN_LOG_FORMAT=json`. `--log-level trace|debug|info|warn|
+error` (or `MERIDIAN_LOG_LEVEL`) sets the minimum level.
+
 ---
 
 ## The build recipe (what the scripts do under the hood)
