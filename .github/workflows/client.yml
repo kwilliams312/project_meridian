@@ -39,6 +39,12 @@ on:
       - 'server/libs/srp/**'
       - 'scripts/dev/_common.sh'
       - '.github/workflows/client.yml'
+  # Nightly macOS arm64 client export (#113): a fresh export artifact every night,
+  # before the nightly-manifest run (07:05 UTC) that pins its version+hash into the
+  # build manifest (#62/#307). Also on-demand via the Actions "Run workflow" button.
+  schedule:
+    - cron: "40 6 * * *"
+  workflow_dispatch:
 
 # One self-hosted Mac — cancel superseded runs on the same ref so a push doesn't
 # queue behind stale work.
@@ -54,6 +60,9 @@ jobs:
   # was missing from CI. Fast (~1 min), and independent signal from the heavier
   # GDExtension job below.
   client-cores:
+    # Push/PR coverage only — the nightly schedule exists solely to cut the export
+    # artifact below, not to re-run the core ctest suites.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: [self-hosted, macOS]
     steps:
       # The self-hosted runner's Actions shell starts with a minimal PATH that
@@ -136,6 +145,9 @@ jobs:
   # producing client/project/bin/libmeridian.macos.<target>.framework — the exact
   # bundle project/meridian.gdextension references for macos.debug/release.
   client-gdext:
+    # Push/PR coverage only (see client-cores). The nightly export builds its own
+    # template_debug framework, so it does not depend on this job.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: [self-hosted, macOS]
     steps:
       # Same minimal-PATH fix as client-cores: make the Homebrew toolchain
@@ -200,3 +212,125 @@ jobs:
           echo "godot-cpp lib arch: $(lipo -archs "$gcpp")"
           # OpenSSL (not mbedTLS) is what the net/login core links.
           otool -L "$bin" | grep -iE 'ssl|crypto' || { echo "::error::OpenSSL not linked into the extension"; exit 1; }
+
+  # --- macOS arm64 client EXPORT (#113) --------------------------------------
+  # The deliverable this workflow adds: a runnable, ad-hoc-signed macOS arm64 .app
+  # of the Godot client, published as a retained nightly artifact, and the
+  # version+hash coordinate that fills the `client` stream of the nightly build
+  # manifest (#62/#307). Runs on push-to-main, the nightly schedule, and manual
+  # dispatch — NOT on PRs (keeps PR CI to the fast core/gdext jobs above).
+  #
+  # scripts/export-client-macos.sh does the real work (resolve pinned editor,
+  # install pinned export templates + inject arm64 engine binaries, build the
+  # template_debug GDExtension, headless export, assert arm64-only + framework
+  # bundled + ad-hoc signed, zip + hash). The export runs under the SAME
+  # Rosetta-proof / arch -arm64 runner-reality handling as the jobs above.
+  client-export:
+    if: github.event_name != 'pull_request'
+    runs-on: [self-hosted, macOS]
+    steps:
+      # Same minimal-PATH fix as the other jobs: reach the Homebrew toolchain.
+      - name: Put Homebrew (arm64) on PATH
+        run: |
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/sbin" >> "$GITHUB_PATH"
+      - name: Ensure build tools (arm64 Homebrew)
+        run: HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install flatbuffers openssl@3 || true
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive   # client/godot-cpp at its pinned 4.7 commit
+      - name: Verify Apple-Silicon host (Rosetta-proof) + toolchain
+        run: |
+          echo "runner process uname -m : $(uname -m)"        # x86_64 under Rosetta on MacOS-M1
+          arm="$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)"
+          echo "hw.optional.arm64       : $arm"
+          test "$arm" = "1" || { echo "::error::not Apple Silicon (hw.optional.arm64=$arm)"; exit 1; }
+          echo "arch -arm64 uname -m    : $(arch -arm64 uname -m)"
+          for t in cmake flatc lipo ditto; do
+            command -v "$t" >/dev/null || { echo "::error::missing $t"; exit 1; }
+          done
+          test -f client/godot-cpp/CMakeLists.txt || { echo "::error::godot-cpp submodule not checked out"; exit 1; }
+      - name: Configure Homebrew CMake env (arm64 prefixes)
+        run: |
+          # shellcheck source=/dev/null
+          source scripts/dev/_common.sh
+          setup_cmake_env
+          echo "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+      # Reuse godot-cpp objects across runs (the export builds the template_debug
+      # GDExtension, same as client-gdext). Keyed on the pin — only rebuilds on a
+      # 4.7 bump. Path matches the export script's build tree.
+      - name: Cache godot-cpp build (keyed on the pin)
+        uses: actions/cache@v4
+        with:
+          path: build/client-gdext-template_debug/godot-cpp
+          key: godotcpp-arm64-export-${{ hashFiles('client/ENGINE_VERSION') }}
+      # Fetch + SHA-512-verify the pinned engine (editor zip + export templates
+      # .tpz) into client/.godot-bin/. The export script installs the templates
+      # from the .tpz and re-verifies the .tpz sum before installing.
+      - name: Fetch pinned engine + export templates (SHA-512 verified)
+        run: ./scripts/fetch-deps.sh
+      # Extract the pinned editor so the export uses the PINNED 4.7 engine (not
+      # whatever the runner happens to have in /Applications). The export script's
+      # editor resolver checks client/.godot-bin/Godot.app first.
+      - name: Extract pinned Godot editor into .godot-bin
+        run: |
+          ver="$(grep -E '^GODOT_VERSION=' client/ENGINE_VERSION | cut -d= -f2)"
+          ditto -x -k "client/.godot-bin/Godot_v${ver}_macos.universal.zip" client/.godot-bin/
+          test -x "client/.godot-bin/Godot.app/Contents/MacOS/Godot" \
+            || { echo "::error::pinned editor not extracted"; exit 1; }
+          arch -arm64 "client/.godot-bin/Godot.app/Contents/MacOS/Godot" --version | head -1
+      # The whole export: build template_debug framework, install templates,
+      # inject arm64 engine binaries, headless export, assert (arm64-only +
+      # framework bundled + ad-hoc signed), zip + hash. arch -arm64 keeps the
+      # framework build native even from the Rosetta host.
+      - name: Export macOS arm64 client (.app + hash)
+        run: |
+          arch -arm64 ./scripts/export-client-macos.sh \
+            --out build/export/macos \
+            --emit-env build/export/macos/client-export.env
+      # Independent hard gate on the artifact (belt-and-suspenders vs the script's
+      # own asserts): the exported .app MUST bundle the template_debug framework
+      # and be pure arm64.
+      - name: Assert export bundles the template_debug framework (arm64)
+        run: |
+          app="build/export/macos/ProjectMeridian.app"
+          fw="$app/Contents/Frameworks/libmeridian.macos.template_debug.framework/libmeridian.macos.template_debug"
+          test -f "$fw" || { echo "::error::exported .app does not bundle the template_debug framework"; exit 1; }
+          arch="$(lipo -archs "$fw")"
+          echo "bundled framework arch: $arch"
+          case "$arch" in arm64) ;; *) echo "::error::bundled framework not pure arm64 (got '$arch')"; exit 1 ;; esac
+          engine="$(find "$app/Contents/MacOS" -maxdepth 1 -type f | head -1)"
+          echo "engine binary arch: $(lipo -archs "$engine")"
+      - name: Summary
+        run: |
+          # shellcheck source=/dev/null
+          source build/export/macos/client-export.env
+          {
+            echo "### macOS arm64 client export :package:"
+            echo ""
+            echo "| field | value |"
+            echo "|-------|-------|"
+            echo "| version | \`${EXPORT_VERSION}\` |"
+            echo "| export_hash (sha256) | \`${EXPORT_HASH}\` |"
+            echo "| artifact | \`$(basename "${EXPORT_ZIP}")\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      # Retention: the runnable export zip for 30 days (docs/ops/artifact-retention.md
+      # — same window as nightly-content; regenerable from the pinned git SHA).
+      - name: Upload macOS arm64 export (retained 30 days)
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-macos-arm64
+          path: build/export/macos/ProjectMeridian-macos-arm64.zip
+          retention-days: 30
+          if-no-files-found: error
+      # The tiny coordinate (version + export_hash) the nightly-manifest downloads
+      # to fill the build manifest's `client` stream. Kept 90 days to match the
+      # manifest's own retention (a manifest may outlive its 30-day export zip).
+      - name: Upload client-export coordinate (retained 90 days)
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-export-coordinate
+          path: build/export/macos/client-export.env
+          retention-days: 90
+          if-no-files-found: error

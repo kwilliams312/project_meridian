@@ -9,8 +9,9 @@
 #   * server  — the authd + worldd GHCR images (#175-177): tag + immutable digest,
 #   * content — the mcc pipeline outputs (#120/#121): the IF-4 <-> IF-5 BLAKE3
 #               content_hash (Tools SAD 2.6) + world.sql checksum + pack metadata,
-#   * client  — the Godot client export (#113): 'pending' placeholder until #113's
-#               client-export CI lands (fill --client-version/--client-hash then),
+#   * client  — the Godot client export (#113): the macOS arm64 .app version +
+#               export_hash, pulled from the latest client.yml client-export run
+#               (falls back to 'pending' if no export artifact is available),
 #   plus the git SHA + a timestamp.
 #
 # The manifest is uploaded as a retained artifact (docs/ops/artifact-retention.md)
@@ -45,10 +46,12 @@ on:
         required: false
         default: ""
 
-# Least-privilege: read the repo + read GHCR packages (to resolve image digests).
+# Least-privilege: read the repo + read GHCR packages (to resolve image digests)
+# + read Actions (to download the latest macOS client-export coordinate #113).
 permissions:
   contents: read
   packages: read
+  actions: read
 
 concurrency:
   group: nightly-manifest
@@ -129,6 +132,52 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "resolved tag=${tag} authd=${authd_digest:-<none>} worldd=${worldd_digest:-<none>}"
 
+      # Resolve the client stream (#113): the macOS arm64 export runs on the
+      # self-hosted Mac (client.yml → client-export) and uploads a tiny
+      # `client-export-coordinate` artifact (version + export_hash). Pull it from
+      # the most recent successful client.yml run on the default branch and pin
+      # those coordinates. A manual workflow_dispatch input still wins if given.
+      # If no export artifact is found (e.g. the Mac runner was offline), the
+      # coordinate stays empty and the manifest records the client stream as
+      # 'pending' — the nightly is never blocked on the client export.
+      - name: Resolve client export coordinate (#113)
+        id: client
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_VERSION: ${{ github.event.inputs.client_version }}
+          INPUT_HASH: ${{ github.event.inputs.client_hash }}
+        run: |
+          set -euo pipefail
+          version="${INPUT_VERSION:-}"
+          hash="${INPUT_HASH:-}"
+          if [ -z "${version}" ] || [ -z "${hash}" ]; then
+            # Newest few successful client.yml runs on the default branch; try each
+            # until one carries the coordinate artifact (a cores/gdext-only run won't).
+            ids="$(gh run list --workflow client.yml \
+                     --branch "${GITHUB_REF_NAME}" --status success \
+                     --limit 10 --json databaseId --jq '.[].databaseId' || true)"
+            for id in ${ids}; do
+              rm -rf client-coord
+              if gh run download "${id}" --name client-export-coordinate --dir client-coord 2>/dev/null; then
+                echo "::notice::using client export coordinate from client.yml run ${id}"
+                # shellcheck source=/dev/null
+                source client-coord/client-export.env
+                version="${version:-${EXPORT_VERSION:-}}"
+                hash="${hash:-${EXPORT_HASH:-}}"
+                break
+              fi
+            done
+          fi
+          if [ -n "${version}" ] && [ -n "${hash}" ]; then
+            echo "resolved client export: version=${version} hash=${hash}"
+          else
+            echo "::notice::no client export coordinate found — client stream stays 'pending'"
+          fi
+          {
+            echo "version=${version}"
+            echo "hash=${hash}"
+          } >> "$GITHUB_OUTPUT"
+
       # Assemble + validate the manifest. Digest flags are omitted when empty so
       # the generator records them as null (never a fabricated digest).
       - name: Generate build manifest
@@ -138,8 +187,8 @@ jobs:
           TAG: ${{ steps.server.outputs.tag }}
           AUTHD_DIGEST: ${{ steps.server.outputs.authd_digest }}
           WORLDD_DIGEST: ${{ steps.server.outputs.worldd_digest }}
-          CLIENT_VERSION: ${{ github.event.inputs.client_version }}
-          CLIENT_HASH: ${{ github.event.inputs.client_hash }}
+          CLIENT_VERSION: ${{ steps.client.outputs.version }}
+          CLIENT_HASH: ${{ steps.client.outputs.hash }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
