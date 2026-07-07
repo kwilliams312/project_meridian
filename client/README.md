@@ -181,10 +181,23 @@ godot --headless --path project \
 
 ---
 
-## CI (follow-up, not in this PR)
+## CI
 
-A client GDExtension build/export CI job is intentionally **not** added here: the macOS
-runner isn't provisioned yet (that's **#61 / A-16**, owner-assigned). When it lands, the
-job wires `git submodule update --init` → the CMake build above → Godot export for
-win-x64 + macos-arm64 (D-28 phase 1 = build-health smoke, not an IT gate). Tracked as a
-follow-up so this PR stays conflict-free with parallel work on `.github/workflows/`.
+The first client-side CI job lands in [`.github/workflows/client.yml`](../.github/workflows/client.yml)
+(#112 / A-16). It runs on the self-hosted Apple-Silicon runner (`runs-on: [self-hosted,
+macOS]`) and targets **arm64 explicitly** (`-DCMAKE_OSX_ARCHITECTURES=arm64`, which
+godot-cpp honors) because the runner reports the `macOS` label set, not an `arm64` label.
+Two jobs:
+
+- **`client-cores`** — builds the engine-agnostic cores with
+  `-DMERIDIAN_CLIENT_NET=ON -DMERIDIAN_BOT=ON -DMERIDIAN_CLIENT_TESTS=ON` and runs their
+  ctest suites (the `clientnet-test` 77 checks, the bot world-session/FSM tests, and the
+  GDExtension core tests). This verifies **OpenSSL** (TLS 1.3 + SRP-6a +
+  ChaCha20-Poly1305/HKDF — not mbedTLS) and the FlatBuffers codec compile clean on arm64.
+- **`client-gdext`** — checks out the pinned godot-cpp submodule and builds the
+  GDExtension into `client/project/bin/libmeridian.macos.template_debug.framework`, then
+  asserts the framework binary is arm64 and links OpenSSL. godot-cpp's compiled bindings
+  are cached (keyed on `ENGINE_VERSION`).
+
+Godot **export** for win-x64 + macos-arm64 (D-28 phase 1 build-health smoke) remains a
+later follow-up on top of this build job.
