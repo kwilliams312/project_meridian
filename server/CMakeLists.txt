@@ -62,6 +62,15 @@ add_subdirectory(libs/metrics)
 # authd + worldd link it to emit the session-flow trace (login -> enter-world).
 add_subdirectory(libs/trace)
 add_subdirectory(libs/proto)
+# bus: the internal message bus (#88) — SAD §2.6/§6.1/§6.3. Typed publish/
+# subscribe over bounded, ordered, backpressured lanes: the single mechanism for
+# cross-subsystem messaging so subsystems never call each other synchronously
+# from the update loop (generalizes worldd's world-thread<->IO-worker MPSC queue,
+# #82/#87). Dependency-free (std threads only). Ships a unit test + a "bus-only"
+# CI ARCHITECTURE TEST that enforces the discipline — both run in this job's
+# ctest. worldd migration onto the bus is a documented follow-up (server/libs/
+# bus/test/README.md), scoped out of v0 to avoid destabilising #82/#87.
+add_subdirectory(libs/bus)
 # srp: SRP-6a authentication (#78) — clean-room from RFC 5054; needs OpenSSL.
 add_subdirectory(libs/srp)
 # db: MariaDB access (#75) — synchronous connection + prepared statements.
