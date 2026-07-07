@@ -30,3 +30,25 @@ else()
 endif()
 
 add_test(NAME movement-controller COMMAND movement-controller-test)
+
+# --- Telemetry log capture core (#168) ---
+# The engine-free ERROR/CRITICAL log capture + shipping core (Client SAD §9.2 /
+# D-29 client channel). Same engine-free discipline: no godot-cpp, plain C++17.
+add_executable(telemetry-log-capture-test
+  telemetry_log_capture_test.cpp
+  "${SRC}/telemetry_log_capture.cpp"
+  "${SRC}/telemetry_log_core.cpp"
+)
+target_include_directories(telemetry-log-capture-test PRIVATE "${SRC}")
+set_target_properties(telemetry-log-capture-test PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+if(MSVC)
+  target_compile_options(telemetry-log-capture-test PRIVATE /W4)
+else()
+  target_compile_options(telemetry-log-capture-test PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME telemetry-log-capture COMMAND telemetry-log-capture-test)

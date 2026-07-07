@@ -22,8 +22,9 @@ scripts/dev/certs/*.key
 .godot/
 # Pinned engine binaries fetched by scripts/fetch-deps.sh (never committed)
 client/.godot-bin/
-# CMake / SCons build trees
+# CMake / SCons build trees (incl. per-target dirs, e.g. build-ext / build-tests)
 client/build/
+client/build-*/
 client/.sconsign.dblite
 # Compiled GDExtension output (dropped into client/project/bin/ by the build)
 client/project/bin/libmeridian.*
