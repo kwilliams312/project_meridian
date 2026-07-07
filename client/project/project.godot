@@ -10,6 +10,11 @@ config_version=5
 
 config/name="Project Meridian (client bootstrap)"
 config/features=PackedStringArray("4.7", "Forward Plus")
+; Boot entry of the client flow (Boot/Login → CharSelect → World). The login scene
+; (#99) is the first screen; on success it hands off to char-select (#110), which
+; enters the world map. Requires the GDExtension binary (login uses MeridianLogin);
+; char-select itself is pure GDScript.
+run/main_scene="res://scenes/login/login_screen.tscn"
 
 [rendering]
 
