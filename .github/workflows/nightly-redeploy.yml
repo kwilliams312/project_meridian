@@ -1,0 +1,142 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Nightly test-realm redeploy + smoke + rollback (#94, D-30 §10 rule 5:
+# "the nightly test realm tracks main").
+#
+# WHAT: once a night (and on demand) redeploy the latest published GHCR images
+# (ghcr.io/kwilliams312/project_meridian/{authd,worldd} @ `latest`, published by
+# cd.yml / #175) to the IT-M0 test-realm host (#159), run a smoke test (daemons
+# come up + a login->enter-world bot check), and — if the smoke FAILS — ROLL BACK
+# to the previous version and fail the job LOUDLY so the team is paged.
+#
+# All deploy/smoke/rollback logic lives in deploy/scripts/redeploy.sh; this
+# workflow only wires up credentials + SSH and invokes it. Keeping the logic in a
+# script means it is unit-testable (bash -n / shellcheck / --dry-run) and runnable
+# by hand on the host during incident response.
+#
+# ── SKIP-WHEN-UNCONFIGURED GUARD ─────────────────────────────────────────────
+# The test-realm host (#159) is not provisioned yet. Rather than red-X every
+# night until it exists, the `preflight` job checks whether the DEPLOY_TARGET
+# secret is set. If it is NOT, the deploy job is skipped and the run ends GREEN
+# with a notice. Once #159's host + the secrets below are configured, the deploy
+# runs automatically — no workflow edit required (go-live steps in
+# docs/ops/nightly-redeploy.md).
+#
+# ── REQUIRED SECRETS / VARS (configure at go-live, #159) ─────────────────────
+#   secrets.DEPLOY_TARGET   SSH target for the test-realm host, e.g.
+#                           deploy@realm.example.com. PRESENCE of this secret is
+#                           the gate: unset => skip. (Also settable as a repo var,
+#                           but a secret keeps the hostname out of logs.)
+#   secrets.DEPLOY_SSH_KEY  Private SSH key (PEM) for that deploy user. Least-
+#                           privilege: a key that can only reach the compose dir
+#                           and run docker on the host.
+#   secrets.DEPLOY_KNOWN_HOSTS  The host's SSH public key line(s) for
+#                           known_hosts (pins the host identity; avoids TOFU).
+# Optional (have sane defaults in redeploy.sh; override via repo Variables):
+#   vars.MERIDIAN_TAG       Image tag to deploy. Default: latest (tracks main).
+#   vars.COMPOSE_DIR        Compose dir on the host. Default /opt/meridian/deploy/docker.
+#   vars.BOT_BIN            Path to meridian-bot on the host for the L2 (login->
+#                           enter->move) smoke. Unset => L1 health-only smoke.
+#   secrets.BOT_USER / secrets.BOT_PASS  Pre-seeded account creds for the L2 bot
+#                           smoke (runbook §4.1). Only needed if vars.BOT_BIN set.
+
+name: nightly-redeploy
+
+on:
+  schedule:
+    # 07:17 UTC nightly (~00:17 US Pacific). Off the top of the hour to avoid the
+    # cron thundering herd; after cd.yml has published the day's `latest`.
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to deploy (default: latest / tracks main)"
+        required: false
+        default: "latest"
+
+# Least-privilege: this workflow only reads the repo (to get redeploy.sh). It
+# does NOT publish images, write packages, or mint OIDC tokens — the deploy uses
+# SSH creds from secrets, scoped to the test-realm host.
+permissions:
+  contents: read
+
+concurrency:
+  # Never let two redeploys race the same test realm; a new run cancels a
+  # still-running one (the newer `latest` is what we want live anyway).
+  group: nightly-redeploy
+  cancel-in-progress: true
+
+jobs:
+  # ── Gate: is the test-realm host configured yet? ───────────────────────────
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - name: Check DEPLOY_TARGET secret presence
+        id: check
+        env:
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_TARGET }}
+        run: |
+          if [ -n "${DEPLOY_TARGET}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Test realm configured::DEPLOY_TARGET is set — proceeding with nightly redeploy."
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Test realm not configured::DEPLOY_TARGET secret is unset (test-realm host #159 not provisioned). Skipping deploy — this is expected until go-live. See docs/ops/nightly-redeploy.md."
+          fi
+
+  # ── Redeploy + smoke + rollback (only when the host is configured). ────────
+  redeploy:
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    environment: test-realm
+    steps:
+      - name: Checkout (for deploy/scripts/redeploy.sh)
+        uses: actions/checkout@v4
+
+      - name: Set up SSH to the test-realm host
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${DEPLOY_SSH_KEY}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "${DEPLOY_KNOWN_HOSTS}" ]; then
+            printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+            chmod 644 ~/.ssh/known_hosts
+          fi
+
+      - name: Redeploy + smoke + rollback
+        env:
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_TARGET }}
+          MERIDIAN_TAG: ${{ github.event.inputs.tag || vars.MERIDIAN_TAG || 'latest' }}
+          COMPOSE_DIR: ${{ vars.COMPOSE_DIR }}
+          BOT_BIN: ${{ vars.BOT_BIN }}
+          BOT_USER: ${{ secrets.BOT_USER }}
+          BOT_PASS: ${{ secrets.BOT_PASS }}
+          # Pin the host key we wrote above; batch mode so a missing key fails
+          # fast instead of hanging on an interactive prompt.
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o BatchMode=yes -o UserKnownHostsFile=/home/runner/.ssh/known_hosts -o StrictHostKeyChecking=accept-new"
+        run: |
+          # If COMPOSE_DIR is empty (var unset), unset it so the script default
+          # (/opt/meridian/deploy/docker) applies rather than an empty override.
+          [ -n "${COMPOSE_DIR}" ] || unset COMPOSE_DIR
+          [ -n "${BOT_BIN}" ] || unset BOT_BIN
+          bash deploy/scripts/redeploy.sh
+          # A non-zero exit (smoke failed after rollback) fails the job here, so
+          # the run goes RED and GitHub notifications page the team.
+
+      - name: Report result
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "### Nightly test-realm redeploy :rocket: — SUCCESS" >> "$GITHUB_STEP_SUMMARY"
+            echo "- tag: \`${{ github.event.inputs.tag || vars.MERIDIAN_TAG || 'latest' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Nightly test-realm redeploy :rotating_light: — FAILED (rolled back)" >> "$GITHUB_STEP_SUMMARY"
+            echo "Smoke failed on the new tag; the script rolled the test realm back to the previous version. Investigate before the next push to main." >> "$GITHUB_STEP_SUMMARY"
+          fi
