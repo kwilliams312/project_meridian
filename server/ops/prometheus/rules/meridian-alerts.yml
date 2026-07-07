@@ -1,78 +1,166 @@
-# Alert rules — Server SAD §8.5.
+# Meridian alert rules v1 — OPS-05 (issue #171).
 #
-# M0 ships the tick/DB/CCU/error alerts (metrics that exist at M0). Sharding
-# and coordinator alerts (transfer p99, bus lane, journal lag, fence rejection,
-# shard flap) are present but fire only once their metrics exist at M2/M3.
-# Thresholds are placeholders tuned against IT-M1 per D-29 §9 rule 7.
+# The alerting complement to the Grafana dashboards (#169 / PR #294). Every
+# expression below fires on a metric that the M0 daemons EMIT LIVE — verified
+# against the emit call sites (not just the catalog declarations in
+# server/libs/metrics/include/meridian/metrics/catalog.h). A rule on a declared-
+# but-never-set series is worse than no rule: it silently never fires. So the v1
+# set is deliberately narrow, and the signals we WANT but cannot yet alert on are
+# listed under "GAPS" below rather than shipped as dead rules.
+#
+# Loaded by Prometheus via `rule_files: /etc/prometheus/rules/*.yml`
+# (server/ops/prometheus/prometheus.yml), which docker-compose.observability.yml
+# mounts read-only from ./prometheus/rules. `promtool check rules` clean.
+#
+# EMITTED metrics this file alerts on (metric — emit site — labels):
+#   meridian_tick_duration_seconds   worldd world_dispatch.cpp:910  {realm,zone,shard,map}  (histogram, 50 ms/20 Hz budget — SAD §3.2 LOCKED)
+#   meridian_db_latency_seconds      worldd world_dispatch.cpp:424  {realm,db}              (histogram; db="auth")
+#   meridian_ccu                     worldd world_dispatch.cpp:476  {realm,zone,shard}      (gauge; io-worker saturation proxy — #278)
+#   meridian_opcode_errors_total     worldd world_dispatch.cpp:341  {realm,zone,shard,opcode}
+#   meridian_opcode_dropped_total    worldd world_dispatch.cpp:329  {realm,zone,shard,opcode,reason}
+#   meridian_disconnects_total       worldd world_dispatch.cpp:1006 {realm,reason}
+#   meridian_movement_violations_total worldd world_dispatch.cpp:654 {realm,zone,shard,kind}  (kind ∈ speed/teleport/bounds/z)
+#   meridian_auth_results_total      authd  login_session.cpp:75    {realm,outcome}         (outcome: granted/rejected_hello/rejected_auth/rejected_realm/protocol_error/transport_closed)
+#   meridian_auth_attempts_total     authd  login_session.cpp:73    {realm}
+#   meridian_auth_srp_duration_seconds authd login_session.cpp:76   {realm,outcome}         (histogram)
+#
+# GAPS — signals we would alert on but the metric is NOT emitted live at M0.
+# Do NOT add rules for these until the emit path exists (they would never fire):
+#   · Process RSS / memory growth — meridian_rss_bytes is emitted but only
+#     `.set(0.0)` once at startup as a series-registration placeholder in BOTH
+#     daemons (worldd main.cpp:349, authd main.cpp:384). No sampler updates it, so
+#     it is a constant 0 — a growth/ceiling alert can never trip. Needs a periodic
+#     getrusage/statm sampler first.
+#   · IO-worker utilization — no meridian_io_workers / _busy metric exists
+#     (worldd dashboard flags this as GAP #278). CCUSaturationProxy below is the
+#     documented stand-in until the real utilization gauge lands.
+#   · action_rtt, reconnects, db_queue_depth, grids/instances/saves_batched,
+#     client_crash — declared in the catalog and/or dashboards but never set by any
+#     daemon (cross-checked in #294). No rules here.
+#   · Sharding/coordinator signals (transfer p99, bus-lane depth, journal lag,
+#     save-fence rejection, shard flap) — metrics arrive at M2/M3. Deferred to a
+#     later alert-rules revision so v1 stays free of never-firing rules.
+#
+# Thresholds are IT-M1 placeholders (D-29 §9 rule 7) — tune to observed baselines.
+# Severity: `page` = wakes on-call (breaks a core guarantee); `warning` = ticket.
 
 groups:
+  # ── Realm-wide golden-signal SLOs ──────────────────────────────────────────
   - name: meridian-realm-health
     rules:
-      - alert: TickOverBudget
-        expr: histogram_quantile(0.99, sum by (le, realm, zone, shard) (rate(meridian_tick_duration_seconds_bucket[5m]))) > 0.05
+      - alert: TickDurationBudgetBreach
+        # 20 Hz map tick = 50 ms budget (SAD §3.2 / PRD §3.1, LOCKED). p99 over
+        # budget means the world thread cannot keep cadence — authoritative sim
+        # falls behind. Page.
+        expr: histogram_quantile(0.99, sum by (le, realm, zone, shard, map) (rate(meridian_tick_duration_seconds_bucket[5m]))) > 0.05
         for: 2m
         labels:
           severity: page
         annotations:
-          summary: "Tick p99 over budget on {{ $labels.realm }}/{{ $labels.zone }}"
+          summary: "worldd tick p99 over the 50 ms budget on {{ $labels.realm }}/{{ $labels.zone }} (map {{ $labels.map }})"
+          description: "Tick p99 is {{ $value | humanizeDuration }} (budget 50 ms) on realm={{ $labels.realm }} zone={{ $labels.zone }} shard={{ $labels.shard }} map={{ $labels.map }}. The 20 Hz world thread is slipping cadence. Dashboard: worldd."
 
-      - alert: DBQueueBacklog
-        expr: max by (realm, db) (meridian_db_queue_depth) > 1000
+      - alert: DBLatencyHigh
+        # DB round-trip p99. Emitted from the authd-DB path (db="auth"). Rising
+        # p99 backs up the world thread and login funnel.
+        expr: histogram_quantile(0.99, sum by (le, realm, db) (rate(meridian_db_latency_seconds_bucket[5m]))) > 0.1
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "DB queue depth high on {{ $labels.realm }} ({{ $labels.db }})"
+          summary: "DB round-trip p99 high on {{ $labels.realm }} ({{ $labels.db }})"
+          description: "DB latency p99 is {{ $value | humanizeDuration }} (threshold 100 ms) on realm={{ $labels.realm }} db={{ $labels.db }}. Dashboard: Realm health."
 
-      - alert: CCUSaturation
-        expr: max by (realm) (meridian_ccu) > 2800
-        for: 5m
+      - alert: CCUSaturationProxy
+        # io-worker saturation proxy (#278). At M0 worldd uses one blocking IO
+        # worker per connection (pool = cores-3, or --io-workers N), so max
+        # concurrent CCU per worldd ≈ io_workers. No io-worker utilization metric
+        # exists yet, so CCU is the closest saturation signal (worldd dashboard).
+        # THRESHOLD IS HOST-SPECIFIC: set it just below your configured
+        # --io-workers ceiling (default = cores-3). 900 is a placeholder for a
+        # mid-size host — retune per deployment.
+        expr: max by (realm, zone, shard) (meridian_ccu) > 900
+        for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "CCU approaching realm cap on {{ $labels.realm }}"
+          summary: "CCU approaching io-worker ceiling on {{ $labels.realm }}/{{ $labels.zone }} (shard {{ $labels.shard }})"
+          description: "CCU is {{ $value }} on realm={{ $labels.realm }} zone={{ $labels.zone }} shard={{ $labels.shard }}. Max CCU per worldd ≈ --io-workers (default cores-3, #278); beyond it new connections wait in the accept backlog. Tune this threshold to the deployment's --io-workers. Dashboard: worldd."
 
-  - name: meridian-errors
+  # ── worldd error / quality signals ─────────────────────────────────────────
+  - name: meridian-worldd
     rules:
-      - alert: OpcodeErrorRate
+      - alert: OpcodeErrorRateHigh
         expr: sum by (realm, opcode) (rate(meridian_opcode_errors_total[5m])) > 5
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "Opcode error rate elevated: {{ $labels.opcode }} on {{ $labels.realm }}"
+          description: "{{ $labels.opcode }} erroring at {{ $value | humanize }}/s (threshold 5/s) on realm={{ $labels.realm }}. Dashboard: Errors."
 
-  - name: meridian-sharding
-    rules:
-      # Any nonzero save-fence rejection is page-worthy (SAD §8.5).
-      - alert: SaveFenceRejection
-        expr: increase(meridian_save_fence_rejections_total[5m]) > 0
-        for: 0m
-        labels:
-          severity: page
-        annotations:
-          summary: "Save-ownership fence rejection on {{ $labels.realm }} — investigate immediately"
-
-      - alert: TransferLatencyHigh
-        expr: histogram_quantile(0.99, sum by (le, realm) (rate(meridian_transfer_duration_seconds_bucket[5m]))) > 1
-        for: 2m
-        labels:
-          severity: page
-        annotations:
-          summary: "Shard-transfer p99 > 1s on {{ $labels.realm }}"
-
-      - alert: BusLaneSaturation
-        expr: max by (realm, link, lane) (meridian_bus_lane_depth) > 0.6
+      - alert: OpcodeDropRateHigh
+        expr: sum by (realm, opcode, reason) (rate(meridian_opcode_dropped_total[5m])) > 5
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "Bus lane {{ $labels.lane }} > 60% sustained on {{ $labels.link }}"
+          summary: "Opcode drop rate elevated: {{ $labels.opcode }} ({{ $labels.reason }}) on {{ $labels.realm }}"
+          description: "{{ $labels.opcode }} dropped at {{ $value | humanize }}/s (reason={{ $labels.reason }}, threshold 5/s) on realm={{ $labels.realm }}. Dashboard: Errors."
 
-      - alert: JournalLagHigh
-        expr: max by (realm) (meridian_journal_lag_seconds) > 5
-        for: 2m
+      - alert: DisconnectRateHigh
+        # Sustained disconnect churn — network trouble, a crash-looping client
+        # build, or a kick storm.
+        expr: sum by (realm) (rate(meridian_disconnects_total[5m])) > 2
+        for: 10m
         labels:
-          severity: page
+          severity: warning
         annotations:
-          summary: "Standby journal lag > 5s on {{ $labels.realm }}"
+          summary: "Disconnect rate high on {{ $labels.realm }}"
+          description: "Disconnects at {{ $value | humanize }}/s (threshold 2/s) on realm={{ $labels.realm }}. Dashboard: Player experience."
+
+      - alert: MovementViolationRateHigh
+        # Movement-check violations by kind (speed/teleport/bounds/z). A sustained
+        # spike points at desync, a broken client build, or cheating.
+        expr: sum by (realm, kind) (rate(meridian_movement_violations_total[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Movement-violation rate high: {{ $labels.kind }} on {{ $labels.realm }}"
+          description: "{{ $labels.kind }} violations at {{ $value | humanize }}/s (threshold 1/s) on realm={{ $labels.realm }} — possible desync, bad client build, or cheating. Dashboard: worldd."
+
+  # ── authd login funnel ─────────────────────────────────────────────────────
+  - name: meridian-auth
+    rules:
+      - alert: AuthFailureRateSpike
+        # Share of login attempts ending in a genuine credential/realm rejection.
+        # Sustained high share = brute-force / credential-stuffing, or a broken
+        # client build. The `and attempts > 0.1/s` guard suppresses low-traffic
+        # noise and the 0/0 divide case (no alert when nobody is logging in).
+        expr: |
+          (
+            sum by (realm) (rate(meridian_auth_results_total{outcome=~"rejected_.*"}[5m]))
+            /
+            sum by (realm) (rate(meridian_auth_attempts_total[5m]))
+          ) > 0.5
+          and
+          sum by (realm) (rate(meridian_auth_attempts_total[5m])) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Auth failure rate spike on {{ $labels.realm }}"
+          description: "{{ $value | humanizePercentage }} of login attempts rejected (threshold 50%) on realm={{ $labels.realm }} — possible brute-force/credential-stuffing or a broken client build. Dashboard: Errors."
+
+      - alert: AuthSRPLatencyHigh
+        # SRP handshake p99 for successful logins. Rising p99 = CPU pressure on
+        # the SRP math or a slow auth DB; filter to granted so fast-rejects don't
+        # skew the histogram.
+        expr: histogram_quantile(0.99, sum by (le, realm) (rate(meridian_auth_srp_duration_seconds_bucket{outcome="granted"}[5m]))) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SRP login handshake p99 high on {{ $labels.realm }}"
+          description: "SRP p99 (granted logins) is {{ $value | humanizeDuration }} (threshold 500 ms) on realm={{ $labels.realm }}. Dashboard: Player experience."
