@@ -44,6 +44,12 @@ void emit_stage(mcc::stages::Stage s) { mcc::stages::run(s, std::cout); }
 // from the repo root in CI and by editors, so ./content is the convention.
 constexpr std::string_view kDefaultContentDir = "./content";
 
+// The reproducible default build timestamp stamped into world_manifest.built_at
+// when --built-at is not given. NOT the wall clock — a fixed epoch keeps
+// double-build output byte-identical (Tools SAD §5 determinism). A real nightly
+// build passes its own value via --built-at.
+constexpr std::string_view kDefaultBuiltAt = "1970-01-01 00:00:00";
+
 // Shared parse of the check/build diagnostics flags: `--diag-format=text|json`,
 // an optional positional content directory, and (check only) `--file <path>`
 // for single-file / validation-as-you-type mode. Returns false on a bad flag
@@ -139,15 +145,23 @@ int cmd_build(const std::vector<std::string>& args) {
         return link_rc;
     }
 
-    std::cout << "stub: build — bake + emit (Tools SAD §2),"
-                 " producing IF-4 SQL + IF-5 .pck\n";
+    std::cout << "build — bake + emit (Tools SAD §2), producing IF-4 SQL + IF-5 .pck\n";
     std::cout << "  mode: " << (full ? "full rebuild" : "incremental")
               << (watch ? ", watching for changes" : "") << '\n';
-    // discover/parse/validate/link are now real; bake/emit remain stubs until
-    // later M0 tasks (#120 emit-sql, #121 emit-pck).
+    // discover/parse/validate/link ran above; bake is still a stub. emit-sql
+    // (#120) is real: after link allocated the ids, emit the IF-4 world DB SQL
+    // to <content>/../build/world.sql (a stable path next to the content root).
     emit_stage(mcc::stages::Stage::Bake);
-    emit_stage(mcc::stages::Stage::EmitSql);
-    emit_stage(mcc::stages::Stage::EmitPck);
+    const std::string world_sql = "build/world.sql";
+    const int emit_rc = mcc::stages::emit_sql_content(
+        content_dir, world_sql, MCC_VERSION, std::string(kDefaultBuiltAt), format,
+        std::cout, std::cerr);
+    if (emit_rc != 0) {
+        std::cerr << kProg << " build: emit-sql failed — aborting build\n";
+        return emit_rc;
+    }
+    std::cout << "  emit-sql: wrote IF-4 world DB SQL -> " << world_sql << '\n';
+    emit_stage(mcc::stages::Stage::EmitPck);  // #121, still a stub
     return 0;
 }
 
@@ -171,6 +185,42 @@ int cmd_link(const std::vector<std::string>& args) {
     if (!parse_check_flags("link", check_args, content_dir, format)) return 2;
     return mcc::stages::link_content(content_dir, format, allocate_ids, report,
                                      std::cout, std::cerr);
+}
+
+// mcc emit-sql [dir] [--out <file>] [--built-at "<ts>"] [--diag-format=...]
+//   Emit the world DB DML (IF-4): content-table inserts + the world_manifest row
+//   worldd reads at boot (Tools SAD §2.6). Consumes the existing idmap.lock
+//   read-only (run `mcc link`/`mcc build --allocate-ids` first to allocate ids).
+//   Without --out the SQL goes to stdout (diagnostics to stderr); with --out the
+//   SQL is written to the file (diagnostics to stdout).
+int cmd_emit_sql(const std::vector<std::string>& args) {
+    std::string out_file;
+    std::string built_at(kDefaultBuiltAt);
+    std::vector<std::string> check_args;
+    bool expect_out = false;
+    bool expect_built = false;
+    for (const auto& a : args) {
+        if (expect_out) { out_file = a; expect_out = false; }
+        else if (expect_built) { built_at = a; expect_built = false; }
+        else if (a == "--out") expect_out = true;
+        else if (a.rfind("--out=", 0) == 0) out_file = a.substr(std::strlen("--out="));
+        else if (a == "--built-at") expect_built = true;
+        else if (a.rfind("--built-at=", 0) == 0) built_at = a.substr(std::strlen("--built-at="));
+        else check_args.push_back(a);
+    }
+    if (expect_out) {
+        std::cerr << kProg << " emit-sql: --out requires a path argument\n";
+        return 2;
+    }
+    if (expect_built) {
+        std::cerr << kProg << " emit-sql: --built-at requires a timestamp argument\n";
+        return 2;
+    }
+    std::string content_dir;
+    mcc::stages::DiagFormat format;
+    if (!parse_check_flags("emit-sql", check_args, content_dir, format)) return 2;
+    return mcc::stages::emit_sql_content(content_dir, out_file, MCC_VERSION, built_at,
+                                         format, std::cout, std::cerr);
 }
 
 int cmd_check(const std::vector<std::string>& args) {
@@ -305,6 +355,7 @@ const Command kCommands[] = {
     {"build",     "check then compile /content -> IF-4 SQL + IF-5 .pck (--full, --watch)", cmd_build},
     {"check",     "validate /content (or --file <p>): structural lints (L001-L011)", cmd_check},
     {"link",      "resolve refs + backlinks + allocate IF-9 ids (--report, --no-allocate-ids)", cmd_link},
+    {"emit-sql",  "emit IF-4 world DB SQL + world_manifest (--out <file>, --built-at)",         cmd_emit_sql},
     {"fmt",       "canonically format /content YAML; --check for CI/pre-commit",       cmd_fmt},
     {"diff",      "compare two builds: diff <buildA> <buildB>",                        cmd_diff},
     {"pack",      "build a signed .mcpack community pack + content hash",              cmd_pack},
@@ -357,10 +408,20 @@ void print_help() {
            "  --no-allocate-ids    read-only: never write idmap.lock; fail on L015\n"
            "                       drift (the CI contract). Default allocates +\n"
            "                       writes idmap.lock (editor-invoked builds).\n\n"
-           "NOTE: discover/parse, the structural lints (L001-L011), and the link\n"
-           "stage (reference graph + backlinks + IF-9 idmap) are implemented; JSON\n"
-           "Schema validation, semantic lints, and bake/emit land in later M0 tasks\n"
-           "(they report as stubs).\n";
+           "EMIT-SQL OPTIONS (IF-4, SAD §2.6):\n"
+           "  [dir]                content root to emit (default: ./content)\n"
+           "  --out <file>         write the world DB SQL to <file> (default: stdout).\n"
+           "                       With --out, diagnostics go to stdout; without it,\n"
+           "                       the SQL is on stdout and diagnostics on stderr.\n"
+           "  --built-at \"<ts>\"    world_manifest.built_at DATETIME (default a fixed\n"
+           "                       epoch for reproducible output; pass a real build\n"
+           "                       timestamp for a nightly build).\n"
+           "                       Consumes the existing idmap.lock read-only — run\n"
+           "                       'mcc link' / 'mcc build' first to allocate ids.\n\n"
+           "NOTE: discover/parse, the structural lints (L001-L011), the link stage\n"
+           "(reference graph + backlinks + IF-9 idmap), and emit-sql (IF-4 world DB\n"
+           "SQL + world_manifest) are implemented; JSON Schema validation, semantic\n"
+           "lints, bake, and emit-pck land in later M0 tasks (they report as stubs).\n";
 }
 
 }  // namespace

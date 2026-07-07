@@ -9,8 +9,11 @@
 #include <system_error>
 #include <thread>
 
+#include <fstream>
+
 #include "stages/diagnostics.h"
 #include "stages/discover.h"
+#include "stages/emit_sql.h"
 #include "stages/idmap.h"
 #include "stages/link.h"
 #include "stages/model.h"
@@ -97,6 +100,67 @@ int link_content(const std::string& content_dir, DiagFormat format, bool allocat
     }
 
     return diags.ok() ? 0 : 1;
+}
+
+int emit_sql_content(const std::string& content_dir, const std::string& out_file,
+                     const std::string& mcc_version, const std::string& built_at,
+                     DiagFormat format, std::ostream& out, std::ostream& err) {
+    model::ContentModel model;
+    if (!discover(content_dir, model)) {
+        err << "mcc emit-sql: content directory not found: " << content_dir << '\n';
+        return 2;
+    }
+
+    diag::Diagnostics diags;
+    parse(model, diags);
+    validate(model, diags);
+    // emit-sql consumes the EXISTING idmap.lock (read-only: allocate=false). Ids
+    // must already be allocated (`mcc build --allocate-ids` / `mcc link`) — a
+    // drift surfaces as an L015 error and aborts the emit, exactly like CI.
+    const LinkResult linked =
+        link(model, content_dir, /*allocate=*/false, diags, /*emit_dangling=*/false);
+
+    EmitSqlResult emitted;
+    if (diags.ok()) {
+        EmitSqlOptions opts;
+        opts.mcc_version = mcc_version;
+        opts.built_at = built_at;
+        emitted = emit_sql(model, linked, opts, diags);
+    }
+
+    // Diagnostics render to stderr-ish `out` UNLESS the SQL itself goes to stdout
+    // (then diagnostics go to `err` so the emitted SQL is clean on stdout).
+    std::ostream& diag_out = out_file.empty() ? err : out;
+    if (format == DiagFormat::Json) {
+        diag::render_json(diags, diag_out);
+    } else {
+        std::string stats = "Emitted world DB SQL: " +
+                            std::to_string(emitted.manifest_rows) + " manifest row(s), " +
+                            std::to_string(emitted.content_rows) + " content rows.";
+        diag::render_text(diags, stats, diag_out);
+    }
+
+    if (!diags.ok()) {
+        err << "mcc emit-sql: check/link/emit failed — no SQL written\n";
+        return 1;
+    }
+
+    if (out_file.empty()) {
+        out << emitted.sql;
+    } else {
+        // Create the parent directory if it does not exist (e.g. `mcc build`
+        // writes build/world.sql into a fresh tree).
+        std::error_code ec;
+        const fs::path parent = fs::path(out_file).parent_path();
+        if (!parent.empty()) fs::create_directories(parent, ec);
+        std::ofstream f(out_file, std::ios::binary | std::ios::trunc);
+        if (!f) {
+            err << "mcc emit-sql: could not open output file: " << out_file << '\n';
+            return 2;
+        }
+        f << emitted.sql;
+    }
+    return 0;
 }
 
 namespace {

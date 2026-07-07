@@ -109,9 +109,44 @@ preservation, single trailing newline — are documented in
 - `mcc fmt [path]` — format in place (default `./content`).
 - `mcc fmt --check [path]` — report drift, exit `1` if any file is non-canonical.
 
+**emit-sql** (Tools PRD §2.2 / SAD §2.6, IF-4) — emits the **world DB SQL**: the
+deterministic DML that populates the content tables (`schema/sql/world/*.sql`)
+with every entity keyed by its IF-9 numeric id, plus the one `world_manifest` row
+that `worldd`'s boot (issue #89) reads and verifies. This is what makes real
+content flow `mcc → world DB → worldd serves it`.
+
+- `mcc emit-sql [dir]` — emit the SQL to **stdout** (diagnostics to stderr).
+- `mcc emit-sql [dir] --out world.sql` — write the SQL to a file (diagnostics to
+  stdout). `mcc build` writes `build/world.sql` this way.
+- `mcc emit-sql [dir] --built-at "2026-07-06 03:00:00"` — stamp a real build
+  timestamp into `world_manifest.built_at`. The default is a **fixed epoch**
+  (`1970-01-01 00:00:00`) so double-build output is byte-identical (SAD §5
+  determinism); pass a real value for a nightly build.
+
+emit-sql consumes the **existing `idmap.lock`** read-only — run `mcc link` or
+`mcc build` (which allocate ids) first; an out-of-date lock is an `L015` error.
+
+**Content → SQL mapping** (mirrors `schema/sql/world/*.sql`, the co-reviewed IF-4
+DDL contract): nested scalar objects flatten to prefixed columns (`stats.*` →
+`stat_*`), `intRange {min,max}` → `<field>_min`/`_max`, `position {x,y,z}` →
+`pos_x/y/z`, arrays of objects → child tables keyed `(parent_id, ordinal)`,
+`oneOf` variant arrays (`effects`, `objectives`, loot entries) → one discriminated
+child table, and every `*Ref` / asset ref → its IF-9 numeric `*_id` column. The
+dump is bracketed by `SET FOREIGN_KEY_CHECKS = 0 … = 1` (like the schema loader)
+so forward references load cleanly. Tables emit in DDL declaration order; rows in
+primary-key order; no wall-clock timestamps → stable diffs.
+
+**Content hash** (`world_manifest.content_hash`): **BLAKE3** of the pack's
+canonical source tree (each parsed content/asset/pack file, in sorted rel-path
+order, contributing `rel_path\0<canonical-yaml>\0`), rendered as 64 lowercase-hex
+chars — exactly the shape `worldd`'s `verify_world_manifest` accepts
+(`kContentHashHexLen = 64`, `schema_version == kSupportedContentSchemaVersion = 1`).
+BLAKE3 is **vendored** (`src/hash/blake3.{h,cpp}`, no external hashing dep, SAD
+§2.6 decision table) and byte-verified against the published BLAKE3 test vectors.
+
 **Deferred to later M0 tasks** (reported as stubs / not yet run): full JSON Schema 2020-12
 validation, L004 intRange, L020 asset-sidecar existence, the semantic lints
-(L034/L035/L052/L062), and the `link → bake → emit-sql / emit-pck` stages. Because JSON
+(L034/L035/L052/L062), and the `bake` / `emit-pck` stages. Because JSON
 Schema validation is deferred, a file the reference validator would reject at the `SCHEMA`
 layer (and skip) still reaches mcc's structural lints — the two agree wherever the reference
 actually reaches the structural layer.
@@ -132,5 +167,22 @@ cmake --build build           # -> tools/mcc/build/mcc (+ mcc-tests)
 ./build/mcc check ../../content
 ./build/mcc check --file ../../content/core/items/rusty_pickaxe.item.yaml ../../content --diag-format=json
 ./build/mcc fmt --check ../../content   # canonical-form gate
-ctest --test-dir build --output-on-failure   # unit tests (fmt + single-file/watch)
+./build/mcc link ../../content --report # allocate IF-9 ids + print the idmap
+./build/mcc emit-sql ../../content --out world.sql   # IF-4 world DB SQL + manifest
+ctest --test-dir build --output-on-failure   # unit tests (fmt, single-file, link, emit-sql)
+```
+
+### emit-sql tests + the DB-backed integration test
+
+`ctest` runs `mcc-emit-sql-unit` (BLAKE3 vs published vectors, well-formed SQL, a
+`world_manifest` row with a 64-hex hash + `schema_version = 1`, determinism, and
+`*Ref` → numeric-id resolution) always. The `mcc-emit-sql-db` test **loads the
+real world DDL + the emitted SQL into a live MariaDB** and asserts the content
+tables and `world_manifest` are populated — it is **env-guarded** (parity with the
+worldd DB tests) and SKIPs unless `MERIDIAN_DB_*` (or `MERIDIAN_WORLDDB_*`) point
+at a MariaDB with a `mariadb`/`mysql` client on `PATH`:
+
+```sh
+export MERIDIAN_DB_HOST=127.0.0.1 MERIDIAN_DB_PORT=3306 MERIDIAN_DB_USER=root
+ctest --test-dir build -R mcc-emit-sql-db --output-on-failure
 ```
