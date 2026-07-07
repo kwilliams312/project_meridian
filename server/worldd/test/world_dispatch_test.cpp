@@ -208,6 +208,13 @@ Bytes enc_clock_sync(std::uint64_t client_time_ms) {
     b.Finish(mn::CreateClockSync(b, client_time_ms, /*server_time_ms=*/0));
     return bytes_of(b);
 }
+Bytes enc_movement_intent(std::uint32_t seq, std::uint32_t flags, float x, float y,
+                          float z, std::uint64_t client_time_ms) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateMovementIntent(b, seq, flags, x, y, z, /*orientation=*/0.0f,
+                                      client_time_ms));
+    return bytes_of(b);
+}
 
 template <typename T>
 const T* decode(const Bytes& buf) {
@@ -294,8 +301,10 @@ int main() {
 
         // Server: serve exactly THREE connections (happy path, unknown opcode,
         // reserved opcode), each on the world serve loop.
+        // Four connections: B+C (hello+clock), D (unknown), E (reserved), and
+        // G (#86 — MOVEMENT_INTENT before handshake -> Disconnect).
         std::thread server([&] {
-            for (int i = 0; i < 3; ++i) {
+            for (int i = 0; i < 4; ++i) {
                 try {
                     net::Session s = listener.accept();
                     world.serve_connection(std::move(s));
@@ -389,6 +398,33 @@ int main() {
             }
             check("E: server sent a Disconnect for reserved opcode", got_disconnect);
             check("E: connection closed after Disconnect",
+                  !c.recv_frame().has_value());
+        }
+
+        // ===== G. MOVEMENT_INTENT before HandshakeOk -> Disconnect + close ====
+        // The DEFAULT MOVEMENT_INTENT handler (#86 — NOT the WORLD_HELLO override
+        // above) enforces "movement only after auth" (SAD §5.5): an intent on an
+        // unauthenticated connection is a protocol error. This runs DB-free (no
+        // grant/session is established), so it lives in the plain-ctest dispatch
+        // test rather than the DB-gated session test — it proves the auth-gate on
+        // the real serve loop end-to-end.
+        {
+            Client c(port);
+            check("G: client connected", c.connected());
+            c.send_frame(mw::encode_frame(mn::Opcode::MOVEMENT_INTENT, /*seq=*/11,
+                                          enc_movement_intent(1, /*flags=*/2, 64.0f, 64.0f,
+                                                              0.0f, /*client_time_ms=*/1000)));
+            std::optional<Bytes> reply = c.recv_frame();
+            bool got_disconnect = false;
+            if (reply) {
+                std::optional<mw::Frame> rf = mw::decode_frame(*reply);
+                if (rf && rf->opcode == mn::Opcode::DISCONNECT) {
+                    Bytes pl(rf->payload, rf->payload + rf->payload_len);
+                    got_disconnect = (decode<mn::Disconnect>(pl) != nullptr);
+                }
+            }
+            check("G: pre-handshake movement -> Disconnect", got_disconnect);
+            check("G: connection closed after Disconnect",
                   !c.recv_frame().has_value());
         }
 

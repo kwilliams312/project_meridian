@@ -45,6 +45,7 @@
 #include "meridian/db/connection.h"
 #include "meridian/net/tls_listener.h"
 
+#include "movement_validation.h"
 #include "world_generated.h"
 #include "world_session.h"
 
@@ -116,6 +117,20 @@ enum class DispatchOutcome {
 //     loop to send a Disconnect and close — the grant-reject path uses it so the
 //     handler does not have to own socket-close policy (SAD §5.2 keeps that in
 //     the serve loop).
+//   - `movement` / `intake`: the per-session AUTHORITATIVE movement state (#86)
+//     and the ≤ 10/s intent-rate gate. std::nullopt until a valid WORLD_HELLO —
+//     movement is only processed AFTER a HandshakeOk (SAD §5.5: MovementIntent is
+//     trusted only post-auth), so the MOVEMENT_INTENT handler rejects a
+//     pre-handshake intent. The state is emplaced at enter-world with the
+//     placeholder character's spawn position + guid. THREADING: at M0 one
+//     connection is served start-to-finish by ONE IO worker (serve_connection
+//     runs on the calling worker), so this per-connection movement state is
+//     single-threaded by construction — the SAD's "game state on the world
+//     thread" invariant (§2.5/§6) is honoured because no OTHER thread touches
+//     this ConnCtx. The seam where authoritative state migrates onto the shared
+//     world thread (keyed by session id, drained from the inbound queue) is the
+//     WorldServer scaffold's queue; #87's AoI relay consumes `movement` from
+//     there. At M0 it lives here, next to the WorldSession it is scoped to.
 struct ConnCtx {
     db::Connection* db = nullptr;        // auth DB (session_grant) — may be null in tests
     db::Connection* char_db = nullptr;   // characters DB — nullable (placeholder fallback)
@@ -123,6 +138,9 @@ struct ConnCtx {
 
     std::optional<WorldSession> session; // established on a valid WORLD_HELLO
     bool authenticated = false;
+
+    std::optional<SessionMovementState> movement;  // authoritative movement (#86), post-auth
+    MovementIntake intake;                          // ≤ 10/s intent-rate gate (#86)
 
     bool disconnect = false;             // handler asks the serve loop to close
     net::DisconnectReason disconnect_reason = net::DisconnectReason::UNKNOWN;

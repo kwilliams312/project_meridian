@@ -242,6 +242,64 @@ void seed_grant(db::Connection& db, std::uint64_t grant_id, std::uint64_t accoun
          db::Param{static_cast<std::int64_t>(client_build)}});
 }
 
+Bytes enc_movement_intent(std::uint32_t seq, std::uint32_t flags, float x, float y,
+                          float z, std::uint64_t client_time_ms) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateMovementIntent(b, seq, flags, x, y, z, /*orientation=*/0.0f,
+                                      client_time_ms));
+    return bytes_of(b);
+}
+
+// Handshake over a fresh connection, then send ONE MovementIntent on the SAME
+// (now-authenticated) connection and decode the MovementState reply. Proves the
+// #86 authoritative path end-to-end on an established session: the server
+// validates the intent, advances authoritative state, and replies MovementState.
+struct MoveResult {
+    bool handshake_ok = false;
+    bool got_state = false;      // a MovementState reply came back
+    float state_x = 0.0f, state_y = 0.0f, state_z = 0.0f;
+    std::uint32_t ack_seq = 0;
+};
+
+MoveResult drive_hello_then_move(std::uint16_t port, std::uint64_t grant_id,
+                                 std::uint32_t build, std::uint32_t flags, float x,
+                                 float y, float z, std::uint64_t client_time_ms) {
+    MoveResult r;
+    Client c(port);
+    if (!c.connected()) return r;
+    c.send_frame(mw::encode_frame(mn::Opcode::WORLD_HELLO, /*seq=*/1,
+                                  enc_world_hello(grant_id, build)));
+    std::optional<Bytes> hs = c.recv_frame();
+    if (hs) {
+        std::optional<mw::Frame> rf = mw::decode_frame(*hs);
+        if (rf && rf->opcode == mn::Opcode::HANDSHAKE_OK) {
+            Bytes pl(rf->payload, rf->payload + rf->payload_len);
+            r.handshake_ok = (decode<mn::HandshakeOk>(pl) != nullptr);
+        }
+    }
+    if (!r.handshake_ok) return r;
+
+    // Now send a MovementIntent on the authenticated connection.
+    c.send_frame(mw::encode_frame(mn::Opcode::MOVEMENT_INTENT, /*seq=*/2,
+                                  enc_movement_intent(7, flags, x, y, z, client_time_ms)));
+    std::optional<Bytes> ms = c.recv_frame();
+    if (ms) {
+        std::optional<mw::Frame> rf = mw::decode_frame(*ms);
+        if (rf && rf->opcode == mn::Opcode::MOVEMENT_STATE) {
+            Bytes pl(rf->payload, rf->payload + rf->payload_len);
+            const auto* st = decode<mn::MovementState>(pl);
+            if (st) {
+                r.got_state = true;
+                r.state_x = st->x();
+                r.state_y = st->y();
+                r.state_z = st->z();
+                r.ack_seq = st->ack_seq();
+            }
+        }
+    }
+    return r;
+}
+
 // Drive one WorldHello over a fresh TLS connection; return the server's first
 // reply frame (HandshakeOk on success, Disconnect on reject) decoded, plus a
 // flag for whether the connection then closed.
@@ -373,7 +431,7 @@ int main() {
     const std::uint32_t client_build = 1000;
     std::uint64_t account_id = 0;
     std::uint32_t realm_id = 0;
-    std::uint64_t grant_ok = 0, grant_expired = 0, grant_wrong_realm = 0;
+    std::uint64_t grant_ok = 0, grant_expired = 0, grant_wrong_realm = 0, grant_move = 0;
     const std::uint64_t grant_unknown = 0xFEEDFACECAFEBEEFULL;  // never inserted
 
     try {
@@ -421,9 +479,14 @@ int main() {
         grant_ok = rand_u64();
         grant_expired = rand_u64();
         grant_wrong_realm = rand_u64();
+        grant_move = rand_u64();
         const Bytes session_key(32, 0xAB);  // deterministic 32-byte key
 
         seed_grant(db, grant_ok, account_id, realm_id, session_key, client_build,
+                   "DATE_ADD(UTC_TIMESTAMP(), INTERVAL 30 SECOND)");
+        // A second valid grant used by the movement leg (section G): handshake +
+        // MOVEMENT_INTENT on the SAME connection (#86 authoritative-state proof).
+        seed_grant(db, grant_move, account_id, realm_id, session_key, client_build,
                    "DATE_ADD(UTC_TIMESTAMP(), INTERVAL 30 SECOND)");
         seed_grant(db, grant_expired, account_id, realm_id, session_key, client_build,
                    "DATE_SUB(UTC_TIMESTAMP(), INTERVAL 30 SECOND)");
@@ -452,9 +515,10 @@ int main() {
         mw::WorldServer world(dispatcher, wcfg);
         world.start();
 
-        // Serve five connections: happy, replay, expired, unknown, wrong-realm.
+        // Serve six connections: happy, replay, expired, unknown, wrong-realm,
+        // and the movement leg (handshake + MOVEMENT_INTENT on one connection).
         std::thread server([&] {
-            for (int i = 0; i < 5; ++i) {
+            for (int i = 0; i < 6; ++i) {
                 try {
                     net::Session s = listener.accept();
                     world.serve_connection(std::move(s));
@@ -512,6 +576,25 @@ int main() {
         // against realm2 either (single-use preserved even on a wrong-realm hit).
         HelloResult f = drive_hello(port, grant_wrong_realm, client_build);
         check("F: wrong-realm grant got a Disconnect", f.is_disconnect);
+
+        // ===== G. MOVEMENT after handshake -> authoritative MovementState =====
+        // Handshake on grant_move, then send a LEGAL movement intent (a small
+        // step from the 64 m spawn) on the same connection. The server validates
+        // it, advances authoritative state, and replies MovementState (#86). This
+        // proves the authoritative path over a REAL established session (the pure
+        // unit test proves the validator; this proves the wired serve loop).
+        {
+            // Spawn is the play-area centre (64, 64, 0). A 0.20 m walk step to
+            // (64.20, 64, 0) at t=100 is inside the walk budget (accept).
+            MoveResult g = drive_hello_then_move(port, grant_move, client_build,
+                                                 /*flags=Walk*/ 1, 64.20f, 64.0f, 0.0f,
+                                                 /*client_time_ms=*/100);
+            check("G: handshake ok on the movement connection", g.handshake_ok);
+            check("G: server replied MovementState to the intent", g.got_state);
+            check("G: MovementState acks the intent seq", g.ack_seq == 7);
+            check("G: authoritative advanced to the validated position",
+                  g.got_state && g.state_x > 64.19f && g.state_x < 64.21f);
+        }
 
         server.join();
         world.stop();

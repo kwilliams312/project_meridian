@@ -103,6 +103,22 @@ Bytes encode_handshake_ok(const Bytes& content_hash, const Bytes& server_proof) 
     return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
 }
 
+// Build a MovementState payload (S→C, world.fbs) from a validated/rejected
+// MoveDecision. entity_guid + server_time_ms are session-scoped (supplied by the
+// handler); the position/flags/ack come from the decision — which is the advanced
+// position on accept or the snap-back (last authoritative) on reject. This is the
+// authoritative state #87's AoI relay will forward to observers; here it is also
+// sent back to the mover so it can reconcile / snap back.
+Bytes encode_movement_state(std::uint64_t entity_guid, const MoveDecision& d,
+                            std::uint64_t server_time_ms) {
+    fb::FlatBufferBuilder b;
+    auto st = mn::CreateMovementState(b, entity_guid, d.ack_seq, d.state_flags,
+                                      d.pos.x, d.pos.y, d.pos.z, d.pos.orientation,
+                                      server_time_ms);
+    b.Finish(st);
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -257,6 +273,19 @@ void Dispatcher::register_m0_stubs() {
            // 3. Enter world: load the D-11 placeholder character.
            PlaceholderCharacter pc =
                load_placeholder_character(ctx.char_db, consumed->account_id);
+
+           // 3a. Seed the authoritative movement state (#86) at the character's
+           //     M0 spawn. D-19 flat bootstrap map: spawn at the play-area centre
+           //     so the first legal moves in any direction stay in bounds. The
+           //     guid lets the world thread stamp MovementState (world.fbs).
+           //     spawn_time_ms = 0 seeds the first intent's Δt from spawn.
+           Position spawn;
+           spawn.x = movement::kZoneMaxXY * 0.5f;  // 64 m — bootstrap play-area centre
+           spawn.y = movement::kZoneMaxXY * 0.5f;
+           spawn.z = movement::kFlatGroundZ;       // flat ground (D-19)
+           ctx.movement.emplace(spawn, /*spawn_time_ms=*/0);
+           ctx.movement->set_entity_guid(pc.char_guid);
+
            log::info(kCat, "WORLD_HELLO accepted grant_id=" +
                                std::to_string(grant_id) + " account=" +
                                std::to_string(consumed->account_id) + " realm=" +
@@ -293,15 +322,79 @@ void Dispatcher::register_m0_stubs() {
     });
 
     // MOVEMENT_INTENT (#86): the only client input the server trusts, and only
-    // after OPS-03 validation (SAD §5.5). At M0 we log receipt; validation +
-    // authoritative MovementState broadcast land in #86.
+    // after OPS-03 validation (SAD §5.5). worldd is the SERVER MOVEMENT AUTHORITY:
+    // it re-checks every intent against the shared movement rules (the #101 LOCKED
+    // constants) and produces the authoritative MovementState. "Server is law"
+    // (Pillar 3) — a valid move advances the server's authoritative position; an
+    // invalid one is REJECTED and answered with a snap-back correction rather than
+    // trusting the client's claimed position.
     on(net::Opcode::MOVEMENT_INTENT, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
-        (void)sess;
-        (void)ctx;
+        // Movement is only legal AFTER a valid HandshakeOk (SAD §5.5 trusts the
+        // intent only post-auth). A pre-handshake MOVEMENT_INTENT is a protocol
+        // error — ask the serve loop to close (no oracle, no simulation touched).
+        if (!ctx.authenticated || !ctx.movement) {
+            log::warn(kCat, "MOVEMENT_INTENT before handshake — rejecting");
+            ctx.disconnect = true;
+            ctx.disconnect_reason = net::DisconnectReason::PROTOCOL_MISMATCH;
+            ctx.disconnect_message = "movement before handshake";
+            return;
+        }
+
         const auto* mi = fb::GetRoot<mn::MovementIntent>(f.payload);
-        log::info(kCat, "MOVEMENT_INTENT seq=" +
-                            std::to_string(mi ? mi->seq() : 0) +
-                            " (stub — validation + broadcast is #86)");
+        if (mi == nullptr) return;  // verified upstream; defensive
+
+        // Lift the intent off the FlatBuffer into the validator's POD (keeps the
+        // validator wire-free / pure).
+        MovementIntentPod pod;
+        pod.seq = mi->seq();
+        pod.state_flags = mi->state_flags();
+        pod.pos = {mi->x(), mi->y(), mi->z(), mi->orientation()};
+        pod.client_time_ms = mi->client_time_ms();
+
+        // R1 — RATE CLASS (≤ 10/s + state changes, SAD §5.5 / #101). An intent
+        // above the cap that is not a state change is dropped/coalesced here,
+        // BEFORE validation — throttling is not a violation, so it produces no
+        // correction (the client simply sees no MovementState for that intent).
+        if (!ctx.intake.admit(pod, pod.client_time_ms)) {
+            log::debug(kCat, "MOVEMENT_INTENT seq=" + std::to_string(pod.seq) +
+                                 " dropped (rate class > " +
+                                 std::to_string(movement::kMovementIntentMaxHz) + "/s)");
+            return;
+        }
+
+        // R2..R5 — validate against the shared constants, then commit the
+        // decision to the authoritative state (advance on accept, snap-back on
+        // reject). At M0 the per-connection movement state is single-threaded by
+        // construction (one IO worker per connection); the seam onto the shared
+        // world thread is the WorldServer queue (#87).
+        MoveDecision decision = ctx.movement->validate_move(pod, pod.client_time_ms);
+        ctx.movement->apply(decision, pod, pod.client_time_ms);
+
+        // The authoritative timestamp for this MovementState (SAD §5.5 / world.fbs
+        // server_time_ms). A real monotonic map-tick clock is a later concern; a
+        // steady-clock reading is well-formed for M0.
+        const std::uint64_t server_time_ms =
+            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                                           .count());
+
+        // Send the authoritative MovementState back to the mover (accept =
+        // advanced position; reject = snap-back correction to the last
+        // authoritative position). #87's AoI pass relays this same state to
+        // observers; here it goes to the mover for reconciliation / snap-back.
+        sess.write_frame(encode_frame(
+            net::Opcode::MOVEMENT_STATE, f.seq,
+            encode_movement_state(ctx.movement->entity_guid(), decision, server_time_ms)));
+
+        if (decision.accepted) {
+            log::debug(kCat, "MOVEMENT_INTENT seq=" + std::to_string(pod.seq) +
+                                 " accepted -> authoritative advanced");
+        } else {
+            log::warn(kCat, "MOVEMENT_INTENT seq=" + std::to_string(pod.seq) +
+                                " REJECTED (reason=" +
+                                std::to_string(static_cast<int>(decision.reject)) +
+                                ") -> snap-back correction");
+        }
     });
 
     // No handler is registered for server→client opcodes (HANDSHAKE_OK,
