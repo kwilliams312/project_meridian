@@ -53,6 +53,52 @@ target_sources(${TARGET_NAME} PRIVATE ${MERIDIAN_SOURCES})
 
 target_link_libraries(${TARGET_NAME} PRIVATE godot-cpp)
 
+# --- IF-1/IF-2 login core deps (#99) ---
+# The login core (login_core.* / srp_client_core.* / login_transport.*) — the
+# CLIENT side of the IF-1 login authd drives (#79) + the IF-2 WorldHello (#84) —
+# takes the SAME crypto/wire stack the server uses so the two interoperate:
+#   - OpenSSL     : SRP-6a BIGNUM/EVP + HMAC + TLS 1.3 client transport.
+#   - FlatBuffers : auth.fbs / world.fbs codegen (flatc) + the header-only runtime.
+# These are provisioned find-first / fetch-fallback exactly like server/libs/proto,
+# so the extension builds on a dev box (Homebrew) AND a bare runner.
+find_package(OpenSSL REQUIRED)
+find_package(FlatBuffers CONFIG QUIET)
+
+find_program(MERIDIAN_FLATC_EXE flatc)
+if(TARGET flatbuffers::flatc)
+	set(MERIDIAN_FLATC flatbuffers::flatc)
+elseif(MERIDIAN_FLATC_EXE)
+	set(MERIDIAN_FLATC "${MERIDIAN_FLATC_EXE}")
+else()
+	message(FATAL_ERROR
+		"meridian client: no flatc found for auth.fbs/world.fbs codegen (#99). "
+		"Install flatbuffers (brew install flatbuffers / apt libflatbuffers-dev).")
+endif()
+
+get_filename_component(MERIDIAN_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+set(MERIDIAN_SCHEMA_NET_DIR "${MERIDIAN_REPO_ROOT}/schema/net")
+set(MERIDIAN_LOGIN_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${MERIDIAN_LOGIN_GEN_DIR}")
+set(MERIDIAN_LOGIN_GENERATED
+	"${MERIDIAN_LOGIN_GEN_DIR}/auth_generated.h"
+	"${MERIDIAN_LOGIN_GEN_DIR}/world_generated.h")
+add_custom_command(
+	OUTPUT ${MERIDIAN_LOGIN_GENERATED}
+	COMMAND ${MERIDIAN_FLATC} --cpp --scoped-enums -o "${MERIDIAN_LOGIN_GEN_DIR}"
+			"${MERIDIAN_SCHEMA_NET_DIR}/auth.fbs"
+			"${MERIDIAN_SCHEMA_NET_DIR}/world.fbs"
+	DEPENDS "${MERIDIAN_SCHEMA_NET_DIR}/auth.fbs" "${MERIDIAN_SCHEMA_NET_DIR}/world.fbs"
+	COMMENT "meridian client: flatc --cpp on schema/net/{auth,world}.fbs (#99)"
+	VERBATIM)
+add_custom_target(meridian-client-codegen DEPENDS ${MERIDIAN_LOGIN_GENERATED})
+add_dependencies(${TARGET_NAME} meridian-client-codegen)
+
+target_include_directories(${TARGET_NAME} PRIVATE "${MERIDIAN_LOGIN_GEN_DIR}")
+if(TARGET flatbuffers::flatbuffers)
+	target_link_libraries(${TARGET_NAME} PRIVATE flatbuffers::flatbuffers)
+endif()
+target_link_libraries(${TARGET_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+
 # Reuse godot-cpp's computed filename suffix (e.g.
 # ".windows.template_debug.x86_64") so the output matches the paths declared in
 # project/meridian.gdextension.
