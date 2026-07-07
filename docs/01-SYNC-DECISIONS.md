@@ -1,6 +1,6 @@
 # Cross-Track Sync Decisions
 
-**Version:** 1.11 — 2026-07-07 (§12 added: D-33 — client engine pin bumped Godot 4.6 → 4.7-stable (#262), owner decision; no baseline matrix change. §7.2 added: A-03 RESOLVED — CHR-01 appearance customization is **presets-first** (discrete preset IDs: hair/face/skin + class/race options) plus an optional 1–2 continuous morphs if the blend-shape budget allows, and the server-persisted appearance data is a **versioned, extensible appearance record** so post-1.0 presets/morphs are additive with no breaking schema change (D-32). §11 added: A-09 terrain decision — Terrain3D fork-and-vendor, no baseline change. §7.1: A-15 RESOLVED — asset source + IF-8 sidecars live pack-local at `content/<ns>/assets/**` (D-31), ratifying the existing `core` layout. §10 added: server packaging & CD, D-30 — no baseline change, OPS-01 extension. §9: telemetry & observability, D-29/Baseline v0.6. §8: macOS client, D-28/Baseline v0.5. §7: Content Schema v1.1 reconciliation — A-12 discharged, D-24..D-27, A-15 opened, A-13 done. §6: sharded-realm scale-up. §5: SAD reconciliation. §4: engine pivot UE5 → Godot 4.6)
+**Version:** 1.12 — 2026-07-07 (§13 added: D-34 — keep the **monorepo through M2**; a Server/Client/Tools/Assets multi-repo split is deferred and **revisited at M3**, gated on a hard prerequisite — the shared wire contract + shared movement/crypto constants must first be extracted into a versioned `meridian-protocol` package; tracked by epic #266 (#267–#271); no baseline change, no code impact now. §12 added: D-33 — client engine pin bumped Godot 4.6 → 4.7-stable (#262), owner decision; no baseline matrix change. §7.2 added: A-03 RESOLVED — CHR-01 appearance customization is **presets-first** (discrete preset IDs: hair/face/skin + class/race options) plus an optional 1–2 continuous morphs if the blend-shape budget allows, and the server-persisted appearance data is a **versioned, extensible appearance record** so post-1.0 presets/morphs are additive with no breaking schema change (D-32). §11 added: A-09 terrain decision — Terrain3D fork-and-vendor, no baseline change. §7.1: A-15 RESOLVED — asset source + IF-8 sidecars live pack-local at `content/<ns>/assets/**` (D-31), ratifying the existing `core` layout. §10 added: server packaging & CD, D-30 — no baseline change, OPS-01 extension. §9: telemetry & observability, D-29/Baseline v0.6. §8: macOS client, D-28/Baseline v0.5. §7: Content Schema v1.1 reconciliation — A-12 discharged, D-24..D-27, A-15 opened, A-13 done. §6: sharded-realm scale-up. §5: SAD reconciliation. §4: engine pivot UE5 → Godot 4.6)
 **Purpose:** Resolutions for the conflicts and gaps the five track PRDs raised against Baseline v0.1. Decisions marked **[baseline]** are already folded into Baseline v0.2; the rest are binding interpretations the PRDs should be read against. Remaining items are in §3.
 
 ---
@@ -228,3 +228,29 @@ Rationale:
 3. **Load-proven on 4.7.** Verified by a headless load against the local `4.7.stable.official.5b4e0cb0f` editor: the extension loads and all six registered classes (`MeridianClient`, `MeridianMovementController`, `MeridianTelemetry`, `MeridianPackMount`, `MeridianLogin`, `MeridianRemoteInterpolator`) are available; `MeridianClient.get_version()` reports `godot 4.7-stable`.
 
 Binding artifacts (kept in sync): `client/ENGINE_VERSION` (machine-readable pin — engine `4.7-stable`/`5b4e0cb`, godot-cpp `5ffd70e`, 4.7 download SHA-512s), `client/project/meridian.gdextension` (`compatibility_minimum = "4.7"`), and the human pin table + rationale in `client/README.md`. Recorded architecturally in Client SAD §9.7. CI (a macOS runner build/export job, #112) is a deliberate follow-up — not added with this pin move.
+
+---
+
+## 13. Repo topology — monorepo through M2, multi-repo split deferred to M3 (2026-07-07, no baseline change)
+
+**Decision D-34: keep the monorepo through M2; defer a Server/Client/Tools/Assets multi-repo split and revisit it at M3, gated on a hard prerequisite.** Project-owner direction. The split is not rejected — it is deferred, and its revisit at M3 is **conditional on the shared wire contract and the shared movement/crypto constants first being extracted into a versioned `meridian-protocol` package** (the extraction itself happens in-monorepo). No baseline matrix change and no new feature ID — this is a repo-topology ruling, not a scope change. Tracked on GitHub as epic **#266** with sub-issues **#267–#271**.
+
+The `meridian-protocol` extraction is the **true prerequisite**, not a nicety: in a monorepo a single atomic PR touching both sides keeps client and server honest against a contract that is still moving, so the seam can stay implicit; across repos that same contract becomes a **published-artifact contract** between independently-versioned repos, and without a versioned package to pin against, a split would relocate the coupling onto an unstable, unversioned interface.
+
+Rationale:
+
+1. **The contract is still churning through M0/M1.** The wire protocol (IF-1/IF-2, `schema/net/*.fbs`) and the shared constants — the hand-duplicated `movement_constants.h` guarded by a cross-track `static_assert`, plus the session-crypto framing — are actively changing during M0/M1. Splitting now would relocate that coupling onto an unstable contract and cost more than it saves; the protocol seam must exist and stabilize first.
+2. **The pull toward splitting is real but premature.** Client (Godot/GDExtension, community/modding-facing, moddable) and server (C++ realm daemons, operator-facing) genuinely have different architectures, audiences, and release cadences — that is the legitimate case for eventually splitting. But different cadences only pay off once the interface between the two is a versioned artifact; until then a split trades a compiler-enforced seam for a coordination tax.
+3. **Extract in-monorepo, then decide.** Pulling the wire contract + shared constants into `meridian-protocol` inside the monorepo is valuable on its own (it removes the hand-duplicated constants and gives the contract a semver + wire-compat policy) and is the gating deliverable the M3 go/no-go decision reads against.
+
+Action tracked in M3 (epic **#266**):
+
+| Issue | Work | Role |
+|-------|------|------|
+| #267 | Extract the shared wire contract + movement/crypto constants into a versioned **`meridian-protocol`** package (in-monorepo) | **Prerequisite** — gates everything below |
+| #268 | Protocol **semver + wire-compat CI policy** for the package | Contract discipline |
+| #269 | **Assets topology finalize** — reconcile with D-31 (pack-local `content/<ns>/assets/**`) and #160 (Git LFS) | Resolve the Assets-repo question |
+| #270 | **Split-readiness go/no-go** decision point | Gate |
+| #271 | **Cross-repo integration-test strategy** — pinned-SHA super-repo, only if go | Contingent on #270 = go |
+
+**Status:** deferred to M3. No baseline change; no code impact now. The next concrete step is the in-monorepo `meridian-protocol` extraction (#267); the split itself is not committed and is re-decided at the #270 go/no-go point.
