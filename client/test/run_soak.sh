@@ -365,9 +365,21 @@ if [ "${EXTERNAL}" -eq 0 ]; then
   export MERIDIAN_CHARDB_USER=root
   export MERIDIAN_CHARDB_NAME="${CHAR_DB_NAME}"
 
-  log "launching worldd on 127.0.0.1:${WORLDD_PORT} (realm_id=${REALM_ID}, /metrics on ${METRICS_PORT})"
+  # Size the IO worker pool to the fleet. worldd's M0 model is one BLOCKING
+  # worker per connection, each serving a session read->dispatch loop to
+  # completion; a soak session stays in-world for the WHOLE window, so a worker
+  # is occupied for the full duration. The default pool is auto-sized to
+  # (cores - 3), which on a small CI runner (2-4 vCPU) is just ONE worker — then
+  # the first bot occupies it for the whole soak and the other N-1 connections
+  # queue behind it until their 30 s grants EXPIRE (observed: 1 accepted, 9
+  # "expired grant" in a burst). A realm expecting N concurrent players must be
+  # provisioned for N; give a worker per bot plus headroom for the brief overlap
+  # when a reconnecting bot's old connection is closing as its new one opens.
+  WORLDD_IO_WORKERS="${MERIDIAN_SOAK_IO_WORKERS:-$(( BOTS + 4 ))}"
+  log "launching worldd on 127.0.0.1:${WORLDD_PORT} (realm_id=${REALM_ID}, io-workers=${WORLDD_IO_WORKERS}, /metrics on ${METRICS_PORT})"
   "${WORLDD_BIN}" --cert "${CERT_PEM}" --key "${KEY_PEM}" \
     --bind 127.0.0.1 --port "${WORLDD_PORT}" --realm reference \
+    --io-workers "${WORLDD_IO_WORKERS}" \
     --metrics-port "${METRICS_PORT}" --metrics-bind 127.0.0.1 &
   WORLDD_PID=$!
   for i in $(seq 1 40); do
