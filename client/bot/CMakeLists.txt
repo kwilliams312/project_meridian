@@ -99,6 +99,21 @@ if(NOT MSVC)
   target_compile_options(meridian-bot PRIVATE -Wall -Wextra)
 endif()
 
+# --- The TWO-BOT AoI E2E driver (#248) --------------------------------------
+# Composes the single-bot core TWICE, concurrently (one std::thread per bot), with
+# a rendezvous barrier between enter-world and movement so BOTH bots are in-world
+# before either moves. Proves the IT-M0 headline: two clients see each other move
+# (mutual EntityEnter + EntityUpdate via the #87 relay). Driven over real TLS by
+# client/test/run_two_bot_it.sh against a live authd + worldd.
+find_package(Threads REQUIRED)
+add_executable(meridian-two-bot bot_two_main.cpp)
+target_link_libraries(meridian-two-bot PRIVATE meridian-bot-core Threads::Threads)
+set_target_properties(meridian-two-bot PROPERTIES
+  CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+if(NOT MSVC)
+  target_compile_options(meridian-two-bot PRIVATE -Wall -Wextra)
+endif()
+
 # --- Engine-free unit tests (ctest) -----------------------------------------
 enable_testing()
 

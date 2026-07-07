@@ -341,9 +341,21 @@ BotRunResult run_world_session(login::ILoginTransport& transport,
         return true;
     };
 
+    // Rendezvous (#248): if a barrier is wired, wait here until the OTHER bot has
+    // also entered the world. After this returns, worldd has run enter() for BOTH
+    // sessions, so each has been sent an EntityEnter for the other — which the
+    // login-time drain below then captures. This makes login-time MUTUAL visibility
+    // deterministic instead of racing the two logins. No-op for the single bot.
+    if (cfg.on_entered_world) cfg.on_entered_world();
+
     // Login-time visibility: pull any EntityEnter frames worldd queued the instant
-    // we entered (the OTHER bot already in range). Harmless if none are pending.
-    (void)drain_available(kDrainBudget);
+    // we (and, post-barrier, the peer) entered range. Harmless if none are pending.
+    // Sweep a few times so the peer's enter — which may land a beat after the
+    // barrier releases — is captured before the movement loop begins.
+    for (int i = 0; i < kFinalDrainSweeps; ++i) {
+        if (!drain_available(kDrainBudget)) break;
+        if (res.distinct_entities_seen() > 0) break;  // saw the peer — proceed
+    }
 
     // --- 4. Movement loop. Drive the #102 integrator at 20 Hz over the scripted
     //        path; emit MovementIntents gated by the ≤10/s + on-state-change cap;

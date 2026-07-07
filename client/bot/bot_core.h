@@ -26,6 +26,7 @@
 #define MERIDIAN_BOT_CORE_H
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -114,6 +115,15 @@ struct BotWorldConfig {
     // How many 20 Hz sim ticks to run the movement loop for. At 20 Hz, 200 ticks
     // = 10 s of simulated movement. The CLI derives this from --duration.
     std::uint32_t movement_ticks = 200;
+
+    // Optional rendezvous barrier (#248, two-bot mutual visibility). Invoked ONCE,
+    // right after this bot has entered the world (HandshakeOk + login-time AoI
+    // drain) and BEFORE it starts moving. The two-bot driver passes a barrier that
+    // blocks until BOTH bots are in-world, so each is already registered in the AoI
+    // grid before either moves — guaranteeing both the login-time EntityEnter and
+    // overlapping movement (so each sees the other MOVE, not just enter). Default
+    // (null) is a no-op — the single-bot CLI + unit tests are unaffected.
+    std::function<void()> on_entered_world;
 };
 
 // Drive the CLIENT-side worldd session over `transport` from a successful authd
