@@ -42,9 +42,9 @@
     }
   },
   "client": {
-    "status": "pending",
-    "version": null,
-    "export_hash": null,
-    "note": "client export CI (#113) not wired yet; coordinate reserved"
+    "status": "resolved",
+    "version": "0.0.1",
+    "export_hash": "7895729c9afdc6a89efc6185eda53e13155dd1c295814e8a0ee539e60193bfc4",
+    "note": "client export pinned (#113)"
   }
 }

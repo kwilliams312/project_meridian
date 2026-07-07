@@ -20,3 +20,8 @@ run/main_scene="res://scenes/login/login_screen.tscn"
 
 ; Forward+ per TD-02: D3D12 on Windows, native Metal on macOS Apple Silicon.
 renderer/rendering_method="forward_plus"
+; Required for the macOS **arm64** export (#113). Godot refuses an arm64/universal
+; export unless the ETC2/ASTC VRAM-compression import path is enabled (arm64 is
+; treated as a mobile-class texture target). Benign for the desktop dev boot — it
+; only widens which compressed texture variants the importer emits.
+textures/vram_compression/import_etc2_astc=true

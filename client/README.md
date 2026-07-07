@@ -299,6 +299,42 @@ x86_64 process), invokes the toolchain natively with `arch -arm64 cmake/ctest`, 
   GDExtension into `client/project/bin/libmeridian.macos.template_debug.framework`, then
   asserts the framework binary is arm64 and links OpenSSL. godot-cpp's compiled bindings
   are cached (keyed on `ENGINE_VERSION`).
+- **`client-export`** (#113) — produces the runnable **macOS arm64** `.app` via
+  [`scripts/export-client-macos.sh`](../scripts/export-client-macos.sh), asserts it is
+  pure arm64 + bundles the `template_debug` framework + is ad-hoc signed, and uploads it
+  as a retained nightly artifact (`client-macos-arm64`, 30 days) plus a tiny
+  `client-export-coordinate` (version + `export_hash`, 90 days). Runs on push-to-`main`,
+  the nightly schedule, and manual dispatch — **not** on PRs. The nightly build manifest
+  (#62/#307) downloads the coordinate to fill its `client` stream
+  (`scripts/build-manifest.sh --client-version/--client-hash`).
 
-Godot **export** for win-x64 + macos-arm64 (D-28 phase 1 build-health smoke) remains a
-later follow-up on top of this build job.
+## Exporting the macOS client (#113)
+
+The macOS **arm64** export is produced by one script, used identically locally and in CI:
+
+```bash
+scripts/fetch-deps.sh                 # once: pinned editor + export templates (SHA-512 verified)
+scripts/export-client-macos.sh        # → build/export/macos/ProjectMeridian.app (+ .zip + sha256)
+scripts/export-client-macos.sh --target release   # release variant
+scripts/export-client-macos.sh --skip-build        # reuse an already-built framework
+```
+
+The export preset lives in
+[`client/project/export_presets.cfg`](project/export_presets.cfg) — one macOS preset,
+`architecture="arm64"` (no universal2, SAD §9.6), **ad-hoc signed** (M0: `codesign` = Built-in,
+`identity="-"`, notarization off). The exported `.app` loads the **`template_debug`**
+GDExtension variant (`Contents/Frameworks/libmeridian.macos.template_debug.framework`),
+not the editor variant (#300).
+
+Two macOS-specific facts the script handles for you:
+
+- **arm64 template binaries.** The official `.tpz` ships only `godot_macos_*.universal`;
+  Godot's exporter looks up `godot_macos_<cfg>.arm64` by exact name and does **not** thin,
+  so the script `lipo`-thins arm64 slices and injects them into the installed `macos.zip`.
+- **ETC2/ASTC.** `project.godot` sets `textures/vram_compression/import_etc2_astc=true`;
+  Godot refuses an arm64 export without it.
+
+The **export itself is headless** (`--export-debug` uses the dummy renderer, so the #283
+cold-import MoltenVK abort does not apply). If a future project addition ever makes the
+cold headless import abort, pass `--seed` to do the one-time **windowed** `.godot/` seed
+first (the #290 approach `run-client.sh` uses — that step needs a GUI session).

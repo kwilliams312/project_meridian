@@ -13,8 +13,11 @@
 #               content_hash (Tools SAD 2.6), the world.sql file checksum, and the
 #               pack namespace/version/schema metadata. Read straight out of a
 #               content build output dir (scripts/content-build.sh --out DIR).
-#   * client  — the Godot client export (#113). Not wired yet, so emitted as a
-#               'pending' placeholder unless --client-* flags are given.
+#   * client  — the Godot client export (#113): the macOS arm64 .app version +
+#               export_hash from scripts/export-client-macos.sh. Resolved when
+#               --client-version/--client-hash are given (the nightly wires these
+#               from the client-export CI artifact); a 'pending' placeholder
+#               otherwise (e.g. a locally-generated sample with no export at hand).
 #
 #   plus the git SHA + a build timestamp.
 #
