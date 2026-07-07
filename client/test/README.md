@@ -58,3 +58,37 @@ client/test/run_authd_login_it.sh
 Requires `mariadbd`/`mariadb-install-db`/`mariadb`, `cmake`, `flatc`, `openssl`,
 `nc` on PATH. Inert as a plain ctest (`authd-login-it` SKIPs without the harness's
 `--host`/`--port` args).
+
+**Single-bot full-client harness (#111)** — the headless bot (`meridian-bot`)
+driven over real TLS against a **real authd AND worldd**: login → enter-world →
+MOVE. Boots a throwaway MariaDB (unique socket/port), seeds an account + realm,
+launches both daemons, runs the bot, asserts `handshake_ok=1` + `moves_accepted>0`
++ the grant is consumed:
+
+```
+client/test/run_bot_client_it.sh
+```
+
+**Two-bot AoI E2E harness (#248) — the IT-M0 see-each-other-move capstone**
+(§Step 3 / DC-4). Runs `meridian-two-bot`: TWO headless bots log into the real
+authd, both enter the real worldd at the bootstrap spawn (within the 40 m AoI
+enter radius, #87), rendezvous at a barrier so both are in-world, then both walk a
+square path. Each bot **captures the OTHER's relayed EntityEnter (saw the peer on
+login) + EntityUpdate (saw the peer MOVE)** via the #87 AoI relay. Asserts mutual
+enter **and** mutual move both ways, distinct per-session guids (#87 fix), and both
+grants consumed:
+
+```
+client/test/run_two_bot_it.sh
+```
+
+Both harnesses use a UNIQUE PID-keyed MariaDB socket/port (never the dev default
+`/tmp/mmdb.sock:3307`) so they never collide with a dev DB or each other. They are
+env-guarded integration tests — not wired into a fast CI job. The two-bot driver
+prints a machine-readable `TWO_BOT_RESULT` line with each visibility leg
+(`a_saw_b_enter`, `b_saw_a_move`, …) so the run is honest about full vs partial
+mutual visibility.
+
+The bot's inbound-entity CAPTURE (EntityEnter/Update/Leave → guid + position) is
+proven WITHOUT a server by section 6 of the `bot-world-session` unit test (ctest,
+`-DMERIDIAN_BOT=ON`); the two-bot harness is the live-server proof.
