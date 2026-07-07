@@ -7,6 +7,16 @@ __pycache__/
 # mcc build cache (tools SAD §2.8)
 .mcc-cache/
 
+# --- Native macOS dev toolkit (scripts/dev/, issue #223) ---
+# CMake build trees produced by scripts/dev/build.sh
+/build/
+# Throwaway local MariaDB datadirs + runtime state (scripts/dev/test.sh --db,
+# scripts/dev/run-local.sh). NEVER committed — ephemeral local state only.
+/.dev-run/
+# Self-signed TLS cert/key generated for local run (scripts/dev/run-local.sh)
+scripts/dev/certs/*.crt
+scripts/dev/certs/*.key
+
 # --- Client GDExtension build artifacts (issue #158) ---
 # Godot editor cache
 .godot/
