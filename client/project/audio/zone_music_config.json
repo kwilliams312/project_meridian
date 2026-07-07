@@ -1,0 +1,28 @@
+{
+  "schema": "meridian/zone_music_config@1",
+  "_comment": "Zone -> music-set -> stem mapping for ZoneMusicPlayer (AUD-02, issue #144). Content references stable asset IDs ONLY (music PRD §7, music SAD §6.1) — never file paths. The runtime datastore (IF-5 pack manifest, PackEntry.resource) resolves each asset ID to a res://meridian/... resource. At M0 the resolver is the PLACEHOLDER factory (placeholder_stream_factory.gd) — synthesized tones, NOT real music. See docs/audio-direction.md (#143, deferred) for the real audio direction.",
+  "placeholder": true,
+  "sets": {
+    "core:mus.placeholder": {
+      "_comment": "PLACEHOLDER set — procedurally synthesized tones per layer. Clearly not music; proves the ZoneMusicPlayer system + the ID hook path end-to-end without shipping any audio asset. Musical metadata mirrors the illustrative sidecar in music SAD §4.2 (bpm 96, 4/4, 96 bars).",
+      "bpm": 96.0,
+      "time_signature": "4/4",
+      "beats_per_bar": 4,
+      "length_bars": 96,
+      "key": "d_dorian",
+      "stems": [
+        {"layer": "L1", "asset_id": "core:mus.placeholder.explore.layer1", "placeholder_tone_hz": 146.83},
+        {"layer": "L2", "asset_id": "core:mus.placeholder.explore.layer2", "placeholder_tone_hz": 220.0},
+        {"layer": "L3", "asset_id": "core:mus.placeholder.tension.layer3", "placeholder_tone_hz": 293.66},
+        {"layer": "L4", "asset_id": "core:mus.placeholder.combat.layer4a", "placeholder_tone_hz": 349.23},
+        {"layer": "L4", "asset_id": "core:mus.placeholder.combat.layer4b", "placeholder_tone_hz": 440.0}
+      ]
+    }
+  },
+  "zones": {
+    "_comment": "zone id -> default music set (zone.music, music SAD §6.1). At M0 every zone maps to the placeholder set; real per-zone sets land from M1 (music PRD §6).",
+    "zone.bootstrap": {"set": "core:mus.placeholder", "default_state": "explore"},
+    "zone.default": {"set": "core:mus.placeholder", "default_state": "explore"}
+  },
+  "default_zone": "zone.default"
+}
