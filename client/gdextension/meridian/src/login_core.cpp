@@ -15,6 +15,7 @@
 #include <cstring>
 
 #include "auth_generated.h"
+#include "version_compat.h"
 #include "world_generated.h"
 
 namespace meridian::login {
@@ -154,9 +155,17 @@ LoginResult run_login(
     std::optional<Bytes> frame = transport.recv_frame();
     if (!frame) return transport_closed("ServerHello");
     if (const mn::ServerHello* sh = decode<mn::ServerHello>(*frame)) {
-        if (sh->proto_ver() != cfg.proto_ver) {
+        // Schema/protocol version check (#98): compare our proto_ver against the
+        // server-advertised one through the ONE shared compat rule (version_compat.*).
+        // IF-1 carries no content hash (that is IF-2 HandshakeOk), so only proto_ver is
+        // compared here; a blocking verdict is the "client out of date" case, surfaced
+        // as kProtocolMismatch → the login scene's "client out of date — please update".
+        const compat::CompatResult cr = compat::check_compat(
+            compat::SchemaVersion{cfg.proto_ver, {}},
+            compat::SchemaVersion{sh->proto_ver(), {}});
+        if (cr.blocking) {
             result.status = LoginStatus::kProtocolMismatch;
-            result.detail = "server proto_ver mismatch";
+            result.detail = cr.detail;
             return result;
         }
     } else if (const mn::Error* err = decode<mn::Error>(*frame)) {

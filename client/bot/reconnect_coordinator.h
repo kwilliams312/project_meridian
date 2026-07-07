@@ -53,6 +53,10 @@ enum class ReEstablishOutcome : std::uint8_t {
                          // kResumeWithGrant; or an expired grant on kFullRelogin)
     kConnectFailed,      // could not reach the server (transport down) — retryable
     kFatal,              // an unrecoverable error (bad credentials on relogin, etc.)
+    kOutOfDate,          // the (re)connect's schema/protocol version check failed
+                         // (#98) — the client is out of date. Terminal + DISTINCT
+                         // from kFatal: the FSM goes kOutOfDate, not kFailed, so the
+                         // UX prompts an update instead of a network-error retry.
 };
 
 const char* to_string(ReEstablishOutcome o);

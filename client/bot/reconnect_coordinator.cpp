@@ -14,6 +14,7 @@ const char* to_string(ReEstablishOutcome o) {
         case ReEstablishOutcome::kGrantRejected: return "GrantRejected";
         case ReEstablishOutcome::kConnectFailed: return "ConnectFailed";
         case ReEstablishOutcome::kFatal:         return "Fatal";
+        case ReEstablishOutcome::kOutOfDate:     return "OutOfDate";
     }
     return "?";
 }
@@ -73,6 +74,11 @@ ReconnectReport run_reconnect(ConnectionFsm& fsm, const ReEstablishFn& reestabli
             case ReEstablishOutcome::kFatal:
                 fsm.dispatch(ConnEvent::kFatal, elapsed);
                 break;
+            case ReEstablishOutcome::kOutOfDate:
+                // Version mismatch on the (re)connect (#98) — terminal, but DISTINCT
+                // from Fatal: the FSM goes kOutOfDate so the UX prompts an update.
+                fsm.dispatch(ConnEvent::kVersionMismatch, elapsed);
+                break;
         }
     }
 
@@ -86,6 +92,8 @@ ReconnectReport run_reconnect(ConnectionFsm& fsm, const ReEstablishFn& reestabli
         rep.detail = rep.resumed_without_relogin
                          ? "reconnected: session RESUMED with token (no relogin)"
                          : "reconnected: via full re-login (fresh grant — NOT a token resume)";
+    } else if (fsm.is_out_of_date()) {
+        rep.detail = "client out of date — schema/protocol version rejected; update required (#98)";
     } else if (rep.gave_up) {
         rep.detail = "gave up: reconnect window / attempts exhausted";
     } else {

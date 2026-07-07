@@ -265,6 +265,23 @@ void test_forged_server_proof() {
     check("C: no grant on a server we could not authenticate", r.grant_id == 0);
 }
 
+void test_proto_mismatch() {
+    std::printf("B2. PROTO MISMATCH -> client out of date (#98)\n");
+    login::LoginConfig cfg;
+    cfg.client_build = 1000;
+    cfg.proto_ver = 1;
+    // The mock authd's ServerHello advertises proto_ver 2 (a newer wire major); the
+    // client's IF-1 version check (via the shared version_compat core) must reject the
+    // login as kProtocolMismatch — the "client out of date" outcome — before SRP runs.
+    MockAuthdTransport t("alice", "pw", {{7u, "Reference", 0u, 0u}},
+                         /*proto_ver=*/2);
+    login::LoginResult r = login::run_login(t, cfg, "alice", "pw", nullptr, nullptr);
+    check("B2: status == kProtocolMismatch (client out of date)",
+          r.status == login::LoginStatus::kProtocolMismatch);
+    check("B2: no grant issued on a version mismatch", r.grant_id == 0);
+    check("B2: no session key", r.session_key.empty());
+}
+
 void test_realm_selection() {
     std::printf("D. REALM SELECTION (build compat + explicit chooser)\n");
     login::LoginConfig cfg;
@@ -355,6 +372,7 @@ int main() {
     std::printf("client login core test (IF-1/IF-2, #99)\n\n");
     test_full_login();
     test_wrong_password();
+    test_proto_mismatch();
     test_forged_server_proof();
     test_realm_selection();
     test_world_hello();

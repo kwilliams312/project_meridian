@@ -476,6 +476,11 @@ ReconnectRunReport run_session_with_reconnect(
             if (!relogin) return ReEstablishOutcome::kFatal;  // misconfigured
             login::LoginResult fresh = relogin();
             if (!fresh.ok()) {
+                // A schema/protocol version mismatch (#98) is NOT a network error and
+                // NOT a plain fatal: route it to the DISTINCT kOutOfDate terminal so
+                // the UX says "client out of date — update", never a retry prompt.
+                if (fresh.status == login::LoginStatus::kProtocolMismatch)
+                    return ReEstablishOutcome::kOutOfDate;
                 // Distinguish a transport failure (retry) from an auth reject (fatal).
                 return (fresh.status == login::LoginStatus::kConnectFailed ||
                         fresh.status == login::LoginStatus::kTransportClosed)

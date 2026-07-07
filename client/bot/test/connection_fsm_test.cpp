@@ -34,6 +34,7 @@
 #include "reconnect_coordinator.h"
 
 #include <cstdio>
+#include <string>
 #include <vector>
 
 using namespace meridian::bot;
@@ -202,6 +203,47 @@ int main() {
               !ConnectionFsm().dispatch(ConnEvent::kFatal));
     }
 
+    // ===== 6b-ver. Version mismatch -> OutOfDate (distinct from Failed) (#98) =
+    std::printf("\n6b-ver. version mismatch -> OutOfDate (client out of date)\n");
+    {
+        // From Authenticating (where the IF-1 proto check runs): a version mismatch
+        // drops to the DISTINCT terminal OutOfDate, NOT Failed.
+        ConnectionFsm fsm;
+        fsm.dispatch(ConnEvent::kConnect);
+        fsm.dispatch(ConnEvent::kConnected);  // Authenticating
+        check("6b-ver: VersionMismatch in Authenticating -> OutOfDate",
+              fsm.dispatch(ConnEvent::kVersionMismatch) &&
+                  fsm.state() == ConnState::kOutOfDate);
+        check("6b-ver: OutOfDate is terminal", fsm.is_terminal());
+        check("6b-ver: OutOfDate is out-of-date (user-actionable)", fsm.is_out_of_date());
+        check("6b-ver: OutOfDate is NOT Failed (distinct from network error)",
+              fsm.state() != ConnState::kFailed);
+        check("6b-ver: no reconnect scheduled from OutOfDate", fsm.next_backoff_ms() == 0);
+    }
+    {
+        // A plain network-error Failed is NOT out-of-date — the two terminals differ.
+        ConnectionFsm fsm;
+        fsm.dispatch(ConnEvent::kConnect);
+        fsm.dispatch(ConnEvent::kConnected);
+        fsm.dispatch(ConnEvent::kFatal);
+        check("6b-ver: Failed is terminal but NOT out-of-date",
+              fsm.is_terminal() && !fsm.is_out_of_date());
+    }
+    {
+        // VersionMismatch is ignored from a clean Disconnected (nothing to fail) and
+        // once already terminal; Reset recovers a fresh session (post-update relaunch).
+        ConnectionFsm fsm;
+        check("6b-ver: VersionMismatch ignored when Disconnected",
+              !fsm.dispatch(ConnEvent::kVersionMismatch) &&
+                  fsm.state() == ConnState::kDisconnected);
+        fsm.dispatch(ConnEvent::kConnect);
+        fsm.dispatch(ConnEvent::kVersionMismatch);  // Connecting -> OutOfDate
+        check("6b-ver: VersionMismatch ignored once OutOfDate",
+              !fsm.dispatch(ConnEvent::kVersionMismatch));
+        check("6b-ver: Reset from OutOfDate -> Disconnected",
+              fsm.dispatch(ConnEvent::kReset) && fsm.state() == ConnState::kDisconnected);
+    }
+
     // ===== 6c. A pre-InWorld drop is NOT a reconnect episode =================
     std::printf("\n6c. drop before InWorld falls back to Disconnected\n");
     {
@@ -343,6 +385,35 @@ int main() {
         check("10: gave up (Failed)", rep.gave_up && rep.final_state == ConnState::kFailed);
         check("10: exactly one attempt before fatal", calls == 1);
         check("10: not reconnected", !rep.reconnected);
+    }
+
+    // ===== 11. Coordinator: version mismatch on reconnect -> OutOfDate (#98) =
+    // A relogin during reconnect whose schema/protocol version is rejected routes to
+    // the DISTINCT OutOfDate terminal (NOT Failed): the report says "client out of
+    // date", not "gave up", so the UX prompts an update rather than a retry.
+    std::printf("\n11. coordinator: version mismatch on reconnect -> OutOfDate\n");
+    {
+        VClock clk;
+        BackoffPolicy p;
+        p.base_delay_ms = 100;
+        ConnectionFsm fsm(p, ReconnectStrategy::kFullRelogin);
+        drive_to_in_world(fsm);
+        auto now = [&clk]() { return clk.t; };
+        auto wait = [&clk](std::uint32_t ms) { clk.t += ms; };
+        int calls = 0;
+        auto reestablish = [&calls](std::uint32_t, ReconnectStrategy) {
+            ++calls;
+            return ReEstablishOutcome::kOutOfDate;  // server advertised a different proto
+        };
+        ReconnectReport rep = run_reconnect(fsm, reestablish, now, wait, /*drop_first=*/true);
+        check("11: final state OutOfDate (distinct terminal)",
+              rep.final_state == ConnState::kOutOfDate);
+        check("11: is_out_of_date via fsm", fsm.is_out_of_date());
+        check("11: NOT counted as gave_up (network exhaustion)", !rep.gave_up);
+        check("11: not reconnected", !rep.reconnected);
+        check("11: stopped after one attempt (terminal)", calls == 1);
+        check("11: detail names client-out-of-date",
+              rep.detail.find("out of date") != std::string::npos);
     }
 
     std::printf(g_fail == 0 ? "\nALL CONNECTION-FSM TESTS PASSED\n"
