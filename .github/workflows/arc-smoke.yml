@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# Proves the self-hosted runners work on BOTH arches and that dind/buildx can
+# build a container. Manual trigger (workflow_dispatch). Each job runs on its
+# arch's runner label and builds a trivial image natively (no QEMU).
+name: arc-smoke
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [meridian-amd64, meridian-arm64]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Report arch
+        run: uname -m
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build a trivial image natively (proves dind + buildx)
+        run: |
+          printf 'FROM alpine:3.20\nRUN uname -m > /arch.txt\n' > Dockerfile.smoke
+          docker buildx build -f Dockerfile.smoke --load -t arc-smoke:${{ matrix.runner }} .
+          docker run --rm arc-smoke:${{ matrix.runner }} cat /arch.txt
