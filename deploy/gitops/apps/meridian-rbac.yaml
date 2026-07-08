@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: meridian-rbac
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/kwilliams312/project_meridian.git
+    targetRevision: dev
+    path: deploy/gitops/rbac
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [ServerSideApply=true]
