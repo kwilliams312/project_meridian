@@ -27,6 +27,13 @@ worldd:
       metallb.universe.tf/loadBalancerIPs: "192.168.89.31"
       metallb.universe.tf/allow-shared-ip: "meridian-dev"
   probes: { type: tcp }
+  # At M0 worldd plays the gateway role and CONSUMES the IF-3 session_grant from
+  # the auth DB (server/worldd/world_session.cpp validate_and_consume_grant).
+  # The chart default worldd.db.enabled=false ("no DB at M0") is wrong for that —
+  # without meridian_auth access worldd rejects every grant as GRANT_INVALID(3).
+  db:
+    enabled: true
+    name: meridian_auth
 
 tls:
   mode: selfSignedInit
