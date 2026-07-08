@@ -25,6 +25,10 @@ spec:
       kind: Deployment
       jqPathExpressions:
         - '.spec.template.metadata.annotations."kubectl.kubernetes.io/restartedAt"'
+    - group: apps
+      kind: StatefulSet
+      jqPathExpressions:
+        - '.spec.volumeClaimTemplates'
   syncPolicy:
     syncOptions:
       - CreateNamespace=true

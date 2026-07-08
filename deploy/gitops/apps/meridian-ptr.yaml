@@ -23,6 +23,12 @@ spec:
       kind: Deployment
       jqPathExpressions:
         - '.spec.template.metadata.annotations."kubectl.kubernetes.io/restartedAt"'
+    # StatefulSet volumeClaimTemplates are immutable + apiserver-defaulted
+    # (apiVersion/kind/status/volumeMode) — ignore so the SS isn't perma-OutOfSync.
+    - group: apps
+      kind: StatefulSet
+      jqPathExpressions:
+        - '.spec.volumeClaimTemplates'
   syncPolicy:
     automated:
       prune: true
