@@ -18,6 +18,13 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: meridian-dev
+  # cd.yml rollout-restarts the daemons to repull the moving :dev tag; ignore the
+  # restartedAt annotation so self-heal doesn't fight (and revert) the restart.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jqPathExpressions:
+        - '.spec.template.metadata.annotations."kubectl.kubernetes.io/restartedAt"'
   syncPolicy:
     automated:
       prune: true
