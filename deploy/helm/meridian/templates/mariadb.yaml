@@ -1,0 +1,124 @@
+{{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
+{{- /* Bundled MariaDB (D-37). Deployment+emptyDir when persistence is off (dev),
+       StatefulSet+PVC when on (PTR/Prod). Seeded from the meridian-db image. */ -}}
+{{- if .Values.mariadb.enabled }}
+{{- $full := include "meridian.mariadb.fullname" . -}}
+{{- $img := printf "%s/%s:%s" .Values.mariadb.image.registry .Values.mariadb.image.repository .Values.mariadb.image.tag -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $full }}
+  labels:
+    {{- include "meridian.mariadb.selectorLabels" . | nindent 4 }}
+type: Opaque
+stringData:
+  MARIADB_ROOT_PASSWORD: {{ .Values.mariadb.rootPassword | quote }}
+  MARIADB_USER: {{ .Values.db.user | quote }}
+  MARIADB_PASSWORD: {{ required "db.password is required when mariadb.enabled=true" .Values.db.password | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}
+  labels:
+    {{- include "meridian.mariadb.selectorLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "meridian.mariadb.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+      protocol: TCP
+---
+{{- if .Values.mariadb.persistence.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+{{- else }}
+apiVersion: apps/v1
+kind: Deployment
+{{- end }}
+metadata:
+  name: {{ $full }}
+  labels:
+    {{- include "meridian.mariadb.selectorLabels" . | nindent 4 }}
+spec:
+  replicas: 1
+  {{- if .Values.mariadb.persistence.enabled }}
+  serviceName: {{ $full }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "meridian.mariadb.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "meridian.mariadb.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.mariadb.podSecurityContext | nindent 8 }}
+      {{- with .Values.mariadb.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mariadb.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mariadb.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mariadb
+          image: {{ $img | quote }}
+          imagePullPolicy: {{ .Values.mariadb.image.pullPolicy }}
+          args: ["--skip-name-resolve"]
+          envFrom:
+            - secretRef:
+                name: {{ $full }}
+          ports:
+            - name: mysql
+              containerPort: 3306
+              protocol: TCP
+          livenessProbe:
+            exec:
+              command: ["healthcheck.sh", "--connect", "--innodb_initialized"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command: ["healthcheck.sh", "--connect", "--innodb_initialized"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.mariadb.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: run
+              mountPath: /run/mysqld
+      volumes:
+        - name: run
+          emptyDir: {}
+        {{- if not .Values.mariadb.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+  {{- if .Values.mariadb.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.mariadb.persistence.storageClass | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.mariadb.persistence.size | quote }}
+  {{- end }}
+{{- end }}

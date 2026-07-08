@@ -85,6 +85,39 @@ db:
     characters: meridian_characters
     world: meridian_world
 
+# ── Bundled MariaDB (opt-in; D-37 hosted realms) ─────────────────────────────
+# When enabled, the chart runs an in-cluster MariaDB seeded from the meridian-db
+# image (the 3-DB split baked from source). Dev uses persistence.enabled=false
+# (ephemeral emptyDir — reseeded on every pod start). PTR/Prod set
+# persistence.enabled=true for a StatefulSet + Longhorn PVC.
+mariadb:
+  enabled: false
+  image:
+    registry: ghcr.io
+    repository: kwilliams312/project_meridian/meridian-db
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  # Root password (chart-created Secret). Dev only; PTR/Prod use db.existingSecret.
+  rootPassword: "meridian-root"
+  persistence:
+    enabled: false        # false → Deployment + emptyDir; true → StatefulSet + PVC
+    storageClass: "longhorn"
+    size: 8Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+  # MariaDB runs as its own uid (image default 999); it needs a writable rootfs,
+  # so it does NOT inherit the daemons' read-only-rootfs containerSecurityContext.
+  podSecurityContext:
+    fsGroup: 999
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # ── authd — login / realm-list / session-grant (IF-1, TLS 1.3, port 7100) ────
 authd:
   enabled: true
