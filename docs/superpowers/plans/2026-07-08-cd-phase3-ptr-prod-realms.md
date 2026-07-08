@@ -12,11 +12,19 @@
 
 **Branch:** author on `dev`. **Reference:** spec §3 (realm matrix), §5.1 (persistence). Realm matrix (spec §3):
 
-| Realm | Branch | NS | MariaDB | Moving tag | NodePorts authd/worldd | Replicas | Sync |
+Exposure: authd (:7100) + worldd (:7200) share **one MetalLB LoadBalancer IP** per
+realm (`metallb.universe.tf/{loadBalancerIPs,allow-shared-ip}`) from the
+`192.168.89.30-49` pool (`.30` = enigma-bbs; `.31` = dev, already live).
+
+| Realm | Branch | NS | MariaDB | Moving tag | Shared LB IP (authd :7100 / worldd :7200) | Replicas | Sync |
 |-------|--------|----|---------|-----------|------------------------|----------|------|
-| Dev (live) | `dev` | `meridian-dev` | ephemeral emptyDir | `:dev` + restart | 31710/31720 | 1 | auto |
-| **PTR** | `ptr` | `meridian-ptr` | **StatefulSet + Longhorn PVC** | `:ptr` + restart | 31730/31740 | 2 | auto |
-| **Prod** | `main` | `meridian-prod` | **StatefulSet + Longhorn PVC** | `:prod` (+`:latest`) | 31750/31760 | 3 | **manual** |
+| Dev (live) | `dev` | `meridian-dev` | ephemeral emptyDir | `:dev` + restart | `192.168.89.31` | 1 | auto |
+| **PTR** | `ptr` | `meridian-ptr` | **StatefulSet + Longhorn PVC** | `:ptr` + restart | `192.168.89.32` | 2 | auto |
+| **Prod** | `main` | `meridian-prod` | **StatefulSet + Longhorn PVC** | `:prod` (+`:latest`) | `192.168.89.33` | 3 | **manual** |
+
+NOTE: authd advertising each realm's LB IP in its realm list (so external *real*
+clients get directed to worldd) is tracked in **#339** — not part of standing up
+the realms here.
 
 **Prereq facts:** cd.yml publishes `:ptr`/`:prod` multi-arch (Phase 2b). Longhorn is the default StorageClass. The `ptr` branch already exists (created in the Phase-0 bootstrap at `bb2fe25`) but is stale — it must be fast-forwarded/merged from `dev`. `main` currently lacks the CD infra (it arrives via promotion).
 
@@ -53,11 +61,19 @@ image:
   pullPolicy: Always
 authd:
   replicaCount: 2
-  service: { type: NodePort, nodePort: 31730 }
+  service:
+    type: LoadBalancer
+    annotations:
+      metallb.universe.tf/loadBalancerIPs: "192.168.89.32"
+      metallb.universe.tf/allow-shared-ip: "meridian-ptr"
   probes: { type: tcp }
 worldd:
   replicaCount: 2
-  service: { type: NodePort, nodePort: 31740 }
+  service:
+    type: LoadBalancer
+    annotations:
+      metallb.universe.tf/loadBalancerIPs: "192.168.89.32"
+      metallb.universe.tf/allow-shared-ip: "meridian-ptr"
   probes: { type: tcp }
 tls:
   mode: selfSignedInit
@@ -83,11 +99,19 @@ image:
   pullPolicy: Always
 authd:
   replicaCount: 3
-  service: { type: NodePort, nodePort: 31750 }
+  service:
+    type: LoadBalancer
+    annotations:
+      metallb.universe.tf/loadBalancerIPs: "192.168.89.33"
+      metallb.universe.tf/allow-shared-ip: "meridian-prod"
   probes: { type: tcp }
 worldd:
   replicaCount: 3
-  service: { type: NodePort, nodePort: 31760 }
+  service:
+    type: LoadBalancer
+    annotations:
+      metallb.universe.tf/loadBalancerIPs: "192.168.89.33"
+      metallb.universe.tf/allow-shared-ip: "meridian-prod"
   probes: { type: tcp }
 tls:
   mode: selfSignedInit
@@ -313,10 +337,11 @@ Expected: cd green; `meridian-ptr` Synced/Healthy; 2×authd + 2×worldd + 1×mar
 
 ```bash
 kubectl -n meridian-ptr get pvc                              # a bound Longhorn PVC for mariadb
-NODE_IP=$(kubectl get node -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
-echo | openssl s_client -connect "${NODE_IP}:31730" 2>/dev/null | openssl x509 -noout -subject   # authd
+kubectl -n meridian-ptr get svc -o wide                      # authd+worldd both EXTERNAL-IP 192.168.89.32
+echo | openssl s_client -connect 192.168.89.32:7100 2>/dev/null | openssl x509 -noout -subject   # authd
+echo | openssl s_client -connect 192.168.89.32:7200 2>/dev/null | openssl x509 -noout -subject   # worldd
 ```
-Expected: a `Bound` PVC; `subject=CN=meridian-ptr-authd`.
+Expected: a `Bound` PVC; both services share `192.168.89.32`; `subject=CN=meridian-ptr-authd` and `-worldd`.
 
 ---
 
