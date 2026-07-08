@@ -86,6 +86,12 @@ minRunners: 0
 maxRunners: 3
 containerMode:
   type: dind
+# ArgoCD + `helm template` cannot run the chart's controller-SA `lookup`, so name
+# it explicitly: SA = <controller release>-gha-rs-controller, and the controller
+# ArgoCD Application (Task 3) is named `arc-controller`.
+controllerServiceAccount:
+  name: arc-controller-gha-rs-controller
+  namespace: arc-systems
 template:
   spec:
     nodeSelector:
@@ -104,6 +110,10 @@ minRunners: 0
 maxRunners: 3
 containerMode:
   type: dind
+# See amd64-values.yaml — the controller-SA lookup must be named explicitly.
+controllerServiceAccount:
+  name: arc-controller-gha-rs-controller
+  namespace: arc-systems
 template:
   spec:
     nodeSelector:
@@ -115,11 +125,11 @@ template:
 Run (substitute the pinned `<ARC_VERSION>`; a dummy secret name is fine for templating):
 ```bash
 helm template amd64 oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set \
-  --version <ARC_VERSION> -f deploy/gitops/runners/amd64-values.yaml >/dev/null && echo "amd64 values OK"
+  --version <ARC_VERSION> --namespace arc-runners -f deploy/gitops/runners/amd64-values.yaml >/dev/null && echo "amd64 values OK"
 helm template arm64 oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set \
-  --version <ARC_VERSION> -f deploy/gitops/runners/arm64-values.yaml >/dev/null && echo "arm64 values OK"
-helm template ctl oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set-controller \
-  --version <ARC_VERSION> -f deploy/gitops/runners/controller-values.yaml >/dev/null && echo "controller values OK"
+  --version <ARC_VERSION> --namespace arc-runners -f deploy/gitops/runners/arm64-values.yaml >/dev/null && echo "arm64 values OK"
+helm template arc-controller oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set-controller \
+  --version <ARC_VERSION> --namespace arc-systems -f deploy/gitops/runners/controller-values.yaml >/dev/null && echo "controller values OK"
 ```
 Expected: `amd64 values OK`, `arm64 values OK`, `controller values OK` (no template errors — proves the value keys are valid for the chart).
 
