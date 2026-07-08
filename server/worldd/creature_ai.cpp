@@ -417,4 +417,22 @@ float CreatureAi::threat_of(ObjectGuid creature_guid, ObjectGuid attacker_guid) 
     return t == it->second.threat.end() ? 0.0f : t->second;
 }
 
+ObjectGuid CreatureAi::top_threat(ObjectGuid creature_guid) const {
+    auto it = instances_.find(creature_guid);
+    if (it == instances_.end()) return 0;
+    // Highest accrued threat wins; ties broken by ascending guid (deterministic) —
+    // the same rule select_threat_target uses. This is the "damage attribution via
+    // threat" a kill-XP award resolves the killer with when the killing blow has no
+    // direct caster (a periodic/DoT tick — #360).
+    ObjectGuid best = 0;
+    float best_threat = -1.0f;
+    for (const auto& kv : it->second.threat) {
+        if (kv.second > best_threat || (kv.second == best_threat && kv.first < best)) {
+            best_threat = kv.second;
+            best = kv.first;
+        }
+    }
+    return best;
+}
+
 }  // namespace meridian::worldd

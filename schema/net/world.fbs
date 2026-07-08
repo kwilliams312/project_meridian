@@ -47,6 +47,12 @@ enum Opcode : uint16 {
   ENTER_WORLD_REQUEST  = 0x0016,  // C→S  spawn as an OWNED character (by id)
   ENTER_WORLD_RESPONSE = 0x0017,  // S→C  typed result (OK spawns; else no spawn)
 
+  // --- 0x0xxx  character progression  (M1 — CHR-03: XP awards + level-up) ---
+  // Server-authoritative XP/leveling (#360). The client only DISPLAYS these — it
+  // never predicts XP or a level-up (server is law, Principle 1). Both are S→C.
+  XP_GAINED = 0x0020,  // S→C  XP earned (e.g. a kill) + progress toward next level
+  LEVEL_UP  = 0x0021,  // S→C  level increased + the stat growth applied
+
   // --- 0x1xxx  movement  (M0) ---
   MOVEMENT_INTENT = 0x1001,  // C→S  client movement intent (validated OPS-03)
   MOVEMENT_STATE  = 0x1002,  // S→C  authoritative movement state broadcast
@@ -61,6 +67,16 @@ enum Opcode : uint16 {
   CAST_START   = 0x3002,     // S→C  ACCEPT: cast/GCD started (cast_ms; 0 = instant)
   CAST_FAILED  = 0x3003,     // S→C  REJECT: reason + gcd_remaining_ms (D-10 rollback)
   CAST_RESULT  = 0x3004,     // S→C  resolution outcome (attack table + damage/heal)
+
+  // --- 0x3xxx  death / resurrect (M1 — CMB-03: death state machine, #359) ---
+  // Server-authoritative death→resurrect flow. On death the server spawns a corpse
+  // and starts the graveyard-release countdown; the client requests release +
+  // resurrect and is told the outcome. All state is the server's.
+  DEATH_STATE       = 0x3010,  // S→C  you died: corpse guid + auto-release countdown
+  RELEASE_REQUEST   = 0x3011,  // C→S  request an early release to the graveyard
+  GHOST_STATE       = 0x3012,  // S→C  released: now a ghost at the graveyard
+  RESURRECT_REQUEST = 0x3013,  // C→S  resurrect at your corpse (corpse-run complete)
+  RESURRECT_RESULT  = 0x3014,  // S→C  resurrection outcome (alive + health, or refused)
 
   // --- 0x4xxx  quest / gossip    (reserved — see placeholder below) ---
   // --- 0x5xxx  inventory/economy (reserved — see placeholder below) ---
@@ -389,11 +405,101 @@ table CastResult {
 }
 
 // ===========================================================================
+// 0x3xxx — death / resurrect  (M1 — CMB-03: death state machine, #359)
+// ===========================================================================
+// Server-authoritative death→resurrect flow (server SAD §2.5 shallow hierarchy +
+// Corpse; PRD CMB-03). On a player reaching 0 HP the server spawns a Corpse at the
+// death spot and starts the graveyard-release countdown (DEATH_STATE). The player
+// may release early (RELEASE_REQUEST) — auto-release fires on the timer regardless —
+// becoming a ghost at the nearest graveyard (GHOST_STATE). The ghost runs back to
+// its corpse (corpse-run) and resurrects there (RESURRECT_REQUEST → RESURRECT_RESULT:
+// restore a % of max health, clear the ghost, despawn the corpse). The nearest
+// graveyard + resurrection-sickness knobs come from world data (content epic #28).
+
+/// S→C. You died. The server spawned your corpse at your death location and
+/// started the graveyard-release countdown.
+table DeathState {
+  victim_guid:uint64;       // the player who died (self)
+  killer_guid:uint64;       // who dealt the killing blow (0 = environment/unknown)
+  corpse_guid:uint64;       // the spawned corpse (your corpse-run destination)
+  corpse_x:float;
+  corpse_y:float;
+  corpse_z:float;
+  auto_release_ms:uint32;   // ms until the server auto-releases you to the graveyard
+}
+
+/// C→S. Request an early release to the nearest graveyard (become a ghost now,
+/// rather than waiting out DeathState.auto_release_ms). Empty — acts on self.
+table ReleaseRequest {}
+
+/// S→C. You have been released and are now a ghost at the graveyard. Run back to
+/// your corpse (corpse-run) to resurrect.
+table GhostState {
+  player_guid:uint64;
+  graveyard_x:float;
+  graveyard_y:float;
+  graveyard_z:float;
+  corpse_guid:uint64;       // your corpse (the corpse-run destination)
+}
+
+/// C→S. Resurrect at your corpse — valid once the corpse-run is complete (you are
+/// a ghost standing at your corpse). Empty — acts on self.
+table ResurrectRequest {}
+
+/// Typed outcome of a resurrection attempt (mirrors death_state.h ResurrectReject).
+enum ResurrectStatus : uint16 {
+  OK           = 0,   // resurrected — health restored, corpse despawned
+  NOT_DEAD     = 1,   // you are not dead
+  NOT_RELEASED = 2,   // release to the graveyard first
+  TOO_FAR      = 3,   // corpse-run not complete — move closer to your corpse
+}
+
+/// S→C. Resurrection outcome. On OK the player is alive again with restored health
+/// and the corpse is despawned; otherwise the reason and no state change.
+table ResurrectResult {
+  player_guid:uint64;
+  status:ResurrectStatus = OK;
+  health:uint32;            // health after resurrection (0 unless OK)
+  max_health:uint32;        // max health (for the client bar)
+}
+
+// ===========================================================================
+// 0x0xxx — character progression  (M1 — CHR-03: XP awards + level-up, #360)
+// ===========================================================================
+// Server-authoritative XP/leveling (PRD CHR-03). XP is awarded on a kill
+// (attributed via the threat table) and accumulates toward the next level; a
+// crossed threshold levels the player up and applies stat growth from the level
+// curve. The client only DISPLAYS these — never predicted. The real per-level XP
+// curve + per-class/level stat tables load from the world DB (content epic #28).
+
+/// S→C. XP award + progress toward the next level. `xp_gained` is this award;
+/// `xp_total` is XP accumulated INTO the current level (resets on level-up);
+/// `xp_to_next` is the threshold to reach the next level.
+table XpGained {
+  player_guid:uint64;
+  xp_gained:uint32;
+  level:uint16;
+  xp_total:uint32;          // XP into the current level
+  xp_to_next:uint32;        // XP required to reach the next level
+}
+
+/// S→C. The player leveled up — the new level + the stat growth applied from the
+/// level curve.
+table LevelUp {
+  player_guid:uint64;
+  old_level:uint16;
+  new_level:uint16;
+  max_health:uint32;        // new health cap after stat growth
+  max_resource:uint32;      // new secondary-resource cap after stat growth
+}
+
+// ===========================================================================
 // RESERVED RANGES — commented placeholders only (do NOT define tables until milestone).
 // Each names its opcode range and the owning future issue / SAD section.
 // ===========================================================================
 //
-// 0x3xxx  combat            — DEFINED above (M1, CMB-01): CastRequest / CastStart / CastFailed / CastResult.
+// 0x3xxx  combat            — DEFINED above (M1, CMB-01): CastRequest / CastStart / CastFailed / CastResult;
+//                             (M1, CMB-03 #359): DeathState / ReleaseRequest / GhostState / ResurrectRequest / ResurrectResult.
 // 0x4xxx  quest / gossip    — quest state, gossip menus (content schemas: quest.*, gossip). Future issue.
 // 0x5xxx  inventory/economy — inventory, loot rolls, vendor/economy (loot.*, vendor.*). Future issue.
 // 0x6xxx  chat / social     — chat channels, whisper, social lists (cross-shard, server SAD §3.8). Future issue.

@@ -168,6 +168,10 @@ public:
     ResourceType resource_type() const { return resource_type_; }
     std::uint32_t resource() const { return resource_; }
     std::uint32_t max_resource() const { return max_resource_; }
+    // Raise/lower the secondary-resource cap (level-up stat growth, CHR-03 #360).
+    // Current resource is clamped down if it now exceeds the cap. A Unit with no
+    // secondary resource (kNone) ignores this — its pool stays 0.
+    void set_max_resource(std::uint32_t max_resource);
 
     LifeState life_state() const { return life_state_; }
     bool is_alive() const { return life_state_ == LifeState::kAlive; }

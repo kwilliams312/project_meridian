@@ -29,6 +29,8 @@ add_library(world-dispatch STATIC
   creature_ai.cpp
   combat_resolver.cpp
   aura_container.cpp
+  death_state.cpp
+  leveling.cpp
   world_state.cpp
   active_sessions.cpp
   ability_store.cpp
@@ -401,6 +403,55 @@ target_link_libraries(worldd-combat-golden-test
 )
 set_target_properties(worldd-combat-golden-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-combat-golden COMMAND worldd-combat-golden-test)
+
+# --- XP curve / leveling UNIT test (CHR-03 #360). -----------------------------
+# PURE (no DB, no socket, no clock, no RNG): drives the leveling curve directly —
+# xp_to_next_level monotonicity, xp_for_kill grey-mob falloff, and grant_xp
+# roll-over (including multi-level awards + the level cap). Deterministic, so it
+# always runs in the plain server ctest — the seeded/deterministic ask (#360).
+add_executable(worldd-leveling-test
+  test/leveling_test.cpp
+)
+target_link_libraries(worldd-leveling-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-leveling-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-leveling COMMAND worldd-leveling-test)
+
+# --- Player death state machine UNIT test (CMB-03 #359). ----------------------
+# PURE (no DB, no socket): drives DeathStateMachine directly — on_death spawns a
+# corpse + enters kCorpse, auto-release timer + requested release → kGhost,
+# corpse-run distance gating for resurrect, and resurrect despawns the corpse +
+# restores the health %. Deterministic (dt passed in), so it always runs in the
+# plain server ctest.
+add_executable(worldd-death-state-test
+  test/death_state_test.cpp
+)
+target_link_libraries(worldd-death-state-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-death-state-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-death-state COMMAND worldd-death-state-test)
+
+# --- Death + XP END-TO-END through the MapTick hook (CMB-03 #359 + CHR-03 #360).
+# PURE (no DB, no socket): drives the MapTick orchestrator through the SINGLE
+# "unit died" hook both stories share. Two seeded/deterministic scenarios:
+#   1. a player dies (via the resolver) → corpse spawns → auto-release to ghost →
+#      corpse-run → resurrect (health restored, corpse despawned);
+#   2. a player kills creatures and levels 1→5, with stat growth applied from the
+#      level curve at each level-up (fully server-authoritative).
+# Always runs in the plain server ctest (no MERIDIAN_* env needed).
+add_executable(worldd-death-xp-test
+  test/death_xp_test.cpp
+)
+target_link_libraries(worldd-death-xp-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-death-xp-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-death-xp COMMAND worldd-death-xp-test)
 
 # --- Movement-derived (fall + swim/breath) damage unit test (issue #362, CHR-02
 # full). Exercises the PURE MovementDamageState evaluator directly (fall above the

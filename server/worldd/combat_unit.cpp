@@ -45,6 +45,12 @@ void Unit::set_max_health(std::uint32_t max_health) {
     if (health_ > max_health_) health_ = max_health_;
 }
 
+void Unit::set_max_resource(std::uint32_t max_resource) {
+    if (resource_type_ == ResourceType::kNone) return;  // no pool to grow
+    max_resource_ = max_resource;
+    if (resource_ > max_resource_) resource_ = max_resource_;
+}
+
 void Unit::spawn() {
     health_ = max_health_;
     resource_ = max_resource_;
