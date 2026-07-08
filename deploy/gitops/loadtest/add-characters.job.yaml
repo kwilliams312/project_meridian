@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# Create one character per load account (${PREFIX}0001..) so the bots have a real,
+# server-persisted character to enter with. Idempotent (meridian-character exits 3
+# on duplicate name / one-per-account cap). Rendered by scripts/dev/loadtest.sh
+# via envsubst; run AFTER add-users. Not GitOps-synced.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: meridian-${REALM}-add-characters
+  namespace: meridian-${REALM}
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: add-characters
+          image: ghcr.io/kwilliams312/project_meridian/meridian-character:${TAG}
+          env:
+            # meridian-character defaults its DB to meridian_characters and resolves
+            # the account_id via meridian_auth.account (same connection, cross-DB).
+            - { name: MERIDIAN_DB_HOST, value: "meridian-${REALM}-mariadb" }
+            - { name: MERIDIAN_DB_PORT, value: "3306" }
+            - { name: MERIDIAN_DB_USER, value: "meridian" }
+            - { name: MERIDIAN_DB_PASS, value: "meridian" }
+            - { name: MERIDIAN_DB_NAME, value: "meridian_characters" }
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              i=1
+              while [ $i -le ${COUNT} ]; do
+                u=$(printf '${PREFIX}%04d' $i)
+                # character name = the username (globally unique); race/class default 1/1.
+                /usr/local/bin/meridian-character create --username "$u" || [ $? -eq 3 ]
+                i=$((i+1))
+              done
+              echo "add-characters done (${COUNT})"

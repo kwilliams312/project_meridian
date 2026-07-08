@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1.7
+# SPDX-License-Identifier: Apache-2.0
+#
+# meridian-character — CLI to create a character for an account (test
+# provisioning; server/tools/meridian-character). Resolves account_id from the
+# auth DB by username, then creates a character via the meridian-characters CRUD.
+# Same hardened multi-stage pattern as the daemon / meridian-account images.
+FROM debian:bookworm-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake ninja-build g++ pkg-config \
+        flatbuffers-compiler libflatbuffers-dev libssl-dev libmariadb-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY schema/ ./schema/
+COPY server/ ./server/
+RUN cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build server/build --target meridian-character
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libssl3 libmariadb3 ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 meridian \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin meridian
+COPY --from=build /src/server/build/tools/meridian-character/meridian-character /usr/local/bin/meridian-character
+USER 10001:10001
+ENTRYPOINT ["/usr/local/bin/meridian-character"]
