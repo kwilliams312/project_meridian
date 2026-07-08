@@ -1,17 +1,31 @@
 # SPDX-License-Identifier: Apache-2.0
-# Dev realm (meridian-dev) overlay — ephemeral DB, self-signed TLS, NodePort,
-# multi-arch :dev images (schedule on any node pool). Design §3.
+# Dev realm (meridian-dev) overlay — ephemeral DB, self-signed TLS, multi-arch
+# :dev images (schedule on any node pool). Design §3.
+#
+# Exposure: authd (:7100) + worldd (:7200) SHARE one MetalLB LoadBalancer IP
+# (192.168.89.31) via the metallb allow-shared-ip annotation, so a single realm
+# IP reaches both daemons. NOTE: authd does not yet advertise this IP in its
+# realm list (the realm DB row) — external real clients need that; tracked in #339.
+# The in-cluster load harness reaches the daemons by ClusterIP name regardless.
 image:
   tag: "dev"                # moving per-branch tag, published multi-arch by cd.yml
   pullPolicy: Always
 
 authd:
   replicaCount: 1
-  service: { type: NodePort, nodePort: 31710 }
+  service:
+    type: LoadBalancer
+    annotations:
+      metallb.universe.tf/loadBalancerIPs: "192.168.89.31"
+      metallb.universe.tf/allow-shared-ip: "meridian-dev"
   probes: { type: tcp }
 worldd:
   replicaCount: 1
-  service: { type: NodePort, nodePort: 31720 }
+  service:
+    type: LoadBalancer
+    annotations:
+      metallb.universe.tf/loadBalancerIPs: "192.168.89.31"
+      metallb.universe.tf/allow-shared-ip: "meridian-dev"
   probes: { type: tcp }
 
 tls:
