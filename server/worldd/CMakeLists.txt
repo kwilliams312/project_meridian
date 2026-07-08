@@ -28,6 +28,7 @@ add_library(world-dispatch STATIC
   combat_unit.cpp
   creature_ai.cpp
   combat_resolver.cpp
+  aura_container.cpp
   world_state.cpp
   active_sessions.cpp
   ability_store.cpp
@@ -253,6 +254,25 @@ target_link_libraries(worldd-combat-resolver-test
 )
 set_target_properties(worldd-combat-resolver-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-combat-resolver COMMAND worldd-combat-resolver-test)
+
+# --- Combat aura container UNIT test (CMB-01 #346). ---------------------------
+# PURE (no DB, no socket, no session, no clock): drives AuraContainer directly with
+# a seeded CombatRng and an explicit dt — apply/refresh/expire, periodic DoT/HoT
+# tick cadence + damage/heal application (via Unit::apply_damage/apply_healing),
+# stat-modifier apply/remove/expiry, and the three stacking rules (refresh-duration,
+# stack-count, independent-per-caster), plus a periodic-kill/host-death path and
+# seed determinism. Always runs in the plain server ctest (no MERIDIAN_DB_* needed)
+# — the aura container is a pure core over the #342 Unit + #343 effect model. The
+# 20 Hz tick-loop wiring + golden scenarios are #349.
+add_executable(worldd-aura-test
+  test/aura_container_test.cpp
+)
+target_link_libraries(worldd-aura-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-aura-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-aura COMMAND worldd-aura-test)
 
 # --- Combat ability-use WIRE round-trip integration test (CMB-01 #344, D-10). -
 # Self-contained (no DB): stands the REAL TLS listener + world serve loop on an
