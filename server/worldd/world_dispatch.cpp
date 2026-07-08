@@ -141,6 +141,7 @@ bool verify_payload_for(net::Opcode op, const Frame& f) {
         case net::Opcode::CHAR_CREATE_REQUEST: return verify_table<mn::CharCreateRequest>(f);
         case net::Opcode::CHAR_DELETE_REQUEST: return verify_table<mn::CharDeleteRequest>(f);
         case net::Opcode::ENTER_WORLD_REQUEST: return verify_table<mn::EnterWorldRequest>(f);
+        case net::Opcode::CAST_REQUEST:        return verify_table<mn::CastRequest>(f);
         default:                           return false;
     }
 }
@@ -223,6 +224,71 @@ Bytes encode_enter_world_response(mn::EnterWorldStatus status) {
     fb::FlatBufferBuilder b;
     b.Finish(mn::CreateEnterWorldResponse(b, status));
     return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// ---- combat encoders (S→C, world.fbs; CMB-01 #344/#345) ---------------------
+
+// Build a CastStart payload — the D-10 ACCEPT reply. cast_ms 0 = instant.
+Bytes encode_cast_start(AbilityId ability_id, std::uint32_t cast_ms,
+                        std::uint64_t server_time_ms) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateCastStart(b, ability_id, cast_ms, server_time_ms));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// Build a CastFailed payload — the D-10 REJECT reply (client rolls back + resyncs
+// its GCD clock from gcd_remaining_ms).
+Bytes encode_cast_failed(AbilityId ability_id, mn::CastFailReason reason,
+                         std::uint32_t gcd_remaining_ms) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateCastFailed(b, ability_id, reason, gcd_remaining_ms));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// Build a CastResult payload — the server-authoritative resolution outcome.
+Bytes encode_cast_result(AbilityId ability_id, std::uint64_t caster_guid,
+                         std::uint64_t target_guid, mn::AttackOutcome outcome,
+                         std::uint32_t amount, bool is_heal,
+                         std::uint32_t target_health, bool target_dead,
+                         std::uint64_t server_time_ms) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateCastResult(b, ability_id, caster_guid, target_guid, outcome,
+                                  amount, is_heal, target_health, target_dead,
+                                  server_time_ms));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// Map the resolver's CastReject -> the wire CastFailReason. kNone should never
+// reach here (only rejects are sent) — it maps to UNKNOWN_ABILITY defensively.
+mn::CastFailReason to_wire_reason(CastReject r) {
+    switch (r) {
+        case CastReject::kNone:                 return mn::CastFailReason::UNKNOWN_ABILITY;
+        case CastReject::kUnknownAbility:       return mn::CastFailReason::UNKNOWN_ABILITY;
+        case CastReject::kNotInWorld:           return mn::CastFailReason::NOT_IN_WORLD;
+        case CastReject::kCasterDead:           return mn::CastFailReason::CASTER_DEAD;
+        case CastReject::kOnGcd:                return mn::CastFailReason::ON_GCD;
+        case CastReject::kAlreadyCasting:       return mn::CastFailReason::ALREADY_CASTING;
+        case CastReject::kInsufficientResource: return mn::CastFailReason::INSUFFICIENT_RESOURCE;
+        case CastReject::kNoTarget:             return mn::CastFailReason::NO_TARGET;
+        case CastReject::kTargetDead:           return mn::CastFailReason::TARGET_DEAD;
+        case CastReject::kWrongFaction:         return mn::CastFailReason::WRONG_FACTION;
+        case CastReject::kOutOfRange:           return mn::CastFailReason::OUT_OF_RANGE;
+        case CastReject::kNoLineOfSight:        return mn::CastFailReason::NO_LINE_OF_SIGHT;
+        case CastReject::kInterrupted:          return mn::CastFailReason::INTERRUPTED;
+    }
+    return mn::CastFailReason::UNKNOWN_ABILITY;
+}
+
+// Map the resolver's AttackOutcome -> the wire AttackOutcome.
+mn::AttackOutcome to_wire_outcome(AttackOutcome o) {
+    switch (o) {
+        case AttackOutcome::kMiss:  return mn::AttackOutcome::MISS;
+        case AttackOutcome::kDodge: return mn::AttackOutcome::DODGE;
+        case AttackOutcome::kParry: return mn::AttackOutcome::PARRY;
+        case AttackOutcome::kHit:   return mn::AttackOutcome::HIT;
+        case AttackOutcome::kCrit:  return mn::AttackOutcome::CRIT;
+    }
+    return mn::AttackOutcome::HIT;
 }
 
 // Char-management ops are legal only on an AUTHENTICATED session (post-WorldHello),
@@ -643,6 +709,24 @@ void Dispatcher::register_m0_stubs() {
                                    server_time_ms);
         }
 
+        // COMBAT cast interrupt (CMB-01 #344): moving cancels an in-progress cast
+        // (SAD §2.5 interrupt / §3.3 cast-while-moving rules). Only an ACCEPTED
+        // move interrupts — a snap-back (reject) means the client did NOT move, so
+        // the cast stands. The client sees CastFailed{INTERRUPTED} and rolls the
+        // cast bar back (its GCD, already elapsing, is untouched).
+        if (decision.accepted && ctx.combat.is_casting(server_time_ms)) {
+            const AbilityId cast_ability =
+                ctx.combat.pending() ? ctx.combat.pending()->ability_id : 0;
+            ctx.combat.interrupt();
+            send_s2c(sess, ctx,
+                     encode_frame(net::Opcode::CAST_FAILED, f.seq,
+                                  encode_cast_failed(cast_ability,
+                                                     mn::CastFailReason::INTERRUPTED,
+                                                     ctx.combat.gcd_remaining_ms(server_time_ms))));
+            log::debug(kCat, "cast interrupted by movement ability=" +
+                                 std::to_string(cast_ability));
+        }
+
         if (decision.accepted) {
             log::debug(kCat, "MOVEMENT_INTENT seq=" + std::to_string(pod.seq) +
                                  " accepted -> authoritative advanced");
@@ -978,6 +1062,113 @@ void Dispatcher::register_m0_stubs() {
            }
        });
 
+    // --- 0x3xxx COMBAT: ability use (CMB-01 #344/#345) --------------------------
+    // The D-10 ability-use path (server SAD §3.3, client SAD §2.2/§3c): validate
+    // the use (known ability, caster alive, GCD clock, in-progress cast, resource,
+    // target legality/range/LoS) and reply ACCEPT (CastStart) or REJECT (CastFailed)
+    // so the client's optimistic GCD/cast confirms or ROLLS BACK within one RTT
+    // (resyncing its GCD clock from CastFailed.gcd_remaining_ms). On an INSTANT
+    // accept the server ALSO rolls the attack table and applies damage/heal
+    // (CastResult, #345) — outcomes are server-only, never predicted. A cast-time
+    // ability's CastResult is emitted on cast completion by the map tick (the
+    // CombatSession::take_completed poll seam — the 20 Hz tick loop is #349).
+    on(net::Opcode::CAST_REQUEST, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+        // A cast before the handshake is a protocol error (mirrors MOVEMENT_INTENT).
+        if (!ctx.authenticated) {
+            log::warn(kCat, "CAST_REQUEST before handshake — rejecting");
+            ctx.disconnect = true;
+            ctx.disconnect_reason = net::DisconnectReason::PROTOCOL_MISMATCH;
+            ctx.disconnect_message = "combat before handshake";
+            return;
+        }
+
+        const auto* req = fb::GetRoot<mn::CastRequest>(f.payload);
+        if (req == nullptr) return;  // verified upstream; defensive
+        const AbilityId ability_id = req->ability_id();
+        const std::uint64_t target_guid = req->target_guid();
+
+        const std::uint64_t now_ms =
+            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                                           .count());
+
+        auto fail = [&](mn::CastFailReason reason, std::uint32_t gcd_rem) {
+            send_s2c(sess, ctx,
+                     encode_frame(net::Opcode::CAST_FAILED, f.seq,
+                                  encode_cast_failed(ability_id, reason, gcd_rem)));
+        };
+
+        // Must be SPAWNED in-world (authenticated char-select is not enough). A
+        // cast at char-select is a client bug, not hostile — REJECT (roll back),
+        // do not disconnect.
+        if (ctx.phase != SessionPhase::kInWorld || !ctx.movement) {
+            fail(mn::CastFailReason::NOT_IN_WORLD, 0);
+            return;
+        }
+
+        // Known ability? (SAD §3.3 first check.) An unknown id is the client SAD
+        // §2.4 "never crash" case — reject cleanly, do not disconnect.
+        const Ability* ability = ctx.abilities ? ctx.abilities->find(ability_id) : nullptr;
+        if (ability == nullptr) {
+            fail(mn::CastFailReason::UNKNOWN_ABILITY, ctx.combat.gcd_remaining_ms(now_ms));
+            return;
+        }
+
+        // Reach the caster's Unit (its combat state) via the world registry.
+        Unit* caster = (ctx.world != nullptr) ? ctx.world->unit_for_slot(ctx.slot) : nullptr;
+        if (caster == nullptr) {
+            fail(mn::CastFailReason::NOT_IN_WORLD, 0);
+            return;
+        }
+        const std::uint64_t caster_guid = ctx.movement->entity_guid();
+
+        // Resolve the target Unit: self for a self ability / no target / own guid;
+        // otherwise the entity named by guid (absent -> null -> a NO_TARGET reject
+        // inside validate_target).
+        Unit* target = nullptr;
+        if (ability->target == TargetKind::kSelf || target_guid == 0 ||
+            target_guid == caster_guid) {
+            target = caster;
+        } else {
+            target = ctx.world->unit_for_guid(target_guid);
+        }
+
+        // Validate + start the GCD/cast lifecycle (#344). flat_map_los: the D-19
+        // bootstrap map has no occluders (the LoS seam).
+        CastDecision decision = begin_ability_use(ctx.combat, *ability, *caster, target,
+                                                  target_guid, flat_map_los, now_ms);
+        if (!decision.accepted) {
+            fail(to_wire_reason(decision.reject), decision.gcd_remaining_ms);
+            log::debug(kCat, "CAST_REQUEST rejected ability=" + std::to_string(ability_id) +
+                                 " reason=" +
+                                 std::to_string(static_cast<int>(decision.reject)));
+            return;
+        }
+
+        // ACCEPT (D-10): confirm the client's optimistic GCD/cast.
+        send_s2c(sess, ctx,
+                 encode_frame(net::Opcode::CAST_START, f.seq,
+                              encode_cast_start(ability_id, decision.cast_ms, now_ms)));
+
+        // INSTANT: resolve now (#345) — spend the resource, roll the attack table,
+        // apply damage/heal, trigger death at 0 HP. A cast-time ability resolves on
+        // completion instead (map tick polls CombatSession::take_completed — #349).
+        if (decision.instant && target != nullptr) {
+            if (ability->resource_amount > 0) caster->spend_resource(ability->resource_amount);
+            ResolveResult rr =
+                resolve_ability(*ability, *caster, *target, ctx.world->combat_rng());
+            send_s2c(sess, ctx,
+                     encode_frame(net::Opcode::CAST_RESULT, f.seq,
+                                  encode_cast_result(ability_id, caster_guid, target_guid,
+                                                     to_wire_outcome(rr.outcome), rr.amount,
+                                                     rr.is_heal, rr.target_health,
+                                                     rr.target_died, now_ms)));
+            log::debug(kCat, "CAST_REQUEST resolved ability=" + std::to_string(ability_id) +
+                                 " outcome=" + std::to_string(static_cast<int>(rr.outcome)) +
+                                 " amount=" + std::to_string(rr.amount));
+        }
+    });
+
     // No handler is registered for server→client opcodes (HANDSHAKE_OK,
     // MOVEMENT_STATE, ENTITY_ENTER/UPDATE/LEAVE, CHAR_*_RESPONSE): a client
     // sending one is out-of-direction and is treated as an unknown opcode
@@ -1007,6 +1198,12 @@ struct WorldServer::Impl {
     // across every serve_connection so a second login for an account kicks the
     // first (kick-old) — an account holds at most one in-world session.
     ActiveSessionRegistry active_sessions;
+
+    // The read-only ability template store (#343), loaded once at construction
+    // with the M1 placeholder set (epic #28 swaps the source behind the store).
+    // Shared read-only across every serve_connection — the CAST_REQUEST handler
+    // looks abilities up here with no lock (O(1), single load — client SAD §2.4).
+    AbilityStore abilities = load_placeholder_ability_store();
 };
 
 WorldServer::WorldServer(const Dispatcher& dispatcher, WorldServerConfig cfg)
@@ -1116,6 +1313,7 @@ void WorldServer::serve_connection(net::Session sess) {
     ctx.labels = cfg_.labels;   // OPS-05: stamp {realm,zone,shard,map} on metrics
     ctx.tracer = cfg_.tracer;   // OPS-05: session-flow trace exporter (#166)
     ctx.world = &impl_->world;  // shared AoI relay registry (#87)
+    ctx.abilities = &impl_->abilities;  // shared ability template store (#343 / CMB-01)
     ctx.active_sessions = &impl_->active_sessions;  // single-session registry (#326)
     ctx.kicked = std::make_shared<std::atomic<bool>>(false);  // set if a later login kicks us
     std::optional<db::Connection> auth_conn;

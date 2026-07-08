@@ -68,6 +68,7 @@
 #include <vector>
 
 #include "aoi_grid.h"
+#include "combat_resolver.h"      // CombatRng — per-map seeded combat RNG (#345)
 #include "combat_unit.h"          // WorldObject→Unit→Player hierarchy (#342)
 #include "movement_validation.h"  // Position
 #include "world_generated.h"
@@ -222,6 +223,21 @@ public:
     Unit* unit_for_slot(SessionSlot slot);
     const Unit* unit_for_slot(SessionSlot slot) const;
 
+    // The Unit for the entity with wire guid `guid` (the CastRequest.target_guid
+    // path — the combat resolver reaches a TARGET's Unit by its guid, since the
+    // client names targets by guid, not by our internal slot id). Returns nullptr
+    // if no entered session holds that guid. Same ownership/threading contract as
+    // unit_for_slot (map-owned storage, single-threaded access).
+    Unit* unit_for_guid(AoiId guid);
+    const Unit* unit_for_guid(AoiId guid) const;
+
+    // The per-map seeded combat RNG (#345, SAD §2.5 "all rolls server-side,
+    // seeded-RNG unit-testable"). One RNG per map so every combat roll on this map
+    // draws from a single deterministic stream owned by the (single-threaded) map;
+    // the resolver's instant-resolution path draws from here. Tests that need a
+    // pinned sequence construct their own CombatRng instead.
+    CombatRng& combat_rng() { return combat_rng_; }
+
 private:
     struct SessionRec {
         // The wire projection relayed on EntityEnter (guid + type_id + char_class).
@@ -257,6 +273,11 @@ private:
     std::unordered_map<SessionSlot, SessionRec> sessions_;
     std::unordered_map<AoiId, SessionSlot> slot_by_guid_;
     SessionSlot next_slot_ = 1;
+
+    // Per-map combat RNG. A fixed default seed keeps a single-worker M0 boot
+    // deterministic; a per-map seed derived from the MapKey is a later concern
+    // (the tick loop / map manager, #349).
+    CombatRng combat_rng_{0x9E3779B97F4A7C15ULL};
 };
 
 // ---------------------------------------------------------------------------

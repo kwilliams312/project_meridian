@@ -333,4 +333,22 @@ const Unit* WorldState::unit_for_slot(SessionSlot slot) const {
     return &it->second.unit;
 }
 
+Unit* WorldState::unit_for_guid(AoiId guid) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    auto sit = slot_by_guid_.find(guid);
+    if (sit == slot_by_guid_.end()) return nullptr;
+    auto it = sessions_.find(sit->second);
+    if (it == sessions_.end()) return nullptr;
+    return &it->second.unit;
+}
+
+const Unit* WorldState::unit_for_guid(AoiId guid) const {
+    std::lock_guard<std::mutex> lk(mtx_);
+    auto sit = slot_by_guid_.find(guid);
+    if (sit == slot_by_guid_.end()) return nullptr;
+    auto it = sessions_.find(sit->second);
+    if (it == sessions_.end()) return nullptr;
+    return &it->second.unit;
+}
+
 }  // namespace meridian::worldd

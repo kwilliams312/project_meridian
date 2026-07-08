@@ -27,6 +27,7 @@ add_library(world-dispatch STATIC
   aoi_grid.cpp
   combat_unit.cpp
   creature_ai.cpp
+  combat_resolver.cpp
   world_state.cpp
   active_sessions.cpp
   ability_store.cpp
@@ -234,6 +235,44 @@ target_link_libraries(worldd-creature-ai-test
 )
 set_target_properties(worldd-creature-ai-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-creature-ai COMMAND worldd-creature-ai-test)
+
+# --- Combat resolver UNIT test (CMB-01 #344 + #345). --------------------------
+# PURE (no DB, no socket, no session): drives the combat resolver core directly —
+# the attack-table classifiers at each band boundary, seeded-RNG damage/heal
+# application + death, faction/range/LoS target validation, and the GCD + cast
+# lifecycle (accept/reject decisions, interrupt, pushback, cast completion). All
+# rolls use a seeded CombatRng so the outcomes are deterministic (SAD §2.5). Always
+# runs in the plain server ctest (no MERIDIAN_DB_* needed) — the resolver is a pure
+# core over the #342 Unit model + the #343 AbilityStore.
+add_executable(worldd-combat-resolver-test
+  test/combat_resolver_test.cpp
+)
+target_link_libraries(worldd-combat-resolver-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-combat-resolver-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-combat-resolver COMMAND worldd-combat-resolver-test)
+
+# --- Combat ability-use WIRE round-trip integration test (CMB-01 #344, D-10). -
+# Self-contained (no DB): stands the REAL TLS listener + world serve loop on an
+# ephemeral port and drives a TLS client through the ability-use path. A test-
+# installed WORLD_HELLO handler promotes the connection in-world (DB-free) so the
+# CAST_REQUEST handler runs against a real spawned Unit. Proves the D-10 wire
+# round-trip end-to-end: CAST_REQUEST -> CastStart (ACCEPT, cast-time ability) and
+# CAST_REQUEST -> CastFailed (REJECT: unknown ability + wrong faction), so the
+# client's optimistic GCD/cast confirms or rolls back within one RTT. Always runs
+# in the plain server ctest (like worldd-dispatch-test).
+add_executable(worldd-combat-wire-test
+  test/combat_wire_test.cpp
+)
+target_link_libraries(worldd-combat-wire-test
+  PRIVATE
+    meridian::world-dispatch
+    Threads::Threads
+)
+set_target_properties(worldd-combat-wire-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-combat-wire COMMAND worldd-combat-wire-test)
 
 # --- Two-session AoI movement RELAY integration test (IT-M0 see-each-other-move;
 #     #87). ---------------------------------------------------------------------

@@ -246,9 +246,10 @@ int main() {
         // A frame shorter than the IF-2 header is malformed.
         Bytes tiny = {0x01, 0x00};  // 2 bytes < 10-byte header
         check("A: short frame -> no decode", !mw::decode_frame(tiny).has_value());
-        // is_reserved_range: 0x1xxx movement is live; 0x3xxx combat is reserved.
+        // is_reserved_range: 0x1xxx movement + 0x3xxx combat (M1) are live; the
+        // still-unimplemented domains (quest 0x4xxx, …) remain reserved.
         check("A: 0x1001 not reserved", !mw::is_reserved_range(0x1001));
-        check("A: 0x3001 is reserved", mw::is_reserved_range(0x3001));
+        check("A: 0x4001 (quest) is reserved", mw::is_reserved_range(0x4001));
     }
 
     // Self-signed cert into a temp dir.
@@ -380,12 +381,15 @@ int main() {
                   !c.recv_frame().has_value());
         }
 
-        // ===== E. RESERVED-range opcode (0x3xxx combat) -> Disconnect + close ==
+        // ===== E. RESERVED-range opcode (0x4xxx quest) -> Disconnect + close ==
+        // Combat 0x3xxx went live with CMB-01 (#344/#345), so this probes a domain
+        // that is still declared-but-unimplemented (quest 0x4xxx) — the reserved-
+        // range reject policy is identical.
         {
             Client c(port);
             check("E: client connected", c.connected());
             Bytes junk = {0x00};
-            c.send_frame(mw::encode_frame(static_cast<mn::Opcode>(0x3001), /*seq=*/9,
+            c.send_frame(mw::encode_frame(static_cast<mn::Opcode>(0x4001), /*seq=*/9,
                                           junk));
             std::optional<Bytes> reply = c.recv_frame();
             bool got_disconnect = false;

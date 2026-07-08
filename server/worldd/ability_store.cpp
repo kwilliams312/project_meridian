@@ -55,7 +55,7 @@ namespace {
 // A single-effect direct-damage ability builder (melee strike / nuke shape).
 Ability make_damage_ability(AbilityId id, const char* name, School school,
                             TargetKind target, float range_m,
-                            std::uint32_t cast_time_ms, ResourceType res_type,
+                            std::uint32_t cast_time_ms, AbilityResourceType res_type,
                             std::uint32_t res_amount, std::uint32_t dmg_min,
                             std::uint32_t dmg_max) {
     Ability a;
@@ -89,14 +89,14 @@ std::vector<Ability> placeholder_ability_set() {
     set.push_back(make_damage_ability(
         kPlaceholderMeleeStrikeId, "Placeholder Melee Strike", School::kPhysical,
         TargetKind::kEnemy, /*range_m=*/5.0f, /*cast_time_ms=*/0,
-        ResourceType::kNone, /*res_amount=*/0, /*dmg_min=*/8, /*dmg_max=*/12));
+        AbilityResourceType::kNone, /*res_amount=*/0, /*dmg_min=*/8, /*dmg_max=*/12));
 
     // 2) Nuke — 1.5 s cast, 30 m ranged, fire, mana cost, direct damage.
     //    Exercises the cast-timer + resource + range validate path (§3.3).
     set.push_back(make_damage_ability(
         kPlaceholderNukeId, "Placeholder Fire Nuke", School::kFire,
         TargetKind::kEnemy, /*range_m=*/30.0f, /*cast_time_ms=*/1500,
-        ResourceType::kMana, /*res_amount=*/20, /*dmg_min=*/40, /*dmg_max=*/55));
+        AbilityResourceType::kMana, /*res_amount=*/20, /*dmg_min=*/40, /*dmg_max=*/55));
 
     // 3) Heal — 2.0 s cast, 40 m, friendly target, holy, mana cost, heal effect.
     //    Exercises the friendly-target legality + heal application path.
@@ -109,7 +109,7 @@ std::vector<Ability> placeholder_ability_set() {
         heal.range_m = 40.0f;
         heal.cast_time_ms = 2000;
         heal.triggers_gcd = true;
-        heal.resource_type = ResourceType::kMana;
+        heal.resource_type = AbilityResourceType::kMana;
         heal.resource_amount = 25;
         AbilityEffect e;
         e.kind = EffectKind::kHeal;
@@ -132,7 +132,7 @@ std::vector<Ability> placeholder_ability_set() {
         dot.range_m = 30.0f;
         dot.cast_time_ms = 0;  // instant apply
         dot.triggers_gcd = true;
-        dot.resource_type = ResourceType::kMana;
+        dot.resource_type = AbilityResourceType::kMana;
         dot.resource_amount = 15;
         AbilityEffect aura;
         aura.kind = EffectKind::kAura;
@@ -179,12 +179,12 @@ const char* target_kind_name(TargetKind t) {
     return "unknown";
 }
 
-const char* resource_type_name(ResourceType r) {
+const char* resource_type_name(AbilityResourceType r) {
     switch (r) {
-        case ResourceType::kNone:   return "none";
-        case ResourceType::kMana:   return "mana";
-        case ResourceType::kRage:   return "rage";
-        case ResourceType::kEnergy: return "energy";
+        case AbilityResourceType::kNone:   return "none";
+        case AbilityResourceType::kMana:   return "mana";
+        case AbilityResourceType::kRage:   return "rage";
+        case AbilityResourceType::kEnergy: return "energy";
     }
     return "unknown";
 }
