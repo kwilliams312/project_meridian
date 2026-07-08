@@ -12,6 +12,7 @@ on:
     branches: [dev, ptr, main]
     paths:
       - server/**
+      - client/**
       - schema/**
       - deploy/docker/**
       - .github/workflows/cd.yml
