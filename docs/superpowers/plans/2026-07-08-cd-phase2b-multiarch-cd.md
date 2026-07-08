@@ -386,7 +386,7 @@ Append to `docs/ops/dev-realm.md` a "Phase 2b verified <date>: multi-arch images
 
 **Spec coverage (§6.3/§6.5/§11 Phase 2):** native multi-arch build on ARC runners → Task 1 matrix ✓; manifest-list merge + per-branch tags + cosign/SBOM → Task 1 merge job ✓; retire dev-images stopgap → Task 1 delete ✓; auto-restart dev/ptr via ArgoCD-friendly rollout restart → Tasks 1(restart job)+2(RBAC)+3(ignoreDifferences) ✓; drop amd64 pin → Task 3 ✓; verified live → Task 4 ✓.
 
-**Deferred (flagged):** the **bot image** (§6.4) → Phase 4, where the concurrency harness needs it (and the `client/CMakeLists.txt` godot-cpp question gets resolved). Phase 3 (PTR/Prod realms) unchanged.
+**Deferred (flagged):** the **bot image** (§6.4) → Phase 4, where the concurrency harness needs it. **godot-cpp question RESOLVED (investigated 2026-07-08):** `client/CMakeLists.txt:56-77` — building with `-DMERIDIAN_BOT=ON` configures only the bot + net core and `return()`s *before* `add_subdirectory(godot-cpp)` (and before the submodule FATAL_ERROR check), so the bot builds with a plain C++17 + OpenSSL + flatc toolchain, **no godot-cpp / no Godot**. ⇒ Phase 4's `Dockerfile.bot` mirrors the daemon multi-stage image (build `client/` with `-DMERIDIAN_BOT=ON`, target `meridian-bot`); context needs `client/` + `schema/` (add a `.dockerignore` exception for `client/`, which is currently fully excluded). Phase 3 (PTR/Prod realms) unchanged.
 
 **Placeholder scan:** the only runtime-derived values are the branch→tag mapping (computed in the `meta` job) and `<date>` in the runbook note — no vague TODOs.
 
