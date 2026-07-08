@@ -111,6 +111,18 @@ public:
 	// send_movement_intent(). Returns an empty array on a malformed Dictionary.
 	godot::PackedByteArray build_movement_intent_frame(const godot::Dictionary &intent) const;
 
+	// ── Character-select frame builders (D-35 / #286 / #341) ───────────────────
+	// Each returns a ready-to-send IF-2 frame; pass to send_bulk() (char management)
+	// or send_control() (ENTER_WORLD). The server's reply is drained by pump() and
+	// re-emitted as the matching signal: char_list / char_create_result /
+	// char_delete_result / enter_world_result. Char management requires an
+	// authenticated (post-HandshakeOk / character-select) session.
+	godot::PackedByteArray build_char_list_request_frame() const;
+	godot::PackedByteArray build_char_create_request_frame(const godot::String &name,
+			int race, int char_class) const;
+	godot::PackedByteArray build_char_delete_request_frame(int64_t character_id) const;
+	godot::PackedByteArray build_enter_world_request_frame(int64_t character_id) const;
+
 	// ── Diagnostics (atomic counters from the core) ────────────────────────────
 	int64_t frames_sent() const;
 	int64_t frames_received() const;

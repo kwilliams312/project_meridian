@@ -200,4 +200,114 @@ std::optional<EntityLeave> decode_entity_leave(const Bytes& buf) {
     return out;
 }
 
+// ---- IF-2 character management (D-35 / #286) -------------------------------
+
+Bytes encode_char_list_request() {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateCharListRequest(b));
+    return to_bytes(b);
+}
+
+std::optional<CharListResponse> decode_char_list_response(const Bytes& buf) {
+    const mn::CharListResponse* t = verify_and_get<mn::CharListResponse>(buf);
+    if (t == nullptr) return std::nullopt;
+    CharListResponse out;
+    if (t->characters() != nullptr) {
+        out.characters.reserve(t->characters()->size());
+        for (const auto* e : *t->characters()) {
+            if (e == nullptr) continue;
+            CharSummary c;
+            c.character_id = e->character_id();
+            if (e->name() != nullptr) c.name = e->name()->str();
+            c.race = e->race();
+            c.char_class = e->char_class();
+            c.level = e->level();
+            out.characters.push_back(std::move(c));
+        }
+    }
+    return out;
+}
+
+Bytes encode_char_create_request(const CharCreateRequest& in) {
+    fb::FlatBufferBuilder b;
+    auto name = b.CreateString(in.name);
+    b.Finish(mn::CreateCharCreateRequest(b, name, in.race, in.char_class));
+    return to_bytes(b);
+}
+
+std::optional<CharCreateResponse> decode_char_create_response(const Bytes& buf) {
+    const mn::CharCreateResponse* t = verify_and_get<mn::CharCreateResponse>(buf);
+    if (t == nullptr) return std::nullopt;
+    CharCreateResponse out;
+    out.status = static_cast<std::uint16_t>(t->status());
+    out.character_id = t->character_id();
+    return out;
+}
+
+Bytes encode_char_delete_request(std::uint64_t character_id) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateCharDeleteRequest(b, character_id));
+    return to_bytes(b);
+}
+
+std::optional<CharDeleteResponse> decode_char_delete_response(const Bytes& buf) {
+    const mn::CharDeleteResponse* t = verify_and_get<mn::CharDeleteResponse>(buf);
+    if (t == nullptr) return std::nullopt;
+    CharDeleteResponse out;
+    out.status = static_cast<std::uint16_t>(t->status());
+    return out;
+}
+
+// ---- IF-2 server-authoritative enter-world (D-35 / #341) -------------------
+
+Bytes encode_enter_world_request(std::uint64_t character_id) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateEnterWorldRequest(b, character_id));
+    return to_bytes(b);
+}
+
+std::optional<EnterWorldResponse> decode_enter_world_response(const Bytes& buf) {
+    const mn::EnterWorldResponse* t = verify_and_get<mn::EnterWorldResponse>(buf);
+    if (t == nullptr) return std::nullopt;
+    EnterWorldResponse out;
+    out.status = static_cast<std::uint16_t>(t->status());
+    return out;
+}
+
+// ---- S→C response encoders (test/mock symmetry — client never sends these) ---
+
+Bytes encode_char_list_response(const CharListResponse& in) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::CharListEntry>> rows;
+    rows.reserve(in.characters.size());
+    for (const auto& c : in.characters) {
+        auto n = b.CreateString(c.name);
+        rows.push_back(mn::CreateCharListEntry(b, c.character_id, n, c.race,
+                                               c.char_class, c.level));
+    }
+    b.Finish(mn::CreateCharListResponse(b, b.CreateVector(rows)));
+    return to_bytes(b);
+}
+
+Bytes encode_char_create_response(const CharCreateResponse& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateCharCreateResponse(
+        b, static_cast<mn::CharCreateStatus>(in.status), in.character_id));
+    return to_bytes(b);
+}
+
+Bytes encode_char_delete_response(const CharDeleteResponse& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateCharDeleteResponse(
+        b, static_cast<mn::CharDeleteStatus>(in.status)));
+    return to_bytes(b);
+}
+
+Bytes encode_enter_world_response(const EnterWorldResponse& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateEnterWorldResponse(
+        b, static_cast<mn::EnterWorldStatus>(in.status)));
+    return to_bytes(b);
+}
+
 }  // namespace meridian::clientnet::codec

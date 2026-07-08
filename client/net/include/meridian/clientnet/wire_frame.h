@@ -31,6 +31,16 @@ inline constexpr std::uint16_t kOpWorldHello     = 0x0001;  // C→S
 inline constexpr std::uint16_t kOpHandshakeOk    = 0x0002;  // S→C
 inline constexpr std::uint16_t kOpDisconnect     = 0x0003;  // S→C
 inline constexpr std::uint16_t kOpClockSync      = 0x0004;  // C↔S
+// Character management (D-35 / #286) over the authenticated world session.
+inline constexpr std::uint16_t kOpCharListReq    = 0x0010;  // C→S
+inline constexpr std::uint16_t kOpCharListResp   = 0x0011;  // S→C
+inline constexpr std::uint16_t kOpCharCreateReq  = 0x0012;  // C→S
+inline constexpr std::uint16_t kOpCharCreateResp = 0x0013;  // S→C
+inline constexpr std::uint16_t kOpCharDeleteReq  = 0x0014;  // C→S
+inline constexpr std::uint16_t kOpCharDeleteResp = 0x0015;  // S→C
+// Server-authoritative enter-world (D-35 / #341): spawn as an OWNED character.
+inline constexpr std::uint16_t kOpEnterWorldReq  = 0x0016;  // C→S
+inline constexpr std::uint16_t kOpEnterWorldResp = 0x0017;  // S→C
 inline constexpr std::uint16_t kOpMovementIntent = 0x1001;  // C→S
 inline constexpr std::uint16_t kOpMovementState  = 0x1002;  // S→C
 inline constexpr std::uint16_t kOpEntityEnter    = 0x2001;  // S→C

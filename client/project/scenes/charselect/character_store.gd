@@ -1,35 +1,26 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Project Meridian — M0 LOCAL character-list stub (issue #110, CHR-01 / D-11).
+# Project Meridian — LOCAL character-list store (issue #110, CHR-01 / D-11).
 #
-# ⚠ THIS IS A LOCAL, IN-MEMORY STUB — NOT the real character list.
+# ⚠ THIS IS THE OFFLINE FALLBACK — an in-memory store, NOT the server roster.
 #
-# WHY STILL A STUB: the char-management WIRE MESSAGES now exist on the server side
-# (decision D-35 / #286): schema/net/world.fbs carries CharList/CharCreate/CharDelete
-# request+response over the authenticated world session (opcodes 0x0010–0x0015), and
-# worldd implements the three handlers backed by the meridian-characters CRUD (#85),
-# scoped to the session's own account. What is NOT yet done is the CLIENT wiring —
-# sending these messages over the net thread (#279) and rendering the responses.
-# That is deferred (a scoped follow-up), not shipped here, because the M0 client
-# cannot be verified headlessly (the MoltenVK/Apple-Silicon caveat, #283), so
-# unverified transport code must not land. Until then this store keeps the account's
-# characters in memory so the char-select flow (#110) stays buildable + testable.
+# The REAL, server-authoritative character CRUD now ships (D-35 / #279): when
+# char_select.gd has a live session it drives CharList/CharCreate/CharDelete +
+# ENTER_WORLD over the net thread (MeridianNetThread) directly, and the roster is the
+# server's (worldd → meridian-characters CRUD, #85). This store is used ONLY when
+# there is NO session — a warm boot / standalone open / the headless verify test —
+# so the char-select scene stays buildable + testable without a server. (The online
+# path is verified on-device per the MoltenVK/Apple-Silicon caveat, #283.)
 #
-# The validation here deliberately MIRRORS the server's create_character rules
-# (server/characters/src/characters.h → CharCreateStatus) so behaviour matches once
-# the client wiring lands:
+# The validation here MIRRORS the server's create_character rules
+# (server/characters/src/characters.h → CharCreateStatus) so the OFFLINE behaviour
+# matches the server's:
 #   1. name non-empty and <= MAX_NAME_LEN (VARCHAR(32))    -> "invalid_name"
 #   2. race id in the M0-frozen roster (MeridianRoster)     -> "invalid_race"
 #   3. class id in the M0-frozen roster (MeridianRoster)    -> "invalid_class"
 #   4. name unique, case-insensitive (uq_character_name)    -> "duplicate_name"
 # The server additionally enforces a one-character-per-account cap at create
-# (#329, CharCreateStatus.LIMIT_REACHED); this local stub does not cap (see create()).
-#
-# TODO(#286 client wiring): replace the three CRUD methods below with calls over the
-# session (the net thread / MeridianNetThread) — send CHAR_LIST_REQUEST on entering
-# char-select, CHAR_CREATE_REQUEST / CHAR_DELETE_REQUEST for create/delete, and map
-# the CharCreateStatus / CharDeleteStatus reply enums onto the error codes above. The
-# char_select view calls this store, not the transport, so only this file changes.
+# (#329, CharCreateStatus.LIMIT_REACHED); this local fallback does not cap (see create()).
 
 extends RefCounted
 class_name CharacterStore

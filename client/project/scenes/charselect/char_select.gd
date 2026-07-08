@@ -59,6 +59,22 @@ var _account: String = ""
 var _session: Dictionary = {}
 var _pending_status: String = ""            # set by configure(), shown once in _ready
 
+# --- Server-authoritative character CRUD over the net thread (#279 / D-35) -----
+# When there is a live session (grant + WorldHello frame + worldd address), this
+# screen connects to worldd itself and drives the REAL character flow over the
+# authenticated session: CharList populates the roster, Create/Delete persist to
+# the server, and Enter World sends ENTER_WORLD(character_id) — the world scene is
+# opened only on ENTER_WORLD_RESPONSE(OK), reusing THIS live connection (the grant
+# is single-use, so world.gd must not reconnect). With NO session (warm boot /
+# tests) the screen falls back to the local in-memory CharacterStore + local demo.
+var _net: MeridianNetThread = null          # the live world session (online only)
+var _online: bool = false                   # a real session is driving this screen
+var _roster: Array = []                      # server roster cache (online); rows {id,name,race,class,level}
+var _handshaked: bool = false               # HandshakeOk seen (character-select reached)
+var _entering: bool = false                 # ENTER_WORLD sent, awaiting the response
+var _enter_character: Dictionary = {}       # the character Enter World was pressed for
+var _pending_select_id: int = 0             # select this char once the next CharList lands
+
 
 # Called by the login handoff BEFORE this scene is added to the tree so the account
 # context (and any pre-known characters) are set before _ready populates the UI.
@@ -84,14 +100,24 @@ var _pending_status: String = ""            # set by configure(), shown once in 
 func configure(account: String, seed_rows: Array = [], session: Dictionary = {}, error: String = "") -> void:
 	_account = account
 	_session = session if session != null else {}
+	# Online when the login handed us a real world session (grant + WorldHello frame
+	# + worldd address). Then this screen connects to worldd itself and the roster is
+	# fetched over the wire (CharList) — NOT carried as local state. Offline (no
+	# session) keeps the local in-memory store + seed rows for warm boot / tests (#327).
+	_online = not _session.is_empty() \
+		and (_session.get("world_hello_frame", PackedByteArray()) as PackedByteArray).size() > 0 \
+		and not String(_session.get("worldd_host", "")).is_empty()
 	# Fresh store on every configure() — never inherit a prior session's rows (#327).
 	_store = CharacterStore.new()
-	# Authoritative roster first (the session-carried server list); seed_rows is the
-	# no-session fallback so a re-login with a real roster is never masked by stale seeds.
-	var roster: Array = _session.get("roster", [])
-	var source: Array = roster if not roster.is_empty() else seed_rows
-	for row in source:
-		_store.create(String(row.get("name", "")), int(row.get("race", 0)), int(row.get("class", 0)))
+	if not _online:
+		# Offline: repopulate the local store from the AUTHORITATIVE session roster
+		# (the #327 fix — a re-login/bounce-back rebuilds from session, not stale local
+		# state), falling back to seed_rows (tests / warm boot). Online skips this: the
+		# roster is fetched live via CharList once the session handshakes.
+		var roster: Array = _session.get("roster", [])
+		var source: Array = roster if not roster.is_empty() else seed_rows
+		for row in source:
+			_store.create(String(row.get("name", "")), int(row.get("race", 0)), int(row.get("class", 0)))
 	if not error.strip_edges().is_empty():
 		_pending_status = error
 
@@ -115,8 +141,46 @@ func _ready() -> void:
 	if not _pending_status.is_empty():
 		_set_status(_pending_status)
 		_pending_status = ""
+	elif _online:
+		_set_status("Connecting to the realm…")
 	else:
 		_set_status("Select a character to enter the world, or create a new one.")
+
+	# Online: connect to worldd over the net thread and drive the real character flow.
+	if _online:
+		_connect_online()
+
+
+# Establish the authenticated world session (WorldHello) so this screen can list/
+# create/delete characters over the wire and ENTER_WORLD. The SAME live connection is
+# handed to the world scene on a successful enter (the grant is single-use). Signals
+# are drained each frame by _process -> _net.pump().
+func _connect_online() -> void:
+	_net = MeridianNetThread.new()
+	_net.handshake_ok.connect(_on_net_handshake_ok)
+	_net.char_list.connect(_on_net_char_list)
+	_net.char_create_result.connect(_on_net_char_create_result)
+	_net.char_delete_result.connect(_on_net_char_delete_result)
+	_net.enter_world_result.connect(_on_net_enter_world_result)
+	_net.disconnected.connect(_on_net_disconnected)
+	_net.connect_failed.connect(_on_net_connect_failed)
+	_net.transport_closed.connect(_on_net_transport_closed)
+
+	var host := String(_session.get("worldd_host", ""))
+	var port := int(_session.get("worldd_port", 0))
+	var frame: PackedByteArray = _session.get("world_hello_frame", PackedByteArray())
+	var key: PackedByteArray = _session.get("session_key", PackedByteArray())
+	if not _net.connect_to_world(host, port, frame, key):
+		_online = false
+		_net = null
+		_set_status("Could not start the world connection.")
+
+
+# Drain decoded server events each frame (the pre-sim sync point). Only while this
+# screen owns the net thread — once handed to the world scene, that scene pumps.
+func _process(_delta: float) -> void:
+	if _online and _net != null and not _entering:
+		_net.pump()
 
 
 # Fill the race + class pickers from the M0-frozen roster. Each item carries its roster id
@@ -142,10 +206,16 @@ func _select_option_by_id(option: OptionButton, id: int) -> void:
 
 # Rebuild the character list from the store. Each row shows "Name — Class (Race)" and
 # stores its character id as item metadata so delete/enter read the id, not the row index.
+# The current roster rows — the server roster cache when online (from CharList), or
+# the local store when offline. Each row is { id, name, race, class }.
+func _rows() -> Array:
+	return _roster if _online else _store.list()
+
+
 func _refresh_list() -> void:
 	var previously_selected := _selected_char_id()
 	_char_list.clear()
-	for row in _store.list():
+	for row in _rows():
 		var label := "%s — %s (%s)" % [
 			String(row["name"]),
 			MeridianRoster.class_name_for(int(row["class"])),
@@ -177,6 +247,23 @@ func _selected_char_id() -> int:
 
 
 func _on_create_pressed() -> void:
+	# Online: send CHAR_CREATE over the session; the roster refreshes on the OK reply
+	# (server is the source of truth). Offline: create in the local store immediately.
+	if _online:
+		if not _handshaked:
+			_set_status("Still connecting to the realm…")
+			return
+		var name := _name_edit.text.strip_edges()
+		if name.is_empty():
+			_set_status("Enter a name first.")
+			return
+		var frame: PackedByteArray = _net.build_char_create_request_frame(
+			name, _race_option.get_selected_id(), _class_option.get_selected_id())
+		if _net.send_bulk(frame):
+			_set_status("Creating %s…" % name)
+		else:
+			_set_status("Could not send the create request.")
+		return
 	var result := _store.create(
 		_name_edit.text, _race_option.get_selected_id(), _class_option.get_selected_id()
 	)
@@ -195,6 +282,14 @@ func _on_delete_pressed() -> void:
 	if id == 0:
 		_set_status("Select a character to delete.")
 		return
+	# Online: send CHAR_DELETE; the roster refreshes on the reply. Offline: local delete.
+	if _online:
+		var frame: PackedByteArray = _net.build_char_delete_request_frame(id)
+		if _net.send_bulk(frame):
+			_set_status("Deleting…")
+		else:
+			_set_status("Could not send the delete request.")
+		return
 	if _store.delete(id):
 		_refresh_list()
 		_set_status("Character deleted.")
@@ -208,48 +303,37 @@ func _on_enter_pressed() -> void:
 		_set_status("Select a character first.")
 		return
 	var character := _character_by_id(id)
-	# Announce the intent, then hand off to the world scene. With a live session context
-	# (#301) the REAL networked world scene opens the worldd session bound to this
-	# character; without one we fall back to the standalone local camera demo.
 	enter_world_requested.emit(character)
-	var have_session := not _session.is_empty() and _session.has("world_hello_frame")
-	var target := WORLD_SCENE if have_session else LOCAL_DEMO_SCENE
-	print("[char_select] enter world as '%s' (race=%d class=%d) → %s%s"
-		% [String(character.get("name", "")), int(character.get("race", 0)),
-		   int(character.get("class", 0)), target,
-		   "" if have_session else " (no session — local demo)"])
-	_set_status("Entering world as %s…" % String(character.get("name", "")))
-	# Guard: only change scenes when actually inside a running SceneTree (a headless
-	# instantiation test builds this node without a current scene).
-	if is_inside_tree():
-		if have_session:
-			_go_to_world(target, character)
+
+	# Online (server-authoritative, D-35): send ENTER_WORLD(character_id) and switch
+	# to the world scene ONLY on ENTER_WORLD_RESPONSE(OK) — the server validates the
+	# character is owned before spawning. The live connection is carried into the world
+	# scene (the grant is single-use, so it must be reused, not reconnected).
+	if _online:
+		if not _handshaked:
+			_set_status("Still connecting to the realm…")
+			return
+		_entering = true
+		_enter_character = character
+		var frame: PackedByteArray = _net.build_enter_world_request_frame(id)
+		if _net.send_control(frame):
+			_set_status("Entering world as %s…" % String(character.get("name", "")))
 		else:
-			get_tree().change_scene_to_file(target)
-
-
-# Instantiate the networked world scene and hand it the session + character BEFORE it
-# enters the tree, so world.gd's _ready() connects to worldd with the right context.
-func _go_to_world(scene_path: String, character: Dictionary) -> void:
-	var packed: PackedScene = load(scene_path)
-	if packed == null:
-		_set_status("Could not load the world scene.")
+			_entering = false
+			_set_status("Could not send the enter request.")
 		return
-	var world := packed.instantiate()
-	# Carry the account name + current roster in the session so that if world.gd has to
-	# bounce the player back here on a pre-HandshakeOk connect failure (#301 UX), it can
-	# rebuild THIS screen (right account label, characters intact) rather than a blank one.
-	_session["account"] = _account
-	_session["roster"] = _store.list()
-	world.configure(_session, character)
-	var tree := get_tree()
-	tree.root.add_child(world)
-	tree.current_scene = world
-	queue_free()
+
+	# Offline fallback: no session → the standalone local camera demo.
+	print("[char_select] enter world as '%s' (race=%d class=%d) → %s (no session — local demo)"
+		% [String(character.get("name", "")), int(character.get("race", 0)),
+		   int(character.get("class", 0)), LOCAL_DEMO_SCENE])
+	_set_status("Entering world as %s…" % String(character.get("name", "")))
+	if is_inside_tree():
+		get_tree().change_scene_to_file(LOCAL_DEMO_SCENE)
 
 
 func _character_by_id(id: int) -> Dictionary:
-	for row in _store.list():
+	for row in _rows():
 		if int(row["id"]) == id:
 			return row
 	return {}
@@ -307,6 +391,110 @@ func _build_placeholder_preview() -> void:
 	world_root.add_child(cam)
 
 	_preview_holder.add_child(container)
+
+
+# --- Net-thread signal handlers (online only) --------------------------------
+
+# HandshakeOk = authenticated, at character-select. Ask the server for the roster.
+func _on_net_handshake_ok() -> void:
+	_handshaked = true
+	_set_status("Loading your characters…")
+	_net.send_bulk(_net.build_char_list_request_frame())
+
+
+# The account's roster arrived — cache it and render. Enter/Delete need a selection;
+# an empty roster prompts creation.
+func _on_net_char_list(characters: Array) -> void:
+	_roster = characters
+	_refresh_list()
+	if _pending_select_id != 0:
+		_select_char_id(_pending_select_id)  # select a just-created character
+		_pending_select_id = 0
+	if _roster.is_empty():
+		_set_status("No characters yet — create one to enter the world.")
+	elif _status.text.begins_with("Loading"):
+		_set_status("Select a character to enter the world, or create a new one.")
+
+
+# Create result: OK re-lists (server is the source of truth); else a typed error.
+func _on_net_char_create_result(status: int, character_id: int) -> void:
+	# world.fbs CharCreateStatus: 0 OK, 1 DUPLICATE_NAME, 2 INVALID_NAME,
+	# 3 INVALID_RACE, 4 INVALID_CLASS, 5 LIMIT_REACHED, 6 INTERNAL.
+	if status == 0:
+		_name_edit.clear()
+		_pending_select_id = character_id  # select the new character once it lists
+		_net.send_bulk(_net.build_char_list_request_frame())
+		_set_status("Character created.")
+		return
+	var reasons := {
+		1: "that name is taken", 2: "invalid name", 3: "invalid race",
+		4: "invalid class", 5: "you already have a character",
+	}
+	var why: String = reasons.get(status, "server error")
+	_set_status("Cannot create: %s." % why)
+
+
+# Delete result: OK re-lists; REFUSED/INTERNAL surfaces a message.
+func _on_net_char_delete_result(status: int) -> void:
+	if status == 0:
+		_net.send_bulk(_net.build_char_list_request_frame())
+		_set_status("Character deleted.")
+	else:
+		_set_status("Could not delete that character.")
+
+
+# Enter-world result: OK hands the LIVE session to the world scene; else stay here.
+func _on_net_enter_world_result(status: int) -> void:
+	# world.fbs EnterWorldStatus: 0 OK (spawned), 1 NOT_FOUND, 2 NO_CHARACTER, 3 INTERNAL.
+	if status == 0:
+		_enter_world_scene()
+		return
+	_entering = false
+	if status == 2:
+		_set_status("Create a character before entering the world.")
+	elif status == 1:
+		_set_status("That character was not found — pick another.")
+		_net.send_bulk(_net.build_char_list_request_frame())  # re-sync the roster
+	else:
+		_set_status("Could not enter the world (server error).")
+
+
+func _on_net_disconnected(_reason: int, message: String) -> void:
+	_set_status("Disconnected: %s" % message)
+
+
+func _on_net_connect_failed(detail: String) -> void:
+	_set_status("Could not reach the realm: %s" % detail)
+
+
+func _on_net_transport_closed(_detail: String) -> void:
+	_set_status("The realm connection closed.")
+
+
+# Hand the LIVE, in-world net thread to the world scene and switch to it. The world
+# scene REUSES this connection (the grant is single-use — it must not reconnect).
+# char_select stops draining first so the queued AoI EntityEnter frames survive for
+# the world scene to consume.
+func _enter_world_scene() -> void:
+	if not is_inside_tree():
+		return
+	var live_net := _net
+	# Stop receiving on this screen so we don't drain the world scene's inbound frames.
+	set_process(false)
+	_net = null
+	_online = false
+	_session["account"] = _account
+	_session["net_thread"] = live_net  # world.gd reuses this instead of reconnecting
+	var packed: PackedScene = load(WORLD_SCENE)
+	if packed == null:
+		_set_status("Could not load the world scene.")
+		return
+	var world := packed.instantiate()
+	world.configure(_session, _enter_character)
+	var tree := get_tree()
+	tree.root.add_child(world)
+	tree.current_scene = world
+	queue_free()
 
 
 func _set_status(text: String) -> void:

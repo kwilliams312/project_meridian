@@ -13,6 +13,7 @@
 
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/object.hpp>  // MethodInfo / ADD_SIGNAL
+#include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/vector3.hpp>
 
@@ -86,6 +87,16 @@ void MeridianNetThread::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("build_movement_intent_frame", "intent"),
 	                     &MeridianNetThread::build_movement_intent_frame);
 
+	ClassDB::bind_method(D_METHOD("build_char_list_request_frame"),
+	                     &MeridianNetThread::build_char_list_request_frame);
+	ClassDB::bind_method(
+	    D_METHOD("build_char_create_request_frame", "name", "race", "char_class"),
+	    &MeridianNetThread::build_char_create_request_frame);
+	ClassDB::bind_method(D_METHOD("build_char_delete_request_frame", "character_id"),
+	                     &MeridianNetThread::build_char_delete_request_frame);
+	ClassDB::bind_method(D_METHOD("build_enter_world_request_frame", "character_id"),
+	                     &MeridianNetThread::build_enter_world_request_frame);
+
 	ClassDB::bind_method(D_METHOD("frames_sent"), &MeridianNetThread::frames_sent);
 	ClassDB::bind_method(D_METHOD("frames_received"), &MeridianNetThread::frames_received);
 	ClassDB::bind_method(D_METHOD("inbound_dropped"), &MeridianNetThread::inbound_dropped);
@@ -106,6 +117,16 @@ void MeridianNetThread::_bind_methods() {
 	                      PropertyInfo(Variant::STRING, "message")));
 	ADD_SIGNAL(MethodInfo("transport_closed", PropertyInfo(Variant::STRING, "detail")));
 	ADD_SIGNAL(MethodInfo("connect_failed", PropertyInfo(Variant::STRING, "detail")));
+
+	// Character-select round-trips (D-35 / #286 / #341), re-emitted from pump().
+	// char_list carries an Array of Dictionaries {id,name,race,char_class,level}.
+	ADD_SIGNAL(MethodInfo("char_list", PropertyInfo(Variant::ARRAY, "characters")));
+	ADD_SIGNAL(MethodInfo("char_create_result", PropertyInfo(Variant::INT, "status"),
+	                      PropertyInfo(Variant::INT, "character_id")));
+	ADD_SIGNAL(MethodInfo("char_delete_result", PropertyInfo(Variant::INT, "status")));
+	// enter_world_result: EnterWorldStatus (0=OK spawned, 1=NOT_FOUND, 2=NO_CHARACTER,
+	// 3=INTERNAL). The scene switches to the world scene only on OK.
+	ADD_SIGNAL(MethodInfo("enter_world_result", PropertyInfo(Variant::INT, "status")));
 }
 
 bool MeridianNetThread::connect_to_world(const String &host, int port,
@@ -186,6 +207,33 @@ int MeridianNetThread::pump() {
 				break;
 			case net::InboundKind::kConnectFailed:
 				emit_signal("connect_failed", String(msg.detail.c_str()));
+				break;
+			case net::InboundKind::kCharList: {
+				Array chars;
+				for (const auto &c : msg.roster.characters) {
+					Dictionary row;
+					row["id"] = static_cast<int64_t>(c.character_id);
+					row["name"] = String(c.name.c_str());
+					row["race"] = static_cast<int64_t>(c.race);
+					row["class"] = static_cast<int64_t>(c.char_class);
+					row["level"] = static_cast<int64_t>(c.level);
+					chars.push_back(row);
+				}
+				emit_signal("char_list", chars);
+				break;
+			}
+			case net::InboundKind::kCharCreate:
+				emit_signal("char_create_result",
+				            static_cast<int64_t>(msg.char_create.status),
+				            static_cast<int64_t>(msg.char_create.character_id));
+				break;
+			case net::InboundKind::kCharDelete:
+				emit_signal("char_delete_result",
+				            static_cast<int64_t>(msg.char_delete.status));
+				break;
+			case net::InboundKind::kEnterWorld:
+				emit_signal("enter_world_result",
+				            static_cast<int64_t>(msg.enter_world.status));
 				break;
 		}
 	}
@@ -273,6 +321,39 @@ PackedByteArray MeridianNetThread::build_movement_intent_frame(
 	net::Bytes payload = cn::codec::encode_movement_intent(mi);
 	net::Bytes frame = cn::encode_world_frame(cn::kOpMovementIntent, mi.seq, payload);
 	return to_pba(frame);
+}
+
+// ── Character-select frame builders (D-35 / #286 / #341) ─────────────────────
+// Seq is a per-message counter the server echoes; it is not correlated by the
+// client (responses are matched by opcode/signal), so a fixed non-zero seq is fine.
+
+PackedByteArray MeridianNetThread::build_char_list_request_frame() const {
+	net::Bytes payload = cn::codec::encode_char_list_request();
+	return to_pba(cn::encode_world_frame(cn::kOpCharListReq, /*seq=*/1, payload));
+}
+
+PackedByteArray MeridianNetThread::build_char_create_request_frame(
+		const String &name, int race, int char_class) const {
+	cn::codec::CharCreateRequest req;
+	req.name = to_std(name);
+	req.race = static_cast<std::uint8_t>(race);
+	req.char_class = static_cast<std::uint8_t>(char_class);
+	net::Bytes payload = cn::codec::encode_char_create_request(req);
+	return to_pba(cn::encode_world_frame(cn::kOpCharCreateReq, /*seq=*/1, payload));
+}
+
+PackedByteArray MeridianNetThread::build_char_delete_request_frame(
+		int64_t character_id) const {
+	net::Bytes payload = cn::codec::encode_char_delete_request(
+	    static_cast<std::uint64_t>(character_id));
+	return to_pba(cn::encode_world_frame(cn::kOpCharDeleteReq, /*seq=*/1, payload));
+}
+
+PackedByteArray MeridianNetThread::build_enter_world_request_frame(
+		int64_t character_id) const {
+	net::Bytes payload = cn::codec::encode_enter_world_request(
+	    static_cast<std::uint64_t>(character_id));
+	return to_pba(cn::encode_world_frame(cn::kOpEnterWorldReq, /*seq=*/1, payload));
 }
 
 int64_t MeridianNetThread::frames_sent() const {

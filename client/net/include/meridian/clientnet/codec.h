@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "meridian/clientnet/framing.h"  // Bytes
 
@@ -133,6 +134,77 @@ struct EntityLeave {
 
 Bytes encode_entity_leave(const EntityLeave& in);
 std::optional<EntityLeave> decode_entity_leave(const Bytes& buf);
+
+// ---------------------------------------------------------------------------
+// IF-2 (world.fbs) — character management (D-35 / #286) + server-authoritative
+// enter-world (D-35 / #341), over the AUTHENTICATED world session (post-HandshakeOk).
+// The client lists/creates/deletes its OWN account's characters (worldd scopes
+// every op to the session's grant-derived account) and then ENTER_WORLDs one.
+// Status fields are the world.fbs enum ordinals (kept as u16 so the codec has no
+// generated-enum dependency): CharCreateStatus{OK=0,DUPLICATE_NAME=1,INVALID_NAME=2,
+// INVALID_RACE=3,INVALID_CLASS=4,LIMIT_REACHED=5,INTERNAL=6},
+// CharDeleteStatus{OK=0,REFUSED=1,INTERNAL=2}, EnterWorldStatus{OK=0,NOT_FOUND=1,
+// NO_CHARACTER=2,INTERNAL=3}.
+// ---------------------------------------------------------------------------
+
+// One roster row (world.fbs CharListEntry).
+struct CharSummary {
+    std::uint64_t character_id = 0;
+    std::string name;
+    std::uint8_t race = 0;
+    std::uint8_t char_class = 0;
+    std::uint16_t level = 0;
+};
+
+// CHAR_LIST_REQUEST carries no fields (the account is the session's).
+Bytes encode_char_list_request();
+
+// CHAR_LIST_RESPONSE — the account's roster (0 or 1 at M0, #329).
+struct CharListResponse {
+    std::vector<CharSummary> characters;
+};
+std::optional<CharListResponse> decode_char_list_response(const Bytes& buf);
+
+// CHAR_CREATE_REQUEST — name + M0-frozen race/class.
+struct CharCreateRequest {
+    std::string name;
+    std::uint8_t race = 0;
+    std::uint8_t char_class = 0;
+};
+Bytes encode_char_create_request(const CharCreateRequest& in);
+
+// CHAR_CREATE_RESPONSE — typed status + (on OK) the minted id.
+struct CharCreateResponse {
+    std::uint16_t status = 0;  // CharCreateStatus
+    std::uint64_t character_id = 0;
+};
+std::optional<CharCreateResponse> decode_char_create_response(const Bytes& buf);
+
+// CHAR_DELETE_REQUEST — one owned character id.
+Bytes encode_char_delete_request(std::uint64_t character_id);
+
+// CHAR_DELETE_RESPONSE — ok / refused.
+struct CharDeleteResponse {
+    std::uint16_t status = 0;  // CharDeleteStatus
+};
+std::optional<CharDeleteResponse> decode_char_delete_response(const Bytes& buf);
+
+// ENTER_WORLD_REQUEST — spawn as this owned character.
+Bytes encode_enter_world_request(std::uint64_t character_id);
+
+// ENTER_WORLD_RESPONSE — typed enter result (OK spawns; else no spawn).
+struct EnterWorldResponse {
+    std::uint16_t status = 0;  // EnterWorldStatus
+};
+std::optional<EnterWorldResponse> decode_enter_world_response(const Bytes& buf);
+
+// S→C response ENCODERS — the client never sends these, but mocks/tests (the net
+// thread's replay harness, #97) build server frames through the SAME POD API rather
+// than the generated types. Symmetric with encode_movement_state / encode_entity_*.
+Bytes encode_char_list_response(const CharListResponse& in);
+Bytes encode_char_create_response(const CharCreateResponse& in);
+Bytes encode_char_delete_response(const CharDeleteResponse& in);
+Bytes encode_enter_world_response(const EnterWorldResponse& in);
 
 }  // namespace meridian::clientnet::codec
 

@@ -52,6 +52,7 @@ var _session: Dictionary = {}
 var _character: Dictionary = {}
 
 var _net: MeridianNetThread
+var _net_preconnected: bool = false  # net thread handed over LIVE by char-select (D-35)
 var _interp: MeridianRemoteInterpolator
 var _mover: MeridianMovementController
 
@@ -91,6 +92,12 @@ var _last_move_debug_ms: int = -100000
 func configure(session: Dictionary, character: Dictionary = {}) -> void:
 	_session = session if session != null else {}
 	_character = character if character != null else {}
+	# Server-authoritative characters (D-35 / #279): char-select established the world
+	# session (WorldHello → CharList → ENTER_WORLD OK) on a LIVE net thread and handed
+	# it over here. Reuse it — the grant is single-use, so we must NOT reconnect.
+	if _session.get("net_thread", null) != null:
+		_net = _session.get("net_thread")
+		_net_preconnected = true
 
 
 func _ready() -> void:
@@ -110,12 +117,30 @@ func _ready() -> void:
 	_mover = MeridianMovementController.new()
 	_mover.reset(SPAWN, 0.0)
 
-	if _has_session():
+	if _net_preconnected and _net != null:
+		_attach_preconnected()
+	elif _has_session():
 		_connect_to_world()
 	else:
 		_conn_text = "offline (no session — local sandbox)"
 		print("[world] no session context — running OFFLINE local sandbox")
 	_refresh_hud()
+
+
+# Reuse the LIVE net thread handed over by char-select (D-35 / #279). HandshakeOk +
+# ENTER_WORLD already happened there, so no handshake_ok signal will arrive here — we
+# mark ourselves in-world and let _physics_process pump() drain the queued AoI
+# EntityEnter frames. Wire the same signals _connect_to_world() would have.
+func _attach_preconnected() -> void:
+	_router = MeridianWorldConnectRouter.new()
+	_net.handshake_ok.connect(_on_handshake_ok)  # harmless if a late one arrives
+	_net.movement_state.connect(_on_movement_state)
+	_net.entity_frame.connect(_on_entity_frame)
+	_net.disconnected.connect(_on_disconnected)
+	_net.transport_closed.connect(_on_transport_closed)
+	_net.connect_failed.connect(_on_connect_failed)
+	print("[world] reusing the live world session from character-select (in-world)")
+	_on_handshake_ok()  # we are already past char-select — treat as entered
 
 
 func _exit_tree() -> void:

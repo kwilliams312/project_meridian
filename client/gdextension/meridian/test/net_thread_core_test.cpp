@@ -76,8 +76,32 @@ public:
 			cn::Bytes body = cn::codec::encode_movement_state(st);
 			inbox_.push_back(cn::encode_world_frame(cn::kOpMovementState, st.ack_seq, body));
 		}
+		// Character-select round-trips (D-35): reply to each request with the matching
+		// response frame so the net thread's inbound decode path is exercised.
+		if (f && f->opcode == cn::kOpCharListReq) {
+			cn::codec::CharListResponse roster;
+			roster.characters.push_back({/*id=*/100, "MockChar", /*race=*/1, /*class=*/1, /*lvl=*/1});
+			inbox_.push_back(cn::encode_world_frame(
+			    cn::kOpCharListResp, f->seq, cn::codec::encode_char_list_response(roster)));
+		}
+		if (f && f->opcode == cn::kOpCharCreateReq) {
+			cn::codec::CharCreateResponse r;
+			r.status = 0;  // OK
+			r.character_id = 100;
+			inbox_.push_back(cn::encode_world_frame(
+			    cn::kOpCharCreateResp, f->seq, cn::codec::encode_char_create_response(r)));
+		}
+		if (f && f->opcode == cn::kOpEnterWorldReq) {
+			cn::codec::EnterWorldResponse r;
+			r.status = enter_reject_ ? 1 /*NOT_FOUND*/ : 0 /*OK*/;
+			inbox_.push_back(cn::encode_world_frame(
+			    cn::kOpEnterWorldResp, f->seq, cn::codec::encode_enter_world_response(r)));
+		}
 		return true;
 	}
+
+	// Make the ENTER_WORLD reply NOT_FOUND (server-authoritative reject path).
+	void set_enter_reject(bool v) { enter_reject_ = v; }
 
 	std::optional<cn::Bytes> recv_frame() override {
 		if (inbox_.empty()) return std::nullopt;
@@ -106,6 +130,7 @@ public:
 private:
 	std::deque<cn::Bytes> inbox_;  // frames delivered to the client (net thread reads)
 	std::atomic<std::uint64_t> intents_received_{0};
+	std::atomic<bool> enter_reject_{false};
 };
 
 // A transport factory that fails to connect (returns nullptr).
@@ -186,6 +211,42 @@ int main() {
 		check("frames_received counts HandshakeOk + MovementState",
 		      core.frames_received() >= 2);
 		check("no inbound messages were dropped", core.inbound_dropped() == 0);
+
+		// --- Character-select round-trips (D-35 / #286 / #341) over the net thread.
+		// CHAR_LIST -> roster with the mock's one character.
+		core.send(cn::encode_world_frame(cn::kOpCharListReq, 1,
+		                                 cn::codec::encode_char_list_request()),
+		          net::SendPriority::kBulk);
+		net::InboundMessage cl;
+		check("CharListResponse drained (kCharList)",
+		      wait_for_inbound(core, net::InboundKind::kCharList, cl, 2000));
+		check("roster carries the mock's one character",
+		      cl.roster.characters.size() == 1 &&
+		          cl.roster.characters[0].character_id == 100 &&
+		          cl.roster.characters[0].name == "MockChar");
+
+		// CHAR_CREATE -> OK + minted id.
+		cn::codec::CharCreateRequest cc;
+		cc.name = "Newbie";
+		cc.race = 1;
+		cc.char_class = 1;
+		core.send(cn::encode_world_frame(cn::kOpCharCreateReq, 2,
+		                                 cn::codec::encode_char_create_request(cc)),
+		          net::SendPriority::kBulk);
+		net::InboundMessage cc_msg;
+		check("CharCreateResponse drained (kCharCreate)",
+		      wait_for_inbound(core, net::InboundKind::kCharCreate, cc_msg, 2000));
+		check("create result is OK with the minted id",
+		      cc_msg.char_create.status == 0 && cc_msg.char_create.character_id == 100);
+
+		// ENTER_WORLD(owned) -> OK (spawned).
+		core.send(cn::encode_world_frame(cn::kOpEnterWorldReq, 3,
+		                                 cn::codec::encode_enter_world_request(100)),
+		          net::SendPriority::kControl);
+		net::InboundMessage ew;
+		check("EnterWorldResponse drained (kEnterWorld)",
+		      wait_for_inbound(core, net::InboundKind::kEnterWorld, ew, 2000));
+		check("enter-world status is OK (spawned)", ew.enter_world.status == 0);
 
 		core.stop();
 		check("running() is false after stop()", !core.running());

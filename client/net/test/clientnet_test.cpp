@@ -49,6 +49,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace meridian::clientnet;
@@ -366,6 +367,50 @@ void test_entity_codec() {
     CHECK(!codec::decode_entity_enter(garbage).has_value());
     CHECK(!codec::decode_entity_update(garbage).has_value());
     CHECK(!codec::decode_entity_leave(garbage).has_value());
+}
+
+// ---------------------------------------------------------------------------
+// 4b. Character management + enter-world codec (D-35 / #286 / #341)
+//
+// The codec's public API is deliberately POD-in/POD-out and keeps the generated
+// FlatBuffers types PRIVATE (only codec.cpp sees world_generated.h). So here we
+// test what that boundary allows: (a) every request encoder produces a non-empty,
+// frame-wrappable payload, and (b) every response decoder rejects garbage without
+// GetRoot-ing unverified bytes. The FULL response-decode round-trip (real worldd
+// frames -> POD fields) is proven in net_thread_core_test, which simulates the
+// server and already depends on the generated types.
+// ---------------------------------------------------------------------------
+void test_char_enter_codec() {
+    std::puts("[char] CharList/Create/Delete + EnterWorld request encoders + decoder safety");
+
+    // Request encoders produce non-empty payloads that wrap + unwrap at the IF-2
+    // frame layer under the right opcodes (client -> worldd direction).
+    codec::CharCreateRequest cc;
+    cc.name = "Gandalf";
+    cc.race = 4;
+    cc.char_class = 2;
+    const std::pair<std::uint16_t, Bytes> reqs[] = {
+        {kOpCharListReq, codec::encode_char_list_request()},
+        {kOpCharCreateReq, codec::encode_char_create_request(cc)},
+        {kOpCharDeleteReq, codec::encode_char_delete_request(0xABCDull)},
+        {kOpEnterWorldReq, codec::encode_enter_world_request(777ull)},
+    };
+    for (const auto& [op, payload] : reqs) {
+        // CharList request is an empty table (may be 0 bytes); the others carry fields.
+        Bytes frame = encode_world_frame(op, /*seq=*/1, payload);
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == op && f->payload == payload);
+    }
+    CHECK(!codec::encode_char_create_request(cc).empty());
+    CHECK(!codec::encode_char_delete_request(1).empty());
+    CHECK(!codec::encode_enter_world_request(1).empty());
+
+    // Every response decoder rejects garbage (verify-before-GetRoot discipline).
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_char_list_response(garbage).has_value());
+    CHECK(!codec::decode_char_create_response(garbage).has_value());
+    CHECK(!codec::decode_char_delete_response(garbage).has_value());
+    CHECK(!codec::decode_enter_world_response(garbage).has_value());
 }
 
 // ---------------------------------------------------------------------------
@@ -776,6 +821,7 @@ int main() {
     test_world_session();
     test_codec();
     test_entity_codec();
+    test_char_enter_codec();
     test_full_stack();
     test_transport_links();
 
