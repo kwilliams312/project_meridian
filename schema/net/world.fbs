@@ -78,6 +78,17 @@ enum Opcode : uint16 {
   RESURRECT_REQUEST = 0x3013,  // C→S  resurrect at your corpse (corpse-run complete)
   RESURRECT_RESULT  = 0x3014,  // S→C  resurrection outcome (alive + health, or refused)
 
+  // --- 0x9xxx  world / area triggers  (M1, ISSUE #368 — WLD-01/03, epic #20) ---
+  // Server-authoritative area triggers (enter/leave volumes from compiled world
+  // data) fire SERVER-side events — discovery, quest-objective hooks, graveyard
+  // zones (SAD §2.5 OnAreaTrigger hook seam) — evaluated in the map tick against
+  // player positions. The ONLY client-facing message is POI discovery: crossing a
+  // discovery volume marks it discovered on the character and notifies the client
+  // (re-entry does not re-fire). This dedicated world/area nibble extends the SAD
+  // §5.2 range map (which enumerates 0x0..0x8 / 0xE / 0xF) so discovery stays OUT
+  // of the quest range (0x4xxx). Append within this range; never renumber.
+  POI_DISCOVERED = 0x9001,   // S→C  character discovered a point of interest
+
   // --- 0x4xxx  quest / gossip    (reserved — see placeholder below) ---
   // --- 0x5xxx  inventory/economy (reserved — see placeholder below) ---
   // --- 0x6xxx  chat / social     (reserved — see placeholder below) ---
@@ -211,6 +222,29 @@ enum LeaveReason : uint16 {
 table EntityLeave {
   entity_guid:uint64;
   reason:LeaveReason = OUT_OF_RANGE;
+}
+
+// ===========================================================================
+// 0x9xxx — world / area triggers  (M1, ISSUE #368 — WLD-01/03, epic #20)
+// ===========================================================================
+// Area triggers are server-authoritative enter/leave volumes compiled into world
+// content (world DB `area_trigger` / `graveyard`, SAD §4.5; real data via mcc #28).
+// The map tick evaluates them against player positions each tick and fires
+// server-side events (discovery, quest-objective hooks, graveyard zones — the SAD
+// §2.5 OnAreaTrigger hook seam). Only ONE of those events is client-facing: POI
+// discovery. The others stay entirely server-side (no wire message at M1).
+
+/// S→C. The session's character crossed a DISCOVERY trigger volume for the first
+/// time: the server has marked the point of interest discovered on the character
+/// and is notifying the client (to surface a "discovered" toast and reveal it on
+/// the map). Fires ONCE per character per POI — re-entering an already-discovered
+/// volume does not re-send this. `name_id` is an idmap string id (§4.6) for the
+/// POI's display name (0 = unnamed placeholder). `area_id` is the owning area/zone
+/// (world DB `area`) so the client can group discoveries by region.
+table PoiDiscovered {
+  trigger_id:uint32;   // world `area_trigger` id of the discovered POI (stable content id)
+  area_id:uint32;      // owning area/zone id (world DB `area`); 0 = unspecified
+  name_id:uint32;      // idmap string id for the POI display name (§4.6); 0 = unnamed
 }
 
 // ===========================================================================
@@ -506,6 +540,8 @@ table LevelUp {
 // 0x7xxx  group / instance  — party/raid, instance lifecycle. Future issue.
 // 0x8xxx  shard / transfer  — ShardTransferRequest/Deny/Begin, AoIRefreshBegin/End, ShardPresence
 //                             (server SAD §5.2.1, D-23; client handling A-13). M3. Future issue.
+// 0x9xxx  world / area      — area triggers + POI discovery (PoiDiscovered above). M1, ISSUE #368
+//                             (WLD-01/03, epic #20). Extends the SAD §5.2 range map.
 // 0xExxx  GM                — GM commands / audit surface. Future issue.
 // 0xFxxx  hot-reload        — IF-7 editor channel: EditorHello/AuthOk, PushDelta, ApplyResult,
 //                             RespawnRequest, TeleportPreview, SubscribeLog/LogEvent

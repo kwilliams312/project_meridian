@@ -68,6 +68,7 @@
 #include <vector>
 
 #include "aoi_grid.h"
+#include "area_triggers.h"        // AreaTriggerSet — area triggers + POI discovery (#368)
 #include "combat_resolver.h"      // CombatRng — per-map seeded combat RNG (#345)
 #include "combat_unit.h"          // WorldObject→Unit→Player hierarchy (#342)
 #include "movement_validation.h"  // Position
@@ -238,6 +239,26 @@ public:
     // pinned sequence construct their own CombatRng instead.
     CombatRng& combat_rng() { return combat_rng_; }
 
+    // ── Area triggers + POI discovery (#368; WLD-01/03) ──────────────────────
+    // The map tick evaluates every entered character's authoritative position
+    // against the loaded trigger volumes (SAD §2.5) each time it advances — at M0
+    // that advance is enter() + on_movement(), the authoritative-position seams
+    // that stand in for the tick's movement phase until the #349 map tick lands.
+    // A discovery crossing marks the POI on the character and sends POI_DISCOVERED
+    // to that client; every enter/leave crossing also fires the server-side
+    // OnAreaTrigger hook (SAD §2.5 script-hook seam).
+
+    // Load the trigger volume set — the mcc #28 seam (placeholder → compiled world
+    // data). Call once at boot before any session enters. Thread-safe.
+    void load_area_triggers(std::vector<TriggerVolume> volumes);
+
+    // Install the server-side OnAreaTrigger hook (SAD §2.5). Invoked once per
+    // enter/leave crossing (including discovery) with the mover's guid + the event,
+    // under the world lock. Default (unset) logs the crossing. Thread-safe to set
+    // before start; intended for boot wiring + tests. Thread-safe.
+    using AreaTriggerHook = std::function<void(AoiId guid, const TriggerEvent&)>;
+    void set_area_trigger_hook(AreaTriggerHook hook);
+
 private:
     struct SessionRec {
         // The wire projection relayed on EntityEnter (guid + type_id + char_class).
@@ -268,6 +289,11 @@ private:
     // grid's id-based interest set back to session records.
     std::optional<SessionSlot> slot_of_guid(AoiId guid) const;
 
+    // Evaluate `self`'s current authoritative position against the trigger volumes
+    // and dispatch each crossing: a first-time discovery sends POI_DISCOVERED to
+    // `self`'s client; every crossing fires the OnAreaTrigger hook. Caller holds mtx_.
+    void fire_area_triggers(SessionRec& self);
+
     mutable std::mutex mtx_;
     AoiGrid grid_;
     std::unordered_map<SessionSlot, SessionRec> sessions_;
@@ -278,6 +304,11 @@ private:
     // deterministic; a per-map seed derived from the MapKey is a later concern
     // (the tick loop / map manager, #349).
     CombatRng combat_rng_{0x9E3779B97F4A7C15ULL};
+
+    // Area triggers + POI discovery (#368). Owned by the world thread; serialized
+    // under mtx_ with the rest of the world state (same invariant as grid_).
+    AreaTriggerSet triggers_;
+    AreaTriggerHook area_trigger_hook_;
 };
 
 // ---------------------------------------------------------------------------
@@ -298,6 +329,12 @@ std::vector<std::uint8_t> encode_entity_update_payload(AoiId subject_guid,
 // EntityLeave payload for `subject_guid`.
 std::vector<std::uint8_t> encode_entity_leave_payload(AoiId subject_guid,
                                                       net::LeaveReason reason);
+
+// PoiDiscovered payload (world.fbs 0x9xxx) — the S→C notification that the
+// character discovered `trigger_id` (in `area_id`, named by idmap `name_id`).
+std::vector<std::uint8_t> encode_poi_discovered_payload(TriggerId trigger_id,
+                                                        std::uint32_t area_id,
+                                                        std::uint32_t name_id);
 
 }  // namespace meridian::worldd
 
