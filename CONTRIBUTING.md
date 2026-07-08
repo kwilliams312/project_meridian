@@ -67,8 +67,29 @@ uv run tools/check_traceability.py  # every matrix ● must be claimed; PRDs mus
 Cross-track changes (feature matrix, `/schema`, interface contracts IF-1…IF-10) require sign-off
 from every consuming track, recorded in [docs/01-SYNC-DECISIONS.md](docs/01-SYNC-DECISIONS.md).
 
+## Branch workflow
+
+Meridian uses a three-branch promotion model that maps 1:1 to the hosted realms
+(see the [CD design](docs/superpowers/specs/2026-07-07-cd-hosted-realms-design.md)):
+
+| Branch | Realm | Advances via |
+|---|---|---|
+| `dev` | Dev (`meridian-dev`) | day-to-day work — **branch from and PR into `dev`** |
+| `ptr` | PTR (`meridian-ptr`) | promotion only: merge `dev → ptr` |
+| `main` | Prod (`meridian-prod`) | promotion only: merge `ptr → main` |
+
+- **`dev` is the integration branch.** All feature branches start from `dev` and
+  open their PR against `dev`. Never open a PR or commit directly against `ptr` or
+  `main` — those advance only through promotion, which ArgoCD rolls out to the PTR
+  then Prod realms.
+- Each branch's green CI publishes images tagged `:<short-sha>` plus a moving
+  per-branch tag (`:dev`, `:ptr`, `:prod`); a promotion is simply a branch merge
+  ArgoCD picks up. Rollback is `git revert` on the affected branch.
+
 ## Git etiquette
 
 - Binary assets go through Git LFS (patterns in [.gitattributes](.gitattributes)); never force-add
   a binary that LFS should own.
 - One logical change per PR; content PRs separate from code PRs where practical.
+- Target `dev` with every PR (see **Branch workflow** above); `ptr` and `main` are
+  promotion-only.
