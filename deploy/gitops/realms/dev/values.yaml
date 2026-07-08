@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# Dev realm (meridian-dev) overlay — ephemeral DB, self-signed TLS, NodePort,
+# :dev images, amd64-pinned (temporary until Phase 2 multi-arch). Design §3.
+image:
+  tag: "dev"                # moving per-branch tag (Phase 2 publishes it; :latest works until then)
+  pullPolicy: Always
+
+# Temporary: Phase-1 images are amd64-only. Removed in Phase 2 (multi-arch).
+authd:
+  replicaCount: 1
+  service: { type: NodePort, nodePort: 31710 }
+  nodeSelector: { kubernetes.io/arch: amd64 }
+  probes: { type: tcp }
+worldd:
+  replicaCount: 1
+  service: { type: NodePort, nodePort: 31720 }
+  nodeSelector: { kubernetes.io/arch: amd64 }
+  probes: { type: tcp }
+
+tls:
+  mode: selfSignedInit
+
+db:
+  password: "meridian"
+
+mariadb:
+  enabled: true
+  image: { tag: "dev" }
+  persistence: { enabled: false }
+  nodeSelector: { kubernetes.io/arch: amd64 }

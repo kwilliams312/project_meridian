@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# App-of-apps: owns every Application under deploy/gitops/apps/. Register ONCE:
+#   kubectl apply -f deploy/gitops/root-app.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: meridian-root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/kwilliams312/project_meridian.git
+    targetRevision: dev
+    path: deploy/gitops/apps
+    directory:
+      recurse: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
