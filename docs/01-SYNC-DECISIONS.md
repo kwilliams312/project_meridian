@@ -198,6 +198,8 @@ Epic + stories tracked on GitHub under milestone M0 (OPS-05 epic). Server PRD an
 
 Phasing: publish workflow + compose-from-GHCR at M0; SBOM/signing + release workflow at M1; Helm v0 at M1–M2 (best-effort), sharded chart at M3 with OPS-04.
 
+> **Amended 2026-07-07 (D-37, §16).** Rule 1 now fires per realm branch (`dev`/`ptr`/`main`) with multi-arch images; rule 5's nightly compose test realm is replaced by ArgoCD GitOps hosted realms. Rules 2–4 stand (rule 2 clarified: compose is the *local* reference).
+
 ---
 
 ## 11. Terrain decision — A-09 resolved (2026-07-06, no baseline change)
@@ -285,3 +287,19 @@ Binding facts and rules:
 3. **Honesty: these numbers are MODELLED, not measured audio.** The harness stamps `measured: false` on every mock run. The modelled pass establishes that **nothing in the modelled physics contradicts native audio** and that the statistics/gate code the real probe feeds is correct — it is **not** itself the §3.1 authoritative verdict on native Godot audio. The one quantity the model cannot pin (does `AudioStreamInteractive` apply the crossfade sample-accurately within a mix block, or only at its boundary) is exactly what the real probe resolves.
 4. **Provisional ruling = native; fallback held in reserve.** This matches the project owner's stated default (#147: "default to native audio; only fall back if the gate fails"). The GDExtension stem mixer (SAD §3.2) — sample-accurate integer bar clock, per-stem ring buffers, a ~4–6-week one-engineer swap of the playback layer *below* the `ZoneMusicPlayer` API — remains the designed fallback, selected only if the measured gate fails.
 5. **Ratification is owner-runtime and still pending.** The authoritative §3.1 evidence is the **measured** `--source godot` run on the min-spec reference machine under the #111 50-connection bot fleet on the flat bootstrap map, with an adaptive track (#146) to exercise. CI cannot run it: no Godot 4.7 binary is available here (#283) and #111/#146 do not yet exist. The `--source godot` seam is wired (#144) and, run without an engine, fails fast with an actionable error — confirming the only gap is the runtime, not the harness. When the owner runs the measured pass: all five criteria clear ⇒ **D-36 ratified final (native)**; any criterion fails under real load ⇒ the gate selects the GDExtension fallback. Either way, record the measured numbers by updating D-36.
+
+---
+
+## 16. Hosted-realm GitOps CD — three-branch promotion (2026-07-07, no baseline change)
+
+**Decision D-37: hosted delivery moves to GitOps — three long-lived realms (Dev/PTR/Prod) map 1:1 to the `dev`/`ptr`/`main` branches and are reconciled by ArgoCD in the Talos cluster. This amends D-30 rules 1 and 5 and supersedes the nightly compose-over-SSH test realm (#94/#159).** Project-owner direction. Extends **OPS-01** / D-30 — no new feature ID, no baseline matrix change. Full design in [docs/superpowers/specs/2026-07-07-cd-hosted-realms-design.md](superpowers/specs/2026-07-07-cd-hosted-realms-design.md).
+
+Binding rules:
+
+1. **Branch → realm.** `dev` → Dev (`meridian-dev`), `ptr` → PTR (`meridian-ptr`), `main` → Prod (`meridian-prod`). All development lands on `dev` first; promotion is a branch merge `dev → ptr → main`. Each realm's ArgoCD `Application` tracks its own branch (`targetRevision`). **Amends D-30 rule 1:** autopublish fires on green CI for *each* realm branch, not only `main`.
+2. **Multi-arch, per-branch tags.** CI publishes multi-arch (amd64+arm64) images built natively on in-cluster self-hosted runners (ARC), tagged `<short-sha>` plus a moving per-branch tag (`:dev`/`:ptr`/`:prod`; `main` also `:latest`), cosign-signed + SBOM-attested on the manifest-list digest. CI remains the only image producer.
+3. **Sync posture.** Dev and PTR auto-sync (prune + selfHeal) and auto-restart on publish; **Prod is manual-sync** — promotion to production is a deliberate operator action. Rollback at any tier is `git revert` on that branch. **Amends/supersedes D-30 rule 5:** the nightly compose/systemd test realm that "tracked `main`" is replaced by the always-on GitOps realms; community realms still track releases.
+4. **Data + exposure.** Dev runs an ephemeral in-cluster MariaDB (reseeded per run); PTR/Prod persist on Longhorn (StatefulSet + PVC), all seeded from the shared `deploy/docker/db-init/*.sql`. The daemons' raw-TLS TCP listeners are exposed per realm via NodePort (LoadBalancer is non-functional on this cluster); a ClusterIP always serves in-cluster load. **The local compose / `run-local.sh` loop is retained unchanged** as the reference for local development.
+5. **Concurrency harness.** Realms are validated by a smoke + concurrency harness driving the headless `meridian-bot` — in-cluster Indexed Jobs (spread across both arch pools) for scale, plus an external NodePort endpoint for ad-hoc / real-client connects.
+
+Scope is delivered in phases (design §11): Dev realm live → native multi-arch CD (ARC) → PTR + Prod realms → concurrency harness. **D-30 rule 3** (config-only charts) and **rule 4** (supply-chain posture) stand; **rule 2** is clarified — compose is the reference for *local* development and contributor onboarding, while hosted realms deploy via the Helm chart under ArgoCD GitOps.

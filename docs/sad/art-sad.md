@@ -182,7 +182,7 @@ A stage in content CI (shared implementation with TLS-07), run on every PR touch
 1. Every shipped binary under `content/<ns>/assets/**` is listed in exactly one sidecar; every sidecar file exists in LFS. (Existence — TLS-07.)
 2. `license` ∈ {CC0-1.0, CC-BY-4.0}; anything else **fails outright** — there is no tolerated engine-locked tier (PRD §3.3). A denylist of known engine-locked origins (quixel.com, fab.com, unrealengine.com/marketplace, assetstore.unity.com URLs) fails even if the license field claims CC0.
 3. Conditional-field completeness: `cc-by` ⇒ `attribution` + `origin_url`; `ai` ⇒ `ai.tool` + `ai.prompts_file` (and the prompts file exists and passes a franchise-term denylist grep); tier ≠ original ⇒ `restyle_status: done`.
-4. `reviewed_by` has ≥ 2 entries before merge to main (populated by the review bot on approval, §8.3 — contributors don't self-attest).
+4. `reviewed_by` has ≥ 2 entries before merge to `dev` — the integration branch all PRs target (populated by the review bot on approval, §8.3 — contributors don't self-attest).
 
 ### 3.3 CC-BY attribution generation
 
@@ -272,7 +272,7 @@ sequenceDiagram
     R->>CI: provenance lint + budget validator green
     R->>Rev: review request without tier disclosure
     Rev->>R: style verdict, then tier revealed, sign-offs recorded
-    R->>R: merge to main
+    R->>R: merge to dev (promotes dev→ptr→main)
 ```
 
 ### 5.3 Budget violation rejected in CI
