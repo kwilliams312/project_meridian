@@ -44,6 +44,7 @@
 #include "meridian/net/tls_listener.h"
 #include "meridian/trace/exporter.h"
 
+#include "area_triggers.h"
 #include "world_boot.h"
 #include "world_dispatch.h"
 
@@ -399,6 +400,12 @@ int main(int argc, char** argv) {
     // scaffold. The dispatcher registers the M0 stub handlers in its ctor.
     meridian::worldd::Dispatcher dispatcher;
     meridian::worldd::WorldServer world(dispatcher, cfg.world);
+
+    // Area triggers + POI discovery (#368; WLD-01/03): load the trigger volume set
+    // the map tick evaluates against player positions. M1 uses a deterministic
+    // PLACEHOLDER set on the flat bootstrap map; real volumes arrive compiled into
+    // world content (mcc #28) — load_area_triggers() is that seam.
+    world.world_state().load_area_triggers(meridian::worldd::placeholder_area_triggers());
 
     try {
         meridian::net::TlsListener listener(lc);

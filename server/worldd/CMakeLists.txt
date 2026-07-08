@@ -25,6 +25,7 @@ add_library(world-dispatch STATIC
   world_boot.cpp
   movement_validation.cpp
   aoi_grid.cpp
+  area_triggers.cpp
   combat_unit.cpp
   creature_ai.cpp
   combat_resolver.cpp
@@ -297,6 +298,28 @@ target_link_libraries(worldd-combat-wire-test
 )
 set_target_properties(worldd-combat-wire-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-combat-wire COMMAND worldd-combat-wire-test)
+
+# --- Area triggers + POI discovery UNIT test (WLD-01/03; #368). ---------------
+# PURE (no DB, no socket, no TLS): exercises BOTH layers directly —
+#   (1) the AreaTriggerSet core (point-in-box membership, enter/leave fire ONCE
+#       per crossing, POI discovery marks + fires once, re-entry does NOT re-fire
+#       discovery), and
+#   (2) the WorldState wiring: enter() / on_movement() drive trigger evaluation and
+#       route a POI_DISCOVERED frame through the mover's egress. WorldState's egress
+#       is a std::function, so the test captures emitted opcodes with a plain lambda
+#       — no TLS/DB — and asserts POI_DISCOVERED fires exactly once and not on
+#       re-entry, plus the server-side OnAreaTrigger hook fires per crossing.
+# Deterministic (seeded volume set + scripted positions). Always runs in the plain
+# server ctest (no MERIDIAN_DB_* needed).
+add_executable(worldd-area-triggers-test
+  test/area_triggers_test.cpp
+)
+target_link_libraries(worldd-area-triggers-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-area-triggers-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-area-triggers COMMAND worldd-area-triggers-test)
 
 # --- Two-session AoI movement RELAY integration test (IT-M0 see-each-other-move;
 #     #87). ---------------------------------------------------------------------

@@ -114,6 +114,15 @@ std::vector<std::uint8_t> encode_entity_leave_payload(AoiId subject_guid,
     return std::vector<std::uint8_t>(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
 }
 
+std::vector<std::uint8_t> encode_poi_discovered_payload(TriggerId trigger_id,
+                                                        std::uint32_t area_id,
+                                                        std::uint32_t name_id) {
+    fb::FlatBufferBuilder b;
+    auto d = mn::CreatePoiDiscovered(b, trigger_id, area_id, name_id);
+    b.Finish(d);
+    return std::vector<std::uint8_t>(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
 // ---------------------------------------------------------------------------
 // WorldState
 // ---------------------------------------------------------------------------
@@ -143,6 +152,60 @@ void WorldState::send_leave(SessionRec& to, const SessionRec& subject,
     if (!to.egress) return;
     to.egress(mn::Opcode::ENTITY_LEAVE,
               encode_entity_leave_payload(subject.identity.entity_guid, reason));
+}
+
+// ---------------------------------------------------------------------------
+// Area triggers + POI discovery (#368; WLD-01/03). Evaluated against the mover's
+// authoritative position (the map tick's movement phase; SAD §2.5).
+// ---------------------------------------------------------------------------
+
+void WorldState::load_area_triggers(std::vector<TriggerVolume> volumes) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    const std::size_t n = volumes.size();
+    triggers_.load(std::move(volumes));
+    log::info(kCat, "loaded " + std::to_string(n) + " area-trigger volume(s)");
+}
+
+void WorldState::set_area_trigger_hook(AreaTriggerHook hook) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    area_trigger_hook_ = std::move(hook);
+}
+
+void WorldState::fire_area_triggers(SessionRec& self) {
+    // Caller holds mtx_. Diff the mover's position against the volume set; dispatch
+    // each crossing. Cheap no-op when no volumes are loaded (the DB-less dispatch
+    // and relay tests never load a set, so their behaviour is unchanged).
+    const AoiId guid = self.identity.entity_guid;
+    // The Unit owns the authoritative position (#342); evaluate against it.
+    std::vector<TriggerEvent> events = triggers_.evaluate(guid, self.unit.position());
+    for (const TriggerEvent& e : events) {
+        // Discovery: the server has marked the POI discovered on the character
+        // (in-memory at M1; persisting to the characters DB is a later concern) —
+        // NOTIFY the client exactly once (re-entry never re-fires; enforced by the
+        // AreaTriggerSet discovered bookkeeping).
+        if (e.kind == TriggerKind::kDiscovery && e.discovered_now) {
+            if (self.egress) {
+                self.egress(mn::Opcode::POI_DISCOVERED,
+                            encode_poi_discovered_payload(e.trigger_id, e.area_id, e.name_id));
+            }
+            log::info(kCat, "POI discovered guid=" + std::to_string(guid) + " trigger=" +
+                                std::to_string(e.trigger_id) + " area=" +
+                                std::to_string(e.area_id));
+        }
+
+        // Server-side OnAreaTrigger hook (SAD §2.5 script-hook seam): fired for
+        // every enter/leave crossing of every kind (discovery, quest-objective,
+        // graveyard, generic). At M1 the default is a log line; a typed hook
+        // registry keyed by content id is a later concern.
+        if (area_trigger_hook_) {
+            area_trigger_hook_(guid, e);
+        } else {
+            log::debug(kCat, std::string("area-trigger ") + (e.entered ? "ENTER" : "LEAVE") +
+                                 " guid=" + std::to_string(guid) + " trigger=" +
+                                 std::to_string(e.trigger_id) + " kind=" +
+                                 std::to_string(static_cast<int>(e.kind)));
+        }
+    }
 }
 
 EnterResult WorldState::enter(const EntityIdentity& identity, const Position& spawn,
@@ -194,6 +257,11 @@ EnterResult WorldState::enter(const EntityIdentity& identity, const Position& sp
         other_rec.visible.insert(slot);
     }
 
+    // Area triggers (#368): evaluate the spawn position so a character that logs
+    // in already standing inside a volume fires its enter/discovery immediately
+    // (a POI at the spawn point, a graveyard you resurrect into, etc.).
+    fire_area_triggers(self);
+
     log::info(kCat, "session entered slot=" + std::to_string(slot) + " guid=" +
                         std::to_string(id.entity_guid) + " at (" +
                         std::to_string(spawn.x) + "," + std::to_string(spawn.y) +
@@ -211,6 +279,11 @@ void WorldState::on_movement(SessionSlot slot, const Position& pos, std::uint32_
     self.unit.set_position(pos);  // the Unit owns the authoritative position (#342)
     self.state_flags = state_flags;
     grid_.upsert(self.identity.entity_guid, pos);
+
+    // Area triggers (#368): evaluate the mover's new authoritative position for
+    // enter/leave crossings + POI discovery before the AoI relay. This is the map
+    // tick's post-movement trigger phase (SAD §2.5) realized at the M0 movement seam.
+    fire_area_triggers(self);
 
     // Translate self's PREVIOUS visible-slot set into guids for the hysteresis
     // resolution against the grid (which is keyed by guid).
@@ -309,6 +382,8 @@ void WorldState::leave(SessionSlot slot) {
 
     grid_.remove(self.identity.entity_guid);
     slot_by_guid_.erase(self.identity.entity_guid);
+    // Drop this character's area-trigger bookkeeping (occupancy + discovered).
+    triggers_.remove(self.identity.entity_guid);
     log::info(kCat, "session left slot=" + std::to_string(slot) + " guid=" +
                         std::to_string(self.identity.entity_guid));
     sessions_.erase(sit);

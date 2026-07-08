@@ -1115,6 +1115,31 @@ std::vector<Message> build_corpus() {
                  expect(m->max_resource() == 100u, "if2_level_up.max_resource");
                }});
 
+  // ---- world / area triggers (0x9xxx; #368 WLD-01/03, epic #20) -------------
+  // POI discovery is the one client-facing area-trigger message: the server marks
+  // a point of interest discovered on the character and notifies the client.
+  // Freezes the trigger_id / area_id / name_id wire shape.
+  c.push_back({"if2_poi_discovered", "IF-2", "POI_DISCOVERED (0x9001)",
+               "S->C character discovered a POI: trigger_id, area_id, name_id",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreatePoiDiscovered(b, /*trigger_id=*/0x00000101u,
+                                                  /*area_id=*/0x00000005u,
+                                                  /*name_id=*/0x00000007u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::PoiDiscovered>(nullptr),
+                             "if2_poi_discovered verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::PoiDiscovered>(buf.data());
+                 expect(m->trigger_id() == 0x00000101u,
+                        "if2_poi_discovered.trigger_id");
+                 expect(m->area_id() == 0x00000005u, "if2_poi_discovered.area_id");
+                 expect(m->name_id() == 0x00000007u, "if2_poi_discovered.name_id");
+               }});
+
   return c;
 }
 
