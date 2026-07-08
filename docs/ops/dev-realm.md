@@ -64,10 +64,22 @@ Phase 1 acceptance stops here (infra up + TLS reachable). A full
 login→enter→move bot smoke arrives with the concurrency harness (Phase 4), which
 needs the containerized `meridian-bot` + `meridian-account` (Phase 2).
 
+## Phase 2 verified (2026-07-08)
+
+- **ARC self-hosted runners** live (`meridian-amd64`/`meridian-arm64`, dind) — see
+  [arc-runners.md](arc-runners.md).
+- **Native multi-arch CD** (`cd.yml`): `authd`/`worldd`/`meridian-db` published as
+  `amd64+arm64` manifest lists (cosign-signed + SBOM); `dev-images.yml` retired.
+- **Auto-restart** on publish works — the CD runner rollout-restarts the daemons;
+  `ignoreDifferences` on the `restartedAt` annotation stops self-heal reverting it.
+  (The restart also rolls the ephemeral `mariadb`, which reseeds on boot — a code
+  push therefore resets the dev DB; re-provision test accounts with
+  `scripts/dev/add-users.sh` after a deploy.)
+- **amd64 pin dropped** — the realm now schedules across both node pools; verified
+  running on arm64 Talos nodes (TLS on 31710/31720, DB seeded).
+
 ## Follow-ups / known deltas
 
-- **Phase 2:** native multi-arch CD via ARC (fold `dev-images.yml` into `cd.yml`,
-  drop the amd64 nodeSelector), auto-restart via the ArgoCD restart action.
 - **Phase 3:** PTR/Prod realms (Longhorn StatefulSet, `:ptr`/`:prod`, Prod
   manual-sync).
 - **Phase 4:** concurrency harness (`add-users` + `loadtest` Jobs).
