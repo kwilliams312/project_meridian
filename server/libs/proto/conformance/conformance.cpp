@@ -964,6 +964,157 @@ std::vector<Message> build_corpus() {
                         "if2_cast_result.server_time_ms");
                }});
 
+  // ==== IF-2 death / resurrect (world.fbs; CMB-03 #359) =====================
+
+  // DeathState — S->C you died: corpse guid + auto-release countdown.
+  c.push_back({"if2_death_state", "IF-2", "DEATH_STATE (0x3010)",
+               "S->C you died: corpse spawned, 6s release timer",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateDeathState(
+                     b, /*victim_guid=*/0x00000000AABBCCDDULL,
+                     /*killer_guid=*/0x0000000011223344ULL,
+                     /*corpse_guid=*/0xD000000000000001ULL,
+                     /*corpse_x=*/10.5f, /*corpse_y=*/-20.25f, /*corpse_z=*/0.0f,
+                     /*auto_release_ms=*/6000u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::DeathState>(nullptr),
+                             "if2_death_state verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::DeathState>(buf.data());
+                 expect(m->victim_guid() == 0x00000000AABBCCDDULL, "if2_death_state.victim_guid");
+                 expect(m->killer_guid() == 0x0000000011223344ULL, "if2_death_state.killer_guid");
+                 expect(m->corpse_guid() == 0xD000000000000001ULL, "if2_death_state.corpse_guid");
+                 expect(m->corpse_x() == 10.5f, "if2_death_state.corpse_x");
+                 expect(m->corpse_y() == -20.25f, "if2_death_state.corpse_y");
+                 expect(m->corpse_z() == 0.0f, "if2_death_state.corpse_z");
+                 expect(m->auto_release_ms() == 6000u, "if2_death_state.auto_release_ms");
+               }});
+
+  // ReleaseRequest — C->S request early graveyard release (empty table).
+  c.push_back({"if2_release_request", "IF-2", "RELEASE_REQUEST (0x3011)",
+               "C->S request early graveyard release (empty)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateReleaseRequest(b));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 expect(v.VerifyBuffer<mn::ReleaseRequest>(nullptr),
+                        "if2_release_request verifies");
+               }});
+
+  // GhostState — S->C released: now a ghost at the graveyard.
+  c.push_back({"if2_ghost_state", "IF-2", "GHOST_STATE (0x3012)",
+               "S->C released: ghost at the graveyard",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateGhostState(
+                     b, /*player_guid=*/0x00000000AABBCCDDULL,
+                     /*graveyard_x=*/100.0f, /*graveyard_y=*/50.0f, /*graveyard_z=*/0.0f,
+                     /*corpse_guid=*/0xD000000000000001ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::GhostState>(nullptr),
+                             "if2_ghost_state verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::GhostState>(buf.data());
+                 expect(m->player_guid() == 0x00000000AABBCCDDULL, "if2_ghost_state.player_guid");
+                 expect(m->graveyard_x() == 100.0f, "if2_ghost_state.graveyard_x");
+                 expect(m->graveyard_y() == 50.0f, "if2_ghost_state.graveyard_y");
+                 expect(m->graveyard_z() == 0.0f, "if2_ghost_state.graveyard_z");
+                 expect(m->corpse_guid() == 0xD000000000000001ULL, "if2_ghost_state.corpse_guid");
+               }});
+
+  // ResurrectRequest — C->S resurrect at your corpse (empty table).
+  c.push_back({"if2_resurrect_request", "IF-2", "RESURRECT_REQUEST (0x3013)",
+               "C->S resurrect at your corpse (empty)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateResurrectRequest(b));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 expect(v.VerifyBuffer<mn::ResurrectRequest>(nullptr),
+                        "if2_resurrect_request verifies");
+               }});
+
+  // ResurrectResult — S->C resurrection outcome (OK: alive with restored health).
+  c.push_back({"if2_resurrect_result", "IF-2", "RESURRECT_RESULT (0x3014)",
+               "S->C resurrected: OK, health 100/200",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateResurrectResult(
+                     b, /*player_guid=*/0x00000000AABBCCDDULL, mn::ResurrectStatus::OK,
+                     /*health=*/100u, /*max_health=*/200u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::ResurrectResult>(nullptr),
+                             "if2_resurrect_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::ResurrectResult>(buf.data());
+                 expect(m->player_guid() == 0x00000000AABBCCDDULL,
+                        "if2_resurrect_result.player_guid");
+                 expect(m->status() == mn::ResurrectStatus::OK, "if2_resurrect_result.status");
+                 expect(m->health() == 100u, "if2_resurrect_result.health");
+                 expect(m->max_health() == 200u, "if2_resurrect_result.max_health");
+               }});
+
+  // ==== IF-2 character progression (world.fbs; CHR-03 #360) =================
+
+  // XpGained — S->C XP award + progress toward the next level.
+  c.push_back({"if2_xp_gained", "IF-2", "XP_GAINED (0x0020)",
+               "S->C +25 XP: level 1, 25/50 to next",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateXpGained(b, /*player_guid=*/0x00000000AABBCCDDULL,
+                                             /*xp_gained=*/25u, /*level=*/1u,
+                                             /*xp_total=*/25u, /*xp_to_next=*/50u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::XpGained>(nullptr), "if2_xp_gained verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::XpGained>(buf.data());
+                 expect(m->player_guid() == 0x00000000AABBCCDDULL, "if2_xp_gained.player_guid");
+                 expect(m->xp_gained() == 25u, "if2_xp_gained.xp_gained");
+                 expect(m->level() == 1u, "if2_xp_gained.level");
+                 expect(m->xp_total() == 25u, "if2_xp_gained.xp_total");
+                 expect(m->xp_to_next() == 50u, "if2_xp_gained.xp_to_next");
+               }});
+
+  // LevelUp — S->C level increased + the stat growth applied.
+  c.push_back({"if2_level_up", "IF-2", "LEVEL_UP (0x0021)",
+               "S->C level 4->5: hp 200, resource 100",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateLevelUp(b, /*player_guid=*/0x00000000AABBCCDDULL,
+                                            /*old_level=*/4u, /*new_level=*/5u,
+                                            /*max_health=*/200u, /*max_resource=*/100u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::LevelUp>(nullptr), "if2_level_up verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::LevelUp>(buf.data());
+                 expect(m->player_guid() == 0x00000000AABBCCDDULL, "if2_level_up.player_guid");
+                 expect(m->old_level() == 4u, "if2_level_up.old_level");
+                 expect(m->new_level() == 5u, "if2_level_up.new_level");
+                 expect(m->max_health() == 200u, "if2_level_up.max_health");
+                 expect(m->max_resource() == 100u, "if2_level_up.max_resource");
+               }});
+
   return c;
 }
 

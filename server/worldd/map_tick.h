@@ -62,6 +62,8 @@
 #include "combat_resolver.h"   // CombatRng / CombatSession / resolve_ability
 #include "combat_unit.h"       // Unit / Player / ObjectGuid / UnitStats
 #include "creature_ai.h"       // CreatureAi / CreatureSpawnDef / AiState
+#include "death_state.h"       // DeathStateMachine (CMB-03 #359)
+#include "leveling.h"          // xp_for_kill / grant_xp (CHR-03 #360)
 #include "movement_validation.h"  // Position
 
 namespace meridian::worldd {
@@ -88,6 +90,7 @@ enum class TickPhase : std::uint8_t {
     kAi = 1,        // creature AI (threat/aggro/leash/evade/respawn/patrol)
     kCombat = 2,    // cast completion + resource spend + resolution
     kAura = 3,      // periodic DoT/HoT ticks + expiry
+    kDeath = 4,     // spawns/respawns: player death FSM (release/corpse-run/resurrect)
 };
 
 const char* tick_phase_name(TickPhase p);
@@ -123,14 +126,31 @@ public:
     // Add a player-controlled combatant at `pos` with `stats`. Returns its guid
     // (the caller-supplied `guid`). The player gets a CombatSession (GCD/cast
     // clock) and an AuraContainer. Players are fed to the AI phase as aggro targets.
-    ObjectGuid add_player(ObjectGuid guid, const Position& pos, const UnitStats& stats);
+    // `char_class` is the roster.h class id (0 = unset) — it selects the level
+    // curve used for level-up stat growth (CHR-03 #360).
+    ObjectGuid add_player(ObjectGuid guid, const Position& pos, const UnitStats& stats,
+                          std::uint8_t char_class = 0);
 
     // Spawn a server creature from `def` via the AI. Returns its assigned guid.
     ObjectGuid add_creature(const CreatureSpawnDef& def);
 
     // Move a player (the "movement/commands" phase input — the harness sets the
-    // authoritative position the AI phase reads as an aggro target this tick).
+    // authoritative position the AI phase reads as an aggro target this tick). For
+    // a ghost (a released dead player) this is the corpse-run position.
     void set_player_position(ObjectGuid guid, const Position& pos);
+
+    // The map's graveyard — where a released ghost is sent (CMB-03 #359). A single
+    // per-map point for M1; the "nearest graveyard from world data" lookup is the
+    // documented seam (content epic #28). Defaults to the origin.
+    void set_graveyard(const Position& pos) { graveyard_ = pos; }
+
+    // --- death-flow requests (C→S; drained in the death phase) --------------
+    // Request an early graveyard release for a dead player (C→S RELEASE_REQUEST,
+    // #359). No-op unless the player is a just-died corpse. Applied next advance().
+    void request_release(ObjectGuid guid);
+    // Request resurrection at the player's corpse (C→S RESURRECT_REQUEST, #359).
+    // Succeeds next advance() only if the corpse-run is complete. Else denied.
+    void request_resurrect(ObjectGuid guid);
 
     // --- inbound ------------------------------------------------------------
     // Queue an ability use to be drained on the NEXT advance() (SAD §3.2 "drain
@@ -159,14 +179,20 @@ public:
     Unit* unit_for_guid(ObjectGuid guid);
     CreatureAi& ai() { return ai_; }
     CombatRng& rng() { return rng_; }
+    // The player death state machine (CMB-03 #359) — corpse/ghost/release queries.
+    const DeathStateMachine& deaths() const { return deaths_; }
+    // A player's XP accumulated toward the next level (CHR-03 #360). 0 if unknown.
+    std::uint32_t player_xp_into_level(ObjectGuid guid) const;
 
 private:
-    // A player combatant: its Unit + per-session combat clock + aura container.
-    // Heap-boxed so the AuraContainer's Unit& binding stays valid across rehash.
+    // A player combatant: its Unit + per-session combat clock + aura container +
+    // XP progress toward the next level (CHR-03 #360). Heap-boxed so the
+    // AuraContainer's Unit& binding stays valid across rehash.
     struct PlayerCombatant {
         Player          unit;
         CombatSession   combat;
         AuraContainer   auras;
+        std::uint32_t   xp_into_level = 0;  // XP toward the next level (resets on level-up)
         explicit PlayerCombatant(Player u) : unit(std::move(u)), auras(unit) {}
     };
 
@@ -174,6 +200,25 @@ private:
     void phase_drain_inbound(std::vector<TickEvent>& out);
     void phase_ai(std::vector<TickEvent>& out);
     void phase_combat_auras(std::vector<TickEvent>& out);
+    // Spawns/respawns phase: advance the player death FSM (auto-release timers,
+    // drain release/resurrect requests, corpse-run resurrect). CMB-03 #359.
+    void phase_death(std::vector<TickEvent>& out);
+
+    // THE SINGLE "unit died" hook (both death stories consume it). Called exactly
+    // once per death, from the direct-damage path (resolve_and_log) and the
+    // periodic path (phase_combat_auras). Emits the death event, then dispatches
+    // the two cleanly-separated concerns: a dead PLAYER enters the death state
+    // machine (#359); a dead CREATURE awards kill XP to its killer (#360).
+    // `periodic` selects the death event's `by=` label when there is no direct
+    // caster (killer_guid resolves via the threat table).
+    void on_unit_died(ObjectGuid victim_guid, Unit& victim, ObjectGuid killer_guid,
+                      bool periodic, TickPhase phase, std::vector<TickEvent>& out);
+    // #359: spawn the corpse + enter the death FSM for a dead player.
+    void handle_player_death(ObjectGuid victim_guid, Unit& victim, TickPhase phase,
+                             std::vector<TickEvent>& out);
+    // #360: award XP to the killer player (resolved directly or via threat).
+    void award_kill_xp(ObjectGuid victim_guid, Unit& victim, ObjectGuid killer_guid,
+                       TickPhase phase, std::vector<TickEvent>& out);
 
     // Resolve one ability against a target: spend the resource, roll the attack
     // table + apply direct damage/heal (resolve_ability), apply any aura effects to
@@ -197,10 +242,14 @@ private:
     std::uint64_t       tick_no_ = 0;
 
     CreatureAi ai_;  // server creatures (owns Creature + AI state + respawn timers)
+    DeathStateMachine deaths_;  // dead players' death flow + corpses (CMB-03 #359)
+    Position graveyard_;        // per-map release destination (world-data seam, #359)
     std::unordered_map<ObjectGuid, std::unique_ptr<PlayerCombatant>> players_;
     std::unordered_map<ObjectGuid, std::unique_ptr<AuraContainer>> creature_auras_;
     std::unordered_map<ObjectGuid, AiState> prev_ai_state_;  // AI transition edges
     std::vector<AbilityUseCmd> inbound_;
+    std::vector<ObjectGuid> release_requests_;    // C→S RELEASE_REQUEST queue (#359)
+    std::vector<ObjectGuid> resurrect_requests_;  // C→S RESURRECT_REQUEST queue (#359)
     std::vector<TickEvent> log_;
 };
 

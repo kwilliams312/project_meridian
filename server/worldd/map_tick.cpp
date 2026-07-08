@@ -21,6 +21,7 @@ const char* tick_phase_name(TickPhase p) {
         case TickPhase::kAi:      return "ai";
         case TickPhase::kCombat:  return "combat";
         case TickPhase::kAura:    return "aura";
+        case TickPhase::kDeath:   return "death";
     }
     return "?";
 }
@@ -92,8 +93,9 @@ std::string TickEvent::to_line() const {
 MapTick::MapTick(const AbilityStore& abilities, std::uint64_t rng_seed, std::uint32_t dt_ms)
     : abilities_(abilities), rng_(rng_seed), dt_ms_(dt_ms == 0 ? kTickDtMs : dt_ms) {}
 
-ObjectGuid MapTick::add_player(ObjectGuid guid, const Position& pos, const UnitStats& stats) {
-    Player p(guid, pos, stats, /*account_id=*/0, /*char_class=*/0, /*name=*/"");
+ObjectGuid MapTick::add_player(ObjectGuid guid, const Position& pos, const UnitStats& stats,
+                               std::uint8_t char_class) {
+    Player p(guid, pos, stats, /*account_id=*/0, char_class, /*name=*/"");
     players_.emplace(guid, std::make_unique<PlayerCombatant>(std::move(p)));
     return guid;
 }
@@ -154,8 +156,14 @@ std::vector<TickEvent> MapTick::advance() {
 
     // 4) combat/auras: advance cast timers → resolve completed casts (+ spend
     //    resource) → tick aura periodics → deaths (SAD §3.2 "casts complete,
-    //    periodics, deaths"). This CLOSES the #354 cast-completion seam.
+    //    periodics, deaths"). This CLOSES the #354 cast-completion seam. Deaths
+    //    route through the single on_unit_died hook (corpse+XP side effects).
     phase_combat_auras(out);
+
+    // 5) spawns/respawns: the player death FSM — auto-release timers, drained
+    //    release/resurrect requests, corpse-run resurrect (SAD §2.5; CMB-03 #359).
+    //    Creature respawns are owned by the AI phase (creature_ai respawn timers).
+    phase_death(out);
 
     // 6) AoI delta build + 7) flush: the returned event stream IS the per-tick
     //    delta an observer would receive (the wire seam the dispatch layer serialises).
@@ -329,7 +337,9 @@ void MapTick::phase_combat_auras(std::vector<TickEvent>& out) {
                  u(r.auras_expired) + " hp=" + u(host.health()) + " host_died=" +
                  u(r.host_died ? 1 : 0));
         if (r.host_died)
-            emit(out, TickPhase::kAura, "death guid=" + u(g) + " by=PERIODIC");
+            // Periodic death has no direct caster — the hook resolves the killer via
+            // the threat table (#360) and runs the death state machine (#359).
+            on_unit_died(g, host, /*killer_guid=*/0, /*periodic=*/true, TickPhase::kAura, out);
     };
 
     for (ObjectGuid g : pguids) {
@@ -369,7 +379,9 @@ void MapTick::resolve_and_log(const Ability& ability, Unit& caster, ObjectGuid c
                  u(rr.amount) + " heal=" + u(rr.is_heal ? 1 : 0) + " target_hp=" +
                  u(rr.target_health) + " died=" + u(rr.target_died ? 1 : 0));
         if (rr.target_died)
-            emit(out, phase, "death guid=" + u(target_guid) + " by=" + u(caster_guid));
+            // THE single death hook: corpse+ghost for a player (#359), kill XP for a
+            // creature (#360). caster_guid is the direct killer.
+            on_unit_died(target_guid, target, caster_guid, /*periodic=*/false, phase, out);
 
         // Resolver → AI threat seam (#347): landing (or attempting) an attack on a
         // creature adds threat and pulls it into combat on the attacker. A miss
@@ -389,6 +401,133 @@ void MapTick::resolve_and_log(const Ability& ability, Unit& caster, ObjectGuid c
                  "aura_applied target=" + u(target_guid) + " ability=" + u(ability.id) +
                      " count=" + u(n));
     }
+}
+
+// ---------------------------------------------------------------------------
+// THE single "unit died" hook (CMB-03 #359 + CHR-03 #360). One death event, then
+// the two cleanly-separated concerns dispatched by victim kind.
+// ---------------------------------------------------------------------------
+void MapTick::on_unit_died(ObjectGuid victim_guid, Unit& victim, ObjectGuid killer_guid,
+                           bool periodic, TickPhase phase, std::vector<TickEvent>& out) {
+    emit(out, phase,
+         "death guid=" + u(victim_guid) + " by=" + (periodic ? std::string("PERIODIC")
+                                                              : u(killer_guid)));
+    if (victim.type() == ObjectType::kPlayer) {
+        handle_player_death(victim_guid, victim, phase, out);   // #359
+    } else if (victim.type() == ObjectType::kCreature) {
+        award_kill_xp(victim_guid, victim, killer_guid, phase, out);  // #360
+    }
+}
+
+void MapTick::handle_player_death(ObjectGuid victim_guid, Unit& victim, TickPhase phase,
+                                  std::vector<TickEvent>& out) {
+    // Spawn a corpse at the death spot + enter the death FSM (kCorpse, release
+    // timer armed). The graveyard is the map's release destination (world-data seam).
+    const Position death_pos = victim.position();
+    const ObjectGuid corpse = deaths_.on_death(victim_guid, death_pos, graveyard_);
+    emit(out, phase,
+         "corpse_spawn owner=" + u(victim_guid) + " corpse=" + u(corpse) + " x=" +
+             std::to_string(static_cast<long long>(death_pos.x)) + " y=" +
+             std::to_string(static_cast<long long>(death_pos.y)));
+    emit(out, phase,
+         "player_died guid=" + u(victim_guid) + " release_in=" +
+             u(deaths_.config().auto_release_ms));
+}
+
+void MapTick::award_kill_xp(ObjectGuid victim_guid, Unit& victim, ObjectGuid killer_guid,
+                            TickPhase phase, std::vector<TickEvent>& out) {
+    // Resolve the killer PLAYER. The direct killing blow (a cast/melee) names the
+    // caster; a periodic tick names no one, so fall back to the top threat holder —
+    // "attribution via the threat table / damage attribution" (#347/#360).
+    ObjectGuid kg = killer_guid;
+    if (players_.find(kg) == players_.end()) kg = ai_.top_threat(victim_guid);
+    auto pit = players_.find(kg);
+    if (pit == players_.end()) return;  // no player killer (nothing to award)
+
+    Player& killer = pit->second->unit;
+    std::uint32_t& xp_into = pit->second->xp_into_level;
+
+    const std::uint16_t kl = killer.level();
+    const std::uint32_t xp = xp_for_kill(victim.level(), kl);
+
+    const LevelProgress lp = grant_xp(kl, xp_into, xp);
+    xp_into = lp.xp_into_level;
+
+    emit(out, phase,
+         "xp_award killer=" + u(kg) + " victim=" + u(victim_guid) + " xp=" + u(xp) +
+             " level=" + u(kl) + " into=" + u(xp_into) + " next=" +
+             u(xp_to_next_level(lp.level)));
+
+    if (lp.levels_gained == 0) return;
+
+    // Level-up: apply stat growth from the level curve (placeholder_player_stats;
+    // the real per-class/level table loads from the world DB via #28) and top the
+    // player off to the new caps.
+    const UnitStats ns = placeholder_player_stats(killer.char_class(), lp.level);
+    killer.set_level(lp.level);
+    killer.set_max_health(ns.max_health);
+    killer.set_max_resource(ns.max_resource);
+    killer.apply_healing(ns.max_health);          // heal to the new full
+    killer.restore_resource(ns.max_resource);     // top off the new resource pool
+    emit(out, phase,
+         "level_up guid=" + u(kg) + " level=" + u(kl) + "->" + u(lp.level) + " hp=" +
+             u(killer.max_health()) + " res=" + u(killer.max_resource()));
+}
+
+// ---------------------------------------------------------------------------
+// Spawns/respawns phase: the player death FSM (CMB-03 #359).
+// ---------------------------------------------------------------------------
+void MapTick::phase_death(std::vector<TickEvent>& out) {
+    // A) explicit release requests (C→S RELEASE_REQUEST), ascending guid.
+    std::sort(release_requests_.begin(), release_requests_.end());
+    for (ObjectGuid g : release_requests_) {
+        if (!deaths_.request_release(g)) continue;  // not a just-died corpse
+        const DeathRecord* r = deaths_.record(g);
+        if (r != nullptr) set_player_position(g, r->graveyard_pos);  // ghost → graveyard
+        emit(out, TickPhase::kDeath, "player_release guid=" + u(g) + " mode=requested");
+    }
+    release_requests_.clear();
+
+    // B) auto-release timers (kCorpse → kGhost when the countdown elapses).
+    std::vector<ObjectGuid> auto_released;
+    deaths_.advance(dt_ms_, auto_released);
+    for (ObjectGuid g : auto_released) {
+        const DeathRecord* r = deaths_.record(g);
+        if (r != nullptr) set_player_position(g, r->graveyard_pos);
+        emit(out, TickPhase::kDeath, "player_release guid=" + u(g) + " mode=auto");
+    }
+
+    // C) resurrect requests (C→S RESURRECT_REQUEST) — corpse-run resurrect, ascending.
+    std::sort(resurrect_requests_.begin(), resurrect_requests_.end());
+    for (ObjectGuid g : resurrect_requests_) {
+        auto pit = players_.find(g);
+        if (pit == players_.end()) continue;
+        Player& pl = pit->second->unit;
+        ResurrectReject why = ResurrectReject::kNone;
+        if (!deaths_.can_resurrect(g, pl.position(), why)) {
+            const char* reason = why == ResurrectReject::kNotDead      ? "NOT_DEAD"
+                                 : why == ResurrectReject::kNotReleased ? "NOT_RELEASED"
+                                                                        : "TOO_FAR";
+            emit(out, TickPhase::kDeath,
+                 "resurrect_denied guid=" + u(g) + " reason=" + reason);
+            continue;
+        }
+        const std::uint32_t hp = deaths_.resurrect_health(pl.max_health());
+        const ObjectGuid corpse = deaths_.resurrect(g);  // clears record + corpse
+        pl.resurrect(hp);
+        emit(out, TickPhase::kDeath,
+             "player_resurrect guid=" + u(g) + " hp=" + u(pl.health()) + "/" +
+                 u(pl.max_health()) + " corpse_despawn=" + u(corpse));
+    }
+    resurrect_requests_.clear();
+}
+
+void MapTick::request_release(ObjectGuid guid) { release_requests_.push_back(guid); }
+void MapTick::request_resurrect(ObjectGuid guid) { resurrect_requests_.push_back(guid); }
+
+std::uint32_t MapTick::player_xp_into_level(ObjectGuid guid) const {
+    auto it = players_.find(guid);
+    return it == players_.end() ? 0 : it->second->xp_into_level;
 }
 
 std::string MapTick::log_text() const {

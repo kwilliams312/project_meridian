@@ -207,6 +207,10 @@ public:
     AiState state_of(ObjectGuid guid) const;         // kDead for an unknown guid
     ObjectGuid target_of(ObjectGuid guid) const;     // 0 = no current target
     float threat_of(ObjectGuid creature_guid, ObjectGuid attacker_guid) const;  // 0 if none
+    // The attacker holding the most threat on `creature_guid` (0 if none / unknown).
+    // Ties break by ascending guid. Used for kill-XP attribution (#360) when the
+    // killing blow has no direct caster (a periodic tick).
+    ObjectGuid top_threat(ObjectGuid creature_guid) const;
 
 private:
     struct Instance {

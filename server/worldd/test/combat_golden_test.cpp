@@ -229,6 +229,7 @@ t=31 now=1500 combat cast_complete caster=1 ability=4026531842 target=1383505805
 t=31 now=1500 combat resource_spend caster=1 amount=20 ok=1 left=180
 t=31 now=1500 combat resolve caster=1 target=13835058055282163712 ability=4026531842 outcome=HIT amount=40 heal=0 target_hp=0 died=1
 t=31 now=1500 combat death guid=13835058055282163712 by=1
+t=31 now=1500 combat xp_award killer=1 victim=13835058055282163712 xp=8 level=5 into=8 next=450
 t=32 now=1550 ai ai_leave guid=13835058055282163712 reason=died
 t=32 now=1550 ai ai_state guid=13835058055282163712 PATROL->DEAD)GOLD";
 
@@ -255,6 +256,7 @@ t=10 now=9000 combat cast_complete caster=1 ability=4026531842 target=1383505805
 t=10 now=9000 combat resource_spend caster=1 amount=20 ok=1 left=460
 t=10 now=9000 combat resolve caster=1 target=13835058055282163712 ability=4026531842 outcome=CRIT amount=40 heal=0 target_hp=0 died=1
 t=10 now=9000 combat death guid=13835058055282163712 by=1
+t=10 now=9000 combat xp_award killer=1 victim=13835058055282163712 xp=45 level=5 into=45 next=450
 t=11 now=10000 ai ai_leave guid=13835058055282163712 reason=died
 t=11 now=10000 ai ai_state guid=13835058055282163712 COMBAT->DEAD
 t=13 now=12000 ai ai_enter guid=13835058055282163712 hp=40
