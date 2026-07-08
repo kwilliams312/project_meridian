@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1.7
+# SPDX-License-Identifier: Apache-2.0
+# meridian-bot — engine-free headless load bot (client -DMERIDIAN_BOT=ON; no Godot).
+FROM debian:bookworm-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake ninja-build g++ pkg-config \
+        flatbuffers-compiler libflatbuffers-dev libssl-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY schema/ ./schema/
+COPY client/ ./client/
+RUN cmake -S client -B client/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMERIDIAN_BOT=ON \
+    && cmake --build client/build --target meridian-bot
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends libssl3 ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 meridian \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin meridian
+COPY --from=build /src/client/build/bot/meridian-bot /usr/local/bin/meridian-bot
+USER 10001:10001
+ENTRYPOINT ["/usr/local/bin/meridian-bot"]

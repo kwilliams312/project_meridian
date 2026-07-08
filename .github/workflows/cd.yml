@@ -47,7 +47,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [authd, worldd, meridian-db, meridian-account]
+        image: [authd, worldd, meridian-db, meridian-account, meridian-bot]
         arch: [amd64, arm64]
     runs-on: meridian-${{ matrix.arch }}
     steps:
@@ -64,6 +64,7 @@ jobs:
             authd|worldd)    echo "file=deploy/docker/Dockerfile" >> "$GITHUB_OUTPUT"; echo "args=DAEMON=${{ matrix.image }}" >> "$GITHUB_OUTPUT" ;;
             meridian-db)     echo "file=deploy/docker/Dockerfile.db" >> "$GITHUB_OUTPUT"; echo "args=" >> "$GITHUB_OUTPUT" ;;
             meridian-account) echo "file=deploy/docker/Dockerfile.account" >> "$GITHUB_OUTPUT"; echo "args=" >> "$GITHUB_OUTPUT" ;;
+            meridian-bot)     echo "file=deploy/docker/Dockerfile.bot" >> "$GITHUB_OUTPUT"; echo "args=" >> "$GITHUB_OUTPUT" ;;
           esac
       - id: build
         uses: docker/build-push-action@v6
@@ -89,7 +90,7 @@ jobs:
     needs: [meta, build]
     strategy:
       matrix:
-        image: [authd, worldd, meridian-db, meridian-account]
+        image: [authd, worldd, meridian-db, meridian-account, meridian-bot]
     runs-on: meridian-amd64
     steps:
       - uses: docker/setup-buildx-action@v3
