@@ -101,6 +101,25 @@ public:
         : std::runtime_error("character name already exists: " + name) {}
 };
 
+// Maximum number of characters a single account may own (issue #329). M0.5 caps
+// this at 1 for concurrency testing — one account controls one character at a
+// time. It is a NAMED constant (not a magic 1) precisely so it can be raised
+// later without touching the enforcement logic. Enforced server-side inside the
+// create transaction (characters.cpp) so the check-then-insert cannot race.
+inline constexpr std::uint64_t kMaxCharactersPerAccount = 1;
+
+// Account is already at kMaxCharactersPerAccount (issue #329). A create is
+// refused server-side — mirrors DuplicateName as a typed, machine-readable
+// REFUSED reason the caller maps onto its protocol status (LIMIT_REACHED).
+class CharacterLimitReached : public std::runtime_error {
+public:
+    explicit CharacterLimitReached(std::uint64_t account_id)
+        : std::runtime_error(
+              "account " + std::to_string(account_id) +
+              " already owns the maximum of " +
+              std::to_string(kMaxCharactersPerAccount) + " character(s)") {}
+};
+
 // Maximum character name length — mirrors character.name VARCHAR(32) so an
 // over-long name is rejected here with a clear error instead of a DB truncation.
 inline constexpr std::size_t kMaxNameLen = 32;
@@ -117,10 +136,13 @@ std::vector<CharacterSummary> list_characters(db::Connection& conn,
 //   1. name non-empty and <= kMaxNameLen               -> InvalidName
 //   2. race in the M0-frozen roster (roster.h)          -> InvalidRace
 //   3. class in the M0-frozen roster (roster.h)         -> InvalidClass
-//   4. name unique (DB uq_character_name, case-insens.) -> DuplicateName
-// On success INSERTs the row (stamping account_id + the M0 start location) and
-// returns the server-minted character id. Throws meridian::db::DbError on any
-// other DB failure.
+//   4. account below kMaxCharactersPerAccount (#329)     -> CharacterLimitReached
+//   5. name unique (DB uq_character_name, case-insens.) -> DuplicateName
+// Steps 4+5 run together in ONE DB transaction (a locking count then the INSERT)
+// so the per-account cap cannot be beaten by a check-then-insert race between two
+// concurrent creates. On success INSERTs the row (stamping account_id + the M0
+// start location) and returns the server-minted character id. Throws
+// meridian::db::DbError on any other DB failure.
 CreateResult create_character(db::Connection& conn, const CreateRequest& req);
 
 // Delete character `character_id`, but ONLY if it is owned by `account_id`.

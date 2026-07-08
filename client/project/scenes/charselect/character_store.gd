@@ -22,6 +22,8 @@
 #   2. race id in the M0-frozen roster (MeridianRoster)     -> "invalid_race"
 #   3. class id in the M0-frozen roster (MeridianRoster)    -> "invalid_class"
 #   4. name unique, case-insensitive (uq_character_name)    -> "duplicate_name"
+# The server additionally enforces a one-character-per-account cap at create
+# (#329, CharCreateStatus.LIMIT_REACHED); this local stub does not cap (see create()).
 #
 # TODO(#286 client wiring): replace the three CRUD methods below with calls over the
 # session (the net thread / MeridianNetThread) — send CHAR_LIST_REQUEST on entering
@@ -63,6 +65,14 @@ func count() -> int:
 ## `error` is one of: "invalid_name", "invalid_race", "invalid_class",
 ## "duplicate_name" — the same failure taxonomy as the server's create exceptions.
 ## Validation order matches create_character exactly.
+##
+## NOTE (#329): the server also enforces a one-character-per-account cap inside the
+## create transaction (CharCreateStatus.LIMIT_REACHED). This LOCAL stub intentionally
+## does NOT cap — it holds several characters so the list/delete UI stays testable
+## before the server wiring lands. When the TODO(#286) transport wiring replaces
+## these methods, map LIMIT_REACHED onto an "account_limit" error code; the char_select
+## view already renders any create failure's `detail` gracefully ("Cannot create: …"),
+## so a new reason needs no view change.
 func create(name: String, race_id: int, class_id: int) -> Dictionary:
 	var trimmed := name.strip_edges()
 	# 1. Name: non-empty, within VARCHAR(32).

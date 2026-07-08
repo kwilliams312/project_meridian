@@ -236,6 +236,7 @@ enum CharCreateStatus : uint16 {
   INVALID_CLASS  = 3,   // class not in the M0-frozen roster
   INVALID_NAME   = 4,   // name empty or exceeds VARCHAR(32)
   INTERNAL       = 5,   // server/DB error (no characters DB, or a DB failure)
+  LIMIT_REACHED  = 6,   // account already owns kMaxCharactersPerAccount (#329)
 }
 
 /// S→C. Result of a CharCreateRequest. On OK, character_id is the minted id;

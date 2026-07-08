@@ -109,15 +109,24 @@ int main() {
     const int salt = std::rand();
     const std::uint64_t account_a = 4'000'000'000ULL + static_cast<unsigned>(salt);
     const std::uint64_t account_b = 4'100'000'000ULL + static_cast<unsigned>(salt);
+    // account_c / account_d exercise the one-character-per-account cap (#329):
+    // account_c creates one then is refused a second; account_d (a different
+    // account) can still create its first.
+    const std::uint64_t account_c = 4'200'000'000ULL + static_cast<unsigned>(salt);
+    const std::uint64_t account_d = 4'300'000'000ULL + static_cast<unsigned>(salt);
     const std::uint64_t account_big =
         18'000'000'000'000'000'000ULL + static_cast<unsigned>(salt % 100000);
     const std::string name_a = "Chr_" + std::to_string(salt) + "_a";
     const std::string name_dup = name_a;  // same name -> duplicate
     const std::string name_b = "Chr_" + std::to_string(salt) + "_b";
     const std::string name_big = "Chr_" + std::to_string(salt) + "_big";
+    const std::string name_c1 = "Chr_" + std::to_string(salt) + "_c1";
+    const std::string name_c2 = "Chr_" + std::to_string(salt) + "_c2";
+    const std::string name_d = "Chr_" + std::to_string(salt) + "_d";
 
     auto cleanup = [&](db::Connection& db) {
-        for (std::uint64_t acct : {account_a, account_b, account_big}) {
+        for (std::uint64_t acct :
+             {account_a, account_b, account_c, account_d, account_big}) {
             db.execute("DELETE FROM `character` WHERE account_id = ?",
                        {db::Param{std::to_string(acct)}});
         }
@@ -236,6 +245,48 @@ int main() {
                   listed_big.size() == 1);
             check("> INT64_MAX account_id round-trips exactly",
                   listed_big.size() == 1 && listed_big[0].account_id == account_big);
+        }
+
+        // ---- 8. one-character-per-account cap (#329) -----------------------
+        // (a) the 1st create for a fresh account succeeds; (b) a 2nd create for
+        // the SAME account is refused with the cap reason (CharacterLimitReached),
+        // and the account still owns exactly one character; (c) a DIFFERENT
+        // account can still create its 1st character.
+        {
+            characters::CreateRequest first;
+            first.account_id = account_c;
+            first.name = name_c1;
+            first.race = static_cast<std::uint8_t>(characters::Race::kArdent);
+            first.char_class = static_cast<std::uint8_t>(characters::Class::kVanguard);
+            characters::CreateResult r1 = characters::create_character(db, first);
+            check("cap: 1st create for the account succeeds", r1.character_id > 0);
+
+            characters::CreateRequest second;
+            second.account_id = account_c;   // same account -> over the cap
+            second.name = name_c2;           // unique name: the refusal is the cap
+            second.race = static_cast<std::uint8_t>(characters::Race::kSylvane);
+            second.char_class = static_cast<std::uint8_t>(characters::Class::kMender);
+            bool capped = false;
+            try {
+                characters::create_character(db, second);
+            } catch (const characters::CharacterLimitReached&) {
+                capped = true;
+            }
+            check("cap: 2nd create for same account refused (CharacterLimitReached)",
+                  capped);
+
+            std::vector<characters::CharacterSummary> owned =
+                characters::list_characters(db, account_c);
+            check("cap: account still owns exactly one character", owned.size() == 1);
+
+            characters::CreateRequest other;
+            other.account_id = account_d;    // different account -> allowed
+            other.name = name_d;
+            other.race = static_cast<std::uint8_t>(characters::Race::kArdent);
+            other.char_class = static_cast<std::uint8_t>(characters::Class::kRuncaller);
+            characters::CreateResult rd = characters::create_character(db, other);
+            check("cap: a different account can still create its 1st character",
+                  rd.character_id > 0);
         }
 
         cleanup(db);  // remove this run's rows
