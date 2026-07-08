@@ -89,8 +89,15 @@ CreateResult create_character(db::Connection& conn, const CreateRequest& req) {
         throw InvalidClass(req.char_class);
     }
 
-    // 4. INSERT. name uniqueness (case-insensitive) is enforced by the DB
-    // UNIQUE key uq_character_name -> ER_DUP_ENTRY -> DuplicateName. Every value
+    // 4+5. Per-account cap (#329) then INSERT, together in ONE transaction so the
+    // count and the insert are atomic. Without the surrounding transaction a
+    // check-then-insert races: two concurrent creates for the same account both
+    // count 0, both pass the cap, both insert -> two characters. START TRANSACTION
+    // opens the txn; the count is a LOCKING read (FOR UPDATE) over the account's
+    // rows — the idx_character_account index gap-locks the account_id range, so a
+    // concurrent create for the SAME account blocks on this row until we COMMIT,
+    // then re-reads the now-present row and is refused. name uniqueness stays
+    // enforced by the DB UNIQUE key uq_character_name -> ER_DUP_ENTRY. Every value
     // binds through a placeholder (never concatenated); ids bind as decimal
     // strings (unsigned-id rule). Only NOT-NULL-without-default columns are set;
     // level/xp/money/pos_o/save_epoch/timestamps take their schema defaults.
@@ -105,17 +112,39 @@ CreateResult create_character(db::Connection& conn, const CreateRequest& req) {
         db::Param{static_cast<double>(kM0StartZ)},     // pos_z
     };
 
+    conn.execute("START TRANSACTION");
+
+    std::uint64_t owned = 0;
+    try {
+        db::Result cnt = conn.execute(
+            "SELECT COUNT(*) FROM `character` WHERE account_id = ? FOR UPDATE",
+            {bind_u64(req.account_id)});
+        owned = cnt.rows.empty() ? 0 : parse_u64(cnt.rows[0][0]);
+    } catch (...) {
+        conn.execute("ROLLBACK");
+        throw;
+    }
+    if (owned >= kMaxCharactersPerAccount) {
+        conn.execute("ROLLBACK");
+        throw CharacterLimitReached(req.account_id);
+    }
+
     try {
         db::Result r = conn.execute(
             "INSERT INTO `character` "
             "(account_id, name, race, class, map_id, pos_x, pos_y, pos_z) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             bind);
+        conn.execute("COMMIT");
         return CreateResult{r.last_insert_id};
     } catch (const db::DbError& e) {
+        conn.execute("ROLLBACK");
         if (e.code() == kErDupEntry) {
             throw DuplicateName(req.name);
         }
+        throw;
+    } catch (...) {
+        conn.execute("ROLLBACK");
         throw;
     }
 }

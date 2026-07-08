@@ -767,6 +767,8 @@ void Dispatcher::register_m0_stubs() {
                cr.char_class = req->char_class();
                try {
                    minted = chr::create_character(*ctx.char_db, cr).character_id;
+               } catch (const chr::CharacterLimitReached&) {
+                   status = mn::CharCreateStatus::LIMIT_REACHED;
                } catch (const chr::DuplicateName&) {
                    status = mn::CharCreateStatus::DUPLICATE_NAME;
                } catch (const chr::InvalidRace&) {

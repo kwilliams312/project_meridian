@@ -27,8 +27,11 @@
 //   0. A char request BEFORE the handshake is rejected (Disconnect) — char
 //      management is legal only on an authenticated session.
 //   1. list on a fresh account is EMPTY.
+//   1b. a name already owned by another account is rejected (DUPLICATE_NAME) —
+//      tested while the session account is still empty (below the #329 cap).
 //   2. create -> OK + a minted id; list then shows exactly that character.
-//   3. a duplicate name is rejected (DUPLICATE_NAME).
+//   3. a 2nd create for the SAME account is rejected (LIMIT_REACHED, #329) — the
+//      one-character-per-account cap, enforced server-side.
 //   4. an invalid race id is rejected (INVALID_RACE).
 //   5. an invalid class id is rejected (INVALID_CLASS).
 //   6. deleting ANOTHER account's character is REFUSED (ownership predicate) and
@@ -483,6 +486,24 @@ int main() {
             check("1: got a CharListResponse", false);
         }
 
+        // 1b. duplicate name -> DUPLICATE_NAME. name_other is owned by
+        // account_other (seeded in setup); uq_character_name is GLOBAL, so the
+        // session account cannot reuse it. Tested here while the session account
+        // is still empty (0 characters) so it is below the #329 cap and the
+        // refusal is unambiguously the name collision, not the per-account cap.
+        if (std::optional<Bytes> pl = round_trip(
+                c, mn::Opcode::CHAR_CREATE_REQUEST,
+                enc_char_create_request(name_other,
+                                        static_cast<std::uint8_t>(chr::Race::kArdent),
+                                        static_cast<std::uint8_t>(chr::Class::kVanguard)),
+                mn::Opcode::CHAR_CREATE_RESPONSE, seq++)) {
+            const auto* m = decode<mn::CharCreateResponse>(*pl);
+            check("1b: duplicate name rejected (DUPLICATE_NAME)",
+                  m != nullptr && m->status() == mn::CharCreateStatus::DUPLICATE_NAME);
+        } else {
+            check("1b: got a CharCreateResponse", false);
+        }
+
         // 2. create -> OK + minted id; then list shows exactly that character.
         std::uint64_t minted = 0;
         if (std::optional<Bytes> pl = round_trip(
@@ -522,16 +543,19 @@ int main() {
             check("2: got a CharListResponse after create", false);
         }
 
-        // 3. duplicate name -> DUPLICATE_NAME.
+        // 3. second create for the SAME account -> LIMIT_REACHED (#329). The
+        // session account already owns name_a (step 2); the one-character-per-
+        // account cap refuses a second create. A fresh, unique name is used so
+        // the refusal is unambiguously the cap and not a name collision.
         if (std::optional<Bytes> pl = round_trip(
                 c, mn::Opcode::CHAR_CREATE_REQUEST,
-                enc_char_create_request(name_a,
+                enc_char_create_request("Cm_" + std::to_string(salt) + "_2nd",
                                         static_cast<std::uint8_t>(chr::Race::kArdent),
                                         static_cast<std::uint8_t>(chr::Class::kVanguard)),
                 mn::Opcode::CHAR_CREATE_RESPONSE, seq++)) {
             const auto* m = decode<mn::CharCreateResponse>(*pl);
-            check("3: duplicate name rejected (DUPLICATE_NAME)",
-                  m != nullptr && m->status() == mn::CharCreateStatus::DUPLICATE_NAME);
+            check("3: second character for the account rejected (LIMIT_REACHED)",
+                  m != nullptr && m->status() == mn::CharCreateStatus::LIMIT_REACHED);
         } else {
             check("3: got a CharCreateResponse", false);
         }
