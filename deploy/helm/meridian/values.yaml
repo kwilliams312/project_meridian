@@ -120,6 +120,30 @@ mariadb:
   tolerations: []
   affinity: {}
 
+# ── Dev seed (⚠️ SHORT-TERM — remove once the admin web portal exists) ────────
+# A post-sync Job that idempotently seeds the realm row authd advertises + a set
+# of SRP test accounts, so a fresh ephemeral dev DB is usable immediately. This
+# exists only because dev has no real provisioning path yet (the proper fix is
+# the admin portal / #339). Off by default; enable ONLY on dev — never PTR/Prod.
+seed:
+  enabled: false
+  # meridian-account image (creates SRP accounts); mariadb client (realm upsert).
+  accountImage:
+    repository: kwilliams312/project_meridian/meridian-account
+    tag: "dev"
+  clientImage: "mariadb:11"
+  # The realm row authd serves — address is the realm's reachable endpoint
+  # (worldd), port is worldd's game port. build range is wide-open for dev.
+  realm:
+    id: 1
+    name: "Dev"
+    address: "192.168.89.31"
+    port: 7200
+  # Accounts to ensure exist (dev creds — not secret). Idempotent.
+  accounts:
+    - username: devtester
+      password: devpassword
+
 # ── authd — login / realm-list / session-grant (IF-1, TLS 1.3, port 7100) ────
 authd:
   enabled: true

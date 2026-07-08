@@ -17,7 +17,7 @@ description: Project Meridian single-realm server (authd + worldd) — Kubernete
 type: application
 
 # Chart version: v0 of the chart itself (SemVer). Bump on chart changes.
-version: 0.2.0
+version: 0.3.0
 
 # appVersion tracks the daemon image tag the chart defaults to. "latest" matches
 # the compose default (deploy/docker/docker-compose.yml: MERIDIAN_TAG:-latest);

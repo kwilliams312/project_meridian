@@ -1,0 +1,91 @@
+{{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
+{{- /*
+  ⚠️ SHORT-TERM dev convenience — REMOVE once the admin web portal exists.
+
+  A post-sync Job (ArgoCD PostSync / Helm post-install+post-upgrade hook) that
+  makes a fresh dev realm immediately usable by seeding, idempotently:
+    1. the `realm` row authd advertises (address = the realm's reachable
+       endpoint, port = worldd's), so the client's realm list is non-empty; and
+    2. a set of SRP test accounts (via the meridian-account CLI).
+
+  This exists ONLY because dev runs an ephemeral DB with no real provisioning
+  path yet — the proper mechanism is the admin portal / #339. Gated behind
+  seed.enabled (dev only); NEVER enable for PTR/Prod.
+*/ -}}
+{{- if .Values.seed.enabled }}
+{{- $full := include "meridian.fullname" . -}}
+{{- $acctImg := printf "%s/%s:%s" .Values.image.registry .Values.seed.accountImage.repository .Values.seed.accountImage.tag -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $full }}-seed
+  labels:
+    {{- include "meridian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seed
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        {{- include "meridian.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: seed
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        # Wait for MariaDB, then upsert the realm row (plain SQL — no SRP).
+        - name: wait-db
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z {{ include "meridian.db.host" . }} 3306; do echo waiting; sleep 2; done"]
+        - name: seed-realm
+          image: {{ .Values.seed.clientImage | quote }}
+          env:
+            - name: MYSQL_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "meridian.dbSecretName" . }}
+                  key: {{ include "meridian.dbSecretKey" . }}
+          command:
+            - mariadb
+            - "-h"
+            - {{ include "meridian.db.host" . | quote }}
+            - "-u{{ .Values.db.user }}"
+            - "{{ .Values.db.names.auth }}"
+            - "-e"
+            - >-
+              INSERT INTO realm (id, name, address, port, build_min, build_max, population, flags)
+              VALUES ({{ .Values.seed.realm.id }}, '{{ .Values.seed.realm.name }}', '{{ .Values.seed.realm.address }}', {{ .Values.seed.realm.port }}, 0, 4294967295, 0, 0)
+              ON DUPLICATE KEY UPDATE name=VALUES(name), address=VALUES(address), port=VALUES(port);
+      containers:
+        # Create the SRP test accounts (idempotent: meridian-account exits 3 on dup).
+        - name: seed-accounts
+          image: {{ $acctImg | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "meridian.configMapName" . }}
+          env:
+            - name: MERIDIAN_DB_NAME
+              value: {{ .Values.db.names.auth | quote }}
+            - name: MERIDIAN_DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "meridian.dbSecretName" . }}
+                  key: {{ include "meridian.dbSecretKey" . }}
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              {{- range .Values.seed.accounts }}
+              /usr/local/bin/meridian-account create --username {{ .username | quote }} --password {{ .password | quote }} || [ $? -eq 3 ]
+              {{- end }}
+              echo "seed-accounts done"
+{{- end }}

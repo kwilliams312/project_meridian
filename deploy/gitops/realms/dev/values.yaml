@@ -45,3 +45,9 @@ mariadb:
   enabled: true
   image: { tag: "dev" }
   persistence: { enabled: false }
+
+# SHORT-TERM: seed the realm row (→ the shared LB IP) + devtester on every sync,
+# so the ephemeral dev DB is usable without hand-seeding. Remove when the admin
+# web portal lands (#339). Realm address defaults to .31 (the dev LB IP).
+seed:
+  enabled: true
