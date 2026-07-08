@@ -75,6 +75,9 @@ worldd:
       metallb.universe.tf/loadBalancerIPs: "192.168.89.32"
       metallb.universe.tf/allow-shared-ip: "meridian-ptr"
   probes: { type: tcp }
+  db:                      # worldd consumes IF-3 grants from meridian_auth at M0
+    enabled: true
+    name: meridian_auth
 tls:
   mode: selfSignedInit
 db:
@@ -113,6 +116,9 @@ worldd:
       metallb.universe.tf/loadBalancerIPs: "192.168.89.33"
       metallb.universe.tf/allow-shared-ip: "meridian-prod"
   probes: { type: tcp }
+  db:                      # worldd consumes IF-3 grants from meridian_auth at M0
+    enabled: true
+    name: meridian_auth
 tls:
   mode: selfSignedInit
 db:
