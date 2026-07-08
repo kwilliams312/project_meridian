@@ -24,6 +24,10 @@ set_target_properties(meridian-characters-lib PROPERTIES CXX_EXTENSIONS OFF)
 # It drives create/list/delete through the library code path against the
 # characters DB `character` table.
 add_executable(meridian-characters-test test/characters_test.cpp)
-target_link_libraries(meridian-characters-test PRIVATE meridian::characters)
+# Threads::Threads — the concurrency scenario (two-thread deadlock repro) uses
+# std::thread, which needs the platform thread library (pthreads) at link time.
+find_package(Threads REQUIRED)
+target_link_libraries(meridian-characters-test
+  PRIVATE meridian::characters Threads::Threads)
 set_target_properties(meridian-characters-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME characters COMMAND meridian-characters-test)

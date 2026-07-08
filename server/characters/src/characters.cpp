@@ -17,6 +17,23 @@ namespace {
 // account-creation path uses for its username UNIQUE key.
 constexpr unsigned kErDupEntry = 1062;
 
+// MariaDB / MySQL error number for a detected lock cycle
+// (ER_LOCK_DEADLOCK — "Deadlock found when trying to get lock; try restarting
+// transaction"). InnoDB breaks the cycle by rolling the WHOLE losing
+// transaction back, so the documented recovery is to retry the transaction from
+// scratch. See create_character's retry loop for why two DISTINCT accounts can
+// deadlock here.
+constexpr unsigned kErLockDeadlock = 1213;
+
+// How many times create_character re-runs its check-then-insert transaction
+// when InnoDB picks it as the deadlock victim (kErLockDeadlock). Each retry is a
+// fresh transaction; the competing create has almost always committed and
+// released its gap lock by the next attempt, so 1 retry is nearly always enough
+// — the extra attempts are headroom for a burst of concurrent self-creates. A
+// bound (not an unbounded loop) means a genuinely stuck server surfaces the
+// DbError instead of spinning forever.
+constexpr int kCreateMaxAttempts = 5;
+
 // M0 start location (CHR-01 stub). The M0 world is the single flat test map
 // (docs/it-m0-runbook.md — "flat test map"); a new stub character spawns at its
 // origin. These are deliberate M0 placeholders: real per-race start locations
@@ -94,12 +111,10 @@ CreateResult create_character(db::Connection& conn, const CreateRequest& req) {
     // check-then-insert races: two concurrent creates for the same account both
     // count 0, both pass the cap, both insert -> two characters. START TRANSACTION
     // opens the txn; the count is a LOCKING read (FOR UPDATE) over the account's
-    // rows — the idx_character_account index gap-locks the account_id range, so a
-    // concurrent create for the SAME account blocks on this row until we COMMIT,
-    // then re-reads the now-present row and is refused. name uniqueness stays
-    // enforced by the DB UNIQUE key uq_character_name -> ER_DUP_ENTRY. Every value
-    // binds through a placeholder (never concatenated); ids bind as decimal
-    // strings (unsigned-id rule). Only NOT-NULL-without-default columns are set;
+    // rows via the idx_character_account index. name uniqueness stays enforced by
+    // the DB UNIQUE key uq_character_name -> ER_DUP_ENTRY. Every value binds
+    // through a placeholder (never concatenated); ids bind as decimal strings
+    // (unsigned-id rule). Only NOT-NULL-without-default columns are set;
     // level/xp/money/pos_o/save_epoch/timestamps take their schema defaults.
     std::vector<db::Param> bind{
         bind_u64(req.account_id),                      // account_id (soft ref)
@@ -112,40 +127,57 @@ CreateResult create_character(db::Connection& conn, const CreateRequest& req) {
         db::Param{static_cast<double>(kM0StartZ)},     // pos_z
     };
 
-    conn.execute("START TRANSACTION");
+    // Deadlock resilience (#329 self-create path). When the account still owns NO
+    // rows, `... WHERE account_id = ? FOR UPDATE` matches nothing, so at
+    // REPEATABLE READ InnoDB takes a GAP lock over the slice of
+    // idx_character_account where that account_id would sit — this is what
+    // serializes two concurrent creates for the SAME account (the second blocks
+    // until the first commits, then re-reads the now-present row and is capped).
+    // But two DISTINCT accounts whose ids fall in the SAME index gap (the common
+    // case on a small/empty table) take COMPATIBLE gap locks on that shared gap,
+    // and then each INSERT needs an insert-intention lock that waits on the
+    // other's gap lock -> a lock cycle. InnoDB breaks it by rolling ONE whole
+    // transaction back with ER_LOCK_DEADLOCK (1213). That loser is transient: on
+    // a fresh retry the winner has committed and dropped its gap lock, so the
+    // retry proceeds. We therefore re-run the ENTIRE transaction (not just the
+    // INSERT — the deadlock rolls back the count too) up to kCreateMaxAttempts.
+    // Prod pre-creates rows sequentially so accounts already have a record to
+    // lock (no gap), which is why this only bites the concurrent worldd
+    // CHAR_CREATE_REQUEST path. DuplicateName / CharacterLimitReached are NOT
+    // retried — they are decisions, not contention.
+    for (int attempt = 1;; ++attempt) {
+        conn.execute("START TRANSACTION");
+        try {
+            db::Result cnt = conn.execute(
+                "SELECT COUNT(*) FROM `character` WHERE account_id = ? FOR UPDATE",
+                {bind_u64(req.account_id)});
+            std::uint64_t owned = cnt.rows.empty() ? 0 : parse_u64(cnt.rows[0][0]);
+            if (owned >= kMaxCharactersPerAccount) {
+                conn.execute("ROLLBACK");
+                throw CharacterLimitReached(req.account_id);
+            }
 
-    std::uint64_t owned = 0;
-    try {
-        db::Result cnt = conn.execute(
-            "SELECT COUNT(*) FROM `character` WHERE account_id = ? FOR UPDATE",
-            {bind_u64(req.account_id)});
-        owned = cnt.rows.empty() ? 0 : parse_u64(cnt.rows[0][0]);
-    } catch (...) {
-        conn.execute("ROLLBACK");
-        throw;
-    }
-    if (owned >= kMaxCharactersPerAccount) {
-        conn.execute("ROLLBACK");
-        throw CharacterLimitReached(req.account_id);
-    }
-
-    try {
-        db::Result r = conn.execute(
-            "INSERT INTO `character` "
-            "(account_id, name, race, class, map_id, pos_x, pos_y, pos_z) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            bind);
-        conn.execute("COMMIT");
-        return CreateResult{r.last_insert_id};
-    } catch (const db::DbError& e) {
-        conn.execute("ROLLBACK");
-        if (e.code() == kErDupEntry) {
-            throw DuplicateName(req.name);
+            db::Result r = conn.execute(
+                "INSERT INTO `character` "
+                "(account_id, name, race, class, map_id, pos_x, pos_y, pos_z) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                bind);
+            conn.execute("COMMIT");
+            return CreateResult{r.last_insert_id};
+        } catch (const db::DbError& e) {
+            conn.execute("ROLLBACK");
+            if (e.code() == kErDupEntry) {
+                throw DuplicateName(req.name);
+            }
+            if (e.code() == kErLockDeadlock && attempt < kCreateMaxAttempts) {
+                continue;  // transient loser -> retry the whole transaction
+            }
+            throw;
+        } catch (...) {
+            // CharacterLimitReached (already rolled back above) and any other
+            // non-DbError propagate untouched — no double ROLLBACK.
+            throw;
         }
-        throw;
-    } catch (...) {
-        conn.execute("ROLLBACK");
-        throw;
     }
 }
 
