@@ -26,6 +26,7 @@ add_library(world-dispatch STATIC
   movement_validation.cpp
   aoi_grid.cpp
   world_state.cpp
+  active_sessions.cpp
 )
 add_library(meridian::world-dispatch ALIAS world-dispatch)
 target_include_directories(world-dispatch
@@ -110,6 +111,43 @@ target_link_libraries(worldd-grant-test
 )
 set_target_properties(worldd-grant-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-grant COMMAND worldd-grant-test)
+
+# --- Single active session per account UNIT test (#326). ----------------------
+# PURE (no DB, no socket, no session): drives ActiveSessionRegistry directly to
+# prove the "1 login" concurrency guarantee — a 2nd login for an account kicks the
+# 1st (kick-old), the token compare-and-remove stops a kicked-old teardown from
+# evicting its replacement, and the registry stays consistent under concurrent
+# admit/release. Always runs in the plain server ctest (no MERIDIAN_DB_* needed);
+# the DB-backed WORLD_HELLO wiring is exercised end-to-end by the worldd-session job.
+add_executable(worldd-active-session-test
+  test/active_sessions_test.cpp
+)
+target_link_libraries(worldd-active-session-test
+  PRIVATE
+    meridian::world-dispatch
+    Threads::Threads
+)
+set_target_properties(worldd-active-session-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-active-session COMMAND worldd-active-session-test)
+
+# --- Single active session per account END-TO-END test (#326). ----------------
+# Drives TWO real TLS clients logging in for the SAME account against the real
+# serve loop + WORLD_HELLO handler: the 2nd login KICKS the 1st (kick-old), the
+# 1st receives Disconnect{KICKED}, and the active-session registry + AoI world
+# both hold exactly one session — the #326 acceptance proven at the wire. Needs a
+# live MariaDB with the auth schema (seeds two session_grant rows for one account);
+# reads MERIDIAN_DB_* and SKIPS (exit 0) when none are set, so it is inert in the
+# plain server ctest and runs for real in the worldd-session CI job.
+add_executable(worldd-single-session-it
+  test/single_session_it.cpp
+)
+target_link_libraries(worldd-single-session-it
+  PRIVATE
+    meridian::world-dispatch
+    Threads::Threads
+)
+set_target_properties(worldd-single-session-it PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-single-session COMMAND worldd-single-session-it)
 
 # --- Movement intake + validation v0 UNIT test (IT-M0 movement; #86). ---------
 # PURE (no DB, no socket, no session): exercises the movement validator, the

@@ -10,7 +10,10 @@
 #     creation order, and deletes,
 #   * char_select.tscn instantiates, its race/class pickers are populated from the roster,
 #     the shared placeholder model is built, the list reflects the store, and Enter World
-#     emits the intent for the selected character.
+#     emits the intent for the selected character,
+#   * #327 REGRESSION: the roster is repopulated from the authoritative session context on
+#     EVERY (re-)login — a fresh scene configured from the same session roster shows the
+#     characters again (not an empty list), and a no-roster login shows nothing stale.
 # Exits 0 on success, 1 on any failed assertion.
 #
 # The interactive playtest is char_select.tscn reached from the login flow; this script is
@@ -34,6 +37,7 @@ func _initialize() -> void:
 	_verify_roster()
 	_verify_store()
 	await _verify_scene()
+	await _verify_relogin_roster()
 
 	print("\n%s" % ("ALL RUNTIME CHECKS PASS" if _fails == 0 else "%d RUNTIME FAILURE(S)" % _fails))
 	quit(0 if _fails == 0 else 1)
@@ -155,3 +159,63 @@ func _verify_scene() -> void:
 		and int(_entered_character.get("class", 0)) == 1)
 
 	scene.queue_free()
+
+
+# --- 4. #327 REGRESSION: the roster is repopulated on a fresh (re-)login -------
+# Guards the reported bug "character list is empty on a second login". The roster
+# must be re-established from the AUTHORITATIVE session context on every entry, not
+# left to stale ephemeral local state. Two fresh char_select instances configured
+# from the same session roster (simulating login #1 then login #2) must BOTH show
+# the characters — and a fresh instance with no roster must show an EMPTY list (no
+# stale carry-over from a prior instance).
+func _verify_relogin_roster() -> void:
+	print(" re-login roster (#327 regression):")
+	var packed: PackedScene = load("res://scenes/charselect/char_select.tscn")
+	if packed == null:
+		_check("char_select.tscn loads (relogin)", false)
+		return
+
+	# The session context the login handoff / world bounce-back threads through: the
+	# server's roster for this account (the seam a real CharListResponse fills, #279).
+	var session := {
+		"roster": [
+			{"id": 1, "name": "Kaelith", "race": 1, "class": 1},
+			{"id": 2, "name": "Sylwen", "race": 3, "class": 2},
+		],
+	}
+
+	# Login #1: characters appear.
+	var first := packed.instantiate()
+	first.configure("tester@example.com", [], session)
+	root.add_child(first)
+	await process_frame
+	var first_list: ItemList = first.find_child("CharList", true, false)
+	_check("login #1 lists the account's two characters",
+		first_list != null and first_list.item_count == 2)
+	root.remove_child(first)
+	first.queue_free()
+
+	# Login #2: a BRAND-NEW scene + store, same session roster → characters appear
+	# AGAIN (the #327 fix: repopulate from the session, never an empty stale store).
+	var second := packed.instantiate()
+	second.configure("tester@example.com", [], session)
+	root.add_child(second)
+	await process_frame
+	var second_list: ItemList = second.find_child("CharList", true, false)
+	_check("login #2 (fresh scene) still lists the two characters — not empty",
+		second_list != null and second_list.item_count == 2)
+	_check("login #2 label carries the first character",
+		second_list != null and second_list.get_item_text(0).begins_with("Kaelith — Vanguard"))
+	root.remove_child(second)
+	second.queue_free()
+
+	# A fresh instance with NO roster shows an empty list (no stale carry-over).
+	var empty := packed.instantiate()
+	empty.configure("tester@example.com", [], {})
+	root.add_child(empty)
+	await process_frame
+	var empty_list: ItemList = empty.find_child("CharList", true, false)
+	_check("no-roster login shows an empty list (no stale carry-over)",
+		empty_list != null and empty_list.item_count == 0)
+	root.remove_child(empty)
+	empty.queue_free()

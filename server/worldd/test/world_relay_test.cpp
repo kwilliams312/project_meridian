@@ -355,7 +355,11 @@ int main() {
     check("generated self-signed cert+key", generate_self_signed(cert_path, key_path));
 
     const std::uint32_t client_build = 1000;
-    std::uint64_t account_id = 0;
+    // TWO distinct accounts — one per session. Single-session enforcement (#326)
+    // admits at most ONE in-world session PER ACCOUNT, so the two relay clients
+    // must be different accounts (using one account for both would make the 2nd
+    // login kick the 1st, which is exactly what worldd-single-session-it proves).
+    std::uint64_t account_a = 0, account_b = 0;
     std::uint32_t realm_id = 0;
     std::uint64_t grant_a = 0, grant_b = 0;
 
@@ -363,15 +367,21 @@ int main() {
         db::Connection db(p);
         std::printf("connected to MariaDB\n");
 
-        const std::string username = "worldd_relay_" + std::to_string(std::rand());
-        db.execute("DELETE FROM account WHERE username = ?", {db::Param{username}});
-        db.execute(
-            "INSERT INTO account (username, srp_salt, srp_verifier) VALUES (?, ?, ?)",
-            {db::Param{username}, blob32(Bytes(32, 0x11)), blob32(Bytes(32, 0x22))});
-        db::Result ar = db.execute("SELECT id FROM account WHERE username = ?",
-                                   {db::Param{username}});
-        account_id = cell_u64(ar.rows.at(0)[0]);
-        check("test account seeded", account_id > 0);
+        auto seed_account = [&](const std::string& username) -> std::uint64_t {
+            db.execute("DELETE FROM account WHERE username = ?", {db::Param{username}});
+            db.execute(
+                "INSERT INTO account (username, srp_salt, srp_verifier) VALUES (?, ?, ?)",
+                {db::Param{username}, blob32(Bytes(32, 0x11)), blob32(Bytes(32, 0x22))});
+            db::Result r = db.execute("SELECT id FROM account WHERE username = ?",
+                                      {db::Param{username}});
+            return cell_u64(r.rows.at(0)[0]);
+        };
+        const std::string uname_a = "worldd_relay_a_" + std::to_string(std::rand());
+        const std::string uname_b = "worldd_relay_b_" + std::to_string(std::rand());
+        account_a = seed_account(uname_a);
+        account_b = seed_account(uname_b);
+        check("two test accounts seeded", account_a > 0 && account_b > 0 &&
+                                              account_a != account_b);
 
         const std::string realm_name = "WD Relay Realm " + std::to_string(std::rand());
         db.execute(
@@ -391,11 +401,11 @@ int main() {
         grant_a = rand_u64();
         grant_b = rand_u64();
         const Bytes session_key(32, 0xAB);
-        seed_grant(db, grant_a, account_id, realm_id, session_key, client_build,
+        seed_grant(db, grant_a, account_a, realm_id, session_key, client_build,
                    "DATE_ADD(UTC_TIMESTAMP(), INTERVAL 30 SECOND)");
-        seed_grant(db, grant_b, account_id, realm_id, session_key, client_build,
+        seed_grant(db, grant_b, account_b, realm_id, session_key, client_build,
                    "DATE_ADD(UTC_TIMESTAMP(), INTERVAL 30 SECOND)");
-        check("two grants seeded (two real sessions)", true);
+        check("two grants seeded (two real sessions, distinct accounts)", true);
 
         // --- Stand up the real listener + serve loop with the auth DB wired.
         net::ListenConfig lc;
@@ -545,12 +555,14 @@ int main() {
         server.join();
         world.stop();
 
-        db.execute("DELETE FROM session_grant WHERE account_id = ?",
-                   {db::Param{static_cast<std::int64_t>(account_id)}});
+        db.execute("DELETE FROM session_grant WHERE account_id IN (?, ?)",
+                   {db::Param{static_cast<std::int64_t>(account_a)},
+                    db::Param{static_cast<std::int64_t>(account_b)}});
         db.execute("DELETE FROM realm WHERE id = ?",
                    {db::Param{static_cast<std::int64_t>(realm_id)}});
-        db.execute("DELETE FROM account WHERE id = ?",
-                   {db::Param{static_cast<std::int64_t>(account_id)}});
+        db.execute("DELETE FROM account WHERE id IN (?, ?)",
+                   {db::Param{static_cast<std::int64_t>(account_a)},
+                    db::Param{static_cast<std::int64_t>(account_b)}});
     } catch (const db::DbError& e) {
         std::printf("  FAIL  DbError %u: %s\n", e.code(), e.what());
         ++g_fail;
