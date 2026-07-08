@@ -188,8 +188,8 @@ mariadb:
 
 Run (from `deploy/helm/meridian`):
 ```bash
-helm template t . --set mariadb.enabled=true --set tls.create=true \
-  --set-file tls.cert=/dev/null --set-file tls.key=/dev/null \
+helm template t . --set mariadb.enabled=true --set db.password=meridian \
+  --set tls.existingSecret=dummy-tls \
   --show-only templates/mariadb.yaml
 ```
 Expected: FAIL — `could not find template templates/mariadb.yaml`.
@@ -346,10 +346,10 @@ spec:
 Run (from `deploy/helm/meridian`):
 ```bash
 helm template t . --set mariadb.enabled=true --set db.password=meridian \
-  --set tls.create=true --set-file tls.cert=/dev/null --set-file tls.key=/dev/null \
+  --set tls.existingSecret=dummy-tls \
   --show-only templates/mariadb.yaml | grep -E "kind: (Deployment|Service|Secret)"
 helm lint . --set mariadb.enabled=true --set db.password=meridian \
-  --set tls.create=true --set-file tls.cert=/dev/null --set-file tls.key=/dev/null
+  --set tls.existingSecret=dummy-tls
 ```
 Expected: the `grep` prints `kind: Secret`, `kind: Service`, `kind: Deployment`; `helm lint` → `1 chart(s) linted, 0 chart(s) failed`.
 
@@ -358,8 +358,7 @@ Expected: the `grep` prints `kind: Secret`, `kind: Service`, `kind: Deployment`;
 Run:
 ```bash
 helm template t . --set mariadb.enabled=true --set mariadb.persistence.enabled=true \
-  --set db.password=meridian --set tls.create=true \
-  --set-file tls.cert=/dev/null --set-file tls.key=/dev/null \
+  --set db.password=meridian --set tls.existingSecret=dummy-tls \
   --show-only templates/mariadb.yaml | grep -E "kind: StatefulSet|storageClassName"
 ```
 Expected: prints `kind: StatefulSet` and `storageClassName: "longhorn"`.
@@ -384,7 +383,7 @@ git commit -m "feat(chart): bundled MariaDB (ephemeral Deployment / persistent S
 Run (from `deploy/helm/meridian`):
 ```bash
 helm template t . --set mariadb.enabled=true --set db.password=meridian \
-  --set tls.create=true --set-file tls.cert=/dev/null --set-file tls.key=/dev/null \
+  --set tls.existingSecret=dummy-tls \
   --show-only templates/configmap.yaml | grep MERIDIAN_DB_HOST
 ```
 Expected: FAIL to match the bundled service — it prints the static default `MERIDIAN_DB_HOST: "meridian-mariadb"` (from `db.host`), NOT the release-derived `t-meridian-mariadb`. We want it to auto-resolve to the bundled Service name when `mariadb.enabled=true`.
@@ -450,16 +449,16 @@ In `deploy/helm/meridian/templates/_daemon.tpl`, inside the pod `spec:` (immedia
 Run (from `deploy/helm/meridian`):
 ```bash
 helm template t . --set mariadb.enabled=true --set db.password=meridian \
-  --set tls.create=true --set-file tls.cert=/dev/null --set-file tls.key=/dev/null \
+  --set tls.existingSecret=dummy-tls \
   --show-only templates/configmap.yaml | grep 'MERIDIAN_DB_HOST: "t-meridian-mariadb"'
 helm template t . --set mariadb.enabled=true --set db.password=meridian \
-  --set tls.create=true --set-file tls.cert=/dev/null --set-file tls.key=/dev/null \
+  --set tls.existingSecret=dummy-tls \
   --show-only templates/authd.yaml | grep -A1 'initContainers:' | grep 'wait-for-db'
 ```
 Expected: first prints the release-derived host line; second prints `- name: wait-for-db`. worldd (db disabled) must NOT get the initContainer — verify:
 ```bash
 helm template t . --set mariadb.enabled=true --set db.password=meridian \
-  --set tls.create=true --set-file tls.cert=/dev/null --set-file tls.key=/dev/null \
+  --set tls.existingSecret=dummy-tls \
   --show-only templates/worldd.yaml | grep -c 'wait-for-db' || true
 ```
 Expected: `0`.
