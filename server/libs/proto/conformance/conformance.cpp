@@ -565,9 +565,11 @@ std::vector<Message> build_corpus() {
                         "if2_movement_state.server_time_ms");
                }});
 
-  // EntityEnter with a full attribute set (vector of AttrDelta tables).
+  // EntityEnter with a full attribute set (vector of AttrDelta tables) and a
+  // class id (#328) — char_class=2 (Runcaller) exercises the additive field the
+  // client colors the placeholder capsule from.
   c.push_back({"if2_entity_enter", "IF-2", "ENTITY_ENTER (0x2001)",
-               "S->C full state on AoI entry: guid, type, pos, 2 attrs",
+               "S->C full state on AoI entry: guid, type, pos, 2 attrs, class",
                [] {
                  fb::FlatBufferBuilder b;
                  std::vector<fb::Offset<mn::AttrDelta>> attrs;
@@ -579,7 +581,8 @@ std::vector<Message> build_corpus() {
                  b.Finish(mn::CreateEntityEnter(
                      b, /*entity_guid=*/0x0000000012345678ULL,
                      /*type_id=*/0x00000101u, /*x=*/10.0f, /*y=*/20.0f,
-                     /*z=*/0.5f, /*orientation=*/0.0f, av));
+                     /*z=*/0.5f, /*orientation=*/0.0f, av,
+                     /*char_class=*/2u));
                  return finish_to_bytes(b);
                },
                [](const Bytes& buf) {
@@ -595,6 +598,7 @@ std::vector<Message> build_corpus() {
                  expect(m->x() == 10.0f, "if2_entity_enter.x");
                  expect(m->y() == 20.0f, "if2_entity_enter.y");
                  expect(m->z() == 0.5f, "if2_entity_enter.z");
+                 expect(m->char_class() == 2u, "if2_entity_enter.char_class");
                  const auto* attrs = m->attrs();
                  if (!expect(attrs != nullptr && attrs->size() == 2,
                              "if2_entity_enter has 2 attrs"))

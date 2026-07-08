@@ -85,8 +85,10 @@ std::vector<std::uint8_t> encode_entity_enter_payload(const EntityIdentity& subj
     // attrs empty at M0 (D-11 placeholder carries no wire attributes yet); the
     // vector is created so the table shape is complete for the client verifier.
     auto attrs = b.CreateVector(std::vector<fb::Offset<mn::AttrDelta>>{});
+    // char_class (#328): the mover's M0-frozen class id, so every client renders the
+    // placeholder capsule in a class-derived color. Authoritative here on the server.
     auto e = mn::CreateEntityEnter(b, subject.entity_guid, subject.type_id, pos.x, pos.y,
-                                   pos.z, pos.orientation, attrs);
+                                   pos.z, pos.orientation, attrs, subject.char_class);
     b.Finish(e);
     return std::vector<std::uint8_t>(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
 }

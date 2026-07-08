@@ -548,6 +548,8 @@ void Dispatcher::register_m0_stubs() {
                EntityIdentity id;
                id.entity_guid = pc.char_guid;
                id.type_id = pc.class_id;  // M0: the placeholder class stands in for type_id
+               id.char_class = pc.class_id;  // #328: relay the class so every client
+                                             // colors the placeholder capsule by class
                EnterResult er = ctx.world->enter(
                    id, spawn,
                    [egress](net::Opcode op, const Bytes& payload) {
