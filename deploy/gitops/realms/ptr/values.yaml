@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# PTR realm (meridian-ptr) — persistent Longhorn MariaDB, :ptr multi-arch images,
+# self-signed TLS. authd+worldd share MetalLB IP 192.168.89.32. Auto-synced from ptr.
+image:
+  tag: "ptr"
+  pullPolicy: Always
+authd:
+  replicaCount: 2
+  service:
+    type: LoadBalancer
+    annotations:
+      metallb.universe.tf/loadBalancerIPs: "192.168.89.32"
+      metallb.universe.tf/allow-shared-ip: "meridian-ptr"
+  probes: { type: tcp }
+worldd:
+  replicaCount: 2
+  service:
+    type: LoadBalancer
+    annotations:
+      metallb.universe.tf/loadBalancerIPs: "192.168.89.32"
+      metallb.universe.tf/allow-shared-ip: "meridian-ptr"
+  probes: { type: tcp }
+  db:                      # worldd consumes IF-3 grants from meridian_auth at M0
+    enabled: true
+    name: meridian_auth
+tls:
+  mode: selfSignedInit
+db:
+  password: "meridian"
+mariadb:
+  enabled: true
+  image: { tag: "ptr" }
+  persistence:
+    enabled: true
+    storageClass: "longhorn"
+    size: 8Gi
+# SHORT-TERM seed (like dev) so PTR is testable; realm advertises the PTR LB IP.
+# Remove when the admin web portal lands (#339).
+seed:
+  enabled: true
+  accountImage: { tag: "ptr" }
+  realm:
+    name: "PTR"
+    address: "192.168.89.32"
+    port: 7200
