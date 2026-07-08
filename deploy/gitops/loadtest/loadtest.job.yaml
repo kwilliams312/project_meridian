@@ -30,6 +30,10 @@ spec:
       containers:
         - name: bot
           image: ghcr.io/kwilliams312/project_meridian/meridian-bot:${TAG}
+          # ${TAG} (e.g. :dev) is a MOVING tag — force a fresh pull so nodes with a
+          # cached older digest don't run stale bot code (k8s defaults non-:latest
+          # tags to IfNotPresent). Without this the harness silently runs old bots.
+          imagePullPolicy: Always
           command:
             - sh
             - -c

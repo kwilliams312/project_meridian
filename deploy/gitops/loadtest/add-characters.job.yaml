@@ -17,6 +17,7 @@ spec:
       containers:
         - name: add-characters
           image: ghcr.io/kwilliams312/project_meridian/meridian-character:${TAG}
+          imagePullPolicy: Always   # moving ${TAG}: always pull the latest digest
           env:
             # meridian-character defaults its DB to meridian_characters and resolves
             # the account_id via meridian_auth.account (same connection, cross-DB).

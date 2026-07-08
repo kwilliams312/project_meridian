@@ -15,6 +15,7 @@ spec:
       containers:
         - name: add-users
           image: ghcr.io/kwilliams312/project_meridian/meridian-account:${TAG}
+          imagePullPolicy: Always   # moving ${TAG}: always pull the latest digest
           env:
             - { name: MERIDIAN_DB_HOST, value: "meridian-${REALM}-mariadb" }
             - { name: MERIDIAN_DB_PORT, value: "3306" }
