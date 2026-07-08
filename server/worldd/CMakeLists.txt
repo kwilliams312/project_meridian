@@ -26,6 +26,7 @@ add_library(world-dispatch STATIC
   movement_validation.cpp
   aoi_grid.cpp
   combat_unit.cpp
+  creature_ai.cpp
   world_state.cpp
   active_sessions.cpp
   ability_store.cpp
@@ -217,6 +218,22 @@ target_link_libraries(worldd-combat-unit-test
 )
 set_target_properties(worldd-combat-unit-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-combat-unit COMMAND worldd-combat-unit-test)
+
+# --- Creature mob AI UNIT test (issues #347 + #348, CMB-02). -------------------
+# PURE (no DB, no socket): drives the CreatureAi module directly — threat-ordered
+# target selection, aggro radius by level delta, leash → evade → full-heal, respawn
+# timing, and waypoint patrol progression + movement output. Deterministic (tick()
+# is a pure function of dt/targets/state), so it always runs in the plain server
+# ctest — the seeded/deterministic ask (#347/#348).
+add_executable(worldd-creature-ai-test
+  test/creature_ai_test.cpp
+)
+target_link_libraries(worldd-creature-ai-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-creature-ai-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-creature-ai COMMAND worldd-creature-ai-test)
 
 # --- Two-session AoI movement RELAY integration test (IT-M0 see-each-other-move;
 #     #87). ---------------------------------------------------------------------
