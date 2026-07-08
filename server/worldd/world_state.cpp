@@ -127,14 +127,15 @@ std::optional<SessionSlot> WorldState::slot_of_guid(AoiId guid) const {
 void WorldState::send_enter(SessionRec& to, const SessionRec& subject) {
     if (!to.egress) return;
     to.egress(mn::Opcode::ENTITY_ENTER,
-              encode_entity_enter_payload(subject.identity, subject.pos));
+              encode_entity_enter_payload(subject.identity, subject.unit.position()));
 }
 
 void WorldState::send_update(SessionRec& to, const SessionRec& subject,
                              std::uint32_t /*ack_seq*/, std::uint64_t /*server_time_ms*/) {
     if (!to.egress) return;
     to.egress(mn::Opcode::ENTITY_UPDATE,
-              encode_entity_update_payload(subject.identity.entity_guid, subject.pos));
+              encode_entity_update_payload(subject.identity.entity_guid,
+                                           subject.unit.position()));
 }
 
 void WorldState::send_leave(SessionRec& to, const SessionRec& subject,
@@ -157,9 +158,16 @@ EnterResult WorldState::enter(const EntityIdentity& identity, const Position& sp
     EntityIdentity id = identity;
     if (id.entity_guid == 0) id.entity_guid = kSyntheticGuidBase + slot;
 
+    // Build the session's Unit (#342): a Player spawned at `spawn` with clean-room
+    // placeholder stats picked by the M0-frozen class id (the D-11 placeholder
+    // pattern — no content pipeline yet). The Unit OWNS the authoritative position
+    // that the grid mirrors; account/name are not carried on the AoI enter path
+    // (0 / empty here) — the dispatcher can enrich the Player later without
+    // touching this relay. Player() ctor spawns it alive at full health.
     SessionRec rec;
     rec.identity = id;
-    rec.pos = spawn;
+    rec.unit = Player(id.entity_guid, spawn, placeholder_player_stats(id.char_class),
+                      /*account_id=*/0, id.char_class, /*name=*/std::string{});
     rec.egress = std::move(egress);
     sessions_.emplace(slot, std::move(rec));
     slot_by_guid_[id.entity_guid] = slot;
@@ -200,7 +208,7 @@ void WorldState::on_movement(SessionSlot slot, const Position& pos, std::uint32_
     auto sit = sessions_.find(slot);
     if (sit == sessions_.end()) return;  // not entered
     SessionRec& self = sit->second;
-    self.pos = pos;
+    self.unit.set_position(pos);  // the Unit owns the authoritative position (#342)
     self.state_flags = state_flags;
     grid_.upsert(self.identity.entity_guid, pos);
 
@@ -309,6 +317,20 @@ void WorldState::leave(SessionSlot slot) {
 std::size_t WorldState::session_count() const {
     std::lock_guard<std::mutex> lk(mtx_);
     return sessions_.size();
+}
+
+Unit* WorldState::unit_for_slot(SessionSlot slot) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    auto it = sessions_.find(slot);
+    if (it == sessions_.end()) return nullptr;
+    return &it->second.unit;
+}
+
+const Unit* WorldState::unit_for_slot(SessionSlot slot) const {
+    std::lock_guard<std::mutex> lk(mtx_);
+    auto it = sessions_.find(slot);
+    if (it == sessions_.end()) return nullptr;
+    return &it->second.unit;
 }
 
 }  // namespace meridian::worldd

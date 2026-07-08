@@ -68,6 +68,7 @@
 #include <vector>
 
 #include "aoi_grid.h"
+#include "combat_unit.h"          // WorldObject→Unit→Player hierarchy (#342)
 #include "movement_validation.h"  // Position
 #include "world_generated.h"
 #include "world_session.h"        // WorldSession (AEAD s2c channel)
@@ -209,10 +210,28 @@ public:
     // Test/diagnostic: how many sessions are currently entered.
     std::size_t session_count() const;
 
+    // The Unit backing the session in `slot` (its combat/lifecycle state — health,
+    // level, faction, alive/dead; #342). Returns nullptr if `slot` is not entered.
+    //
+    // OWNERSHIP: the pointer is into WorldState-owned storage and stays valid until
+    // that session leaves (std::unordered_map keeps element addresses stable across
+    // rehash). Per SAD §2.5/§6 a map is single-threaded — "the tick owns entity
+    // state" — so this hands the owning (map/tick) thread the entity to spawn /
+    // damage / kill; it is NOT a handle for another thread to race on. The combat
+    // resolver (#344+) reaches a target's Unit through here.
+    Unit* unit_for_slot(SessionSlot slot);
+    const Unit* unit_for_slot(SessionSlot slot) const;
+
 private:
     struct SessionRec {
+        // The wire projection relayed on EntityEnter (guid + type_id + char_class).
         EntityIdentity identity;
-        Position pos;
+        // The session's Unit — the authoritative simulation entity (SAD §2.5
+        // WorldObject→Unit→Player). It OWNS the authoritative position (via its
+        // WorldObject base) and carries the combat/lifecycle state (#342). The grid
+        // is keyed by identity.entity_guid; the Unit's position mirrors what the
+        // grid is updated with each movement.
+        Player unit;
         std::uint32_t state_flags = 0;
         EgressFn egress;
         // The set of OTHER slots this session currently SEES (its interest set),
