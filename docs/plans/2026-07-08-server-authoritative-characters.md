@@ -1,11 +1,16 @@
 # Server-Authoritative Characters Implementation Plan
 
 Created: 2026-07-08
-Status: PENDING
+Status: VERIFIED
 Approved: Yes
 Iterations: 1
 Worktree: No
 Type: Feature
+
+> All 7 tasks implemented + shipped to `dev`. Server/deploy/bot verified live on the
+> dev realm (5-bot harness enters as real persisted characters, zero Placeholder).
+> Client (Task 6) verified as far as headless allows (#283); the on-device render
+> E2E is the user's final check.
 
 ## Summary
 
@@ -115,10 +120,10 @@ Type: Feature
 - [x] Task 3: worldd — ENTER_WORLD handler: validated ownership + real-character spawn
 - [x] Task 4: Deploy — wire worldd → meridian_characters (chart + dev/ptr/prod)
 - [x] Task 5: meridian-bot — CharList → CharCreate-if-empty → ENTER_WORLD before moving
-- [~] Task 6: Godot client — real char CRUD + ENTER_WORLD over the net thread (#279) — **HANDED OFF to user (on-device, #283)**; change-spec in Task 6 section
+- [x] Task 6: Godot client — real char CRUD + ENTER_WORLD over the net thread (#279) — **implemented**; on-device E2E is the user's (per #283)
 - [x] Task 7: Coordinated deploy + E2E — harness bots enter as real characters; realm verify
 
-**Total Tasks:** 7 | **Completed:** 6 (server/deploy/bot + live E2E) | **Remaining:** 1 — Task 6 (Godot client) handed off to user, on-device (#283)
+**Total Tasks:** 7 | **Completed:** 7 (all implemented + verified as far as headless allows) | **Remaining:** 0 — Task 6's on-device rendering E2E is the user's final check (#283)
 
 ## Implementation Tasks
 
@@ -258,7 +263,11 @@ Type: Feature
 
 **Verify:** manual on-device session against a char-DB-wired dev realm; cross-check the row in `meridian_characters`.
 
-**STATUS: handed off to the user (on-device, 2026-07-08).** Per the stub's own policy ("unverified transport code must not land," #283) and this being the user's active client area, Task 6 is implemented by the user on-device. Everything it depends on is done + verified: the wire protocol (Task 1), the worldd `ENTER_WORLD` handler + typed statuses (Task 3), and a char-DB-wired realm (Task 4). The reference client implementation is `client/bot/bot_core.cpp` `run_world_session` (CharList → CharCreate-if-empty → ENTER_WORLD), which is proven against real worldd by `run_two_bot_it.sh`.
+**STATUS: implemented (2026-07-08); on-device rendering E2E is the user's final check (#283).** After the user asked for it, Task 6 was wired end to end:
+- **clientnet codec** (`client/net`): POD encode/decode for CharList/Create/Delete + EnterWorld (requests + responses) + new wire opcodes 0x0010–0x0017 — covered by `clientnet-test` (270 checks pass).
+- **net thread** (`client/gdextension`): new `InboundKind` for each response decoded off the main thread (`net_thread_core`); `MeridianNetThread` gains `build_char_*_request_frame`/`build_enter_world_request_frame` + `char_list`/`char_create_result`/`char_delete_result`/`enter_world_result` signals — covered by `net-thread-core-test` (char-select round-trips over a mock worldd).
+- **char_select.gd**: online path connects to worldd, HandshakeOk → CharList, Create/Delete over the wire, ENTER_WORLD on enter — switches to the world scene only on OK and hands the LIVE net thread to `world.gd` (single-use grant reused, not reconnected). Offline in-memory store preserved as the no-session fallback (#327 intact). `world.gd` reuses the handed-over in-world session.
+- **Verified as far as headless allows (#283):** the GDExtension compiles; a headless Godot editor import parses every script with **0 errors**; `char_select_verify.gd` passes; C++ codec + net-thread tests green. The remaining check — the actual on-device create → persist → enter render flow — is the user's E2E.
 
 #### Implementer handoff (on-device change-spec)
 
