@@ -101,6 +101,9 @@ struct EntityEnter {
     std::uint32_t type_id = 0;
     float x = 0.0f, y = 0.0f, z = 0.0f;  // wire coords (z = height)
     float orientation = 0.0f;
+    std::uint8_t char_class = 0;  // M0-frozen class id (roster.h Class; #328) — the
+                                  // client colors the placeholder capsule by class.
+                                  // 0 = unset/unknown.
 };
 
 Bytes encode_entity_enter(const EntityEnter& in);

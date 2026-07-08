@@ -321,12 +321,22 @@ void test_entity_codec() {
     en.y = 65.0f;
     en.z = 0.5f;
     en.orientation = 1.25f;
+    en.char_class = 3;  // #328: Warden — round-trips so the client can color by class
     auto en_buf = codec::encode_entity_enter(en);
     auto en_out = codec::decode_entity_enter(en_buf);
     CHECK(en_out.has_value());
     CHECK(en_out->entity_guid == 0x1122334455667788ull && en_out->type_id == 7);
     CHECK(en_out->x == 64.0f && en_out->y == 65.0f && en_out->z == 0.5f);
     CHECK(std::fabs(en_out->orientation - 1.25f) < 1e-6f);
+    CHECK(en_out->char_class == 3);
+
+    // #328: char_class defaults to 0 (unset/unknown) when a producer omits it —
+    // the additive field is backward-compatible (a pre-#328 EntityEnter decodes to 0).
+    codec::EntityEnter en_noclass;
+    en_noclass.entity_guid = 0x99ull;
+    auto en_nc_out = codec::decode_entity_enter(codec::encode_entity_enter(en_noclass));
+    CHECK(en_nc_out.has_value());
+    CHECK(en_nc_out->char_class == 0);
 
     // EntityUpdate — a movement delta (all position fields present, as worldd sends).
     codec::EntityUpdate up;

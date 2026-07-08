@@ -158,6 +158,11 @@ table EntityEnter {
   z:float;
   orientation:float;
   attrs:[AttrDelta];       // full attribute set at entry
+  char_class:uint8 = 0;    // M0-frozen class id (roster.h Class; #328) — authoritative
+                           // on the server so EVERY client renders the placeholder
+                           // capsule in a class-derived color. 0 = unset/unknown.
+                           // Additive (appended, defaulted) — additive-field FlatBuffers
+                           // evolution within a major (README versioning note).
 }
 
 /// S→C. Delta update for an entity already in AoI. Only changed fields are present;

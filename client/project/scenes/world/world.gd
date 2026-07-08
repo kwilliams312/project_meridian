@@ -43,6 +43,11 @@ const TICK_MS := 50
 # handoff (scenes/charselect/char_select.gd → WORLD_SCENE).
 const CHAR_SELECT_SCENE := "res://scenes/charselect/char_select.tscn"
 
+# The single shared class→color table (#328). BOTH the local player capsule and the
+# remote-player capsules resolve their color through this one script, so own vs.
+# remote coloring can never drift — every client renders a class the same way.
+const PlayerClassColors := preload("res://scenes/world/player_class_colors.gd")
+
 var _session: Dictionary = {}
 var _character: Dictionary = {}
 
@@ -389,14 +394,20 @@ func _spawn_remote(guid: int, d: Dictionary) -> void:
 	capsule.radius = 0.35
 	body.mesh = capsule
 	body.position = Vector3(0, 0.9, 0)
-	# A tint so remote players read as distinct from the local capsule.
+	# Color the capsule by the mover's class (#328), via the SHARED table the local
+	# player uses too — so this remote renders in the SAME color on every client, and
+	# in the same color the local player would show for that class. Flat (no emission),
+	# which keeps it distinct from the OWNER's glowing local capsule.
+	var class_id := int(d.get("char_class", 0))
+	var col := PlayerClassColors.color_for(class_id)
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.85, 0.4, 0.3)
+	mat.albedo_color = col
 	body.material_override = mat
 	node.add_child(body)
 
 	var label := Label3D.new()
 	label.text = "guid %d" % guid
+	label.modulate = col
 	label.position = Vector3(0, 2.2, 0)
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.no_depth_test = true
@@ -552,13 +563,17 @@ func _build_player_and_camera() -> void:
 	capsule.radius = 0.35
 	(_body as MeshInstance3D).mesh = capsule
 	_body.position = Vector3(0, 0.9, 0)
-	# The LOCAL player: a bright, glowing GREEN capsule — deliberately unmistakable
-	# against the warm-orange remote capsules (see _spawn_remote) so the owner can
-	# instantly tell which one is theirs (the #303 "which capsule am I?" confusion).
+	# The LOCAL player: colored by ITS class (#328) through the SHARED table remotes
+	# use too, so a second client sees this same character in the same color. The
+	# owner still tells which capsule is theirs by the emission GLOW (remotes are flat)
+	# plus the floating "YOU" label — the #303 "which capsule am I?" cue is preserved
+	# without a hardcoded color that would disagree with how others see this player.
+	var local_class := int(_character.get("class", 0))
+	var local_col := PlayerClassColors.color_for(local_class)
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.20, 0.90, 0.35)
+	mat.albedo_color = local_col
 	mat.emission_enabled = true
-	mat.emission = Color(0.10, 0.55, 0.20)
+	mat.emission = local_col * 0.45
 	(_body as MeshInstance3D).material_override = mat
 	var nose := MeshInstance3D.new()
 	var nm := BoxMesh.new()

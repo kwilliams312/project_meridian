@@ -99,6 +99,9 @@ using EgressFn =
 struct EntityIdentity {
     AoiId entity_guid = 0;   // the mover's stable id (placeholder char guid)
     std::uint32_t type_id = 0;  // entity/template kind (world.fbs EntityEnter.type_id)
+    std::uint8_t char_class = 0;  // M0-frozen class id (roster.h Class; #328) — relayed
+                                  // on EntityEnter so every client colors the placeholder
+                                  // capsule by class. 0 = unset/unknown.
 };
 
 // ---------------------------------------------------------------------------

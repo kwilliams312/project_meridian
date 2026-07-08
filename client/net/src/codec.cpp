@@ -127,7 +127,7 @@ Bytes encode_entity_enter(const EntityEnter& in) {
     // (mirrors worldd's encode_entity_enter_payload).
     auto attrs = b.CreateVector(std::vector<fb::Offset<mn::AttrDelta>>{});
     auto e = mn::CreateEntityEnter(b, in.entity_guid, in.type_id, in.x, in.y, in.z,
-                                   in.orientation, attrs);
+                                   in.orientation, attrs, in.char_class);
     b.Finish(e);
     return to_bytes(b);
 }
@@ -142,6 +142,7 @@ std::optional<EntityEnter> decode_entity_enter(const Bytes& buf) {
     out.y = t->y();
     out.z = t->z();
     out.orientation = t->orientation();
+    out.char_class = t->char_class();  // #328: class id for the client capsule color
     return out;
 }
 

@@ -268,6 +268,7 @@ struct EntityMsg {
     std::uint64_t guid = 0;
     float x = 0.0f, y = 0.0f, z = 0.0f;
     std::uint16_t leave_reason = 0;
+    std::uint8_t char_class = 0;  // #328: class relayed on EntityEnter
 };
 
 EntityMsg recv_entity(Client& c) {
@@ -287,6 +288,7 @@ EntityMsg recv_entity(Client& c) {
             m.x = e->x();
             m.y = e->y();
             m.z = e->z();
+            m.char_class = e->char_class();  // #328
             return m;
         }
         if (rf->opcode == mn::Opcode::ENTITY_UPDATE) {
@@ -464,6 +466,11 @@ int main() {
         check("1: the EntityEnter carries the spawn position (~64,64)",
               a_enter.got && a_enter.x > 63.9f && a_enter.x < 64.1f &&
                   a_enter.y > 63.9f && a_enter.y < 64.1f);
+        // #328: the relayed EntityEnter carries B's class so A colors B's capsule by
+        // class. No characters DB is wired, so both use the D-11 stub class (1 =
+        // Vanguard, load_placeholder_character's default).
+        check("1: the EntityEnter carries the mover's class (#328)",
+              a_enter.got && a_enter.char_class == 1);
 
         // B also received an EntityEnter for A at ITS enter (reciprocal login
         // visibility). Drain that first so the next B frame we read is the one A's

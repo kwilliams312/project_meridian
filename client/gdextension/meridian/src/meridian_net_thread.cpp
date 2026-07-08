@@ -226,6 +226,7 @@ Dictionary MeridianNetThread::decode_entity_frame(int opcode,
 		d["kind"] = String("enter");
 		d["guid"] = static_cast<int64_t>(e->entity_guid);
 		d["type_id"] = static_cast<int64_t>(e->type_id);
+		d["char_class"] = static_cast<int64_t>(e->char_class);  // #328: class→color
 		d["has_position"] = true;
 		d["position"] = to_godot(e->x, e->y, e->z);
 		d["orientation"] = e->orientation;
