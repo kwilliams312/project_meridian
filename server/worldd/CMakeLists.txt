@@ -27,6 +27,7 @@ add_library(world-dispatch STATIC
   aoi_grid.cpp
   world_state.cpp
   active_sessions.cpp
+  ability_store.cpp
 )
 add_library(meridian::world-dispatch ALIAS world-dispatch)
 target_include_directories(world-dispatch
@@ -181,6 +182,23 @@ target_link_libraries(worldd-aoi-test
 )
 set_target_properties(worldd-aoi-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-aoi COMMAND worldd-aoi-test)
+
+# --- Combat ability/effect data model + store UNIT test (CMB-01 foundation; #343).
+# PURE (no DB, no socket, no session): drives the AbilityStore load + O(1) lookup
+# and the placeholder ability set's shape directly. It always runs in the plain
+# server ctest (no MERIDIAN_DB_* needed) — the ability model is an in-memory
+# template store with no DB dependency at M1; the mcc/world-DB loader that fills it
+# from IF-4 is epic #28 (mcc v1), a separate story. This is the "unit tests for
+# load + lookup + the placeholder set's shape" ask (#343).
+add_executable(worldd-ability-test
+  test/ability_store_test.cpp
+)
+target_link_libraries(worldd-ability-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-ability-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-ability COMMAND worldd-ability-test)
 
 # --- Two-session AoI movement RELAY integration test (IT-M0 see-each-other-move;
 #     #87). ---------------------------------------------------------------------
