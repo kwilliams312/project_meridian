@@ -114,14 +114,23 @@ spec:
           imagePullPolicy: {{ $root.Values.image.pullPolicy }}
           securityContext:
             {{- toYaml $root.Values.containerSecurityContext | nindent 12 }}
+          {{- /* meridiand parses "--flag value" (space-separated); the
+                 "--flag=value" form is silently ignored (authd/worldd main.cpp),
+                 so each flag + value MUST be separate argv entries. */}}
           args:
-            - --cert={{ printf "/certs/%s" $root.Values.tls.certKey }}
-            - --key={{ printf "/certs/%s" $root.Values.tls.keyKey }}
-            - --bind={{ $cfg.bindAddress | default "0.0.0.0" }}
-            - --port={{ $cfg.port }}
+            - --cert
+            - {{ printf "/certs/%s" $root.Values.tls.certKey | quote }}
+            - --key
+            - {{ printf "/certs/%s" $root.Values.tls.keyKey | quote }}
+            - --bind
+            - {{ $cfg.bindAddress | default "0.0.0.0" | quote }}
+            - --port
+            - {{ $cfg.port | quote }}
             {{- if $root.Values.observability.enabled }}
-            - --metrics-port={{ $root.Values.observability.metricsPort }}
-            - --metrics-bind={{ $root.Values.observability.metricsBind }}
+            - --metrics-port
+            - {{ $root.Values.observability.metricsPort | quote }}
+            - --metrics-bind
+            - {{ $root.Values.observability.metricsBind | quote }}
             {{- end }}
             {{- with $cfg.extraArgs }}
             {{- toYaml . | nindent 12 }}
