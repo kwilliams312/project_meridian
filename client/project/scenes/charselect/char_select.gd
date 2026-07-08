@@ -182,7 +182,11 @@ func _connect_online() -> void:
 # Drain decoded server events each frame (the pre-sim sync point). Only while this
 # screen owns the net thread — once handed to the world scene, that scene pumps.
 func _process(_delta: float) -> void:
-	if _online and _net != null and not _entering:
+	# Drain server events every frame while this screen owns the net thread — INCLUDING
+	# while awaiting the ENTER_WORLD response (do NOT gate on _entering, or the response
+	# is never read and Enter World hangs). Draining stops via set_process(false) in
+	# _enter_world_scene() once we hand the live session to the world scene.
+	if _online and _net != null:
 		_net.pump()
 
 
@@ -313,6 +317,8 @@ func _on_enter_pressed() -> void:
 	# character is owned before spawning. The live connection is carried into the world
 	# scene (the grant is single-use, so it must be reused, not reconnected).
 	if _online:
+		if _entering:
+			return  # an ENTER_WORLD is already in flight — ignore repeat clicks
 		if not _handshaked:
 			_set_status("Still connecting to the realm…")
 			return
