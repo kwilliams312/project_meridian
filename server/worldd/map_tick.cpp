@@ -6,6 +6,7 @@
 #include "map_tick.h"
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <string>
 #include <utility>
@@ -94,7 +95,8 @@ MapTick::MapTick(const AbilityStore& abilities, std::uint64_t rng_seed, std::uin
 
 ObjectGuid MapTick::add_player(ObjectGuid guid, const Position& pos, const UnitStats& stats) {
     Player p(guid, pos, stats, /*account_id=*/0, /*char_class=*/0, /*name=*/"");
-    players_.emplace(guid, std::make_unique<PlayerCombatant>(std::move(p)));
+    players_.emplace(guid,
+                     std::make_unique<PlayerCombatant>(std::move(p), move_dmg_params_));
     return guid;
 }
 
@@ -156,6 +158,12 @@ std::vector<TickEvent> MapTick::advance() {
     //    resource) → tick aura periodics → deaths (SAD §3.2 "casts complete,
     //    periodics, deaths"). This CLOSES the #354 cast-completion seam.
     phase_combat_auras(out);
+
+    // 4b) movement-derived (fall/swim) environmental damage (#362), evaluated in
+    //     the combat phase after casts/auras: fall damage on landing + drowning while
+    //     breath is exhausted, applied via Unit::apply_damage. Emits only when it
+    //     actually deals damage (a flat map with no water is silent).
+    phase_movement_damage(out);
 
     // 6) AoI delta build + 7) flush: the returned event stream IS the per-tick
     //    delta an observer would receive (the wire seam the dispatch layer serialises).
@@ -344,6 +352,49 @@ void MapTick::phase_combat_auras(std::vector<TickEvent>& out) {
         Creature* cr = ai_.creature(g);
         if (cr == nullptr) continue;
         tick_host(g, *cr, *creature_auras_[g]);
+    }
+}
+
+void MapTick::phase_movement_damage(std::vector<TickEvent>& out) {
+    // Iterate players in ascending guid order for determinism (mirrors the other
+    // phases). Each player's tracker sees exactly one position sample per tick — the
+    // authoritative position the caller set via set_player_position before advance().
+    std::vector<ObjectGuid> pguids;
+    pguids.reserve(players_.size());
+    for (const auto& kv : players_) pguids.push_back(kv.first);
+    std::sort(pguids.begin(), pguids.end());
+
+    for (ObjectGuid g : pguids) {
+        PlayerCombatant& pc = *players_[g];
+        Unit& unit = pc.unit;
+
+        // Always step the tracker (keeps apex/breath bookkeeping consistent), but a
+        // dead unit takes no further environmental damage.
+        const MovementDamageResult r =
+            pc.move_dmg.step(unit.position(), env_, dt_ms_, unit.max_health());
+        if (unit.is_dead()) continue;
+
+        if (r.fall_damage > 0) {
+            const DamageResult dr = unit.apply_damage(r.fall_damage);
+            emit(out, TickPhase::kCombat,
+                 "fall_damage guid=" + u(g) + " height_cm=" +
+                     u(static_cast<std::uint64_t>(std::lround(r.fall_height_m * 100.0f))) +
+                     " dmg=" + u(dr.applied) + " hp=" + u(unit.health()) + " died=" +
+                     u(dr.lethal ? 1 : 0));
+            if (dr.lethal)
+                emit(out, TickPhase::kCombat, "death guid=" + u(g) + " by=FALL");
+            if (unit.is_dead()) continue;  // a fatal fall pre-empts drowning this tick
+        }
+
+        if (r.drown_damage > 0) {
+            const DamageResult dr = unit.apply_damage(r.drown_damage);
+            emit(out, TickPhase::kCombat,
+                 "drown_damage guid=" + u(g) + " ticks=" + u(r.drown_ticks) + " dmg=" +
+                     u(dr.applied) + " breath_ms=" + u(r.breath_remaining_ms) + " hp=" +
+                     u(unit.health()) + " died=" + u(dr.lethal ? 1 : 0));
+            if (dr.lethal)
+                emit(out, TickPhase::kCombat, "death guid=" + u(g) + " by=DROWN");
+        }
     }
 }
 
