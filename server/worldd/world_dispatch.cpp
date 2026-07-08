@@ -12,9 +12,11 @@
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 #include "characters.h"  // meridian-characters CRUD: list/create/delete (#286 / D-35)
+#include "map_tick.h"    // per-map tick orchestrator (SAD §2.5 phase order; #349)
 #include "meridian/core/audit.hpp"
 #include "meridian/core/log.hpp"
 #include "meridian/metrics/catalog.h"
@@ -317,6 +319,69 @@ void send_s2c(net::Session& sess, ConnCtx& ctx, const Bytes& frame) {
     } else {
         sess.write_frame(frame);
     }
+}
+
+// A monotonic ms clock for the GCD/cast timers (steady, never wall-clock).
+std::uint64_t steady_now_ms() {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+}
+
+// Resolve a cast-time ability whose timer has elapsed — the #354 deferral
+// ("cast-time resolution on cast completion + resource-spend-for-casts to the tick
+// loop") CLOSED by #349. The instant path (CAST_REQUEST handler) resolves inline;
+// this is its cast-time twin: on completion SPEND the resource (deferred from
+// begin_ability_use), roll the attack table + apply damage/heal (resolve_ability),
+// and send the server-authoritative CastResult (or CastFailed if the target died /
+// left / moved out of range while the cast ran). Polled on the serve loop because
+// the per-connection CombatSession (ctx.combat) is owned by this IO worker; a
+// client streams movement/clock frames at >= 20 Hz, so a completed cast resolves
+// within ~one tick of its end. The multi-worker map manager migrates this onto the
+// world thread at M3 (SAD §2.5 "recast at M3"). No-op when no cast is pending.
+void poll_completed_cast(net::Session& sess, ConnCtx& ctx, std::uint64_t now_ms) {
+    if (ctx.phase != SessionPhase::kInWorld || ctx.world == nullptr || !ctx.movement) return;
+    std::optional<PendingCast> done = ctx.combat.take_completed(now_ms);
+    if (!done) return;
+
+    const Ability* ability = ctx.abilities ? ctx.abilities->find(done->ability_id) : nullptr;
+    Unit* caster = ctx.world->unit_for_slot(ctx.slot);
+    if (ability == nullptr || caster == nullptr) return;
+    const std::uint64_t caster_guid = ctx.movement->entity_guid();
+
+    ObjectGuid target_guid = done->target_guid;
+    Unit* target = nullptr;
+    if (ability->target == TargetKind::kSelf || target_guid == 0 ||
+        target_guid == caster_guid) {
+        target = caster;
+        target_guid = caster_guid;
+    } else {
+        target = ctx.world->unit_for_guid(target_guid);
+    }
+
+    // Re-validate on completion (the target may have died / left / moved off).
+    const CastReject why = validate_target(*ability, *caster, target, flat_map_los);
+    if (why != CastReject::kNone || target == nullptr) {
+        send_s2c(sess, ctx,
+                 encode_frame(net::Opcode::CAST_FAILED, 0,
+                              encode_cast_failed(done->ability_id, to_wire_reason(why), 0)));
+        return;
+    }
+
+    // Resource is spent AT RESOLUTION (begin_ability_use deferred it — #354).
+    if (ability->resource_amount > 0) caster->spend_resource(ability->resource_amount);
+    const ResolveResult rr =
+        resolve_ability(*ability, *caster, *target, ctx.world->combat_rng());
+    send_s2c(sess, ctx,
+             encode_frame(net::Opcode::CAST_RESULT, 0,
+                          encode_cast_result(done->ability_id, caster_guid, target_guid,
+                                             to_wire_outcome(rr.outcome), rr.amount,
+                                             rr.is_heal, rr.target_health, rr.target_died,
+                                             now_ms)));
+    log::debug(kCat, "cast completed ability=" + std::to_string(done->ability_id) +
+                         " outcome=" + std::to_string(static_cast<int>(rr.outcome)) +
+                         " amount=" + std::to_string(rr.amount));
 }
 
 }  // namespace
@@ -1204,6 +1269,17 @@ struct WorldServer::Impl {
     // Shared read-only across every serve_connection — the CAST_REQUEST handler
     // looks abilities up here with no lock (O(1), single load — client SAD §2.4).
     AbilityStore abilities = load_placeholder_ability_store();
+
+    // The per-map tick orchestrator (SAD §2.5 phase order; #349). Owned by + run
+    // ONLY on the world thread. Each tick it runs the AI -> combat/auras ->
+    // spawns/respawns passes for the map's server-controlled creatures + auras +
+    // cast timers (the #354 cast-completion seam). At M1 the bootstrap map has no
+    // creatures spawned (content wiring is #28), so has_simulation() is false and
+    // the pass is skipped — the seam is real, the population lands with the content
+    // pipeline. A fixed per-map seed keeps a single-worker boot deterministic
+    // (mirrors WorldState::combat_rng_; the MapKey-derived seed is a map-manager
+    // concern). Declared AFTER `abilities` so its ctor can borrow it.
+    MapTick map{abilities, 0x9E3779B97F4A7C15ULL, kTickDtMs};
 };
 
 WorldServer::WorldServer(const Dispatcher& dispatcher, WorldServerConfig cfg)
@@ -1244,20 +1320,28 @@ WorldState& WorldServer::world_state() { return impl_->world; }
 ActiveSessionRegistry& WorldServer::active_sessions() { return impl_->active_sessions; }
 
 void WorldServer::world_thread_main() {
-    // M0 TICK PLACEHOLDER (SAD §2.5): the real tick is
-    //   drain inbound -> movement -> AI -> combat/auras -> spawns -> AoI delta -> flush
-    // at 20 Hz. Here we ONLY drain the inbound queue at the configured cadence —
-    // there are no maps to update yet. This is the seam the per-map update loop
-    // replaces; the important property today is that this is the ONE thread that
-    // owns simulation work (game state), so nothing on the IO/accept path does.
+    // The per-map map tick (SAD §2.5 / §3.2), 20 Hz with a 40 ms soft budget
+    // (SAD §8.1). Each wake runs ONE tick in the SAD §2.5 PHASE ORDER:
+    //   drain inbound -> movement/commands -> AI -> combat/auras ->
+    //   spawns/respawns -> AoI delta build -> flush.
+    // The inbound queue drain (many IO workers -> this one world thread) is the
+    // "drain inbound" phase; the AI / combat/auras / spawns-respawns passes run in
+    // MapTick (impl_->map) — the single-threaded orchestrator that owns the map's
+    // creatures + auras + cast timers, and that resolves completed casts + spends
+    // their resource (the #354 cast-completion seam). Player combat currently
+    // resolves on the owning IO worker (the M1 per-connection model —
+    // poll_completed_cast); it migrates onto this thread with the multi-worker map
+    // manager (SAD §2.5 "recast at M3"). This is the ONE thread that owns
+    // simulation work (game state), so the IO/accept path never does.
     using namespace std::chrono;
     const auto interval = milliseconds(cfg_.tick_interval_ms);
+    const auto soft_budget = milliseconds(kTickSoftBudgetMs);
 
     // OPS-05: the tick-duration histogram (meridian_tick_duration_seconds
     // {realm,zone,shard,map}; p99 = tick health, the Realm-health headline). We
-    // time the TICK BODY (drain + process), NOT the wait_for idle — the metric is
-    // "how long the tick's work took", so an idle tick with an empty batch is not
-    // measured (it would report ~0 and drown the real work in the histogram).
+    // time the TICK BODY (drain + phases), NOT the wait_for idle — the metric is
+    // "how long the tick's work took", so a truly idle tick is not measured (it
+    // would report ~0 and drown the real work in the histogram).
     auto& tick_hist = metrics::tick_duration_seconds().with(cfg_.labels.rzsm());
 
     while (!impl_->stop_requested.load()) {
@@ -1270,19 +1354,42 @@ void WorldServer::world_thread_main() {
             batch.swap(impl_->queue);
         }
 
-        if (batch.empty()) continue;  // idle tick — no work to time
+        // A truly idle tick — nothing inbound AND no map to simulate (SAD §2.5
+        // "inactive grids do not tick") — is skipped so the histogram measures
+        // real work only.
+        if (batch.empty() && !impl_->map.has_simulation()) continue;
 
         const auto tick_t0 = steady_clock::now();
-        // "drain inbound" — process this tick's batch. At M0 the world thread has
-        // no simulation to run against these events; it just accounts for them so
-        // the queue -> world-thread path is observable (drained_count()).
+
+        // PHASE 1 — drain inbound. At M1 the world thread accounts each event so
+        // the queue -> world-thread path stays observable (drained_count()); typed
+        // per-map command routing lands with the map manager.
         for (const WorldEvent& ev : batch) {
             (void)ev;
             impl_->drained.fetch_add(1);
         }
 
-        // (movement / AI / combat / spawns / AoI / flush would run here)
-        tick_hist.observe(duration<double>(steady_clock::now() - tick_t0).count());
+        // PHASES 2-6 — movement/commands -> AI (threat/aggro/leash/evade/patrol) ->
+        // combat/auras (casts complete + resource spend, periodic DoT/HoT, deaths)
+        // -> spawns/respawns. MapTick runs them in exactly this order; the returned
+        // event stream is the per-tick AoI delta the FLUSH phase (7) serialises to
+        // observers (wired to the AoI relay with the #28 content spawns).
+        if (impl_->map.has_simulation()) {
+            const std::vector<TickEvent> deltas = impl_->map.advance();
+            (void)deltas;
+        }
+
+        // Record the tick + log a soft-budget overrun (SAD §8.1: 50 ms hard / 40 ms
+        // soft per map). Sustained overruns are the first signal a map is too hot.
+        const auto elapsed = steady_clock::now() - tick_t0;
+        tick_hist.observe(duration<double>(elapsed).count());
+        if (elapsed > soft_budget) {
+            log::warn(kCat,
+                      "tick overrun: " +
+                          std::to_string(duration_cast<milliseconds>(elapsed).count()) +
+                          " ms > " + std::to_string(kTickSoftBudgetMs) +
+                          " ms soft budget (map=" + cfg_.labels.map + ")");
+        }
     }
 
     // Final drain on shutdown so no enqueued event is silently lost.
@@ -1378,7 +1485,13 @@ void WorldServer::serve_connection(net::Session sess) {
                 break;
             }
 
-            if (outcome == DispatchOutcome::kHandled) continue;
+            if (outcome == DispatchOutcome::kHandled) {
+                // #349: resolve any cast-time ability whose timer elapsed (the
+                // #354 cast-completion + resource-spend seam). Cheap no-op unless a
+                // cast is pending and has reached its end time.
+                poll_completed_cast(sess, ctx, steady_now_ms());
+                continue;
+            }
 
             // Error path: map the outcome to a DisconnectReason + message, send a
             // Disconnect, and close. One reject ends the connection.

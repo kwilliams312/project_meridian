@@ -1,0 +1,209 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// worldd — per-map tick orchestrator (issue #349, CMB-01/02; the epic-#18
+// capstone). The single-threaded map tick the SAD §2.5 / §3.2 describe, assembled
+// from the four combat modules that landed ahead of it:
+//
+//     AbilityStore (#343) ─┐
+//     Unit model   (#342) ─┼─►  MapTick  ──►  ordered SAD §2.5 phases per tick:
+//     CombatResolver(#344/5)│         drain inbound → movement/commands → AI →
+//     CreatureAi   (#347/8) │         combat/auras → spawns/respawns →
+//     AuraContainer(#346) ──┘         AoI delta build → flush
+//
+// WHAT THIS FILE IS: a self-contained, deterministic driver that runs ONE map's
+// simulation forward one tick at a time, in the exact SAD §2.5 phase order, and
+// emits a byte-stable event stream. It is BOTH:
+//
+//   1. the seam that CLOSES the #354 deferral — cast-time resolution
+//      (`CastResult` on cast completion) and resource-spend-for-casts are resolved
+//      here in the combat/auras phase (`CombatSession::take_completed` → spend
+//      resource → `resolve_ability` → apply aura effects). Instants still resolve
+//      inline in the drain-inbound/command phase, exactly as the live dispatch
+//      handler does today (world_dispatch.cpp CAST_REQUEST);
+//
+//   2. the substrate for the seeded GOLDEN SIM-HARNESS scenarios (#349) that prove
+//      the epic end-to-end: with a fixed CombatRng seed the whole tick is
+//      byte-stable, so the golden test gates in CI — any drift in an attack-table
+//      band, a damage/heal formula, an aura cadence, an AI transition, or the
+//      phase ORDER flips a golden line and fails loudly.
+//
+// PURE / DB-FREE / SOCKET-FREE / CLOCK-FREE: like creature_ai's tick() and
+// aura_container's tick(), MapTick reads NO wall clock (its map-tick clock is
+// accumulated from `dt_ms`), touches NO socket, DB, or FlatBuffer, and rolls only
+// the seeded CombatRng. So a given (seed, spawn set, command stream, dt) yields
+// the same event stream on every platform — the whole module runs in the plain
+// `server` ctest with no MariaDB (mirrors aoi_grid / ability_store / creature_ai).
+//
+// THREADING (SAD §2.5/§6): a map is single-threaded by construction — "the tick
+// owns entity state". MapTick owns its combatants + creatures + auras + the
+// per-map RNG and carries NO lock of its own; the map that owns it is the single
+// caller. The multi-worker map manager (SAD §2.5 "recast at M3") hosts one MapTick
+// per active map, each pinned to one worker.
+//
+// CLEAN-ROOM: designed from docs/sad/server-sad.md §2.5 (the per-map tick order),
+// §3.2 (the one-map-tick sequence: "drain inbound … AI update … combat + auras
+// (casts complete, periodics, deaths) … spawn/respawn timers … AoI pass …
+// enqueue outbound"), §3.3 (the D-10 cast lifecycle), §8.1 (the 20 Hz / 40 ms soft
+// budget), and the #342-#348 module headers ONLY. No GPL / AGPL / CMaNGOS /
+// TrinityCore / leaked emulator source consulted — every phase, ordering, and
+// event here is ORIGINAL, derived from OUR SAD. See CONTRIBUTING.md.
+
+#ifndef MERIDIAN_WORLDD_MAP_TICK_H
+#define MERIDIAN_WORLDD_MAP_TICK_H
+
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "ability_store.h"    // AbilityStore / Ability / AbilityId
+#include "aura_container.h"    // AuraContainer
+#include "combat_resolver.h"   // CombatRng / CombatSession / resolve_ability
+#include "combat_unit.h"       // Unit / Player / ObjectGuid / UnitStats
+#include "creature_ai.h"       // CreatureAi / CreatureSpawnDef / AiState
+#include "movement_validation.h"  // Position
+
+namespace meridian::worldd {
+
+// The map tick rate + soft budget (SAD §8.1: "50 ms hard / 40 ms soft per map",
+// 20 Hz). One tick advances the map-tick clock by kTickDtMs.
+inline constexpr std::uint32_t kTickHz = 20;
+inline constexpr std::uint32_t kTickDtMs = 1000 / kTickHz;   // 50 ms (20 Hz)
+inline constexpr std::uint32_t kTickSoftBudgetMs = 40;       // soft budget (overrun-logged)
+
+// One inbound ability-use command — the tick's "drain inbound" unit for combat
+// (the world.fbs CastRequest lifted off the wire; here a plain struct so the
+// harness + the future dispatch seam feed the tick identically).
+struct AbilityUseCmd {
+    ObjectGuid   caster_guid = 0;
+    AbilityId    ability_id = 0;
+    ObjectGuid   target_guid = 0;   // 0 = self / no explicit target
+};
+
+// The phase of the tick that produced an event (SAD §2.5 order). Recorded so the
+// golden stream shows WHERE in the tick each effect happened.
+enum class TickPhase : std::uint8_t {
+    kInbound = 0,   // drain inbound + command processing (instant resolution)
+    kAi = 1,        // creature AI (threat/aggro/leash/evade/respawn/patrol)
+    kCombat = 2,    // cast completion + resource spend + resolution
+    kAura = 3,      // periodic DoT/HoT ticks + expiry
+};
+
+const char* tick_phase_name(TickPhase p);
+
+// One deterministic tick event. `text` is the byte-stable golden line; the typed
+// fields let a test assert programmatically without parsing. The event stream a
+// tick returns is the map's "AoI delta build → flush" seam in miniature — the set
+// of state changes an observer would be sent this tick.
+struct TickEvent {
+    std::uint64_t tick = 0;       // 1-based tick index
+    std::uint64_t now_ms = 0;     // map-tick clock at the START of this tick
+    TickPhase     phase = TickPhase::kInbound;
+    std::string   text;           // deterministic "kind key=val …" content
+
+    std::string to_line() const;  // "t=<tick> now=<ms> <phase> <text>"
+};
+
+// ---------------------------------------------------------------------------
+// MapTick — the single-threaded per-map tick orchestrator.
+// ---------------------------------------------------------------------------
+class MapTick {
+public:
+    // `abilities` is the read-only ability store (borrowed; outlives the tick).
+    // `rng_seed` seeds the per-map CombatRng (SAD §2.5 seeded rolls). `dt_ms` is
+    // the per-tick step (defaults to the 20 Hz cadence; a scenario may coarsen it).
+    MapTick(const AbilityStore& abilities, std::uint64_t rng_seed,
+            std::uint32_t dt_ms = kTickDtMs);
+
+    MapTick(const MapTick&) = delete;
+    MapTick& operator=(const MapTick&) = delete;
+
+    // --- population ---------------------------------------------------------
+    // Add a player-controlled combatant at `pos` with `stats`. Returns its guid
+    // (the caller-supplied `guid`). The player gets a CombatSession (GCD/cast
+    // clock) and an AuraContainer. Players are fed to the AI phase as aggro targets.
+    ObjectGuid add_player(ObjectGuid guid, const Position& pos, const UnitStats& stats);
+
+    // Spawn a server creature from `def` via the AI. Returns its assigned guid.
+    ObjectGuid add_creature(const CreatureSpawnDef& def);
+
+    // Move a player (the "movement/commands" phase input — the harness sets the
+    // authoritative position the AI phase reads as an aggro target this tick).
+    void set_player_position(ObjectGuid guid, const Position& pos);
+
+    // --- inbound ------------------------------------------------------------
+    // Queue an ability use to be drained on the NEXT advance() (SAD §3.2 "drain
+    // inbound"). Processed in tick order; instants resolve that tick, cast-time
+    // abilities arm a cast timer that completes a later tick.
+    void enqueue_cast(const AbilityUseCmd& cmd);
+
+    // --- the tick ------------------------------------------------------------
+    // Run ONE map tick in SAD §2.5 order and return the events it produced (also
+    // appended to the running log()). The map-tick clock advances by dt_ms.
+    std::vector<TickEvent> advance();
+    // Run `ticks` ticks (convenience for scenarios); events accumulate in log().
+    void advance(int ticks);
+
+    // Whether the map has anything to simulate (any player or creature). The world
+    // thread uses this to skip the tick body on a truly idle map (SAD §2.5
+    // "inactive grids do not tick").
+    bool has_simulation() const;
+
+    // --- introspection -------------------------------------------------------
+    std::uint64_t now_ms() const { return now_ms_; }
+    std::uint64_t tick_count() const { return tick_no_; }
+    const std::vector<TickEvent>& log() const { return log_; }
+    std::string log_text() const;  // newline-joined to_line() — the golden blob
+
+    Unit* unit_for_guid(ObjectGuid guid);
+    CreatureAi& ai() { return ai_; }
+    CombatRng& rng() { return rng_; }
+
+private:
+    // A player combatant: its Unit + per-session combat clock + aura container.
+    // Heap-boxed so the AuraContainer's Unit& binding stays valid across rehash.
+    struct PlayerCombatant {
+        Player          unit;
+        CombatSession   combat;
+        AuraContainer   auras;
+        explicit PlayerCombatant(Player u) : unit(std::move(u)), auras(unit) {}
+    };
+
+    // --- SAD §2.5 phases (each appends to `out`) ----------------------------
+    void phase_drain_inbound(std::vector<TickEvent>& out);
+    void phase_ai(std::vector<TickEvent>& out);
+    void phase_combat_auras(std::vector<TickEvent>& out);
+
+    // Resolve one ability against a target: spend the resource, roll the attack
+    // table + apply direct damage/heal (resolve_ability), apply any aura effects to
+    // the target's container, and feed resolver threat back into the AI. Shared by
+    // the instant path (drain-inbound) and the cast-completion path (combat).
+    void resolve_and_log(const Ability& ability, Unit& caster, ObjectGuid caster_guid,
+                         Unit& target, ObjectGuid target_guid, TickPhase phase,
+                         std::vector<TickEvent>& out);
+
+    // Emit one event (stamped with the current tick + clock).
+    void emit(std::vector<TickEvent>& out, TickPhase phase, std::string text);
+
+    // The AuraContainer for any guid (player or creature), created on demand for a
+    // creature. nullptr if the guid names no live unit.
+    AuraContainer* auras_for(ObjectGuid guid);
+
+    const AbilityStore& abilities_;
+    CombatRng           rng_;
+    std::uint32_t       dt_ms_;
+    std::uint64_t       now_ms_ = 0;
+    std::uint64_t       tick_no_ = 0;
+
+    CreatureAi ai_;  // server creatures (owns Creature + AI state + respawn timers)
+    std::unordered_map<ObjectGuid, std::unique_ptr<PlayerCombatant>> players_;
+    std::unordered_map<ObjectGuid, std::unique_ptr<AuraContainer>> creature_auras_;
+    std::unordered_map<ObjectGuid, AiState> prev_ai_state_;  // AI transition edges
+    std::vector<AbilityUseCmd> inbound_;
+    std::vector<TickEvent> log_;
+};
+
+}  // namespace meridian::worldd
+
+#endif  // MERIDIAN_WORLDD_MAP_TICK_H
