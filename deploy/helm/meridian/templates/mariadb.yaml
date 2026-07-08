@@ -9,7 +9,12 @@ kind: Secret
 metadata:
   name: {{ $full }}
   labels:
-    {{- include "meridian.mariadb.selectorLabels" . | nindent 4 }}
+    {{- include "meridian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mariadb
+  {{- with (include "meridian.annotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
 type: Opaque
 stringData:
   MARIADB_ROOT_PASSWORD: {{ .Values.mariadb.rootPassword | quote }}
@@ -21,7 +26,12 @@ kind: Service
 metadata:
   name: {{ $full }}
   labels:
-    {{- include "meridian.mariadb.selectorLabels" . | nindent 4 }}
+    {{- include "meridian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mariadb
+  {{- with (include "meridian.annotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
 spec:
   type: ClusterIP
   selector:
@@ -42,7 +52,12 @@ kind: Deployment
 metadata:
   name: {{ $full }}
   labels:
-    {{- include "meridian.mariadb.selectorLabels" . | nindent 4 }}
+    {{- include "meridian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mariadb
+  {{- with (include "meridian.annotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
 spec:
   replicas: 1
   {{- if .Values.mariadb.persistence.enabled }}
@@ -54,8 +69,13 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "meridian.mariadb.selectorLabels" . | nindent 8 }}
+        {{- include "meridian.labels" . | nindent 8 }}
+        app.kubernetes.io/component: mariadb
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.mariadb.podSecurityContext | nindent 8 }}
       {{- with .Values.mariadb.nodeSelector }}
