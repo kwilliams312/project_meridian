@@ -32,6 +32,7 @@ add_library(world-dispatch STATIC
   world_state.cpp
   active_sessions.cpp
   ability_store.cpp
+  map_tick.cpp
 )
 add_library(meridian::world-dispatch ALIAS world-dispatch)
 target_include_directories(world-dispatch
@@ -374,3 +375,28 @@ target_link_libraries(worldd-boot-db-test
 )
 set_target_properties(worldd-boot-db-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-boot-db COMMAND worldd-boot-db-test)
+
+# --- Combat tick + seeded GOLDEN sim-harness scenarios (CMB-01/02; #349). ------
+# The epic-#18 capstone. PURE (no DB, no socket): drives the MapTick orchestrator
+# (map_tick.{h,cpp}) — the single-threaded per-map tick in SAD §2.5 phase order —
+# through three SEEDED, byte-stable golden scenarios that prove the combat epic
+# end-to-end:
+#   A. ability use → GCD/accept → cast completes on a later tick → attack-table
+#      roll → damage → DEATH (closes the #354 cast-completion + resource-spend seam);
+#   B. an instant-applied DoT TICKING over several ticks via the aura container;
+#   C. a creature aggro → leash → EVADE → full-heal → resume patrol → death →
+#      RESPAWN cycle driven by creature_ai in the AI phase.
+# Every roll draws from a fixed-seed CombatRng, so the whole event stream is
+# deterministic — the test asserts each scenario's log against an embedded golden
+# blob, so ANY drift in an attack-table band, a damage/heal/aura formula, an AI
+# transition, or the tick PHASE ORDER flips a golden line and fails CI. Always runs
+# in the plain server ctest (no MERIDIAN_* env needed).
+add_executable(worldd-combat-golden-test
+  test/combat_golden_test.cpp
+)
+target_link_libraries(worldd-combat-golden-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-combat-golden-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-combat-golden COMMAND worldd-combat-golden-test)
