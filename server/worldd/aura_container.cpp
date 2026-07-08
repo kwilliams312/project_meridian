@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// worldd — per-Unit combat aura container (issue #346, CMB-01). Implementation of
+// worldd — per-Unit combat aura container (issue #346, CMB-01; extended by issue
+// #361, CMB-04 — dispel types + the dispel() operation). Implementation of
 // aura_container.h. CLEAN-ROOM from docs/sad/server-sad.md §2.5/§3.2/§9 + the IF-4
 // world DDL (schema/sql/world/30_ability.sql) — see the header for the full
 // provenance note. No GPL / emulator source consulted (CONTRIBUTING.md).
@@ -54,7 +55,7 @@ const ActiveAura* AuraContainer::find(AbilityId ability_id, std::uint32_t effect
 // ---------------------------------------------------------------------------
 
 AuraApplyResult AuraContainer::apply(const Ability& ability, std::uint32_t effect_index,
-                                     ObjectGuid caster_guid) {
+                                     ObjectGuid caster_guid, DispelType dispel_type) {
     // Guard: the effect must exist and be an aura. A non-aura effect (damage / heal
     // / threat) has no place in the container — reject without mutating anything.
     if (effect_index >= ability.effects.size()) {
@@ -94,6 +95,7 @@ AuraApplyResult AuraContainer::apply(const Ability& ability, std::uint32_t effec
     aura.periodic_amount_max = e.periodic_amount_max;
     aura.periodic_tick_ms = e.periodic_tick_ms;
     aura.stat_mods = e.stat_mods;
+    aura.dispel_type = dispel_type;  // CMB-04 classification, fixed at first apply
     aura.stacks = 1;
     aura.remaining_ms = e.duration_ms;
     aura.since_last_tick_ms = 0;
@@ -104,11 +106,12 @@ AuraApplyResult AuraContainer::apply(const Ability& ability, std::uint32_t effec
 }
 
 std::size_t AuraContainer::apply_ability_auras(const Ability& ability,
-                                               ObjectGuid caster_guid) {
+                                               ObjectGuid caster_guid,
+                                               DispelType dispel_type) {
     std::size_t applied = 0;
     for (std::uint32_t i = 0; i < ability.effects.size(); ++i) {
         if (ability.effects[i].kind == EffectKind::kAura) {
-            const AuraApplyResult r = apply(ability, i, caster_guid);
+            const AuraApplyResult r = apply(ability, i, caster_guid, dispel_type);
             if (r.action != AuraApplyAction::kRejected) ++applied;
         }
     }
@@ -185,6 +188,25 @@ bool AuraContainer::remove(AbilityId ability_id, std::uint32_t effect_index,
         }
     }
     return false;
+}
+
+std::size_t AuraContainer::dispel(DispelType type) {
+    // kNone is the UNDISPELLABLE sentinel — dispelling it removes nothing, so
+    // unclassified / undispellable auras always survive a dispel.
+    if (type == DispelType::kNone) return 0;
+
+    std::size_t removed = 0;
+    // Back-to-front so erasures don't shift the yet-to-scan prefix. Every matching
+    // instance is stripped — independent-caster copies and multi-stack instances
+    // alike — rolling back the full (all-stacks) stat contribution of each.
+    for (std::size_t i = auras_.size(); i-- > 0;) {
+        if (auras_[i].dispel_type == type) {
+            fold_stat_mods(auras_[i], auras_[i].stacks, -1);
+            auras_.erase(auras_.begin() + static_cast<std::ptrdiff_t>(i));
+            ++removed;
+        }
+    }
+    return removed;
 }
 
 void AuraContainer::clear() {

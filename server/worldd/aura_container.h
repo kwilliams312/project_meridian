@@ -24,6 +24,9 @@
 //     to the host's primary stats for as long as it is active.
 //   • STACKING — refresh-duration (max_stacks == 1), stack-count (max_stacks > 1),
 //     and independent instances (a different caster is always its own aura).
+//   • DISPEL (issue #361, CMB-04) — each aura carries a dispel_type class
+//     (none/magic/curse/poison/disease); dispel(type) strips every aura of that
+//     class, respecting undispellable (kNone) auras. See DispelType below.
 //
 // CLEAN-ROOM: designed from docs/sad/server-sad.md §2.5 (the CMB-01 aura-container
 // line + the tick order "combat/auras", §3.2 "combat + auras (casts complete,
@@ -64,6 +67,34 @@ namespace meridian::worldd {
 inline constexpr std::size_t kStatKeyCount = 5;
 
 // ---------------------------------------------------------------------------
+// DispelType — the dispel classification of an aura (issue #361, CMB-04).
+// ---------------------------------------------------------------------------
+//
+// CLEAN-ROOM: this is the aura-dispel taxonomy CMB-04 needs — a dispel targets a
+// CLASS of auras (not a single ability), so every aura carries a class tag and a
+// dispel of type T removes the auras tagged T. The categories below are the
+// canonical MMORPG dispel families (magic / curse / poison / disease) plus a
+// `kNone` sentinel for auras that are UNDISPELLABLE (physical/self buffs, boss
+// mechanics, etc.) — dispelling kNone is defined as a no-op so those always
+// survive. Derived from OUR combat design conventions; NO GPL / AGPL / emulator
+// source (CMaNGOS / TrinityCore / leaked) consulted. See CONTRIBUTING.md.
+//
+// DDL SEAM (mirrors ability_store.h's documented seams): the IF-4 world DDL
+// (schema/sql/world/30_ability.sql) does not yet carry a dispel column. When the
+// content pipeline (epic #28, mcc) adds an `ability_effect.dispel_type
+// ENUM('none','magic','curse','poison','disease')` column, this enum is its 1:1
+// image and the classification simply flows into apply()'s `dispel_type` argument
+// — no logic here changes. Until then a caller (resolver / test) supplies it
+// explicitly; the default (kNone) leaves an aura undispellable.
+enum class DispelType : std::uint8_t {
+    kNone,     // DDL 'none' / NULL — UNDISPELLABLE (never removed by dispel())
+    kMagic,    // DDL 'magic'
+    kCurse,    // DDL 'curse'
+    kPoison,   // DDL 'poison'
+    kDisease,  // DDL 'disease'
+};
+
+// ---------------------------------------------------------------------------
 // ActiveAura — one live aura instance on a host Unit.
 // ---------------------------------------------------------------------------
 //
@@ -87,6 +118,7 @@ struct ActiveAura {
     std::uint32_t periodic_amount_max = 0;
     std::uint32_t periodic_tick_ms = 0;     // cadence; 0 (or kNone) = no periodic
     std::vector<StatMod> stat_mods;         // stat deltas contributed PER STACK
+    DispelType dispel_type = DispelType::kNone;  // dispel class; kNone = undispellable
 
     // --- runtime state ---
     std::uint16_t stacks = 1;              // current stack count in [1, max_stacks]
@@ -147,12 +179,20 @@ public:
     // into / out of the host's net stat totals as stacks change. Returns what
     // happened. If `effect_index` is out of range or the effect is not kAura the
     // call is a no-op returning kRejected.
+    //
+    // `dispel_type` tags the instance for CMB-04 dispel (issue #361): a fresh ADD
+    // stores it on the instance; a refresh/stack keeps the original instance's tag
+    // (the classification is fixed at first application). It defaults to kNone —
+    // an unclassified aura is UNDISPELLABLE.
     AuraApplyResult apply(const Ability& ability, std::uint32_t effect_index,
-                          ObjectGuid caster_guid);
+                          ObjectGuid caster_guid,
+                          DispelType dispel_type = DispelType::kNone);
 
-    // Convenience: apply EVERY kAura effect of `ability` (non-aura effects skipped).
-    // Returns how many aura effects were applied (added/refreshed/stacked).
-    std::size_t apply_ability_auras(const Ability& ability, ObjectGuid caster_guid);
+    // Convenience: apply EVERY kAura effect of `ability` (non-aura effects skipped),
+    // tagging each with `dispel_type`. Returns how many aura effects were applied
+    // (added/refreshed/stacked).
+    std::size_t apply_ability_auras(const Ability& ability, ObjectGuid caster_guid,
+                                    DispelType dispel_type = DispelType::kNone);
 
     // Advance every aura by `dt_ms`, firing due periodic ticks into the host and
     // expiring auras whose duration has elapsed. Periodic amounts are rolled from
@@ -167,6 +207,16 @@ public:
     // Remove a specific aura instance (e.g. a dispel), rolling back its stat
     // deltas. Returns true if an instance was found and removed.
     bool remove(AbilityId ability_id, std::uint32_t effect_index, ObjectGuid caster_guid);
+
+    // DISPEL (issue #361, CMB-04) — remove EVERY aura tagged with dispel type
+    // `type`, rolling back each removed instance's stat deltas (all stacks). This
+    // is the class-targeted dispel: a "dispel magic" (type == kMagic) strips only
+    // the magic auras and leaves curses / poisons / diseases untouched. `type ==
+    // kNone` is the UNDISPELLABLE sentinel — dispelling it is a defined no-op, so
+    // unclassified / undispellable auras always survive. Returns the number of
+    // instances removed. O(n) over the flat vector; iterates back-to-front so
+    // erasures don't disturb the scan.
+    std::size_t dispel(DispelType type);
 
     // Remove every aura (e.g. on death / zone change), rolling back all stat deltas.
     void clear();
