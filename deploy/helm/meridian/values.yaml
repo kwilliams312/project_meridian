@@ -141,6 +141,7 @@ authd:
   service:
     type: ClusterIP
     port: 7100                      # service port (defaults to authd.port)
+    nodePort: null                  # set (e.g. 31710) when type=NodePort
     annotations: {}
   resources:
     requests:
@@ -190,6 +191,7 @@ worldd:
   service:
     type: ClusterIP
     port: 7200
+    nodePort: null                  # set (e.g. 31720) when type=NodePort
     annotations: {}
   resources:
     requests:

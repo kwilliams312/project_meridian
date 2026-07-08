@@ -236,6 +236,9 @@ spec:
       port: {{ $cfg.service.port | default $cfg.port }}
       targetPort: game
       protocol: TCP
+      {{- if and (eq ($cfg.service.type | default "ClusterIP") "NodePort") $cfg.service.nodePort }}
+      nodePort: {{ $cfg.service.nodePort }}
+      {{- end }}
     {{- if $root.Values.observability.enabled }}
     - name: metrics
       port: {{ $root.Values.observability.metricsPort }}
