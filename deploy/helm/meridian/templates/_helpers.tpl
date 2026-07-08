@@ -116,3 +116,16 @@ MERIDIAN_DB_PASS
 {{- required "tls.existingSecret is required when tls.create=false" .Values.tls.existingSecret -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+  Effective DB host. When the chart bundles MariaDB (mariadb.enabled), the
+  daemons connect to the in-cluster Service (<fullname>-mariadb); otherwise the
+  operator-provided db.host (external MariaDB) is used.
+*/}}
+{{- define "meridian.db.host" -}}
+{{- if .Values.mariadb.enabled -}}
+{{- include "meridian.mariadb.fullname" . -}}
+{{- else -}}
+{{- .Values.db.host -}}
+{{- end -}}
+{{- end -}}

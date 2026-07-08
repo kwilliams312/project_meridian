@@ -57,6 +57,25 @@ spec:
       {{- end }}
       securityContext:
         {{- toYaml $root.Values.podSecurityContext | nindent 8 }}
+      {{- if and $root.Values.mariadb.enabled $cfg.db.enabled }}
+      initContainers:
+        - name: wait-for-db
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z {{ include "meridian.mariadb.fullname" $root }} 3306; do
+                echo "waiting for {{ include "meridian.mariadb.fullname" $root }}:3306"; sleep 2;
+              done
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      {{- end }}
       containers:
         - name: {{ $daemon }}
           image: {{ include "meridian.image" (dict "root" $root "daemon" $daemon "cfg" $cfg) | quote }}

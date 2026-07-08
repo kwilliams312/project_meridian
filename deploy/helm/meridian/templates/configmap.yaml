@@ -17,7 +17,7 @@ metadata:
     {{- . | nindent 4 }}
   {{- end }}
 data:
-  MERIDIAN_DB_HOST: {{ .Values.db.host | quote }}
+  MERIDIAN_DB_HOST: {{ include "meridian.db.host" . | quote }}
   MERIDIAN_DB_PORT: {{ .Values.db.port | quote }}
   MERIDIAN_DB_USER: {{ .Values.db.user | quote }}
   {{- if .Values.observability.enabled }}
