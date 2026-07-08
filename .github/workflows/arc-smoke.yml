@@ -1,11 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # Proves the self-hosted runners work on BOTH arches and that dind/buildx can
-# build a container. Manual trigger (workflow_dispatch). Each job runs on its
-# arch's runner label and builds a trivial image natively (no QEMU).
+# build a container. Each job runs on its arch's runner label and builds a
+# trivial image natively (no QEMU). Triggers: manual (once this reaches the
+# default branch), or a push that touches this file (works on any branch — a
+# workflow_dispatch is only dispatchable from the default branch).
 name: arc-smoke
 
 on:
   workflow_dispatch: {}
+  push:
+    branches: [dev]
+    paths:
+      - .github/workflows/arc-smoke.yml
 
 jobs:
   build:
