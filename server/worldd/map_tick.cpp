@@ -6,6 +6,7 @@
 #include "map_tick.h"
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <string>
 #include <utility>
@@ -96,7 +97,8 @@ MapTick::MapTick(const AbilityStore& abilities, std::uint64_t rng_seed, std::uin
 ObjectGuid MapTick::add_player(ObjectGuid guid, const Position& pos, const UnitStats& stats,
                                std::uint8_t char_class) {
     Player p(guid, pos, stats, /*account_id=*/0, char_class, /*name=*/"");
-    players_.emplace(guid, std::make_unique<PlayerCombatant>(std::move(p)));
+    players_.emplace(guid,
+                     std::make_unique<PlayerCombatant>(std::move(p), move_dmg_params_));
     return guid;
 }
 
@@ -159,6 +161,13 @@ std::vector<TickEvent> MapTick::advance() {
     //    periodics, deaths"). This CLOSES the #354 cast-completion seam. Deaths
     //    route through the single on_unit_died hook (corpse+XP side effects).
     phase_combat_auras(out);
+
+    // 4b) movement-derived (fall/swim) environmental damage (#362), evaluated in
+    //     the combat phase after casts/auras: fall damage on landing + drowning while
+    //     breath is exhausted, applied via Unit::apply_damage. A lethal fall/drown
+    //     routes through the SAME on_unit_died hook (corpse + death FSM). Emits only
+    //     when it actually deals damage (a flat map with no water is silent).
+    phase_movement_damage(out);
 
     // 5) spawns/respawns: the player death FSM — auto-release timers, drained
     //    release/resurrect requests, corpse-run resurrect (SAD §2.5; CMB-03 #359).
@@ -339,7 +348,7 @@ void MapTick::phase_combat_auras(std::vector<TickEvent>& out) {
         if (r.host_died)
             // Periodic death has no direct caster — the hook resolves the killer via
             // the threat table (#360) and runs the death state machine (#359).
-            on_unit_died(g, host, /*killer_guid=*/0, /*periodic=*/true, TickPhase::kAura, out);
+            on_unit_died(g, host, /*killer_guid=*/0, "PERIODIC", TickPhase::kAura, out);
     };
 
     for (ObjectGuid g : pguids) {
@@ -354,6 +363,51 @@ void MapTick::phase_combat_auras(std::vector<TickEvent>& out) {
         Creature* cr = ai_.creature(g);
         if (cr == nullptr) continue;
         tick_host(g, *cr, *creature_auras_[g]);
+    }
+}
+
+void MapTick::phase_movement_damage(std::vector<TickEvent>& out) {
+    // Iterate players in ascending guid order for determinism (mirrors the other
+    // phases). Each player's tracker sees exactly one position sample per tick — the
+    // authoritative position the caller set via set_player_position before advance().
+    std::vector<ObjectGuid> pguids;
+    pguids.reserve(players_.size());
+    for (const auto& kv : players_) pguids.push_back(kv.first);
+    std::sort(pguids.begin(), pguids.end());
+
+    for (ObjectGuid g : pguids) {
+        PlayerCombatant& pc = *players_[g];
+        Unit& unit = pc.unit;
+
+        // Always step the tracker (keeps apex/breath bookkeeping consistent), but a
+        // dead unit takes no further environmental damage.
+        const MovementDamageResult r =
+            pc.move_dmg.step(unit.position(), env_, dt_ms_, unit.max_health());
+        if (unit.is_dead()) continue;
+
+        if (r.fall_damage > 0) {
+            const DamageResult dr = unit.apply_damage(r.fall_damage);
+            emit(out, TickPhase::kCombat,
+                 "fall_damage guid=" + u(g) + " height_cm=" +
+                     u(static_cast<std::uint64_t>(std::lround(r.fall_height_m * 100.0f))) +
+                     " dmg=" + u(dr.applied) + " hp=" + u(unit.health()) + " died=" +
+                     u(dr.lethal ? 1 : 0));
+            if (dr.lethal)
+                // Lethal fall routes through the single death hook (corpse + FSM, #359).
+                on_unit_died(g, unit, /*killer_guid=*/0, "FALL", TickPhase::kCombat, out);
+            if (unit.is_dead()) continue;  // a fatal fall pre-empts drowning this tick
+        }
+
+        if (r.drown_damage > 0) {
+            const DamageResult dr = unit.apply_damage(r.drown_damage);
+            emit(out, TickPhase::kCombat,
+                 "drown_damage guid=" + u(g) + " ticks=" + u(r.drown_ticks) + " dmg=" +
+                     u(dr.applied) + " breath_ms=" + u(r.breath_remaining_ms) + " hp=" +
+                     u(unit.health()) + " died=" + u(dr.lethal ? 1 : 0));
+            if (dr.lethal)
+                // Lethal drown routes through the single death hook (corpse + FSM, #359).
+                on_unit_died(g, unit, /*killer_guid=*/0, "DROWN", TickPhase::kCombat, out);
+        }
     }
 }
 
@@ -381,7 +435,7 @@ void MapTick::resolve_and_log(const Ability& ability, Unit& caster, ObjectGuid c
         if (rr.target_died)
             // THE single death hook: corpse+ghost for a player (#359), kill XP for a
             // creature (#360). caster_guid is the direct killer.
-            on_unit_died(target_guid, target, caster_guid, /*periodic=*/false, phase, out);
+            on_unit_died(target_guid, target, caster_guid, u(caster_guid), phase, out);
 
         // Resolver → AI threat seam (#347): landing (or attempting) an attack on a
         // creature adds threat and pulls it into combat on the attacker. A miss
@@ -408,10 +462,9 @@ void MapTick::resolve_and_log(const Ability& ability, Unit& caster, ObjectGuid c
 // the two cleanly-separated concerns dispatched by victim kind.
 // ---------------------------------------------------------------------------
 void MapTick::on_unit_died(ObjectGuid victim_guid, Unit& victim, ObjectGuid killer_guid,
-                           bool periodic, TickPhase phase, std::vector<TickEvent>& out) {
-    emit(out, phase,
-         "death guid=" + u(victim_guid) + " by=" + (periodic ? std::string("PERIODIC")
-                                                              : u(killer_guid)));
+                           const std::string& by_label, TickPhase phase,
+                           std::vector<TickEvent>& out) {
+    emit(out, phase, "death guid=" + u(victim_guid) + " by=" + by_label);
     if (victim.type() == ObjectType::kPlayer) {
         handle_player_death(victim_guid, victim, phase, out);   // #359
     } else if (victim.type() == ObjectType::kCreature) {

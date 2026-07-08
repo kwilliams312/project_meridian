@@ -64,6 +64,7 @@
 #include "creature_ai.h"       // CreatureAi / CreatureSpawnDef / AiState
 #include "death_state.h"       // DeathStateMachine (CMB-03 #359)
 #include "leveling.h"          // xp_for_kill / grant_xp (CHR-03 #360)
+#include "movement_damage.h"   // MovementDamageState / MovementEnv / MovementDamageParams (#362)
 #include "movement_validation.h"  // Position
 
 namespace meridian::worldd {
@@ -135,8 +136,9 @@ public:
     ObjectGuid add_creature(const CreatureSpawnDef& def);
 
     // Move a player (the "movement/commands" phase input — the harness sets the
-    // authoritative position the AI phase reads as an aggro target this tick). For
-    // a ghost (a released dead player) this is the corpse-run position.
+    // authoritative position the AI phase reads as an aggro target this tick, and
+    // the #362 fall/swim evaluator reads as the tick's position sample). For a ghost
+    // (a released dead player) this is the corpse-run position (#359).
     void set_player_position(ObjectGuid guid, const Position& pos);
 
     // The map's graveyard — where a released ghost is sent (CMB-03 #359). A single
@@ -151,6 +153,21 @@ public:
     // Request resurrection at the player's corpse (C→S RESURRECT_REQUEST, #359).
     // Succeeds next advance() only if the corpse-run is complete. Else denied.
     void request_resurrect(ObjectGuid guid);
+
+    // --- environment (fall/swim, #362) --------------------------------------
+    // The map's ground/water environment the movement-damage evaluator samples each
+    // tick. Defaults to the M0 flat bootstrap map (ground = kFlatGroundZ, no water),
+    // so on a flat map players never take fall damage from an ordinary jump and never
+    // drown. An M1 zone (or a test) sets a heightfield ground / water surface here.
+    void set_environment(const MovementEnv& env) { env_ = env; }
+    const MovementEnv& environment() const { return env_; }
+
+    // The fall/swim tuning applied to players added AFTER this call (each player's
+    // MovementDamageState is constructed with the params current at add_player time).
+    // Defaults to the production curve; a test tightens the numbers for a fast run.
+    void set_movement_damage_params(const MovementDamageParams& params) {
+        move_dmg_params_ = params;
+    }
 
     // --- inbound ------------------------------------------------------------
     // Queue an ability use to be drained on the NEXT advance() (SAD §3.2 "drain
@@ -189,11 +206,13 @@ private:
     // XP progress toward the next level (CHR-03 #360). Heap-boxed so the
     // AuraContainer's Unit& binding stays valid across rehash.
     struct PlayerCombatant {
-        Player          unit;
-        CombatSession   combat;
-        AuraContainer   auras;
-        std::uint32_t   xp_into_level = 0;  // XP toward the next level (resets on level-up)
-        explicit PlayerCombatant(Player u) : unit(std::move(u)), auras(unit) {}
+        Player              unit;
+        CombatSession       combat;
+        AuraContainer       auras;
+        std::uint32_t       xp_into_level = 0;  // XP toward the next level (resets on level-up, #360)
+        MovementDamageState move_dmg;           // per-player fall/breath tracker (#362)
+        PlayerCombatant(Player u, const MovementDamageParams& mdp)
+            : unit(std::move(u)), auras(unit), move_dmg(mdp) {}
     };
 
     // --- SAD §2.5 phases (each appends to `out`) ----------------------------
@@ -204,21 +223,30 @@ private:
     // drain release/resurrect requests, corpse-run resurrect). CMB-03 #359.
     void phase_death(std::vector<TickEvent>& out);
 
-    // THE SINGLE "unit died" hook (both death stories consume it). Called exactly
-    // once per death, from the direct-damage path (resolve_and_log) and the
-    // periodic path (phase_combat_auras). Emits the death event, then dispatches
-    // the two cleanly-separated concerns: a dead PLAYER enters the death state
-    // machine (#359); a dead CREATURE awards kill XP to its killer (#360).
-    // `periodic` selects the death event's `by=` label when there is no direct
-    // caster (killer_guid resolves via the threat table).
+    // THE SINGLE "unit died" hook (every death source consumes it): the direct-
+    // damage path (resolve_and_log), the periodic path (phase_combat_auras), and
+    // the fall/drown path (phase_movement_damage, #362). Emits one death event
+    // ("by=<by_label>"), then dispatches the two cleanly-separated concerns: a dead
+    // PLAYER enters the death state machine (#359); a dead CREATURE awards kill XP
+    // to its killer (#360). `killer_guid` drives XP attribution (0 = none/periodic/
+    // environment → resolved via the threat table); `by_label` is the death event's
+    // "by=" text ("<guid>" / "PERIODIC" / "FALL" / "DROWN").
     void on_unit_died(ObjectGuid victim_guid, Unit& victim, ObjectGuid killer_guid,
-                      bool periodic, TickPhase phase, std::vector<TickEvent>& out);
+                      const std::string& by_label, TickPhase phase,
+                      std::vector<TickEvent>& out);
     // #359: spawn the corpse + enter the death FSM for a dead player.
     void handle_player_death(ObjectGuid victim_guid, Unit& victim, TickPhase phase,
                              std::vector<TickEvent>& out);
     // #360: award XP to the killer player (resolved directly or via threat).
     void award_kill_xp(ObjectGuid victim_guid, Unit& victim, ObjectGuid killer_guid,
                        TickPhase phase, std::vector<TickEvent>& out);
+
+    // Fall/swim environmental damage (#362), run inside the combat phase: evaluate
+    // each player's fall/breath tracker against its current position + this tick's
+    // dt, and apply any fall/drowning damage via Unit::apply_damage. Emits a kCombat
+    // event ONLY when damage is dealt (so a flat-ground map produces no events and
+    // the combat golden stream is unaffected). Iterates ascending guid (determinism).
+    void phase_movement_damage(std::vector<TickEvent>& out);
 
     // Resolve one ability against a target: spend the resource, roll the attack
     // table + apply direct damage/heal (resolve_ability), apply any aura effects to
@@ -251,6 +279,11 @@ private:
     std::vector<ObjectGuid> release_requests_;    // C→S RELEASE_REQUEST queue (#359)
     std::vector<ObjectGuid> resurrect_requests_;  // C→S RESURRECT_REQUEST queue (#359)
     std::vector<TickEvent> log_;
+
+    // Fall/swim (#362): the map's environment + the tuning new players inherit.
+    MovementEnv          env_;               // flat ground, no water (M0 default)
+    MovementDamageParams move_dmg_params_;   // production curve by default
+
 };
 
 }  // namespace meridian::worldd

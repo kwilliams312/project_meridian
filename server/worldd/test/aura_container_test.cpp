@@ -25,6 +25,11 @@
 //      capped, scaling periodic + stat delta), independent instances (per caster).
 //   E. DEATH + DETERMINISM — a periodic kill reports host_died and stops further
 //      ticks; a ranged periodic is identical across equal (seed, dt) runs.
+//   F. DISPEL by type (issue #361, CMB-04) — an aura carries a dispel_type
+//      classification (none/magic/curse/poison/disease); dispel(type) removes
+//      ONLY the auras of that type; an undispellable (kNone) aura always survives.
+//   G. DISPEL rollback — dispel removes EVERY matching instance (independent
+//      casters + multi-stack) and rolls back their stat deltas fully.
 
 #include "aura_container.h"
 
@@ -333,6 +338,91 @@ int main() {
         AuraApplyResult rej = c4.apply(strike, 0, 7);
         check("E4: non-aura effect rejected", rej.action == AuraApplyAction::kRejected);
         check("E4: nothing added", c4.empty());
+    }
+
+    // ===== F. DISPEL by type (issue #361, CMB-04) ===========================
+    {
+        Unit u = make_unit(1000);
+        AuraContainer c(u);
+        CombatRng rng(1);
+
+        // One aura of each classified dispel type + one UNDISPELLABLE (kNone).
+        Ability magic   = make_aura_ability(6001, 8000);
+        Ability curse   = make_aura_ability(6002, 8000);
+        Ability poison  = make_aura_ability(6003, 8000);
+        Ability disease = make_aura_ability(6004, 8000);
+        Ability buff    = make_aura_ability(6005, 8000);  // undispellable (kNone)
+        buff.effects[0].stat_mods.push_back(StatMod{StatKey::kStrength, +10});
+
+        c.apply(magic,   0, /*caster=*/7, DispelType::kMagic);
+        c.apply(curse,   0, /*caster=*/7, DispelType::kCurse);
+        c.apply(poison,  0, /*caster=*/7, DispelType::kPoison);
+        c.apply(disease, 0, /*caster=*/7, DispelType::kDisease);
+        c.apply(buff,    0, /*caster=*/7, DispelType::kNone);  // undispellable
+        check("F: five auras applied", c.size() == 5);
+        const ActiveAura* am = c.find(6001, 0, 7);
+        check("F: aura records its dispel type",
+              am && am->dispel_type == DispelType::kMagic);
+        const ActiveAura* ab = c.find(6005, 0, 7);
+        check("F: default dispel type is kNone (undispellable)",
+              ab && ab->dispel_type == DispelType::kNone);
+
+        // Dispel magic → removes ONLY the magic aura; every other type survives.
+        check("F: dispel(magic) removed exactly 1", c.dispel(DispelType::kMagic) == 1);
+        check("F: magic aura gone", c.find(6001, 0, 7) == nullptr);
+        check("F: curse survives", c.find(6002, 0, 7) != nullptr);
+        check("F: poison survives", c.find(6003, 0, 7) != nullptr);
+        check("F: disease survives", c.find(6004, 0, 7) != nullptr);
+        check("F: undispellable survives", c.find(6005, 0, 7) != nullptr);
+        check("F: size 4 after dispel magic", c.size() == 4);
+
+        // Dispelling an already-absent type removes nothing.
+        check("F: dispel of already-removed magic is 0", c.dispel(DispelType::kMagic) == 0);
+
+        // Dispel the remaining classified types one at a time.
+        check("F: dispel(poison) removed 1", c.dispel(DispelType::kPoison) == 1);
+        check("F: dispel(disease) removed 1", c.dispel(DispelType::kDisease) == 1);
+        check("F: dispel(curse) removed 1", c.dispel(DispelType::kCurse) == 1);
+        check("F: only undispellable remains",
+              c.size() == 1 && c.find(6005, 0, 7) != nullptr);
+
+        // dispel(kNone) is a no-op — undispellable auras never leave via dispel.
+        check("F: dispel(kNone) is a no-op", c.dispel(DispelType::kNone) == 0);
+        check("F: undispellable still present", c.size() == 1);
+        check("F: undispellable stat delta intact", c.stat_delta(StatKey::kStrength) == 10);
+    }
+
+    // ===== G. DISPEL rollback — all matching instances + stacks =============
+    {
+        Unit u = make_unit(1000);
+        AuraContainer c(u);
+
+        // Two magic auras from two casters (independent), each +6 intellect.
+        Ability m = make_aura_ability(7001, 8000);
+        m.effects[0].stat_mods.push_back(StatMod{StatKey::kIntellect, +6});
+        c.apply(m, 0, /*casterA=*/10, DispelType::kMagic);
+        c.apply(m, 0, /*casterB=*/20, DispelType::kMagic);
+        check("G: intellect +12 (two magic auras)", c.stat_delta(StatKey::kIntellect) == 12);
+
+        // A multi-stack poison aura, +2 stamina per stack, stacked to 2.
+        Ability p = make_aura_ability(7002, 8000, /*max_stacks=*/3);
+        p.effects[0].stat_mods.push_back(StatMod{StatKey::kStamina, +2});
+        c.apply(p, 0, /*caster=*/30, DispelType::kPoison);
+        c.apply(p, 0, /*caster=*/30, DispelType::kPoison);  // → 2 stacks
+        check("G: stamina +4 (poison 2 stacks)", c.stat_delta(StatKey::kStamina) == 4);
+        check("G: size 3", c.size() == 3);
+
+        // Dispel magic removes BOTH magic instances and rolls back all their stats.
+        check("G: dispel(magic) removed 2 instances", c.dispel(DispelType::kMagic) == 2);
+        check("G: intellect delta back to 0", c.stat_delta(StatKey::kIntellect) == 0);
+        check("G: poison (stacked) untouched", c.stat_delta(StatKey::kStamina) == 4);
+        check("G: only poison remains", c.size() == 1);
+
+        // Dispel poison removes the multi-stack instance, rolling back ALL stacks.
+        check("G: dispel(poison) removed 1 instance", c.dispel(DispelType::kPoison) == 1);
+        check("G: stamina delta 0 (all stacks rolled back)",
+              c.stat_delta(StatKey::kStamina) == 0);
+        check("G: container empty", c.empty());
     }
 
     std::printf(g_fail == 0 ? "\nALL WORLDD AURA CONTAINER TESTS PASSED\n"

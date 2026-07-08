@@ -35,6 +35,7 @@ add_library(world-dispatch STATIC
   active_sessions.cpp
   ability_store.cpp
   map_tick.cpp
+  movement_damage.cpp
 )
 add_library(meridian::world-dispatch ALIAS world-dispatch)
 target_include_directories(world-dispatch
@@ -451,3 +452,19 @@ target_link_libraries(worldd-death-xp-test
 )
 set_target_properties(worldd-death-xp-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-death-xp COMMAND worldd-death-xp-test)
+
+# --- Movement-derived (fall + swim/breath) damage unit test (issue #362, CHR-02
+# full). Exercises the PURE MovementDamageState evaluator directly (fall above the
+# safe threshold → scaled damage, none below; breath depletion underwater → drowning
+# ticks; refill on surfacing; water breaks a fall) AND the MapTick combat-phase
+# WIRING (a landing / drowning applies HP via Unit::apply_damage). Deterministic (no
+# RNG, no clock) — always runs in the plain server ctest (no MERIDIAN_* env needed).
+add_executable(worldd-movement-damage-test
+  test/movement_damage_test.cpp
+)
+target_link_libraries(worldd-movement-damage-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-movement-damage-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-movement-damage COMMAND worldd-movement-damage-test)
