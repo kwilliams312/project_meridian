@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# amd64 runner scale set. runs-on label = runnerScaleSetName. dind for buildx.
+githubConfigUrl: https://github.com/kwilliams312/project_meridian
+githubConfigSecret: arc-github-app        # pre-created Secret (GitHub App creds)
+runnerScaleSetName: meridian-amd64
+minRunners: 0
+maxRunners: 3
+containerMode:
+  type: dind
+# ArgoCD + `helm template` cannot run the chart's controller-SA `lookup`, so name
+# it explicitly: SA = <controller release>-gha-rs-controller, and the controller
+# ArgoCD Application (Task 3) is named `arc-controller`.
+controllerServiceAccount:
+  name: arc-controller-gha-rs-controller
+  namespace: arc-systems
+template:
+  spec:
+    nodeSelector:
+      kubernetes.io/arch: amd64

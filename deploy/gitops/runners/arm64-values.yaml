@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# arm64 runner scale set. Schedules on the untainted arm64 Talos workers.
+githubConfigUrl: https://github.com/kwilliams312/project_meridian
+githubConfigSecret: arc-github-app
+runnerScaleSetName: meridian-arm64
+minRunners: 0
+maxRunners: 3
+containerMode:
+  type: dind
+# See amd64-values.yaml — the controller-SA lookup must be named explicitly.
+controllerServiceAccount:
+  name: arc-controller-gha-rs-controller
+  namespace: arc-systems
+template:
+  spec:
+    nodeSelector:
+      kubernetes.io/arch: arm64
