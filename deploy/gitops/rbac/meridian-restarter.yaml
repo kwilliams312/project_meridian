@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-# Lets the ARC runner (arc-runners/default SA) rollout-restart the realm daemons
-# so cd.yml can repull the moving image tag. Least-privilege: get/list/patch on
+# Lets the CD runner rollout-restart the realm daemons so cd.yml can repull the
+# moving image tag. ARC runs each scale set under its own SA
+# (<scaleset>-gha-rs-no-permission), NOT arc-runners/default — the cd.yml restart
+# job runs on meridian-amd64, so bind THAT SA. Least-privilege: get/list/patch on
 # Deployments in the realm namespace only. (meridian-ptr Role added in Phase 3.)
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -19,7 +21,7 @@ metadata:
   namespace: meridian-dev
 subjects:
   - kind: ServiceAccount
-    name: default
+    name: meridian-amd64-gha-rs-no-permission
     namespace: arc-runners
 roleRef:
   kind: Role
