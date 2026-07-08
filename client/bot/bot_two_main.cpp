@@ -174,6 +174,9 @@ void run_one_bot(BotSlot& slot, const std::string& authd_host, std::uint16_t aut
     wcfg.client_build = client_build;
     wcfg.path = bot::BotPath::kSquare;
     wcfg.movement_ticks = movement_ticks;
+    // Character name = this bot's account username (globally unique) so the two bots
+    // create/enter DISTINCT characters when their accounts are bare (D-35 flow).
+    wcfg.character_name = slot.user;
     wcfg.on_entered_world = [&barrier] {
         // Hold until BOTH bots are in-world (or 10 s safety timeout). See file header.
         barrier.wait(std::chrono::milliseconds(10000));

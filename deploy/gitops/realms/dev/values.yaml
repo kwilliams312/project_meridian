@@ -34,6 +34,13 @@ worldd:
   db:
     enabled: true
     name: meridian_auth
+  # Server-authoritative characters (D-35/#341): worldd loads the REAL character
+  # from meridian_characters on ENTER_WORLD to validate ownership + spawn. Without
+  # this, every ENTER_WORLD returns INTERNAL and the realm is unenterable (the
+  # placeholder fabrication is gone). Renders all five MERIDIAN_CHARDB_* vars.
+  chardb:
+    enabled: true
+    name: meridian_characters
 
 tls:
   mode: selfSignedInit

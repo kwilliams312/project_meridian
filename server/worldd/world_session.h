@@ -185,26 +185,30 @@ std::optional<GrantConsumed> validate_and_consume_grant(
     GrantReject& out_reject);
 
 // ---------------------------------------------------------------------------
-// Enter-world: the D-11 placeholder character (SAD §4.2, decision D-11)
+// Enter-world: server-authoritative character load (D-35 / #341)
 // ---------------------------------------------------------------------------
 
-// The M0 placeholder character loaded on enter-world. D-11 scopes M0 to "name +
-// class selection over one placeholder character model" — so this is a name +
-// class stub, plus the guid/level the client needs to spawn its own entity.
-struct PlaceholderCharacter {
+// A real, server-persisted character loaded on ENTER_WORLD. D-11 scopes M0 to
+// "name + class selection over one placeholder character model" — so this is the
+// name + class of the OWNED character, plus the guid/level the client needs to
+// spawn its own entity. There is NO fabrication: this is only ever populated
+// from an actual `character` row owned by the session's account.
+struct LoadedCharacter {
     std::uint64_t char_guid = 0;  // character.id
     std::string name;
     std::uint8_t class_id = 0;
     std::uint16_t level = 1;
 };
 
-// Load the account's first character from the characters DB, or synthesise a
-// deterministic D-11 placeholder if the account has none / the DB is
-// unavailable. At M0 either is acceptable (D-11: a single placeholder model),
-// so a missing characters DB never blocks enter-world — the handshake still
-// completes with a stub character. `char_db` may be nullptr (no characters DB
-// wired), in which case a pure stub is returned.
-PlaceholderCharacter load_placeholder_character(db::Connection* char_db,
-                                                std::uint64_t account_id);
+// Load character `character_id` IFF it is owned by `account_id`
+// (`SELECT id, name, class, level FROM character WHERE id=? AND account_id=?`).
+// Server is the source of truth: returns std::nullopt when no such owned row
+// exists (a bad/nonexistent id, or a character owned by ANOTHER account) — the
+// caller REJECTS enter-world rather than synthesising a placeholder. `char_db`
+// is a live connection (the caller checks non-null first). Throws db::DbError on
+// a DB fault, which the caller maps to ENTER_WORLD `INTERNAL`.
+std::optional<LoadedCharacter> load_owned_character(db::Connection& char_db,
+                                                    std::uint64_t account_id,
+                                                    std::uint64_t character_id);
 
 }  // namespace meridian::worldd

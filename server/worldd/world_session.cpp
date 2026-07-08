@@ -300,41 +300,31 @@ std::optional<GrantConsumed> validate_and_consume_grant(
 }
 
 // ---------------------------------------------------------------------------
-// Enter-world placeholder character
+// Enter-world: server-authoritative character load (D-35 / #341)
 // ---------------------------------------------------------------------------
 
-PlaceholderCharacter load_placeholder_character(db::Connection* char_db,
-                                                std::uint64_t account_id) {
-    PlaceholderCharacter pc;
-    // D-11: the M0 placeholder model. Default stub used when there is no
-    // characters DB wired or the account has no character yet.
-    pc.char_guid = 0;
-    pc.name = "Placeholder";
-    pc.class_id = 1;  // arbitrary M0 default class (D-11 "name + class")
-    pc.level = 1;
+std::optional<LoadedCharacter> load_owned_character(db::Connection& char_db,
+                                                    std::uint64_t account_id,
+                                                    std::uint64_t character_id) {
+    // Ownership is the WHERE predicate: a row comes back ONLY when this exact
+    // character id belongs to this account. A nonexistent id, or one owned by a
+    // different account, matches zero rows -> nullopt -> the caller rejects entry.
+    // The server never fabricates a character (the D-11 placeholder is gone).
+    // A db::DbError propagates to the caller (mapped to ENTER_WORLD INTERNAL).
+    db::Result r = char_db.execute(
+        "SELECT id, name, class, level FROM `character` "
+        "WHERE id = ? AND account_id = ? LIMIT 1",
+        {db::Param{std::to_string(character_id)},
+         db::Param{std::to_string(account_id)}});
+    if (r.rows.size() != 1) return std::nullopt;
 
-    if (char_db == nullptr) return pc;
-
-    try {
-        db::Result r = char_db->execute(
-            "SELECT id, name, class, level FROM `character` "
-            "WHERE account_id = ? ORDER BY id LIMIT 1",
-            {db::Param{std::to_string(account_id)}});
-        if (r.rows.size() == 1) {
-            const db::Row& row = r.rows[0];
-            pc.char_guid = cell_u64(row[0]);
-            if (row[1].has_value()) pc.name = *row[1];
-            pc.class_id = static_cast<std::uint8_t>(cell_u64(row[2]));
-            pc.level = static_cast<std::uint16_t>(cell_u64(row[3]));
-        }
-        // No row -> keep the deterministic stub (D-11 single placeholder model).
-    } catch (const db::DbError& e) {
-        // Characters DB unavailable at M0 -> fall back to the stub (D-11 allows
-        // a single placeholder model; enter-world must not block on it).
-        log::warn(kCat, std::string("characters DB unavailable, using placeholder: ") +
-                            e.what());
-    }
-    return pc;
+    const db::Row& row = r.rows[0];
+    LoadedCharacter c;
+    c.char_guid = cell_u64(row[0]);
+    if (row[1].has_value()) c.name = *row[1];
+    c.class_id = static_cast<std::uint8_t>(cell_u64(row[2]));
+    c.level = static_cast<std::uint16_t>(cell_u64(row[3]));
+    return c;
 }
 
 }  // namespace meridian::worldd

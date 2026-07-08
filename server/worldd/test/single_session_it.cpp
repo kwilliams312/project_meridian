@@ -222,7 +222,8 @@ void seed_grant(db::Connection& db, std::uint64_t grant_id, std::uint64_t accoun
          db::Param{static_cast<std::int64_t>(client_build)}});
 }
 
-// Handshake a client (WorldHello -> HandshakeOk). Leaves the connection open.
+// Handshake a client (WorldHello -> HandshakeOk). Leaves the connection open at
+// character-select (server-authoritative characters, D-35: NOT yet spawned).
 bool do_handshake(Client& c, std::uint64_t grant_id, std::uint32_t build) {
     if (!c.send_frame(mw::encode_frame(mn::Opcode::WORLD_HELLO, /*seq=*/1,
                                        enc_world_hello(grant_id, build))))
@@ -233,6 +234,75 @@ bool do_handshake(Client& c, std::uint64_t grant_id, std::uint32_t build) {
     if (!rf || rf->opcode != mn::Opcode::HANDSHAKE_OK) return false;
     Bytes pl(rf->payload, rf->payload + rf->payload_len);
     return decode<mn::HandshakeOk>(pl) != nullptr;
+}
+
+Bytes enc_enter_world(std::uint64_t character_id) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateEnterWorldRequest(b, character_id));
+    return bytes_of(b);
+}
+
+// Enter the world as an OWNED character (ENTER_WORLD_REQUEST -> RESPONSE(OK)).
+// This is where a session actually spawns + takes the account's single in-world
+// slot (#326) — the admit/kick moved off the handshake path (D-35). Returns true
+// only on a typed OK.
+bool do_enter_world(Client& c, std::uint64_t character_id) {
+    if (!c.send_frame(mw::encode_frame(mn::Opcode::ENTER_WORLD_REQUEST, /*seq=*/2,
+                                       enc_enter_world(character_id))))
+        return false;
+    std::optional<Bytes> r = c.recv_frame();
+    if (!r) return false;
+    std::optional<mw::Frame> rf = mw::decode_frame(*r);
+    if (!rf || rf->opcode != mn::Opcode::ENTER_WORLD_RESPONSE) return false;
+    Bytes pl(rf->payload, rf->payload + rf->payload_len);
+    const auto* resp = decode<mn::EnterWorldResponse>(pl);
+    return resp != nullptr && resp->status() == mn::EnterWorldStatus::OK;
+}
+
+// Standalone `character` table DDL (mirrors 0001_init_characters.up.sql). Lets the
+// test seed an owned character in whatever DB char_db points at (here the auth DB,
+// which doubles as the characters DB for the test). No-op when the real migration
+// already created the table.
+constexpr const char* kCharacterDdl =
+    "CREATE TABLE IF NOT EXISTS `character` ("
+    "  id            BIGINT UNSIGNED   NOT NULL AUTO_INCREMENT,"
+    "  account_id    BIGINT UNSIGNED   NOT NULL,"
+    "  name          VARCHAR(32)       NOT NULL,"
+    "  race          TINYINT UNSIGNED  NOT NULL,"
+    "  class         TINYINT UNSIGNED  NOT NULL,"
+    "  level         SMALLINT UNSIGNED NOT NULL DEFAULT 1,"
+    "  xp            INT UNSIGNED      NOT NULL DEFAULT 0,"
+    "  money         BIGINT UNSIGNED   NOT NULL DEFAULT 0,"
+    "  map_id        INT UNSIGNED      NOT NULL,"
+    "  instance_id   INT UNSIGNED      NOT NULL DEFAULT 0,"
+    "  pos_x         FLOAT             NOT NULL,"
+    "  pos_y         FLOAT             NOT NULL,"
+    "  pos_z         FLOAT             NOT NULL,"
+    "  pos_o         FLOAT             NOT NULL DEFAULT 0,"
+    "  played_time   INT UNSIGNED      NOT NULL DEFAULT 0,"
+    "  logout_at     DATETIME          NULL,"
+    "  save_epoch    BIGINT            NOT NULL DEFAULT 0,"
+    "  created_at    DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+    "  updated_at    DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,"
+    "  PRIMARY KEY (id),"
+    "  UNIQUE KEY uq_character_name (name),"
+    "  KEY idx_character_account (account_id)"
+    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
+
+// Seed one owned character via raw SQL (avoids a characters-lib link dep) and
+// return the minted character.id. map/pos default to 0 — worldd re-seeds the
+// spawn at zone centre on ENTER_WORLD.
+std::uint64_t seed_character(db::Connection& db, std::uint64_t account_id,
+                             const std::string& name) {
+    db.execute("DELETE FROM `character` WHERE name = ?", {db::Param{name}});
+    db.execute(
+        "INSERT INTO `character` "
+        "(account_id, name, race, class, map_id, pos_x, pos_y, pos_z) "
+        "VALUES (?, ?, 1, 1, 0, 0, 0, 0)",
+        {db::Param{std::to_string(account_id)}, db::Param{name}});
+    db::Result r = db.execute("SELECT id FROM `character` WHERE name = ?",
+                              {db::Param{name}});
+    return cell_u64(r.rows.at(0)[0]);
 }
 
 // Poll `pred` up to `budget_ms` (10 ms steps) — condition-based waiting, no
@@ -297,6 +367,14 @@ int main() {
         std::uint64_t account_id = cell_u64(ar.rows.at(0)[0]);
         check("test account seeded", account_id > 0);
 
+        // Seed ONE owned character (one-per-account, #329). Both logins enter the
+        // world as THIS character — server-authoritative entry requires a real,
+        // owned character (D-35); there is no placeholder fabrication anymore.
+        db.execute(kCharacterDdl);
+        const std::string char_name = "SsChar_" + std::to_string(std::rand());
+        const std::uint64_t char_id = seed_character(db, account_id, char_name);
+        check("test character seeded", char_id > 0);
+
         const std::string realm_name = "SS IT Realm " + std::to_string(std::rand());
         db.execute(
             "INSERT INTO realm (name, address, port, build_min, build_max) "
@@ -337,7 +415,8 @@ int main() {
 
         mw::WorldServerConfig wcfg;
         wcfg.auth_db = p;
-        wcfg.realm_id = realm_id;  // char_db empty -> D-11 placeholder on enter
+        wcfg.char_db = p;          // characters DB (same instance) — ENTER_WORLD ownership load
+        wcfg.realm_id = realm_id;
         mw::Dispatcher dispatcher;
         mw::WorldServer world(dispatcher, wcfg);
         world.start();
@@ -362,8 +441,9 @@ int main() {
             Client a(port);
             check("A: connected (TLS)", a.connected());
             check("A: HandshakeOk on first login", do_handshake(a, grant_a, client_build));
+            check("A: entered world as its owned character", do_enter_world(a, char_id));
             // Wait for A's server-side admit to complete (it runs just after the
-            // HandshakeOk write). A is now the account's single live session.
+            // ENTER_WORLD OK write). A is now the account's single live session.
             check("A: account registered as the single live session",
                   wait_until([&] { return world.active_sessions().is_active(account_id); }, 2000));
             check("A: exactly one active account",
@@ -374,8 +454,11 @@ int main() {
             // ===== B logs in for the SAME account -> kicks A (kick-old). =====
             Client b(port);
             check("B: connected (TLS)", b.connected());
-            check("B: HandshakeOk on second login (admitted)",
+            check("B: HandshakeOk on second login",
                   do_handshake(b, grant_b, client_build));
+            // B enters as the SAME owned character -> takes the account's single
+            // in-world slot and KICKS A (kick-old, #326 at the ENTER_WORLD seam).
+            check("B: entered world (admitted, kicks A)", do_enter_world(b, char_id));
 
             // A must now receive a Disconnect{KICKED} (the KickFn wrote it to A's
             // socket from B's serve thread). B's AoI enter first relays A an
@@ -418,6 +501,8 @@ int main() {
         check("account slot freed after both sessions leave",
               wait_until([&] { return world.active_sessions().active_count() == 0; }, 2000));
 
+        db.execute("DELETE FROM `character` WHERE id = ?",
+                   {db::Param{std::to_string(char_id)}});
         db.execute("DELETE FROM account WHERE id = ?",
                    {db::Param{std::to_string(account_id)}});
     } catch (const db::DbError& e) {

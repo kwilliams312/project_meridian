@@ -43,6 +43,10 @@ enum Opcode : uint16 {
   CHAR_DELETE_REQUEST  = 0x0014,  // C→S  delete one owned character by id
   CHAR_DELETE_RESPONSE = 0x0015,  // S→C  ok / refused (ownership-checked)
 
+  // --- 0x0xxx  enter-world  (M0, server-authoritative spawn) ---
+  ENTER_WORLD_REQUEST  = 0x0016,  // C→S  spawn as an OWNED character (by id)
+  ENTER_WORLD_RESPONSE = 0x0017,  // S→C  typed result (OK spawns; else no spawn)
+
   // --- 0x1xxx  movement  (M0) ---
   MOVEMENT_INTENT = 0x1001,  // C→S  client movement intent (validated OPS-03)
   MOVEMENT_STATE  = 0x1002,  // S→C  authoritative movement state broadcast
@@ -263,6 +267,41 @@ enum CharDeleteStatus : uint16 {
 /// S→C. Result of a CharDeleteRequest.
 table CharDeleteResponse {
   status:CharDeleteStatus = OK;
+}
+
+// ===========================================================================
+// 0x0xxx — enter world  (M0, server-authoritative character spawn)
+// ===========================================================================
+// After HANDSHAKE_OK the session is authenticated but NOT spawned (it sits at
+// character-select). The client selects one of its OWN characters (from a
+// CharListResponse / a fresh CharCreateResponse) and asks to enter as it. worldd
+// validates ownership against its own store (grant-derived account, the CRUD's
+// `WHERE id=? AND account_id=?`) and only then spawns the entity. The server
+// NEVER fabricates a character: an account with none, or an unknown/unowned id,
+// is rejected and the session STAYS at character-select so it can create/select
+// a valid one (char management rides this same session — a disconnect would
+// strand a new account). Movement/entity opcodes are only valid after OK.
+
+/// C→S. Enter the world as one of this session's characters. The account is the
+/// session's own (grant-derived, IF-3) — never a field. `character_id` is the
+/// server-minted id from CharListResponse / CharCreateResponse.
+table EnterWorldRequest {
+  character_id:uint64;
+}
+
+/// Typed outcome of an enter-world attempt.
+enum EnterWorldStatus : uint16 {
+  OK           = 0,   // authorized — the character is spawned (self ENTITY_ENTER follows)
+  NOT_FOUND    = 1,   // no such character owned by this account (unknown id / not owned)
+  NO_CHARACTER = 2,   // the account owns zero characters — create one first
+  INTERNAL     = 3,   // server/DB error (no characters DB, or a DB failure)
+}
+
+/// S→C. Result of an EnterWorldRequest. On OK the player entity is spawned and
+/// the session transitions to in-world; otherwise no spawn and the session stays
+/// at character-select.
+table EnterWorldResponse {
+  status:EnterWorldStatus = OK;
 }
 
 // ===========================================================================

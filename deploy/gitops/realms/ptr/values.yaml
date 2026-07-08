@@ -23,6 +23,9 @@ worldd:
   db:                      # worldd consumes IF-3 grants from meridian_auth at M0
     enabled: true
     name: meridian_auth
+  chardb:                  # ENTER_WORLD loads real characters (D-35/#341); all 5 CHARDB vars
+    enabled: true
+    name: meridian_characters
 tls:
   mode: selfSignedInit
 db:

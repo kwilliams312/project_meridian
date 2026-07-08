@@ -138,10 +138,28 @@ enum class DispatchOutcome {
 //     world thread (keyed by session id, drained from the inbound queue) is the
 //     WorldServer scaffold's queue; #87's AoI relay consumes `movement` from
 //     there. At M0 it lives here, next to the WorldSession it is scoped to.
+// Two-phase in-world session (server-authoritative characters, D-35 / #341).
+// A valid WORLD_HELLO authenticates the session and leaves it at kCharSelect —
+// it may list/create/delete its characters and ENTER_WORLD, but it is NOT
+// spawned (no entity, no movement). An explicit ENTER_WORLD_REQUEST naming a
+// character the account OWNS promotes it to kInWorld (spawned, AoI-registered,
+// movement-enabled, holding the account's single in-world slot #326). The server
+// never fabricates a character, so there is no implicit spawn at handshake.
+enum class SessionPhase {
+    kConnected,   // pre-handshake (no valid WORLD_HELLO yet)
+    kCharSelect,  // authenticated, at character select — NOT spawned
+    kInWorld,     // spawned via an ENTER_WORLD_RESPONSE(OK)
+};
+
 struct ConnCtx {
     db::Connection* db = nullptr;        // auth DB (session_grant) — may be null in tests
-    db::Connection* char_db = nullptr;   // characters DB — nullable (placeholder fallback)
+    db::Connection* char_db = nullptr;   // characters DB — nullable (ENTER_WORLD -> INTERNAL when null)
     std::uint32_t realm_id = 0;          // realm this worldd serves (0 = accept any)
+
+    // Two-phase session state (D-35 / #341). Advances kConnected -> kCharSelect
+    // (valid WORLD_HELLO) -> kInWorld (ENTER_WORLD OK). Movement + entity relay
+    // are legal only at kInWorld; the ENTER_WORLD handler refuses a double-enter.
+    SessionPhase phase = SessionPhase::kConnected;
 
     // OPS-05 session-flow traces (#166). When set, the WORLD_HELLO handler emits a
     // "worldd.enter_world" span (grant validate → session establish → HandshakeOk)

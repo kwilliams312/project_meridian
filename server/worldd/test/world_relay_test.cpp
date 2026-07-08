@@ -245,7 +245,8 @@ void seed_grant(db::Connection& db, std::uint64_t grant_id, std::uint64_t accoun
          db::Param{static_cast<std::int64_t>(client_build)}});
 }
 
-// Handshake a client, returning true on HandshakeOk. Leaves the connection open.
+// Handshake a client, returning true on HandshakeOk. Leaves the connection open
+// at character-select (server-authoritative: NOT yet spawned — D-35).
 bool do_handshake(Client& c, std::uint64_t grant_id, std::uint32_t build) {
     if (!c.send_frame(mw::encode_frame(mn::Opcode::WORLD_HELLO, /*seq=*/1,
                                        enc_world_hello(grant_id, build))))
@@ -256,6 +257,74 @@ bool do_handshake(Client& c, std::uint64_t grant_id, std::uint32_t build) {
     if (!rf || rf->opcode != mn::Opcode::HANDSHAKE_OK) return false;
     Bytes pl(rf->payload, rf->payload + rf->payload_len);
     return decode<mn::HandshakeOk>(pl) != nullptr;
+}
+
+Bytes enc_enter_world(std::uint64_t character_id) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateEnterWorldRequest(b, character_id));
+    return bytes_of(b);
+}
+
+// Enter the world as an OWNED character (ENTER_WORLD_REQUEST -> RESPONSE(OK)).
+// This is where the session actually spawns + AoI-registers (moved off the
+// handshake path, D-35). The OK reply is sent BEFORE any relayed EntityEnter, so
+// reading exactly one frame here consumes the response and leaves the AoI stream
+// intact for recv_entity().
+bool do_enter_world(Client& c, std::uint64_t character_id) {
+    if (!c.send_frame(mw::encode_frame(mn::Opcode::ENTER_WORLD_REQUEST, /*seq=*/2,
+                                       enc_enter_world(character_id))))
+        return false;
+    std::optional<Bytes> r = c.recv_frame();
+    if (!r) return false;
+    std::optional<mw::Frame> rf = mw::decode_frame(*r);
+    if (!rf || rf->opcode != mn::Opcode::ENTER_WORLD_RESPONSE) return false;
+    Bytes pl(rf->payload, rf->payload + rf->payload_len);
+    const auto* resp = decode<mn::EnterWorldResponse>(pl);
+    return resp != nullptr && resp->status() == mn::EnterWorldStatus::OK;
+}
+
+// Standalone `character` table DDL (mirrors 0001_init_characters.up.sql) so the
+// relay test can seed an owned character per account. No-op if the migration ran.
+constexpr const char* kCharacterDdl =
+    "CREATE TABLE IF NOT EXISTS `character` ("
+    "  id            BIGINT UNSIGNED   NOT NULL AUTO_INCREMENT,"
+    "  account_id    BIGINT UNSIGNED   NOT NULL,"
+    "  name          VARCHAR(32)       NOT NULL,"
+    "  race          TINYINT UNSIGNED  NOT NULL,"
+    "  class         TINYINT UNSIGNED  NOT NULL,"
+    "  level         SMALLINT UNSIGNED NOT NULL DEFAULT 1,"
+    "  xp            INT UNSIGNED      NOT NULL DEFAULT 0,"
+    "  money         BIGINT UNSIGNED   NOT NULL DEFAULT 0,"
+    "  map_id        INT UNSIGNED      NOT NULL,"
+    "  instance_id   INT UNSIGNED      NOT NULL DEFAULT 0,"
+    "  pos_x         FLOAT             NOT NULL,"
+    "  pos_y         FLOAT             NOT NULL,"
+    "  pos_z         FLOAT             NOT NULL,"
+    "  pos_o         FLOAT             NOT NULL DEFAULT 0,"
+    "  played_time   INT UNSIGNED      NOT NULL DEFAULT 0,"
+    "  logout_at     DATETIME          NULL,"
+    "  save_epoch    BIGINT            NOT NULL DEFAULT 0,"
+    "  created_at    DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+    "  updated_at    DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,"
+    "  PRIMARY KEY (id),"
+    "  UNIQUE KEY uq_character_name (name),"
+    "  KEY idx_character_account (account_id)"
+    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
+
+// Seed one owned character (class 1 = Vanguard, matching the #328 assertion) via
+// raw SQL and return its minted id. map/pos default 0 — worldd re-seeds spawn at
+// zone centre (64,64) on ENTER_WORLD, so the relay position assertions hold.
+std::uint64_t seed_character(db::Connection& db, std::uint64_t account_id,
+                             const std::string& name) {
+    db.execute("DELETE FROM `character` WHERE name = ?", {db::Param{name}});
+    db.execute(
+        "INSERT INTO `character` "
+        "(account_id, name, race, class, map_id, pos_x, pos_y, pos_z) "
+        "VALUES (?, ?, 1, 1, 0, 0, 0, 0)",
+        {db::Param{std::to_string(account_id)}, db::Param{name}});
+    db::Result r = db.execute("SELECT id FROM `character` WHERE name = ?",
+                              {db::Param{name}});
+    return cell_u64(r.rows.at(0)[0]);
 }
 
 // Read frames from `c` until one of the wanted entity-state opcodes arrives (or
@@ -360,6 +429,7 @@ int main() {
     // must be different accounts (using one account for both would make the 2nd
     // login kick the 1st, which is exactly what worldd-single-session-it proves).
     std::uint64_t account_a = 0, account_b = 0;
+    std::uint64_t char_a = 0, char_b = 0;
     std::uint32_t realm_id = 0;
     std::uint64_t grant_a = 0, grant_b = 0;
 
@@ -382,6 +452,14 @@ int main() {
         account_b = seed_account(uname_b);
         check("two test accounts seeded", account_a > 0 && account_b > 0 &&
                                               account_a != account_b);
+
+        // Seed one owned character per account — each session enters the world as
+        // ITS real character (server-authoritative, D-35; no placeholder). Distinct
+        // character ids give the two sessions distinct entity guids on the wire.
+        db.execute(kCharacterDdl);
+        char_a = seed_character(db, account_a, "Relay_a_" + std::to_string(std::rand()));
+        char_b = seed_character(db, account_b, "Relay_b_" + std::to_string(std::rand()));
+        check("two owned characters seeded", char_a > 0 && char_b > 0 && char_a != char_b);
 
         const std::string realm_name = "WD Relay Realm " + std::to_string(std::rand());
         db.execute(
@@ -420,6 +498,7 @@ int main() {
 
         mw::WorldServerConfig wcfg;
         wcfg.auth_db = p;
+        wcfg.char_db = p;   // characters DB (same instance) — ENTER_WORLD ownership load
         wcfg.realm_id = realm_id;
         mw::Dispatcher dispatcher;
         mw::WorldServer world(dispatcher, wcfg);
@@ -446,9 +525,9 @@ int main() {
         });
 
         // ===== 1. BOTH clients enter world at the spawn (64,64) — in range =====
-        // Both placeholder characters spawn at the play-area centre (the
-        // WORLD_HELLO handler seeds spawn = (kZoneMaxXY*0.5, kZoneMaxXY*0.5, 0) =
-        // (64,64,0)), so they are co-located and mutually in AoI range on enter.
+        // Both owned characters spawn at the play-area centre (the ENTER_WORLD
+        // handler seeds spawn = (kZoneMaxXY*0.5, kZoneMaxXY*0.5, 0) = (64,64,0)),
+        // so they are co-located and mutually in AoI range on enter.
         //
         // The two clients live in a nested scope so their sockets CLOSE (dtor ->
         // SSL_shutdown + close) BEFORE server.join() below — otherwise the two
@@ -457,19 +536,22 @@ int main() {
         Client a(port);
         check("A: client A connected (TLS)", a.connected());
         check("A: client A HandshakeOk", do_handshake(a, grant_a, client_build));
+        check("A: client A entered world as its owned character",
+              do_enter_world(a, char_a));
 
         // A is alone so far — its enter() found no one. Now B enters; B's enter()
         // will EntityEnter A into B, and reciprocally EntityEnter B into A.
         Client b(port);
         check("B: client B connected (TLS)", b.connected());
         check("B: client B HandshakeOk", do_handshake(b, grant_b, client_build));
+        check("B: client B entered world as its owned character",
+              do_enter_world(b, char_b));
 
         // On B's enter, A receives an EntityEnter for B (login bidirectional
-        // visibility). No characters DB is wired, so both placeholder characters
-        // have the D-11 stub guid 0 — the relay assigns each a UNIQUE synthetic
-        // entity guid (kSyntheticGuidBase + slot) so the two sessions are distinct
-        // on the wire. We assert A receives an EntityEnter at the spawn position
-        // (the guid is B's synthetic id, distinct from A's).
+        // visibility). Each session enters as its own REAL character, so the two
+        // carry distinct character.id entity guids on the wire (no synthetic-guid
+        // fallback needed). We assert A receives an EntityEnter at the spawn
+        // position (the guid is B's character id, distinct from A's).
         EntityMsg a_enter = recv_entity(a);
         check("1: A receives EntityEnter when B logs in nearby",
               a_enter.got && a_enter.opcode == mn::Opcode::ENTITY_ENTER);
@@ -477,8 +559,8 @@ int main() {
               a_enter.got && a_enter.x > 63.9f && a_enter.x < 64.1f &&
                   a_enter.y > 63.9f && a_enter.y < 64.1f);
         // #328: the relayed EntityEnter carries B's class so A colors B's capsule by
-        // class. No characters DB is wired, so both use the D-11 stub class (1 =
-        // Vanguard, load_placeholder_character's default).
+        // class. Both seeded characters are class 1 (Vanguard), so the relayed
+        // EntityEnter must carry class 1 — now sourced from the REAL character row.
         check("1: the EntityEnter carries the mover's class (#328)",
               a_enter.got && a_enter.char_class == 1);
 
@@ -558,6 +640,9 @@ int main() {
         db.execute("DELETE FROM session_grant WHERE account_id IN (?, ?)",
                    {db::Param{static_cast<std::int64_t>(account_a)},
                     db::Param{static_cast<std::int64_t>(account_b)}});
+        db.execute("DELETE FROM `character` WHERE id IN (?, ?)",
+                   {db::Param{static_cast<std::int64_t>(char_a)},
+                    db::Param{static_cast<std::int64_t>(char_b)}});
         db.execute("DELETE FROM realm WHERE id = ?",
                    {db::Param{static_cast<std::int64_t>(realm_id)}});
         db.execute("DELETE FROM account WHERE id IN (?, ?)",

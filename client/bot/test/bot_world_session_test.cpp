@@ -171,14 +171,38 @@ public:
             if (!grant_ok_) {
                 queue_disconnect(3 /*GRANT_INVALID*/, "grant invalid", f->seq);
             } else {
+                // Server-authoritative characters (D-35): HandshakeOk lands the bot
+                // at character-select. The spawn (and the #87 AoI EntityEnter flush)
+                // now happen on ENTER_WORLD, not here.
                 queue_handshake_ok(f->seq);
-                // worldd's #87 enter() sends EntityEnter for anyone already in range
-                // AFTER HandshakeOk. Flush any pre-registered peer enter in that
-                // real order so the bot's handshake read gets HandshakeOk first.
-                if (pending_enter_guid_ != 0) {
-                    relay_entity_enter(pending_enter_guid_, pending_enter_x_,
-                                       pending_enter_y_, pending_enter_z_);
-                }
+            }
+            return true;
+        }
+        // Character-select round-trips (D-35 / #341). CharList returns one owned
+        // character so the bot skips CharCreate and enters as it.
+        if (f->opcode == bot::kOpCharListReq) {
+            queue_char_list_one(f->seq, /*char_id=*/kMockCharId);
+            return true;
+        }
+        if (f->opcode == bot::kOpCharCreateReq) {
+            queue_char_create_ok(f->seq, /*char_id=*/kMockCharId);
+            return true;
+        }
+        if (f->opcode == bot::kOpEnterWorldReq) {
+            // Reply OK (unless the requested id is the "unowned" test id), THEN flush
+            // any pre-registered peer EntityEnter — worldd's real reply-before-AoI
+            // order on ENTER_WORLD.
+            const mn::EnterWorldRequest* ew =
+                fb::GetRoot<mn::EnterWorldRequest>(f->payload.data());
+            const std::uint64_t cid = ew ? ew->character_id() : 0;
+            if (reject_enter_id_ != 0 && cid == reject_enter_id_) {
+                queue_enter_world(f->seq, mn::EnterWorldStatus::NOT_FOUND);
+                return true;  // no spawn, no AoI
+            }
+            queue_enter_world(f->seq, mn::EnterWorldStatus::OK);
+            if (pending_enter_guid_ != 0) {
+                relay_entity_enter(pending_enter_guid_, pending_enter_x_,
+                                   pending_enter_y_, pending_enter_z_);
             }
             return true;
         }
@@ -223,6 +247,11 @@ public:
     }
     // #248: enable per-intent peer EntityUpdate relay for the given guid (0 off).
     void set_relay_peer(std::uint64_t guid) { relay_peer_guid_ = guid; }
+    // D-35: reject ENTER_WORLD for this character id with NOT_FOUND (0 = never).
+    void reject_enter_world_for(std::uint64_t id) { reject_enter_id_ = id; }
+
+    // The single owned character id CharList reports (and CharCreate mints).
+    static constexpr std::uint64_t kMockCharId = 100;
 
 private:
     // Queue a relayed EntityEnter/Update the bot should CAPTURE (#248). Simulates
@@ -259,6 +288,31 @@ private:
         auto m = b.CreateString(msg);
         b.Finish(mn::CreateDisconnect(b, static_cast<mn::DisconnectReason>(reason), m));
         push(bot::kOpDisconnect, seq,
+             bot::Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize()));
+    }
+    // CharListResponse carrying exactly one owned character (D-35) — the bot enters
+    // as it (no CharCreate needed).
+    void queue_char_list_one(std::uint64_t seq, std::uint64_t char_id) {
+        fb::FlatBufferBuilder b;
+        auto name = b.CreateString("mockchar");
+        std::vector<flatbuffers::Offset<mn::CharListEntry>> rows;
+        rows.push_back(mn::CreateCharListEntry(b, char_id, name, /*race=*/1,
+                                               /*char_class=*/1, /*level=*/1));
+        auto vec = b.CreateVector(rows);
+        b.Finish(mn::CreateCharListResponse(b, vec));
+        push(bot::kOpCharListResp, seq,
+             bot::Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize()));
+    }
+    void queue_char_create_ok(std::uint64_t seq, std::uint64_t char_id) {
+        fb::FlatBufferBuilder b;
+        b.Finish(mn::CreateCharCreateResponse(b, mn::CharCreateStatus::OK, char_id));
+        push(bot::kOpCharCreateResp, seq,
+             bot::Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize()));
+    }
+    void queue_enter_world(std::uint64_t seq, mn::EnterWorldStatus status) {
+        fb::FlatBufferBuilder b;
+        b.Finish(mn::CreateEnterWorldResponse(b, status));
+        push(bot::kOpEnterWorldResp, seq,
              bot::Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize()));
     }
     // Validate like worldd #86 (coarse): accept if inside [0,128]^2 and the
@@ -298,8 +352,9 @@ private:
     float auth_x_ = 64.0f, auth_y_ = 64.0f, auth_z_ = 0.0f;  // worldd spawn
     std::uint32_t states_sent_ = 0;
     std::uint64_t relay_peer_guid_ = 0;  // #248: relay a peer EntityUpdate per accept
-    std::uint64_t pending_enter_guid_ = 0;  // #248: peer to EntityEnter post-handshake
+    std::uint64_t pending_enter_guid_ = 0;  // #248: peer to EntityEnter post-ENTER_WORLD
     float pending_enter_x_ = 0.0f, pending_enter_y_ = 0.0f, pending_enter_z_ = 0.0f;
+    std::uint64_t reject_enter_id_ = 0;     // D-35: id to reject ENTER_WORLD with NOT_FOUND
 };
 
 }  // namespace
@@ -455,6 +510,22 @@ int main() {
             check("5c: did NOT enter world on grant reject", !r.handshake_ok);
             check("5c: disconnected", r.disconnected);
             check("5c: reason = GRANT_INVALID (3)", r.disconnect_reason == 3);
+        }
+
+        // 5d. Server-authoritative reject (D-35): a bot pointed at an UNOWNED
+        // character id handshakes to character-select but ENTER_WORLD returns
+        // NOT_FOUND — the bot does NOT spawn (in_world false, no movement).
+        {
+            MockWorldd mock(/*grant_ok=*/true);
+            const std::uint64_t unowned = 424242;
+            mock.reject_enter_world_for(unowned);
+            bot::BotWorldConfig cfg;
+            cfg.force_character_id = unowned;  // test hook: enter a specific id
+            bot::BotRunResult r = bot::run_world_session(mock, grant, cfg);
+            check("5d: reached character-select (handshake)", r.handshake_ok);
+            check("5d: did NOT enter world (unowned character)", !r.in_world);
+            check("5d: ENTER_WORLD status = NOT_FOUND (1)", r.enter_world_status == 1);
+            check("5d: sent no movement intents (never spawned)", r.intents_sent == 0);
         }
     }
 

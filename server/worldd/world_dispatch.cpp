@@ -140,6 +140,7 @@ bool verify_payload_for(net::Opcode op, const Frame& f) {
         case net::Opcode::CHAR_LIST_REQUEST:   return verify_table<mn::CharListRequest>(f);
         case net::Opcode::CHAR_CREATE_REQUEST: return verify_table<mn::CharCreateRequest>(f);
         case net::Opcode::CHAR_DELETE_REQUEST: return verify_table<mn::CharDeleteRequest>(f);
+        case net::Opcode::ENTER_WORLD_REQUEST: return verify_table<mn::EnterWorldRequest>(f);
         default:                           return false;
     }
 }
@@ -212,6 +213,15 @@ Bytes encode_char_create(mn::CharCreateStatus status, std::uint64_t character_id
 Bytes encode_char_delete(mn::CharDeleteStatus status) {
     fb::FlatBufferBuilder b;
     b.Finish(mn::CreateCharDeleteResponse(b, status));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// Build an EnterWorldResponse payload: the typed enter-world result. OK means the
+// server spawned the named owned character (the client transitions in-world); any
+// other status means NO spawn — the session stays at character-select.
+Bytes encode_enter_world_response(mn::EnterWorldStatus status) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateEnterWorldResponse(b, status));
     return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
 }
 
@@ -468,35 +478,21 @@ void Dispatcher::register_m0_stubs() {
                return;
            }
            ctx.authenticated = true;
+           // Server-authoritative characters (D-35 / #341): a valid WORLD_HELLO now
+           // leaves the session at CHARACTER-SELECT, NOT in the world. There is no
+           // implicit spawn and no fabricated placeholder — the player must send an
+           // explicit ENTER_WORLD_REQUEST naming a character it OWNS to be spawned.
+           // Everything that makes a session "in-world" (the CCU/active gauges, the
+           // authoritative movement state, the AoI registration, and the #326
+           // single-active-session admission) moves to the ENTER_WORLD OK path.
+           ctx.phase = SessionPhase::kCharSelect;
 
-           // OPS-05: this session is now authenticated + entering the world. Bump
-           // CCU (meridian_ccu{realm,zone,shard}) and the "active" session gauge
-           // (meridian_sessions{realm,state="active"}); the serve loop decrements
-           // both on disconnect. These drive the Realm-health CCU panel.
-           metrics::ccu().with(ctx.labels.rzs()).inc();
-           metrics::sessions().with({ctx.labels.realm, "active"}).inc();
-           ctx.entered_metrics = true;
-
-           // 3. Enter world: load the D-11 placeholder character.
-           PlaceholderCharacter pc =
-               load_placeholder_character(ctx.char_db, consumed->account_id);
-
-           // 3a. Seed the authoritative movement state (#86) at the character's
-           //     M0 spawn. D-19 flat bootstrap map: spawn at the play-area centre
-           //     so the first legal moves in any direction stay in bounds. The
-           //     guid lets the world thread stamp MovementState (world.fbs).
-           //     spawn_time_ms = 0 seeds the first intent's Δt from spawn.
-           Position spawn;
-           spawn.x = movement::kZoneMaxXY * 0.5f;  // 64 m — bootstrap play-area centre
-           spawn.y = movement::kZoneMaxXY * 0.5f;
-           spawn.z = movement::kFlatGroundZ;       // flat ground (D-19)
-           ctx.movement.emplace(spawn, /*spawn_time_ms=*/0);
-           ctx.movement->set_entity_guid(pc.char_guid);  // may be refined below (AoI)
-
-           // OPS-05 traces (#166): emit the enter-world span as a SUCCESS (grant
+           // OPS-05 traces (#166): emit the handshake span as a SUCCESS (grant
            // validated → AEAD session established → about to reply HandshakeOk),
            // stitched to the authd login span via the grant. Carry its ids into
-           // the accept log so the log line pivots to the trace (#165).
+           // the accept log so the log line pivots to the trace (#165). This marks
+           // reaching character-select — the enter-world (spawn) span is emitted
+           // later by the ENTER_WORLD handler.
            std::string trace_id, span_id;
            emit_enter_world_span(ctx, grant_id, trace_start_ns, /*ok=*/true,
                                  /*reject_reason=*/{}, trace_id, span_id);
@@ -504,125 +500,21 @@ void Dispatcher::register_m0_stubs() {
                           log::field("account_id",
                                      static_cast<std::int64_t>(consumed->account_id)),
                           log::field("realm_id",
-                                     static_cast<std::int64_t>(consumed->realm_id)),
-                          log::field("character", pc.name),
-                          log::field("class_id",
-                                     static_cast<std::int64_t>(pc.class_id))};
+                                     static_cast<std::int64_t>(consumed->realm_id))};
            if (!trace_id.empty()) {
                af.push_back(log::field("trace_id", trace_id));
                af.push_back(log::field("span_id", span_id));
            }
-           log::info(kCat, "WORLD_HELLO accepted -> HandshakeOk", af);
+           log::info(kCat, "WORLD_HELLO accepted -> HandshakeOk (character-select)", af);
 
-           // OPS-05 audit (#92): an authenticated session entered the world. The
-           // actor is the account; the target is the character; the correlation id
-           // ties this to the grant_consumed + the authd login. No secrets.
-           audit::emit(audit::Record{
-               .action = audit::Action::kSessionEnter,
-               .outcome = audit::Outcome::kSuccess,
-               .account_id = consumed->account_id,
-               .target = pc.name,
-               .correlation_id = grant_id,
-           });
-
-           // 4. Reply HandshakeOk. content_hash is an M0 placeholder (IF-4 world
-           //    content hashing is later); server_proof empty (see encoder note).
+           // Reply HandshakeOk. content_hash is an M0 placeholder (IF-4 world
+           // content hashing is later); server_proof empty (see encoder note). The
+           // session now sits at character-select: it may CHAR_LIST/CREATE/DELETE
+           // and ENTER_WORLD. No entity, no movement, no CCU/AoI/single-active yet.
            Bytes content_hash;  // empty M0 placeholder
            Bytes server_proof;  // empty M0 placeholder
            sess.write_frame(encode_frame(net::Opcode::HANDSHAKE_OK, f.seq,
                                          encode_handshake_ok(content_hash, server_proof)));
-
-           // 5. AoI ENTER (#87): register this session in the shared world state so
-           //    it is tracked spatially and relayed to/from the OTHER sessions in
-           //    range. Build its serialized, WorldSession-sealed s2c egress channel
-           //    (the relay writes to this socket from OTHER threads — the channel
-           //    serializes those with the serve loop's own writes; SAD §5.2/§6).
-           //    enter() sends this session an EntityEnter for anyone already in
-           //    range and sends THEM an EntityEnter for this one (bidirectional
-           //    visibility on login). Skipped when no world registry is wired (the
-           //    DB-less dispatch smoke test) — there movement still replies to the
-           //    mover, just without relay.
-           if (ctx.world != nullptr && ctx.session) {
-               ctx.egress = std::make_shared<SessionEgress>(sess, *ctx.session);
-               std::shared_ptr<SessionEgress> egress = ctx.egress;
-               EntityIdentity id;
-               id.entity_guid = pc.char_guid;
-               id.type_id = pc.class_id;  // M0: the placeholder class stands in for type_id
-               id.char_class = pc.class_id;  // #328: relay the class so every client
-                                             // colors the placeholder capsule by class
-               EnterResult er = ctx.world->enter(
-                   id, spawn,
-                   [egress](net::Opcode op, const Bytes& payload) {
-                       return egress->emit(op, payload);
-                   });
-               ctx.slot = er.slot;
-               ctx.entered = true;
-               // Stamp the EFFECTIVE guid the relay assigned (a unique synthetic
-               // guid for a 0 stub) onto the movement state so the mover's own
-               // MovementState echo and its relayed EntityEnter/Update all carry
-               // the same entity id — otherwise two placeholder sessions would
-               // both echo guid 0 and be indistinguishable to the client.
-               ctx.movement->set_entity_guid(er.entity_guid);
-               // OPS-05: reflect the new AoI population on the map gauge
-               // (meridian_aoi_entities{realm,zone,shard,map}) — Realm-health.
-               metrics::aoi_entities()
-                   .with(ctx.labels.rzsm())
-                   .set(static_cast<double>(ctx.world->session_count()));
-           }
-
-           // 6. SINGLE ACTIVE SESSION PER ACCOUNT (#326). Admit this account into
-           //    the shared registry with a KICK-OLD policy: if the account already
-           //    has a live in-world session, that one is KICKED now and this new
-           //    login takes over (WoW-style — lets a crashed client reconnect
-           //    without waiting for its stale session to time out). Enforcement
-           //    lives here, where an account actually goes in-world (SAD §5.3), not
-           //    in authd (which is realm-agnostic and cannot see live sessions — a
-           //    second grant can still be issued; worldd is the choke point).
-           //
-           //    The KickFn tears the DISPLACED session down from THIS (the new)
-           //    thread: it never touches the victim's net::Session (single-thread-
-           //    only), only (a) a shared atomic flag the victim's serve loop polls,
-           //    (b) the AoI world (thread-safe), and (c) the victim's SessionEgress
-           //    — the SAME serialized cross-thread write path the AoI relay already
-           //    uses to push frames to a session from other threads (world_state.h).
-           if (ctx.active_sessions != nullptr) {
-               std::shared_ptr<SessionEgress> kick_egress = ctx.egress;
-               std::shared_ptr<std::atomic<bool>> kick_flag = ctx.kicked;
-               WorldState* kick_world = ctx.world;
-               const SessionSlot kick_slot = ctx.slot;
-               const bool kick_entered = ctx.entered;
-               const std::string realm = ctx.labels.realm;
-               AdmitResult admitted = ctx.active_sessions->admit(
-                   consumed->account_id,
-                   [kick_egress, kick_flag, kick_world, kick_slot, kick_entered, realm]() {
-                       if (kick_flag) kick_flag->store(true);
-                       // Drop the displaced session from the AoI world at once so it
-                       // stops being "in-world" the instant it is superseded (its own
-                       // serve loop's later leave() then no-ops).
-                       if (kick_world != nullptr && kick_entered) kick_world->leave(kick_slot);
-                       // Tell the displaced client WHY, then stop its egress so no
-                       // further relay write races its socket close.
-                       if (kick_egress) {
-                           kick_egress->emit_frame(
-                               make_disconnect(net::DisconnectReason::KICKED,
-                                               "logged in from another location", 0));
-                           kick_egress->mark_closed();
-                       }
-                       metrics::disconnects_total()
-                           .with({realm,
-                                  disconnect_reason_label(net::DisconnectReason::KICKED)})
-                           .inc();
-                   });
-               ctx.session_token = admitted.token;
-               ctx.admitted = true;
-               if (admitted.kicked_previous) {
-                   log::info(kCat,
-                             "single-session takeover: kicked prior in-world session",
-                             {log::field("account_id",
-                                         static_cast<std::int64_t>(consumed->account_id)),
-                              log::field("grant_id", grant_id)});
-               }
-           }
        });
 
     // CLOCK_SYNC (#65): the one M0 opcode with a natural echo. The client sends
@@ -653,14 +545,16 @@ void Dispatcher::register_m0_stubs() {
     // invalid one is REJECTED and answered with a snap-back correction rather than
     // trusting the client's claimed position.
     on(net::Opcode::MOVEMENT_INTENT, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
-        // Movement is only legal AFTER a valid HandshakeOk (SAD §5.5 trusts the
-        // intent only post-auth). A pre-handshake MOVEMENT_INTENT is a protocol
-        // error — ask the serve loop to close (no oracle, no simulation touched).
+        // Movement is only legal once the session is IN WORLD (SAD §5.5 trusts the
+        // intent only post-auth; D-35 additionally requires an explicit ENTER_WORLD
+        // spawn). `ctx.movement` is emplaced only on ENTER_WORLD OK, so a movement
+        // sent at character-select (authenticated but not spawned) or pre-handshake
+        // is a protocol error — ask the serve loop to close (no simulation touched).
         if (!ctx.authenticated || !ctx.movement) {
-            log::warn(kCat, "MOVEMENT_INTENT before handshake — rejecting");
+            log::warn(kCat, "MOVEMENT_INTENT before entering world — rejecting");
             ctx.disconnect = true;
             ctx.disconnect_reason = net::DisconnectReason::PROTOCOL_MISMATCH;
-            ctx.disconnect_message = "movement before handshake";
+            ctx.disconnect_message = "movement before entering world";
             return;
         }
 
@@ -767,8 +661,8 @@ void Dispatcher::register_m0_stubs() {
     // account named in the request, so a client can only ever manage its OWN
     // characters. Ownership is additionally enforced at the DB by the CRUD's
     // `WHERE id=? AND account_id=?` predicate (soft-ref rule, §4.4). The char DB
-    // read/write runs synchronously on the IO worker, exactly like enter-world's
-    // load_placeholder_character + the grant consume (no world-thread involvement).
+    // read/write runs synchronously on the IO worker, exactly like ENTER_WORLD's
+    // load_owned_character + the grant consume (no world-thread involvement).
 
     // CHAR_LIST_REQUEST: return the account's roster (character-select screen).
     on(net::Opcode::CHAR_LIST_REQUEST,
@@ -887,6 +781,201 @@ void Dispatcher::register_m0_stubs() {
            send_s2c(sess, ctx,
                     encode_frame(net::Opcode::CHAR_DELETE_RESPONSE, f.seq,
                                  encode_char_delete(status)));
+       });
+
+    // --- ENTER_WORLD (server-authoritative characters, D-35 / #341) ------------
+    // Promote an authenticated CHARACTER-SELECT session INTO the world as a REAL,
+    // OWNED character. This is the SINGLE seam where a session spawns: the server
+    // loads the requested character ONLY if it belongs to this session's grant-
+    // derived account (never a client-named account), spawns THAT character, and
+    // replies OK. A bad/foreign/absent character is REJECTED with a typed status
+    // and no spawn — the server is the definitive source of truth and never
+    // fabricates a character. The CCU/active gauges, the authoritative movement
+    // state, the AoI registration, and the #326 single IN-WORLD session admission
+    // all live here (moved off the handshake path), so only a real in-world player
+    // is counted and holds the account's slot.
+    on(net::Opcode::ENTER_WORLD_REQUEST,
+       [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+           if (!require_authenticated(ctx, "ENTER_WORLD_REQUEST")) return;
+
+           auto reply = [&](mn::EnterWorldStatus st) {
+               send_s2c(sess, ctx,
+                        encode_frame(net::Opcode::ENTER_WORLD_RESPONSE, f.seq,
+                                     encode_enter_world_response(st)));
+           };
+
+           // Double-enter guard: a session already in-world must not spawn twice
+           // (that would leak an AoI slot + a second CCU count). Refuse politely.
+           if (ctx.phase == SessionPhase::kInWorld) {
+               log::warn(kCat, "ENTER_WORLD_REQUEST while already in world — ignoring",
+                         {log::field("account_id",
+                                     static_cast<std::int64_t>(ctx.account_id))});
+               reply(mn::EnterWorldStatus::INTERNAL);
+               return;
+           }
+
+           const auto* req = fb::GetRoot<mn::EnterWorldRequest>(f.payload);
+           if (req == nullptr) return;  // verified upstream; defensive
+           const std::uint64_t character_id = req->character_id();
+
+           // No characters DB -> we cannot prove ownership, and we NEVER fabricate.
+           if (ctx.char_db == nullptr) {
+               log::warn(kCat, "ENTER_WORLD_REQUEST with no characters DB — INTERNAL");
+               reply(mn::EnterWorldStatus::INTERNAL);
+               return;
+           }
+
+           // Load the character IFF this account owns it. nullopt => reject; we
+           // then distinguish "no character at all" (client must create first) from
+           // "that id isn't yours / doesn't exist" (client must re-pick).
+           std::optional<LoadedCharacter> loaded;
+           try {
+               loaded = load_owned_character(*ctx.char_db, ctx.account_id, character_id);
+               if (!loaded) {
+                   const bool has_any =
+                       !chr::list_characters(*ctx.char_db, ctx.account_id).empty();
+                   log::info(kCat, "ENTER_WORLD_REQUEST rejected (unowned/absent)",
+                             {log::field("account_id",
+                                         static_cast<std::int64_t>(ctx.account_id)),
+                              log::field("character_id",
+                                         static_cast<std::int64_t>(character_id))});
+                   reply(has_any ? mn::EnterWorldStatus::NOT_FOUND
+                                 : mn::EnterWorldStatus::NO_CHARACTER);
+                   return;
+               }
+           } catch (const db::DbError& e) {
+               log::warn(kCat, "ENTER_WORLD_REQUEST DB error",
+                         {log::field("account_id",
+                                     static_cast<std::int64_t>(ctx.account_id)),
+                          log::field("character_id",
+                                     static_cast<std::int64_t>(character_id)),
+                          log::field("error", e.what())});
+               reply(mn::EnterWorldStatus::INTERNAL);
+               return;
+           }
+
+           // --- OK: spawn the REAL owned character in-world ----------------------
+           const LoadedCharacter& pc = *loaded;
+
+           // Seed the authoritative movement state (#86) at the character's M0
+           // spawn. D-19 flat bootstrap map: spawn at the play-area centre so the
+           // first legal moves in any direction stay in bounds. The guid lets the
+           // world thread stamp MovementState; spawn_time_ms = 0 seeds Δt.
+           Position spawn;
+           spawn.x = movement::kZoneMaxXY * 0.5f;  // 64 m — bootstrap play-area centre
+           spawn.y = movement::kZoneMaxXY * 0.5f;
+           spawn.z = movement::kFlatGroundZ;       // flat ground (D-19)
+           ctx.movement.emplace(spawn, /*spawn_time_ms=*/0);
+           ctx.movement->set_entity_guid(pc.char_guid);  // may be refined below (AoI)
+
+           // OPS-05: this session is now IN WORLD. Bump CCU (meridian_ccu) and the
+           // "active" session gauge (meridian_sessions{state="active"}); the serve
+           // loop decrements both on disconnect (guarded by entered_metrics).
+           metrics::ccu().with(ctx.labels.rzs()).inc();
+           metrics::sessions().with({ctx.labels.realm, "active"}).inc();
+           ctx.entered_metrics = true;
+
+           // OPS-05 audit (#92): an authenticated session entered the world. Actor
+           // is the account; target is the character; correlation is the grant —
+           // pairs with the kSessionLeave record the serve loop emits (also guarded
+           // by entered_metrics) for a complete in-world lifetime.
+           audit::emit(audit::Record{
+               .action = audit::Action::kSessionEnter,
+               .outcome = audit::Outcome::kSuccess,
+               .account_id = ctx.account_id,
+               .target = pc.name,
+               .correlation_id = ctx.grant_id,
+           });
+
+           // Reply ENTER_WORLD_RESPONSE(OK) BEFORE the AoI relay so the client
+           // transitions in-world ahead of any relayed EntityEnter frames (mirrors
+           // the old HandshakeOk-before-AoI ordering). Sent directly: egress is
+           // created by the AoI block just below.
+           ctx.phase = SessionPhase::kInWorld;
+           reply(mn::EnterWorldStatus::OK);
+
+           log::info(kCat, "ENTER_WORLD accepted -> spawned",
+                     {log::field("account_id",
+                                 static_cast<std::int64_t>(ctx.account_id)),
+                      log::field("character_id",
+                                 static_cast<std::int64_t>(pc.char_guid)),
+                      log::field("character", pc.name),
+                      log::field("class_id",
+                                 static_cast<std::int64_t>(pc.class_id))});
+
+           // AoI ENTER (#87): register this session in the shared world state so it
+           // is tracked spatially and relayed to/from the OTHER in-range sessions.
+           // Build its serialized, WorldSession-sealed s2c egress channel (the relay
+           // writes to this socket from OTHER threads — the channel serializes those
+           // with the serve loop's own writes; SAD §5.2/§6). enter() sends this
+           // session an EntityEnter for anyone already in range and sends THEM one
+           // for this character. Skipped when no world registry is wired (DB-less
+           // dispatch smoke test).
+           if (ctx.world != nullptr && ctx.session) {
+               ctx.egress = std::make_shared<SessionEgress>(sess, *ctx.session);
+               std::shared_ptr<SessionEgress> egress = ctx.egress;
+               EntityIdentity id;
+               id.entity_guid = pc.char_guid;
+               id.type_id = pc.class_id;     // M0: class stands in for type_id
+               id.char_class = pc.class_id;  // #328: relay the class so clients color by class
+               EnterResult er = ctx.world->enter(
+                   id, spawn,
+                   [egress](net::Opcode op, const Bytes& payload) {
+                       return egress->emit(op, payload);
+                   });
+               ctx.slot = er.slot;
+               ctx.entered = true;
+               // Stamp the EFFECTIVE guid the relay assigned onto the movement state
+               // so the mover's own MovementState echo and its relayed
+               // EntityEnter/Update all carry the same entity id.
+               ctx.movement->set_entity_guid(er.entity_guid);
+               metrics::aoi_entities()
+                   .with(ctx.labels.rzsm())
+                   .set(static_cast<double>(ctx.world->session_count()));
+           }
+
+           // SINGLE ACTIVE IN-WORLD SESSION PER ACCOUNT (#326). Admit this account
+           // into the shared registry with a KICK-OLD policy: if the account already
+           // has a live IN-WORLD session, that one is KICKED now and this entry takes
+           // over (WoW-style; lets a crashed client reconnect without waiting out the
+           // stale session). Per the D-35 decision the slot is held by the IN-WORLD
+           // session, not a char-select one — so this lives on the ENTER_WORLD path.
+           // The KickFn tears the DISPLACED session down from THIS thread via a
+           // shared atomic flag, the thread-safe AoI world, and the victim's
+           // SessionEgress (the same serialized cross-thread write path the relay uses).
+           if (ctx.active_sessions != nullptr) {
+               std::shared_ptr<SessionEgress> kick_egress = ctx.egress;
+               std::shared_ptr<std::atomic<bool>> kick_flag = ctx.kicked;
+               WorldState* kick_world = ctx.world;
+               const SessionSlot kick_slot = ctx.slot;
+               const bool kick_entered = ctx.entered;
+               const std::string realm = ctx.labels.realm;
+               AdmitResult admitted = ctx.active_sessions->admit(
+                   ctx.account_id,
+                   [kick_egress, kick_flag, kick_world, kick_slot, kick_entered, realm]() {
+                       if (kick_flag) kick_flag->store(true);
+                       if (kick_world != nullptr && kick_entered) kick_world->leave(kick_slot);
+                       if (kick_egress) {
+                           kick_egress->emit_frame(
+                               make_disconnect(net::DisconnectReason::KICKED,
+                                               "logged in from another location", 0));
+                           kick_egress->mark_closed();
+                       }
+                       metrics::disconnects_total()
+                           .with({realm,
+                                  disconnect_reason_label(net::DisconnectReason::KICKED)})
+                           .inc();
+                   });
+               ctx.session_token = admitted.token;
+               ctx.admitted = true;
+               if (admitted.kicked_previous) {
+                   log::info(kCat,
+                             "single-session takeover: kicked prior in-world session",
+                             {log::field("account_id",
+                                         static_cast<std::int64_t>(ctx.account_id)),
+                              log::field("grant_id", ctx.grant_id)});
+               }
+           }
        });
 
     // No handler is registered for server→client opcodes (HANDSHAKE_OK,

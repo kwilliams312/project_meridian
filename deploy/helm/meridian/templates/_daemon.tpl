@@ -157,6 +157,29 @@ spec:
                   name: {{ include "meridian.dbSecretName" $root }}
                   key: {{ include "meridian.dbSecretKey" $root }}
             {{- end }}
+            {{- /* Characters DB (ENTER_WORLD ownership load, D-35/#341). worldd
+                   reads a SEPARATE MERIDIAN_CHARDB_* block — it does NOT reuse the
+                   MERIDIAN_DB_* host/port/user, and it enables its characters DB
+                   ONLY when MERIDIAN_CHARDB_USER is non-empty. The shared ConfigMap
+                   supplies host/port/user under MERIDIAN_DB_* only, so ALL FIVE
+                   CHARDB vars must be rendered here (host/port/user mirror the DB
+                   connection; NAME defaults to the characters schema; PASS reuses
+                   the same DB Secret). Rendered only when chardb.enabled. */ -}}
+            {{- if and $cfg.chardb $cfg.chardb.enabled }}
+            - name: MERIDIAN_CHARDB_HOST
+              value: {{ include "meridian.db.host" $root | quote }}
+            - name: MERIDIAN_CHARDB_PORT
+              value: {{ $root.Values.db.port | quote }}
+            - name: MERIDIAN_CHARDB_USER
+              value: {{ $root.Values.db.user | quote }}
+            - name: MERIDIAN_CHARDB_NAME
+              value: {{ $cfg.chardb.name | default $root.Values.db.names.characters | quote }}
+            - name: MERIDIAN_CHARDB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "meridian.dbSecretName" $root }}
+                  key: {{ include "meridian.dbSecretKey" $root }}
+            {{- end }}
             {{- with $cfg.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

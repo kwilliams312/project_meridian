@@ -210,6 +210,12 @@ Bytes enc_world_hello(std::uint64_t grant_id, std::uint32_t build) {
     return bytes_of(b);
 }
 
+Bytes enc_enter_world_request(std::uint64_t character_id) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateEnterWorldRequest(b, character_id));
+    return bytes_of(b);
+}
+
 template <typename T>
 const T* decode(const Bytes& buf) {
     fb::Verifier v(buf.data(), buf.size());
@@ -262,7 +268,8 @@ struct MoveResult {
 };
 
 MoveResult drive_hello_then_move(std::uint16_t port, std::uint64_t grant_id,
-                                 std::uint32_t build, std::uint32_t flags, float x,
+                                 std::uint32_t build, std::uint64_t character_id,
+                                 std::uint32_t flags, float x,
                                  float y, float z, std::uint64_t client_time_ms) {
     MoveResult r;
     Client c(port);
@@ -279,8 +286,23 @@ MoveResult drive_hello_then_move(std::uint16_t port, std::uint64_t grant_id,
     }
     if (!r.handshake_ok) return r;
 
-    // Now send a MovementIntent on the authenticated connection.
-    c.send_frame(mw::encode_frame(mn::Opcode::MOVEMENT_INTENT, /*seq=*/2,
+    // Server-authoritative characters (D-35): movement is legal only IN WORLD, so
+    // the session must ENTER_WORLD as its owned character before a MovementIntent
+    // is accepted. Enter, expect OK, THEN move.
+    c.send_frame(mw::encode_frame(mn::Opcode::ENTER_WORLD_REQUEST, /*seq=*/2,
+                                  enc_enter_world_request(character_id)));
+    if (std::optional<Bytes> ew = c.recv_frame()) {
+        std::optional<mw::Frame> rf = mw::decode_frame(*ew);
+        if (!rf || rf->opcode != mn::Opcode::ENTER_WORLD_RESPONSE) return r;
+        Bytes pl(rf->payload, rf->payload + rf->payload_len);
+        const auto* resp = decode<mn::EnterWorldResponse>(pl);
+        if (!resp || resp->status() != mn::EnterWorldStatus::OK) return r;
+    } else {
+        return r;
+    }
+
+    // Now send a MovementIntent on the in-world connection.
+    c.send_frame(mw::encode_frame(mn::Opcode::MOVEMENT_INTENT, /*seq=*/3,
                                   enc_movement_intent(7, flags, x, y, z, client_time_ms)));
     std::optional<Bytes> ms = c.recv_frame();
     if (ms) {
@@ -432,6 +454,7 @@ int main() {
     std::uint64_t account_id = 0;
     std::uint32_t realm_id = 0;
     std::uint64_t grant_ok = 0, grant_expired = 0, grant_wrong_realm = 0, grant_move = 0;
+    std::uint64_t char_move = 0;  // owned character the movement leg enters as
     const std::uint64_t grant_unknown = 0xFEEDFACECAFEBEEFULL;  // never inserted
 
     try {
@@ -449,6 +472,43 @@ int main() {
                                    {db::Param{username}});
         account_id = cell_u64(ar.rows.at(0)[0]);
         check("test account seeded", account_id > 0);
+
+        // Seed one owned character (server-authoritative entry needs a real owned
+        // character now, D-35 — the placeholder fabrication is gone). The `character`
+        // table doubles into this DB for the test; CREATE IF NOT EXISTS is a no-op
+        // when the real migration already loaded it.
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS `character` ("
+            "  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,"
+            "  account_id BIGINT UNSIGNED NOT NULL,"
+            "  name VARCHAR(32) NOT NULL,"
+            "  race TINYINT UNSIGNED NOT NULL,"
+            "  class TINYINT UNSIGNED NOT NULL,"
+            "  level SMALLINT UNSIGNED NOT NULL DEFAULT 1,"
+            "  xp INT UNSIGNED NOT NULL DEFAULT 0,"
+            "  money BIGINT UNSIGNED NOT NULL DEFAULT 0,"
+            "  map_id INT UNSIGNED NOT NULL,"
+            "  instance_id INT UNSIGNED NOT NULL DEFAULT 0,"
+            "  pos_x FLOAT NOT NULL, pos_y FLOAT NOT NULL, pos_z FLOAT NOT NULL,"
+            "  pos_o FLOAT NOT NULL DEFAULT 0,"
+            "  played_time INT UNSIGNED NOT NULL DEFAULT 0,"
+            "  logout_at DATETIME NULL, save_epoch BIGINT NOT NULL DEFAULT 0,"
+            "  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+            "  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,"
+            "  PRIMARY KEY (id), UNIQUE KEY uq_character_name (name),"
+            "  KEY idx_character_account (account_id)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+        const std::string char_name = "WdIt_" + std::to_string(std::rand());
+        db.execute("DELETE FROM `character` WHERE name = ?", {db::Param{char_name}});
+        db.execute(
+            "INSERT INTO `character` "
+            "(account_id, name, race, class, map_id, pos_x, pos_y, pos_z) "
+            "VALUES (?, ?, 1, 1, 0, 0, 0, 0)",
+            {db::Param{std::to_string(account_id)}, db::Param{char_name}});
+        char_move = cell_u64(
+            db.execute("SELECT id FROM `character` WHERE name = ?",
+                       {db::Param{char_name}}).rows.at(0)[0]);
+        check("test character seeded", char_move > 0);
 
         const std::string realm_name = "WD IT Realm " + std::to_string(std::rand());
         db.execute(
@@ -509,8 +569,8 @@ int main() {
 
         mw::WorldServerConfig wcfg;
         wcfg.auth_db = p;          // each served connection opens its own auth DB conn
+        wcfg.char_db = p;          // characters DB (same instance) — ENTER_WORLD ownership load
         wcfg.realm_id = realm_id;  // grants for another realm are rejected
-        // char_db left empty -> enter-world uses the D-11 placeholder stub.
         mw::Dispatcher dispatcher;  // the REAL WORLD_HELLO handler (not overridden)
         mw::WorldServer world(dispatcher, wcfg);
         world.start();
@@ -587,6 +647,7 @@ int main() {
             // Spawn is the play-area centre (64, 64, 0). A 0.20 m walk step to
             // (64.20, 64, 0) at t=100 is inside the walk budget (accept).
             MoveResult g = drive_hello_then_move(port, grant_move, client_build,
+                                                 char_move,
                                                  /*flags=Walk*/ 1, 64.20f, 64.0f, 0.0f,
                                                  /*client_time_ms=*/100);
             check("G: handshake ok on the movement connection", g.handshake_ok);
@@ -606,6 +667,8 @@ int main() {
         db.execute("DELETE FROM realm WHERE id IN (?, ?)",
                    {db::Param{static_cast<std::int64_t>(realm_id)},
                     db::Param{static_cast<std::int64_t>(realm2_id)}});
+        db.execute("DELETE FROM `character` WHERE id = ?",
+                   {db::Param{static_cast<std::int64_t>(char_move)}});
         db.execute("DELETE FROM account WHERE id = ?",
                    {db::Param{static_cast<std::int64_t>(account_id)}});
     } catch (const db::DbError& e) {

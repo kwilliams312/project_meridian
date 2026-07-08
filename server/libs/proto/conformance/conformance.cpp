@@ -823,6 +823,43 @@ std::vector<Message> build_corpus() {
                         "if2_char_delete_response.status");
                }});
 
+  // EnterWorldRequest — the owned character to spawn as (server-minted id).
+  c.push_back({"if2_enter_world_request", "IF-2", "ENTER_WORLD_REQUEST (0x0016)",
+               "C->S enter the world as an owned character by id",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateEnterWorldRequest(
+                     b, /*character_id=*/0x0000000100000003ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::EnterWorldRequest>(nullptr),
+                             "if2_enter_world_request verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::EnterWorldRequest>(buf.data());
+                 expect(m->character_id() == 0x0000000100000003ULL,
+                        "if2_enter_world_request.character_id");
+               }});
+
+  // EnterWorldResponse — canonical is the OK variant (spawn authorized).
+  c.push_back({"if2_enter_world_response", "IF-2", "ENTER_WORLD_RESPONSE (0x0017)",
+               "S->C enter result: status=OK (spawned)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateEnterWorldResponse(b, mn::EnterWorldStatus::OK));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::EnterWorldResponse>(nullptr),
+                             "if2_enter_world_response verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::EnterWorldResponse>(buf.data());
+                 expect(m->status() == mn::EnterWorldStatus::OK,
+                        "if2_enter_world_response.status");
+               }});
+
   return c;
 }
 
