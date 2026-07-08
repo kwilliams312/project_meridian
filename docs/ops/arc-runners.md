@@ -57,3 +57,19 @@ always-on component.
 - Bump ARC: edit `targetRevision` in the three `apps/arc-*.yaml`, commit to `dev`.
 - Change capacity/arch: edit `deploy/gitops/runners/*-values.yaml`.
 - Rotate creds: recreate the `arc-github-app` Secret; restart the listener pods.
+
+## Gotchas seen at go-live
+
+- After first creating the `arc-github-app` Secret, the controller may still be in
+  reconcile backoff from when the Secret was absent — force it:
+  `kubectl -n arc-systems rollout restart deploy/arc-controller-gha-rs-controller`.
+- The **listener** pods run in `arc-systems` (the controller namespace), not
+  `arc-runners`. Ephemeral runner pods (runner + dind sidecar) appear in
+  `arc-runners` only while a job runs.
+- `arc-smoke.yml` also triggers on a push that touches itself: a `workflow_dispatch`
+  is only dispatchable once the workflow is on the **default branch**.
+
+## Verified
+
+2026-07-08 — both scale sets register; `arc-smoke` green on both arches (native
+`x86_64` on `meridian-amd64`, `aarch64` on `meridian-arm64`) via dind buildx.
