@@ -1,173 +1,141 @@
 # SPDX-License-Identifier: Apache-2.0
-#
-# Continuous delivery — GHCR autopublish on green main (#175, D-30 §10 rule 1).
-#
-# Trigger mechanism (the "on green main" contract):
-#   This workflow keys off `workflow_run` for the "build" CI workflow
-#   (.github/workflows/build.yml). It fires when that workflow COMPLETES, and the
-#   `publish` job is guarded to run ONLY when:
-#       conclusion == 'success'   (CI was green)  AND
-#       head_branch == 'main'     (it was a push to main, not a PR)
-#   So images publish strictly AFTER main passes CI — exactly D-30's "every push
-#   to main that passes CI builds and publishes". We use `workflow_run` (not a job
-#   appended to build.yml) deliberately: the CI-conflict-avoidance rule for this
-#   change forbids editing build.yml, and a separate downstream workflow keeps CD
-#   decoupled from CI while still gating on its success. `workflow_run` runs from
-#   the DEFAULT branch's copy of this file — expected, since CD lives on main.
-#
-# What it publishes (D-30 §10 rule 1): the authd + worldd images, built with
-# Buildx from the ONE parameterized Dockerfile (deploy/docker/Dockerfile), tagged
-# by short commit SHA + `latest`, pushed to
-#   ghcr.io/kwilliams312/project_meridian/authd
-#   ghcr.io/kwilliams312/project_meridian/worldd
-# Auth is the built-in GITHUB_TOKEN with `packages: write` — no external secret
-# is needed for GHCR. OCI source/revision labels are stamped at build.
-
+# Native multi-arch CD (D-37 / Phase 2b). On a push to a realm branch, build the
+# server images natively on the ARC self-hosted runners (amd64 on the NUCs, arm64
+# on the Talos workers), publish per-arch by digest, then merge into manifest
+# lists tagged <short-sha> + the moving per-branch tag (:dev/:ptr/:prod; :latest
+# on main), cosign-signed + SBOM-attested on the merged digest. dev/ptr then
+# auto-restart to repull the moving tag. Supersedes dev-images.yml.
 name: cd
 
 on:
-  workflow_run:
-    workflows: ["build"]   # must match build.yml's `name:`
-    types: [completed]
+  push:
+    branches: [dev, ptr, main]
+    paths:
+      - server/**
+      - schema/**
+      - deploy/docker/**
+      - .github/workflows/cd.yml
 
-# Least-privilege: read the repo, write packages (GHCR). id-token: write is
-# required for cosign KEYLESS signing — it lets the job mint a short-lived OIDC
-# token that Sigstore's Fulcio exchanges for an ephemeral signing certificate
-# bound to this workflow's identity. No long-lived signing key is stored.
 permissions:
   contents: read
   packages: write
-  id-token: write
+  id-token: write        # cosign keyless
+
+env:
+  REGISTRY: ghcr.io
+  OWNER_REPO: kwilliams312/project_meridian
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
-    # ── The "on green main" guard ──────────────────────────────────────────
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.event == 'push'
-    strategy:
-      # Build both daemon images in parallel; one image per matrix leg.
-      matrix:
-        daemon: [authd, worldd]
-    env:
-      REGISTRY: ghcr.io
-      # Lowercase owner/repo path GHCR requires.
-      IMAGE: ghcr.io/kwilliams312/project_meridian/${{ matrix.daemon }}
+  meta:
+    runs-on: meridian-amd64
+    outputs:
+      sha: ${{ steps.m.outputs.sha }}
+      moving: ${{ steps.m.outputs.moving }}
+      latest: ${{ steps.m.outputs.latest }}
     steps:
-      # Check out the EXACT commit CI validated (the workflow_run's head_sha),
-      # not the tip of main — so the published image matches the green build.
-      - name: Checkout the validated commit
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+      - id: m
+        run: |
+          echo "sha=$(echo '${{ github.sha }}' | cut -c1-7)" >> "$GITHUB_OUTPUT"
+          case "${{ github.ref_name }}" in
+            dev)  echo "moving=dev"  >> "$GITHUB_OUTPUT"; echo "latest=false" >> "$GITHUB_OUTPUT" ;;
+            ptr)  echo "moving=ptr"  >> "$GITHUB_OUTPUT"; echo "latest=false" >> "$GITHUB_OUTPUT" ;;
+            main) echo "moving=prod" >> "$GITHUB_OUTPUT"; echo "latest=true"  >> "$GITHUB_OUTPUT" ;;
+          esac
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+  build:
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [authd, worldd, meridian-db]
+        arch: [amd64, arm64]
+    runs-on: meridian-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Short SHA (7 chars) of the validated commit, for the immutable tag.
-      - name: Compute short SHA
-        id: sha
-        run: echo "short=$(echo '${{ github.event.workflow_run.head_sha }}' | cut -c1-7)" >> "$GITHUB_OUTPUT"
-
-      # OCI + tag metadata: `latest` and the short SHA; source/revision labels.
-      - name: Derive tags + OCI labels
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE }}
-          tags: |
-            type=raw,value=latest
-            type=raw,value=${{ steps.sha.outputs.short }}
-          labels: |
-            org.opencontainers.image.title=meridian-${{ matrix.daemon }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
-            org.opencontainers.image.licenses=Apache-2.0
-
-      - name: Build + push ${{ matrix.daemon }} image
-        id: build
+      - id: dockerfile
+        run: |
+          case "${{ matrix.image }}" in
+            authd|worldd) echo "file=deploy/docker/Dockerfile" >> "$GITHUB_OUTPUT"; echo "args=DAEMON=${{ matrix.image }}" >> "$GITHUB_OUTPUT" ;;
+            meridian-db)  echo "file=deploy/docker/Dockerfile.db" >> "$GITHUB_OUTPUT"; echo "args=" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: deploy/docker/Dockerfile
-          build-args: |
-            DAEMON=${{ matrix.daemon }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # Speed up repeat builds; scoped per daemon so authd/worldd don't clash.
-          cache-from: type=gha,scope=${{ matrix.daemon }}
-          cache-to: type=gha,scope=${{ matrix.daemon }},mode=max
-
-      # ── Supply chain (D-30 §10 rule 4): SBOM + keyless signature per image ──
-      # Everything below runs AFTER push and targets the immutable digest
-      # (steps.build.outputs.digest), never a mutable tag — a tag can be moved,
-      # a digest cannot, so the attestation/signature binds to exactly these bits.
-      - name: Pin the published image by digest
-        id: ref
-        run: echo "image=${IMAGE}@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
-
-      # SBOM: Syft (via anchore/sbom-action) generates a CycloneDX SBOM of the
-      # pushed image and uploads it as a workflow artifact. The image is addressed
-      # by digest so the SBOM describes exactly the published bits.
-      - name: Generate SBOM (Syft -> CycloneDX)
-        uses: anchore/sbom-action@v0
-        with:
-          image: ${{ steps.ref.outputs.image }}
-          format: cyclonedx-json
-          artifact-name: sbom-${{ matrix.daemon }}.cdx.json
-          output-file: sbom-${{ matrix.daemon }}.cdx.json
-
-      # Install the cosign CLI for keyless signing + attestation.
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3
-
-      # Keyless (Sigstore/OIDC) signature over the image DIGEST. cosign mints the
-      # OIDC token from the id-token: write permission, Fulcio issues an ephemeral
-      # cert, and the signature + cert are logged to the Rekor transparency log.
-      # No private key exists — provenance is the workflow identity itself.
-      - name: Sign image (cosign keyless)
-        env:
-          COSIGN_YES: "true"
-        run: cosign sign --yes "${{ steps.ref.outputs.image }}"
-
-      # Attach the SBOM to the image as a signed CycloneDX attestation (also
-      # keyless). Consumers can `cosign verify-attestation` to fetch a
-      # provenance-bound bill of materials for the exact digest.
-      - name: Attest SBOM (cosign attest, keyless)
-        env:
-          COSIGN_YES: "true"
-        run: >-
-          cosign attest --yes
-          --type cyclonedx
-          --predicate sbom-${{ matrix.daemon }}.cdx.json
-          "${{ steps.ref.outputs.image }}"
-
-      - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sbom-${{ matrix.daemon }}
-          path: sbom-${{ matrix.daemon }}.cdx.json
-          retention-days: 30
-          if-no-files-found: error
-
-      - name: Summary
+          file: ${{ steps.dockerfile.outputs.file }}
+          build-args: ${{ steps.dockerfile.outputs.args }}
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.OWNER_REPO }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }},mode=max
+      - name: Export digest
         run: |
-          {
-            echo "### Published \`${{ matrix.daemon }}\` :rocket:"
-            echo ""
-            echo "- **image:** \`${{ env.IMAGE }}\`"
-            echo "- **tags:** \`latest\`, \`${{ steps.sha.outputs.short }}\`"
-            echo "- **digest:** \`${{ steps.build.outputs.digest }}\`"
-            echo "- **revision:** \`${{ github.event.workflow_run.head_sha }}\`"
-            echo "- **supply chain:** CycloneDX SBOM + cosign keyless signature & SBOM attestation (by digest)"
-          } >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.image }}-${{ matrix.arch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.image }}-${{ matrix.arch }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  merge:
+    needs: [meta, build]
+    strategy:
+      matrix:
+        image: [authd, worldd, meridian-db]
+    runs-on: meridian-amd64
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-${{ matrix.image }}-*
+          path: /tmp/digests
+          merge-multiple: true
+      - name: Create manifest list (tags)
+        id: create
+        run: |
+          IMG="${REGISTRY}/${OWNER_REPO}/${{ matrix.image }}"
+          TAGS="-t ${IMG}:${{ needs.meta.outputs.sha }} -t ${IMG}:${{ needs.meta.outputs.moving }}"
+          if [ "${{ needs.meta.outputs.latest }}" = "true" ]; then TAGS="$TAGS -t ${IMG}:latest"; fi
+          REFS=""
+          for f in /tmp/digests/${{ matrix.image }}-*; do REFS="$REFS ${IMG}@$(cat "$f")"; done
+          docker buildx imagetools create $TAGS $REFS
+          DIGEST=$(docker buildx imagetools inspect "${IMG}:${{ needs.meta.outputs.sha }}" --format '{{ .Manifest.Digest }}')
+          echo "ref=${IMG}@${DIGEST}" >> "$GITHUB_OUTPUT"
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign (keyless) + SBOM attest the merged digest
+        env:
+          COSIGN_YES: "true"
+        run: cosign sign --yes "${{ steps.create.outputs.ref }}"
+      - uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.create.outputs.ref }}
+          format: cyclonedx-json
+          output-file: sbom-${{ matrix.image }}.cdx.json
+      - name: Attest SBOM (keyless)
+        env:
+          COSIGN_YES: "true"
+        run: cosign attest --yes --type cyclonedx --predicate sbom-${{ matrix.image }}.cdx.json "${{ steps.create.outputs.ref }}"
+
+  restart:
+    needs: [meta, merge]
+    if: github.ref_name == 'dev' || github.ref_name == 'ptr'
+    runs-on: meridian-amd64
+    steps:
+      - uses: azure/setup-kubectl@v4
+      - name: Rollout-restart the realm daemons
+        run: |
+          NS="meridian-${{ github.ref_name }}"
+          kubectl -n "$NS" rollout restart deployment -l app.kubernetes.io/part-of=meridian
+          kubectl -n "$NS" rollout status deployment -l app.kubernetes.io/component=authd --timeout=120s
