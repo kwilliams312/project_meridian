@@ -1,6 +1,8 @@
-# Keep the Docker build context lean (#176). The server image build only needs
-# schema/ + server/ (see deploy/docker/Dockerfile COPY lines); everything else
-# is excluded so it neither bloats the context nor invalidates the build cache.
+# Keep the Docker build context lean (#176). The daemon image build needs
+# schema/ + server/ (deploy/docker/Dockerfile COPY lines); the meridian-db image
+# (deploy/docker/Dockerfile.db) also needs the db-init wrappers, so deploy/ is
+# excluded EXCEPT deploy/docker/db-init. Everything else is excluded so it
+# neither bloats the context nor invalidates the build cache.
 .git
 .github
 client
@@ -10,6 +12,7 @@ tests
 tools
 scripts
 deploy
+!deploy/docker/db-init
 *.md
 uv.lock
 pyproject.toml
