@@ -84,6 +84,16 @@ add_subdirectory(libs/net)
 # roster. A library the enter-world / character-select flow links; ships a
 # DB-backed integration test that self-SKIPs without MERIDIAN_DB_*.
 add_subdirectory(characters)
+# items: the M1 item system (ITM-01 + ECO-01; #366). Item templates + a read-only
+# datastore seam (placeholder set now, mcc #28 later), server-minted item
+# instances, the server-authoritative inventory/equip container (add/remove/
+# stack/split/merge + equip slot rules), and int64 copper currency ops on the
+# character. Composes meridian::db over the characters DB item_instance /
+# character_inventory / character.money (SAD §4.2/§4.7). The foundation loot
+# (#369) + vendors (#370) build on; ships a DB-free unit test (pure inventory +
+# currency logic) and a DB-backed integration test that self-SKIPs without
+# MERIDIAN_DB_*.
+add_subdirectory(items)
 
 # --- Daemons (server/README.md process table; SAD §2.1 / §2.5). --------------
 add_subdirectory(authd)
