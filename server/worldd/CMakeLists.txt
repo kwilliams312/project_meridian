@@ -25,6 +25,7 @@ add_library(world-dispatch STATIC
   world_boot.cpp
   movement_validation.cpp
   aoi_grid.cpp
+  combat_unit.cpp
   world_state.cpp
   active_sessions.cpp
   ability_store.cpp
@@ -199,6 +200,23 @@ target_link_libraries(worldd-ability-test
 )
 set_target_properties(worldd-ability-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-ability COMMAND worldd-ability-test)
+
+# --- Combat Unit model UNIT test (CMB-01 foundation; #342). -------------------
+# PURE (no DB, no socket): exercises the WorldObject→Unit→{Player,Creature}
+# hierarchy + lifecycle (spawn, damage→health, death transition, heal/resurrect,
+# resource spend, placeholder stats) AND the WorldState wiring (a session's Unit
+# is reachable via unit_for_slot and takes damage / dies). Always runs in the
+# plain server ctest (no MERIDIAN_DB_* needed) — the model must be DB-free
+# unit-testable (#342).
+add_executable(worldd-combat-unit-test
+  test/combat_unit_test.cpp
+)
+target_link_libraries(worldd-combat-unit-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-combat-unit-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-combat-unit COMMAND worldd-combat-unit-test)
 
 # --- Two-session AoI movement RELAY integration test (IT-M0 see-each-other-move;
 #     #87). ---------------------------------------------------------------------
