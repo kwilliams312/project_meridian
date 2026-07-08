@@ -1,0 +1,18 @@
+# syntax=docker/dockerfile:1.7
+# SPDX-License-Identifier: Apache-2.0
+#
+# meridian-db — MariaDB 11 that self-seeds the 3-DB split (auth / characters /
+# world) on first boot. The db-init wrappers (deploy/docker/db-init/*.sql) run
+# alphabetically from /docker-entrypoint-initdb.d and SOURCE the real schema
+# from /schemas/{auth,characters,world}. Baking the schema into the image keeps
+# it source-of-truth in-repo (server/db/*, schema/sql/world) while letting both
+# compose and the Helm chart consume one seeded image. Build context = repo root.
+FROM mariadb:11
+
+# The first-boot init wrappers (CREATE DATABASE + SOURCE the migrations + grants).
+COPY deploy/docker/db-init/*.sql /docker-entrypoint-initdb.d/
+
+# The schema the wrappers SOURCE, at the exact paths they reference.
+COPY server/db/auth/migrations/          /schemas/auth/
+COPY server/db/characters/migrations/    /schemas/characters/
+COPY schema/sql/world/                    /schemas/world/
