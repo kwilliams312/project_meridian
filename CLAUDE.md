@@ -31,6 +31,24 @@ Bring the stack up locally with `scripts/dev/run-local.sh` (throwaway MariaDB in
 `.dev-run/`). This local build/run loop is the canonical local workflow and is
 **unchanged** by the hosted-realm CD work.
 
+## Orchestration & story tracking
+
+This repo is built through an orchestration loop: a lead (orchestration) agent
+decomposes and delegates, subagents implement, the lead verifies and merges.
+
+- **Every task is delegated to a subagent, and every task has a story.** The
+  orchestration agent does not implement tasks directly — it breaks work into
+  GitHub issues ("stories") and hands each to a subagent. No task without a story.
+- **Every PR is reviewed by the orchestration agent before merge.** The lead
+  independently verifies each PR — rebuild, rerun the tests, never trust the
+  subagent's claims — then merges. PRs are never self-merged by the implementing
+  subagent.
+- **Close the story when its PR merges.** Because PRs merge into `dev` (not the
+  default branch), `Closes #N` does not auto-fire — the orchestration agent closes
+  the story manually on merge and ticks the parent epic's checklist.
+
+See `AGENTS.md` for the rules subagents must follow.
+
 ## Policies
 
 `CONTRIBUTING.md` holds the **binding** clean-room and asset-provenance policies —
