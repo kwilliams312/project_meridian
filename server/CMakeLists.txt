@@ -102,6 +102,12 @@ add_subdirectory(telemetryd)
 # register an account into the auth DB `account` table (SAD §2.1, §4.1).
 add_subdirectory(tools/meridian-account)
 
+# meridian-character: character-creation CLI for test provisioning / the
+# concurrency-harness load driver. Resolves an account_id from the auth DB by
+# username, then creates a character through the existing characters CRUD
+# (meridian::characters, server/characters/src/characters.h, CHR-01 stub / D-11).
+add_subdirectory(tools/meridian-character)
+
 # worldd now consumes world.fbs for real via world-dispatch (#82/#83), which
 # links meridian::proto (+ meridian::net) itself (worldd/CMakeLists.txt) — so no
 # separate proto link is wired here. authd likewise links meridian::proto via
