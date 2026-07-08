@@ -53,7 +53,7 @@ Ability make_ability(AbilityId id, const std::string& name = "test") {
     a.target = TargetKind::kEnemy;
     a.range_m = 30.0f;
     a.cast_time_ms = 1500;
-    a.resource_type = ResourceType::kMana;
+    a.resource_type = AbilityResourceType::kMana;
     a.resource_amount = 20;
     AbilityEffect e;
     e.kind = EffectKind::kDamage;
@@ -117,7 +117,7 @@ int main() {
             check("B cast_time_ms", a->cast_time_ms == 1500);
             check("B triggers_gcd false", a->triggers_gcd == false);
             check("B cooldown_ms", a->cooldown_ms == 6000);
-            check("B resource_type mana", a->resource_type == ResourceType::kMana);
+            check("B resource_type mana", a->resource_type == AbilityResourceType::kMana);
             check("B resource_amount", a->resource_amount == 20);
             check("B one effect", a->effects.size() == 1);
             check("B effect kind damage",
@@ -167,7 +167,7 @@ int main() {
             check("D nuke is ranged (>5m)", nuke->range_m > 5.0f);
             check("D nuke fire school", nuke->school == School::kFire);
             check("D nuke costs mana",
-                  nuke->resource_type == ResourceType::kMana && nuke->resource_amount > 0);
+                  nuke->resource_type == AbilityResourceType::kMana && nuke->resource_amount > 0);
             check("D nuke has a damage effect",
                   !nuke->effects.empty() && nuke->effects[0].kind == EffectKind::kDamage);
         }
@@ -179,7 +179,7 @@ int main() {
             check("D heal has cast time", heal->cast_time_ms > 0);
             check("D heal targets friendly", heal->target == TargetKind::kFriendly);
             check("D heal holy school", heal->school == School::kHoly);
-            check("D heal costs mana", heal->resource_type == ResourceType::kMana);
+            check("D heal costs mana", heal->resource_type == AbilityResourceType::kMana);
             check("D heal has a heal effect",
                   !heal->effects.empty() && heal->effects[0].kind == EffectKind::kHeal);
         }
@@ -237,7 +237,7 @@ int main() {
         check("G target_kind_name friendly",
               std::string(target_kind_name(TargetKind::kFriendly)) == "friendly");
         check("G resource_type_name none",
-              std::string(resource_type_name(ResourceType::kNone)) == "none");
+              std::string(resource_type_name(AbilityResourceType::kNone)) == "none");
         check("G effect_kind_name aura",
               std::string(effect_kind_name(EffectKind::kAura)) == "aura");
     }

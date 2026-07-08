@@ -860,6 +860,110 @@ std::vector<Message> build_corpus() {
                         "if2_enter_world_response.status");
                }});
 
+  // ---- 0x3xxx combat (CMB-01 #344/#345, D-10) --------------------------------
+
+  // CastRequest — C->S ability use (id + target + client clock).
+  c.push_back({"if2_cast_request", "IF-2", "CAST_REQUEST (0x3001)",
+               "C->S use ability against a target",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateCastRequest(b, /*ability_id=*/0xF0000001u,
+                                                /*target_guid=*/0x0000000200000005ULL,
+                                                /*client_time_ms=*/0x0123456789ABCDEFULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::CastRequest>(nullptr),
+                             "if2_cast_request verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::CastRequest>(buf.data());
+                 expect(m->ability_id() == 0xF0000001u, "if2_cast_request.ability_id");
+                 expect(m->target_guid() == 0x0000000200000005ULL,
+                        "if2_cast_request.target_guid");
+                 expect(m->client_time_ms() == 0x0123456789ABCDEFULL,
+                        "if2_cast_request.client_time_ms");
+               }});
+
+  // CastStart — S->C ACCEPT (cast/GCD started; cast_ms > 0 = cast-time).
+  c.push_back({"if2_cast_start", "IF-2", "CAST_START (0x3002)",
+               "S->C accept: cast started (cast_ms=1500)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateCastStart(b, /*ability_id=*/0xF0000002u,
+                                              /*cast_ms=*/1500u,
+                                              /*server_time_ms=*/0x1122334455667788ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::CastStart>(nullptr),
+                             "if2_cast_start verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::CastStart>(buf.data());
+                 expect(m->ability_id() == 0xF0000002u, "if2_cast_start.ability_id");
+                 expect(m->cast_ms() == 1500u, "if2_cast_start.cast_ms");
+                 expect(m->server_time_ms() == 0x1122334455667788ULL,
+                        "if2_cast_start.server_time_ms");
+               }});
+
+  // CastFailed — S->C REJECT (reason + gcd_remaining_ms for the D-10 rollback).
+  c.push_back({"if2_cast_failed", "IF-2", "CAST_FAILED (0x3003)",
+               "S->C reject: reason=ON_GCD, gcd_remaining_ms=1200",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateCastFailed(b, /*ability_id=*/0xF0000003u,
+                                               mn::CastFailReason::ON_GCD,
+                                               /*gcd_remaining_ms=*/1200u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::CastFailed>(nullptr),
+                             "if2_cast_failed verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::CastFailed>(buf.data());
+                 expect(m->ability_id() == 0xF0000003u, "if2_cast_failed.ability_id");
+                 expect(m->reason() == mn::CastFailReason::ON_GCD,
+                        "if2_cast_failed.reason");
+                 expect(m->gcd_remaining_ms() == 1200u, "if2_cast_failed.gcd_remaining_ms");
+               }});
+
+  // CastResult — S->C server-authoritative resolution outcome (a crit).
+  c.push_back({"if2_cast_result", "IF-2", "CAST_RESULT (0x3004)",
+               "S->C resolution: CRIT for 99 damage",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateCastResult(b, /*ability_id=*/0xF0000001u,
+                                               /*caster_guid=*/0x00000000AABBCCDDULL,
+                                               /*target_guid=*/0x0000000011223344ULL,
+                                               mn::AttackOutcome::CRIT,
+                                               /*amount=*/99u, /*is_heal=*/false,
+                                               /*target_health=*/250u,
+                                               /*target_dead=*/false,
+                                               /*server_time_ms=*/0x0000000000009999ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::CastResult>(nullptr),
+                             "if2_cast_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::CastResult>(buf.data());
+                 expect(m->ability_id() == 0xF0000001u, "if2_cast_result.ability_id");
+                 expect(m->caster_guid() == 0x00000000AABBCCDDULL,
+                        "if2_cast_result.caster_guid");
+                 expect(m->target_guid() == 0x0000000011223344ULL,
+                        "if2_cast_result.target_guid");
+                 expect(m->outcome() == mn::AttackOutcome::CRIT, "if2_cast_result.outcome");
+                 expect(m->amount() == 99u, "if2_cast_result.amount");
+                 expect(m->is_heal() == false, "if2_cast_result.is_heal");
+                 expect(m->target_health() == 250u, "if2_cast_result.target_health");
+                 expect(m->target_dead() == false, "if2_cast_result.target_dead");
+                 expect(m->server_time_ms() == 0x0000000000009999ULL,
+                        "if2_cast_result.server_time_ms");
+               }});
+
   return c;
 }
 

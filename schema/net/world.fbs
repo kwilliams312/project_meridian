@@ -56,7 +56,12 @@ enum Opcode : uint16 {
   ENTITY_UPDATE  = 0x2002,   // S→C  delta update for an in-AoI entity
   ENTITY_LEAVE   = 0x2003,   // S→C  entity leaves AoI
 
-  // --- 0x3xxx  combat            (reserved — see placeholder below) ---
+  // --- 0x3xxx  combat            (M1 — CMB-01: ability use + GCD/cast, D-10) ---
+  CAST_REQUEST = 0x3001,     // C→S  use an ability (id + target + client_time)
+  CAST_START   = 0x3002,     // S→C  ACCEPT: cast/GCD started (cast_ms; 0 = instant)
+  CAST_FAILED  = 0x3003,     // S→C  REJECT: reason + gcd_remaining_ms (D-10 rollback)
+  CAST_RESULT  = 0x3004,     // S→C  resolution outcome (attack table + damage/heal)
+
   // --- 0x4xxx  quest / gossip    (reserved — see placeholder below) ---
   // --- 0x5xxx  inventory/economy (reserved — see placeholder below) ---
   // --- 0x6xxx  chat / social     (reserved — see placeholder below) ---
@@ -305,11 +310,90 @@ table EnterWorldResponse {
 }
 
 // ===========================================================================
+// 0x3xxx — combat  (M1 — CMB-01: ability use + GCD/cast prediction, D-10)
+// ===========================================================================
+// The D-10 optimistic-GCD path (server SAD §3.3, client SAD §2.2/§3c): on an
+// ability press the client predicts the GCD/cast start locally, then the server
+// ACCEPTS (CastStart) or REJECTS (CastFailed) so the client confirms or ROLLS
+// BACK within one RTT (resyncing its GCD clock from CastFailed.gcd_remaining_ms).
+// All outcomes — the attack-table roll, damage/heal, death — are SERVER-
+// AUTHORITATIVE and NEVER predicted (Principle 1); they arrive as CastResult.
+
+/// C→S. Use an ability against a target. `target_guid` = 0 means self / no target
+/// (the server resolves the actual target legality). `client_time_ms` is keyed to
+/// the ClockSync estimate. Combat rate class (OPS-03).
+table CastRequest {
+  ability_id:uint32;      // AbilityStore id (server SAD §3.3 "known ability")
+  target_guid:uint64;     // subject entity guid (0 = self)
+  client_time_ms:uint64;  // client clock at press (ClockSync-keyed)
+}
+
+/// S→C. ACCEPT: the server validated the use and started the GCD / cast. Instant
+/// ability -> `cast_ms` = 0 (a CastResult follows immediately); cast-time ability
+/// -> `cast_ms` > 0 and the CastResult follows on cast completion. Confirms the
+/// client's optimistic GCD/cast prediction (D-10).
+table CastStart {
+  ability_id:uint32;
+  cast_ms:uint32;         // cast time in ms (0 = instant)
+  server_time_ms:uint64;  // authoritative cast-start timestamp
+}
+
+/// S→C. REJECT: the server refused the ability use. The client rolls its
+/// optimistic GCD/cast back within one RTT and resyncs its GCD clock from
+/// `gcd_remaining_ms` (D-10; client SAD §3c). One opaque reason per check.
+enum CastFailReason : uint16 {
+  UNKNOWN_ABILITY       = 0,   // ability id not in the store
+  NOT_IN_WORLD          = 1,   // session authenticated but not spawned
+  CASTER_DEAD           = 2,   // a corpse cannot cast
+  ON_GCD                = 3,   // global cooldown still running
+  ALREADY_CASTING       = 4,   // a cast is already in progress
+  INSUFFICIENT_RESOURCE = 5,   // not enough mana/rage/energy
+  NO_TARGET             = 6,   // ability needs a target; none / not found
+  TARGET_DEAD           = 7,   // target is a corpse
+  WRONG_FACTION         = 8,   // target not attackable / not assistable
+  OUT_OF_RANGE          = 9,   // target beyond the ability range
+  NO_LINE_OF_SIGHT      = 10,  // an occluder blocks the target
+  INTERRUPTED           = 11,  // in-progress cast cancelled (e.g. movement)
+}
+
+table CastFailed {
+  ability_id:uint32;
+  reason:CastFailReason = UNKNOWN_ABILITY;
+  gcd_remaining_ms:uint32;   // remaining GCD so the client resyncs its clock (D-10)
+}
+
+/// The server-rolled attack-table outcome (server SAD §2.5). Damage abilities roll
+/// the full table; heals cannot be avoided (only HIT / CRIT).
+enum AttackOutcome : uint16 {
+  MISS  = 0,
+  DODGE = 1,
+  PARRY = 2,
+  HIT   = 3,
+  CRIT  = 4,
+}
+
+/// S→C. The server-authoritative resolution of an ability use: the attack-table
+/// outcome and the damage or heal actually applied to the target. NEVER predicted
+/// by the client (server is law — Principle 1). Sent on instant use or on cast
+/// completion.
+table CastResult {
+  ability_id:uint32;
+  caster_guid:uint64;
+  target_guid:uint64;
+  outcome:AttackOutcome = HIT;
+  amount:uint32;          // damage or heal applied (0 on miss/dodge/parry)
+  is_heal:bool = false;   // true = heal, false = damage
+  target_health:uint32;   // target health AFTER application
+  target_dead:bool = false;
+  server_time_ms:uint64;
+}
+
+// ===========================================================================
 // RESERVED RANGES — commented placeholders only (do NOT define tables until milestone).
 // Each names its opcode range and the owning future issue / SAD section.
 // ===========================================================================
 //
-// 0x3xxx  combat            — ability cast / GCD prediction (server SAD §3.3, D-10). Future issue.
+// 0x3xxx  combat            — DEFINED above (M1, CMB-01): CastRequest / CastStart / CastFailed / CastResult.
 // 0x4xxx  quest / gossip    — quest state, gossip menus (content schemas: quest.*, gossip). Future issue.
 // 0x5xxx  inventory/economy — inventory, loot rolls, vendor/economy (loot.*, vendor.*). Future issue.
 // 0x6xxx  chat / social     — chat channels, whisper, social lists (cross-shard, server SAD §3.8). Future issue.

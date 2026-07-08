@@ -49,7 +49,9 @@
 
 #include <memory>
 
+#include "ability_store.h"
 #include "active_sessions.h"
+#include "combat_resolver.h"
 #include "movement_validation.h"
 #include "world_generated.h"
 #include "world_metrics.h"
@@ -180,6 +182,14 @@ struct ConnCtx {
 
     std::optional<SessionMovementState> movement;  // authoritative movement (#86), post-auth
     MovementIntake intake;                          // ≤ 10/s intent-rate gate (#86)
+
+    // Combat (CMB-01, #344/#345). `abilities` is the shared, read-only ability
+    // template store (#343), set by serve_connection from the WorldServer; the
+    // CAST_REQUEST handler looks the used ability up here. `combat` is THIS
+    // session's per-connection GCD + cast lifecycle state (single-threaded, like
+    // `movement`); the resolver reads/mutates it on each ability use.
+    const AbilityStore* abilities = nullptr;
+    CombatSession combat;
 
     // AoI relay (#87). `world` is the shared world-thread-owned session registry
     // + grid (set by serve_connection; may be null in the DB-less dispatch smoke

@@ -86,7 +86,7 @@ enum class TargetKind : std::uint8_t {
 // The resource an ability spends — mirrors `ability.resource_type`
 // ENUM('mana','rage','energy') NULL, with kNone modelling the SQL NULL (a free
 // ability spends nothing). The resolver's "resource" check (§3.3).
-enum class ResourceType : std::uint8_t {
+enum class AbilityResourceType : std::uint8_t {
     kNone,  // DDL NULL — no resource cost
     kMana,
     kRage,
@@ -180,7 +180,7 @@ struct Ability {
     bool triggers_gcd = true;
 
     // resource.* — kNone + 0 models the SQL NULL (a free ability).
-    ResourceType  resource_type = ResourceType::kNone;
+    AbilityResourceType  resource_type = AbilityResourceType::kNone;
     std::uint32_t resource_amount = 0;
 
     std::vector<AbilityEffect> effects;  // 1..4, in DDL ordinal order
@@ -257,7 +257,7 @@ AbilityStore load_placeholder_ability_store();
 // Human-readable enum names (logs / tooling / test diagnostics; not the hot path).
 const char* school_name(School s);
 const char* target_kind_name(TargetKind t);
-const char* resource_type_name(ResourceType r);
+const char* resource_type_name(AbilityResourceType r);
 const char* effect_kind_name(EffectKind k);
 
 }  // namespace meridian::worldd
