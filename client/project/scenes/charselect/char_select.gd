@@ -170,9 +170,12 @@ func _connect_online() -> void:
 	var port := int(_session.get("worldd_port", 0))
 	var frame: PackedByteArray = _session.get("world_hello_frame", PackedByteArray())
 	var key: PackedByteArray = _session.get("session_key", PackedByteArray())
+	print("[charselect] connecting to worldd %s:%d (world_hello=%d B, key=%d B)"
+		% [host, port, frame.size(), key.size()])
 	if not _net.connect_to_world(host, port, frame, key):
 		_online = false
 		_net = null
+		print("[charselect] connect_to_world refused (bad WorldHello frame)")
 		_set_status("Could not start the world connection.")
 
 
@@ -398,6 +401,7 @@ func _build_placeholder_preview() -> void:
 # HandshakeOk = authenticated, at character-select. Ask the server for the roster.
 func _on_net_handshake_ok() -> void:
 	_handshaked = true
+	print("[charselect] HandshakeOk — at character-select; requesting CharList")
 	_set_status("Loading your characters…")
 	_net.send_bulk(_net.build_char_list_request_frame())
 
@@ -405,6 +409,7 @@ func _on_net_handshake_ok() -> void:
 # The account's roster arrived — cache it and render. Enter/Delete need a selection;
 # an empty roster prompts creation.
 func _on_net_char_list(characters: Array) -> void:
+	print("[charselect] CharList: %d character(s)" % characters.size())
 	_roster = characters
 	_refresh_list()
 	if _pending_select_id != 0:
@@ -446,6 +451,7 @@ func _on_net_char_delete_result(status: int) -> void:
 # Enter-world result: OK hands the LIVE session to the world scene; else stay here.
 func _on_net_enter_world_result(status: int) -> void:
 	# world.fbs EnterWorldStatus: 0 OK (spawned), 1 NOT_FOUND, 2 NO_CHARACTER, 3 INTERNAL.
+	print("[charselect] ENTER_WORLD result status=%d" % status)
 	if status == 0:
 		_enter_world_scene()
 		return
@@ -459,15 +465,18 @@ func _on_net_enter_world_result(status: int) -> void:
 		_set_status("Could not enter the world (server error).")
 
 
-func _on_net_disconnected(_reason: int, message: String) -> void:
+func _on_net_disconnected(reason: int, message: String) -> void:
+	print("[charselect] disconnected reason=%d: %s" % [reason, message])
 	_set_status("Disconnected: %s" % message)
 
 
 func _on_net_connect_failed(detail: String) -> void:
+	print("[charselect] connect FAILED: %s" % detail)
 	_set_status("Could not reach the realm: %s" % detail)
 
 
-func _on_net_transport_closed(_detail: String) -> void:
+func _on_net_transport_closed(detail: String) -> void:
+	print("[charselect] transport closed: %s" % detail)
 	_set_status("The realm connection closed.")
 
 
