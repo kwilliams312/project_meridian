@@ -23,12 +23,12 @@
 
 ---
 
-## Task 0: Resolve bot TLS verification (spike)
+## Task 0: Resolve bot TLS verification (spike) — ✅ RESOLVED 2026-07-08
 
-**Files:** none (investigation; may add a bot flag).
-
-- [ ] **Step 1:** `grep -rn 'SSL_CTX_set_verify\|VERIFY_NONE\|VERIFY_PEER\|set_verify' client/` and read the client TLS setup (`client/net/*` login transport). Determine whether the bot verifies the server cert.
-- [ ] **Step 2:** If `VERIFY_NONE` (or equivalent) → the harness works against `selfSignedInit` realms as-is; record and proceed. If it verifies → add a `--insecure` flag to `meridian-bot` (small change in `bot_main.cpp` + the TLS setup) OR require a trusted-cert realm; pick the `--insecure` route (dev/test harness) and note it. **Do not proceed to Task 3 until this is settled** — the bot must be able to connect to the target realm.
+The client net core the bot links uses **`SSL_VERIFY_NONE` at M0** — no cert-chain
+verification (`client/net/src/tls_client.cpp:63`, header `tls_client.h:25`; same in
+the GDExtension `login_transport.cpp:66`). So the bot connects to `selfSignedInit`
+realms **as-is — no `--insecure` flag needed.** The harness works unchanged.
 
 ---
 
