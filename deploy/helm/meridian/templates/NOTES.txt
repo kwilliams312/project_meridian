@@ -3,24 +3,22 @@ Project Meridian ({{ .Chart.Name }}-{{ .Chart.Version }}, app {{ .Chart.AppVersi
 Deployed daemons (single-realm M0–M2 topology, D-30 §10):
 {{- if .Values.authd.enabled }}
   • authd  — IF-1 login/realm-list/session-grant, TLS 1.3 on port {{ .Values.authd.port }}
-             Service: {{ include "meridian.fullname" . }}-authd:{{ .Values.authd.service.port | default .Values.authd.port }} (ClusterIP)
+             Service: {{ include "meridian.fullname" . }}-authd:{{ .Values.authd.service.port | default .Values.authd.port }} ({{ .Values.authd.service.type | default "ClusterIP" }}{{ if and (eq (.Values.authd.service.type | default "ClusterIP") "NodePort") .Values.authd.service.nodePort }}, nodePort {{ .Values.authd.service.nodePort }}{{ end }})
 {{- end }}
 {{- if .Values.worldd.enabled }}
   • worldd — IF-2 shard worker / map simulation, TLS 1.3 on port {{ .Values.worldd.port }}
-             Service: {{ include "meridian.fullname" . }}-worldd:{{ .Values.worldd.service.port | default .Values.worldd.port }} (ClusterIP)
+             Service: {{ include "meridian.fullname" . }}-worldd:{{ .Values.worldd.service.port | default .Values.worldd.port }} ({{ .Values.worldd.service.type | default "ClusterIP" }}{{ if and (eq (.Values.worldd.service.type | default "ClusterIP") "NodePort") .Values.worldd.service.nodePort }}, nodePort {{ .Values.worldd.service.nodePort }}{{ end }})
 {{- end }}
 
-Database: external MariaDB at {{ .Values.db.host }}:{{ .Values.db.port }}
-  (v0 does not bundle MariaDB — see README "Database". auth DB: {{ .Values.db.names.auth }})
+Database: {{ if .Values.mariadb.enabled }}bundled in-cluster MariaDB{{ else }}external MariaDB{{ end }} at {{ include "meridian.db.host" . }}:{{ .Values.db.port }}
+  ({{ if .Values.mariadb.enabled }}chart-managed, {{ if .Values.mariadb.persistence.enabled }}persistent PVC{{ else }}ephemeral emptyDir{{ end }}{{ else }}operator-managed, see README "Database"{{ end }}. auth DB: {{ .Values.db.names.auth }})
 
-{{- if not .Values.tls.create }}
-{{- if not .Values.tls.existingSecret }}
+{{- if and (eq .Values.tls.mode "existingSecret") (not .Values.tls.existingSecret) }}
 
-WARNING: tls.create=false and tls.existingSecret is empty. The daemons need a
-server.crt/server.key Secret mounted at /certs. Set tls.existingSecret to a
-Secret you provision (operator PKI / cert-manager), or install with
-  --set tls.create=true --set-file tls.cert=server.crt --set-file tls.key=server.key
-{{- end }}
+WARNING: tls.mode=existingSecret but tls.existingSecret is empty. The daemons
+need a server.crt/server.key Secret mounted at /certs. Provision one and set
+tls.existingSecret, or use tls.mode=selfSignedInit (dev), or tls.mode=create
+with --set-file tls.cert=server.crt --set-file tls.key=server.key.
 {{- end }}
 
 Check rollout:

@@ -110,10 +110,10 @@ MERIDIAN_DB_PASS
 
 {{/* Name of the TLS secret to mount (chart-created or existing). */}}
 {{- define "meridian.tlsSecretName" -}}
-{{- if .Values.tls.create -}}
+{{- if eq .Values.tls.mode "create" -}}
 {{- printf "%s-tls" (include "meridian.fullname" .) -}}
 {{- else -}}
-{{- required "tls.existingSecret is required when tls.create=false" .Values.tls.existingSecret -}}
+{{- required "tls.existingSecret is required when tls.mode=existingSecret" .Values.tls.existingSecret -}}
 {{- end -}}
 {{- end -}}
 

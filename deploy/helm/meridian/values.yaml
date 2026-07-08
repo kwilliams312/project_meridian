@@ -41,23 +41,19 @@ commonAnnotations: {}
 # reference an existing Secret provisioned by your realm operator PKI / cert-
 # manager (SAD §5.1: "server cert from realm operator PKI").
 tls:
-  # If true, the chart creates the Secret from tls.cert / tls.key below.
-  # If false, `tls.existingSecret` MUST name a Secret with keys server.crt /
-  # server.key (or the keys named in tls.certKey / tls.keyKey).
-  create: false
-  # Cert-provisioning mode:
+  # Cert-provisioning mode (single source of truth):
   #   existingSecret : mount tls.existingSecret (real certs — PTR/Prod).
-  #   create         : chart renders a Secret from tls.cert/tls.key PEM.
+  #   create         : chart renders a Secret from tls.cert / tls.key PEM below.
   #   selfSignedInit : each pod generates a throwaway self-signed cert into an
   #                    emptyDir /certs via an initContainer (dev only; no Secret).
   mode: existingSecret
-  # Name of an existing TLS Secret to mount. Used when create=false.
+  # Name of an existing TLS Secret to mount. Required when mode=existingSecret.
   existingSecret: ""
   # Keys within the Secret holding the cert and key.
   certKey: server.crt
   keyKey: server.key
-  # PEM material (only read when create=true). Prefer --set-file for these:
-  #   helm install ... --set tls.create=true \
+  # PEM material (only read when mode=create). Prefer --set-file for these:
+  #   helm install ... --set tls.mode=create \
   #     --set-file tls.cert=server.crt --set-file tls.key=server.key
   cert: ""
   key: ""

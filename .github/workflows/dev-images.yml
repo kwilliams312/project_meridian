@@ -87,6 +87,7 @@ jobs:
           file: deploy/docker/Dockerfile
           build-args: |
             DAEMON=${{ matrix.daemon }}
+            PORT=${{ matrix.daemon == 'authd' && '7100' || '7200' }}
           platforms: linux/amd64
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.OWNER_REPO }}/${{ matrix.daemon }}:dev
