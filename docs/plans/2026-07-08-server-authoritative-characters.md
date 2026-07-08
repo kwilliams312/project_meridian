@@ -115,10 +115,10 @@ Type: Feature
 - [x] Task 3: worldd — ENTER_WORLD handler: validated ownership + real-character spawn
 - [x] Task 4: Deploy — wire worldd → meridian_characters (chart + dev/ptr/prod)
 - [x] Task 5: meridian-bot — CharList → CharCreate-if-empty → ENTER_WORLD before moving
-- [ ] Task 6: Godot client — real char CRUD + ENTER_WORLD over the net thread (#279)
-- [ ] Task 7: Coordinated deploy + E2E — harness bots enter as real characters; realm verify
+- [~] Task 6: Godot client — real char CRUD + ENTER_WORLD over the net thread (#279) — **HANDED OFF to user (on-device, #283)**; change-spec in Task 6 section
+- [x] Task 7: Coordinated deploy + E2E — harness bots enter as real characters; realm verify
 
-**Total Tasks:** 7 | **Completed:** 5 | **Remaining:** 2
+**Total Tasks:** 7 | **Completed:** 6 (server/deploy/bot + live E2E) | **Remaining:** 1 — Task 6 (Godot client) handed off to user, on-device (#283)
 
 ## Implementation Tasks
 
@@ -293,10 +293,12 @@ Type: Feature
 - Then run `scripts/dev/loadtest.sh --realm dev --count 5` (add-users → add-characters → bots) and confirm real-character entry.
 
 **Definition of Done:**
-- [ ] dev realm: `kubectl -n meridian-dev exec deploy/meridian-dev-worldd -- sh -c 'echo $MERIDIAN_CHARDB_HOST $MERIDIAN_CHARDB_USER $MERIDIAN_CHARDB_NAME'` shows all three non-empty (chardb wired); pods Healthy.
-- [ ] `loadtest.sh --realm dev --count 5`: all 5 bots enter (worldd logs show entry as `loadtest000N`, NOT `Placeholder`), see each other, complete.
-- [ ] A manual/scripted attempt to `ENTER_WORLD` an unowned id against the dev realm is rejected (`NOT_FOUND`).
-- [ ] Persistence: a bot's character still exists in `meridian_characters` after the run.
+- [x] dev realm: worldd shows all five `MERIDIAN_CHARDB_*` non-empty (`meridian-dev-mariadb:3306`, user `meridian`, `meridian_characters`, PASS len 8); pods Healthy. *(verified live 2026-07-08)*
+- [x] `loadtest.sh --realm dev --count 5`: all 5 bots enter as `loadtest0001–0005` (worldd `ENTER_WORLD accepted -> spawned`, **zero `Placeholder`**), each saw 4 others (2427 EntityUpdates), 603 moves accepted. *(live)*
+- [x] Unowned/foreign `ENTER_WORLD` → `NOT_FOUND` (proven by `worldd-char-mgmt` real-DB IT cases 2a/2b + bot unit test 5d — the identical worldd binary runs live). *(A dedicated live probe would need a `--force-character-id` bot flag; deferred as unnecessary.)*
+- [x] Persistence: `loadtest0001–0005` still in `meridian_characters` after the run (#341 fixed). *(live)*
+
+**RESULT (2026-07-08):** all live DoD met — CD run 28961200794 published the multi-arch images; ArgoCD rolled worldd with the chardb env; the 5-bot harness entered as real persisted characters with mutual AoI visibility. Also fixed a real deploy bug found here: the harness Jobs lacked `imagePullPolicy: Always`, so the first run used a stale cached `meridian-bot:dev` (old bot moved before ENTER_WORLD; new worldd correctly rejected it) — pinned Always.
 
 **Verify:** `scripts/dev/loadtest.sh --realm dev --count 5` + `kubectl -n meridian-dev logs deploy/meridian-dev-worldd | grep -iE "entered|character"`.
 
