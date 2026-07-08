@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1.7
+# SPDX-License-Identifier: Apache-2.0
+#
+# meridian-account — the M0 account-creation CLI (server/tools/meridian-account,
+# ACC-03 / #80). Composes SRP6a verifiers and writes accounts to the auth DB.
+# Same hardened multi-stage pattern as the daemon image; ships one binary.
+FROM debian:bookworm-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake ninja-build g++ pkg-config \
+        flatbuffers-compiler libflatbuffers-dev libssl-dev libmariadb-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY schema/ ./schema/
+COPY server/ ./server/
+RUN cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build server/build --target meridian-account
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libssl3 libmariadb3 ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 meridian \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin meridian
+COPY --from=build /src/server/build/tools/meridian-account/meridian-account /usr/local/bin/meridian-account
+USER 10001:10001
+ENTRYPOINT ["/usr/local/bin/meridian-account"]
