@@ -69,12 +69,28 @@ var _pending_status: String = ""            # set by configure(), shown once in 
 # `error` is a non-empty message when the world scene bounced the player back here on a
 # pre-HandshakeOk connection failure (#301 UX) — surfaced on the status line so the
 # player sees WHY they are back, instead of being stranded in an empty world.
+#
+# ROSTER RE-ESTABLISHMENT (#327). The character roster is re-built from the
+# AUTHORITATIVE session context on EVERY entry to this screen, not carried over as
+# stale local state. Root cause of #327 ("second login shows an empty list"): the
+# roster lived only in this scene's ephemeral CharacterStore, so a fresh login built
+# a NEW empty store and the account's characters vanished. Now configure() (a) starts
+# from a FRESH store so a reused/re-entered scene never leaks a previous session's
+# roster, and (b) repopulates from `session.roster` — the server's list, threaded
+# through by the login handoff and the world bounce-back — falling back to `seed_rows`
+# only when no session roster is present (tests / warm boot). This is also the single
+# seam a real CharListResponse populates once the client char-list transport lands
+# (#279): fill `session.roster` from the wire and this screen shows it every time.
 func configure(account: String, seed_rows: Array = [], session: Dictionary = {}, error: String = "") -> void:
 	_account = account
 	_session = session if session != null else {}
-	if _store == null:
-		_store = CharacterStore.new()
-	for row in seed_rows:
+	# Fresh store on every configure() — never inherit a prior session's rows (#327).
+	_store = CharacterStore.new()
+	# Authoritative roster first (the session-carried server list); seed_rows is the
+	# no-session fallback so a re-login with a real roster is never masked by stale seeds.
+	var roster: Array = _session.get("roster", [])
+	var source: Array = roster if not roster.is_empty() else seed_rows
+	for row in source:
 		_store.create(String(row.get("name", "")), int(row.get("race", 0)), int(row.get("class", 0)))
 	if not error.strip_edges().is_empty():
 		_pending_status = error

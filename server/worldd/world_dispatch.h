@@ -35,6 +35,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -48,6 +49,7 @@
 
 #include <memory>
 
+#include "active_sessions.h"
 #include "movement_validation.h"
 #include "world_generated.h"
 #include "world_metrics.h"
@@ -186,6 +188,21 @@ struct ConnCtx {
     // that never entered emits no leave audit).
     std::uint64_t account_id = 0;
     std::uint64_t grant_id = 0;
+
+    // Single active session per account (#326). `active_sessions` is the shared,
+    // account-keyed registry (set by serve_connection; null in the DB-less
+    // dispatch smoke test, where no account ever authenticates). On a valid
+    // WORLD_HELLO the handler ADMITS this session's account into the registry
+    // (kick-old): if the account already had a live session, that one is kicked.
+    // `session_token` is this admission's holder identity — the serve loop passes
+    // it to release() on teardown (a compare-and-remove, so a kicked-old session
+    // never evicts the session that replaced it). `admitted` guards that
+    // exactly-once release. `kicked` is set true when a LATER login for this
+    // account displaces THIS session — the serve loop notices it and closes.
+    ActiveSessionRegistry* active_sessions = nullptr;
+    SessionToken session_token = 0;
+    bool admitted = false;
+    std::shared_ptr<std::atomic<bool>> kicked;
 
     bool disconnect = false;             // handler asks the serve loop to close
     net::DisconnectReason disconnect_reason = net::DisconnectReason::UNKNOWN;
@@ -353,6 +370,12 @@ public:
     // authoritative MovementState is relayed through it to the OTHER sessions in
     // range. Exposed for tests that inspect session_count().
     WorldState& world_state();
+
+    // The shared single-active-session registry (#326). One per server, keyed by
+    // account_id; the WORLD_HELLO handler admits each authenticated session into
+    // it (kick-old on collision) so an account holds at most one in-world session.
+    // Exposed for tests that assert active_count()/is_active().
+    ActiveSessionRegistry& active_sessions();
 
 private:
     void world_thread_main();

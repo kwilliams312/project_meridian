@@ -569,6 +569,60 @@ void Dispatcher::register_m0_stubs() {
                    .with(ctx.labels.rzsm())
                    .set(static_cast<double>(ctx.world->session_count()));
            }
+
+           // 6. SINGLE ACTIVE SESSION PER ACCOUNT (#326). Admit this account into
+           //    the shared registry with a KICK-OLD policy: if the account already
+           //    has a live in-world session, that one is KICKED now and this new
+           //    login takes over (WoW-style — lets a crashed client reconnect
+           //    without waiting for its stale session to time out). Enforcement
+           //    lives here, where an account actually goes in-world (SAD §5.3), not
+           //    in authd (which is realm-agnostic and cannot see live sessions — a
+           //    second grant can still be issued; worldd is the choke point).
+           //
+           //    The KickFn tears the DISPLACED session down from THIS (the new)
+           //    thread: it never touches the victim's net::Session (single-thread-
+           //    only), only (a) a shared atomic flag the victim's serve loop polls,
+           //    (b) the AoI world (thread-safe), and (c) the victim's SessionEgress
+           //    — the SAME serialized cross-thread write path the AoI relay already
+           //    uses to push frames to a session from other threads (world_state.h).
+           if (ctx.active_sessions != nullptr) {
+               std::shared_ptr<SessionEgress> kick_egress = ctx.egress;
+               std::shared_ptr<std::atomic<bool>> kick_flag = ctx.kicked;
+               WorldState* kick_world = ctx.world;
+               const SessionSlot kick_slot = ctx.slot;
+               const bool kick_entered = ctx.entered;
+               const std::string realm = ctx.labels.realm;
+               AdmitResult admitted = ctx.active_sessions->admit(
+                   consumed->account_id,
+                   [kick_egress, kick_flag, kick_world, kick_slot, kick_entered, realm]() {
+                       if (kick_flag) kick_flag->store(true);
+                       // Drop the displaced session from the AoI world at once so it
+                       // stops being "in-world" the instant it is superseded (its own
+                       // serve loop's later leave() then no-ops).
+                       if (kick_world != nullptr && kick_entered) kick_world->leave(kick_slot);
+                       // Tell the displaced client WHY, then stop its egress so no
+                       // further relay write races its socket close.
+                       if (kick_egress) {
+                           kick_egress->emit_frame(
+                               make_disconnect(net::DisconnectReason::KICKED,
+                                               "logged in from another location", 0));
+                           kick_egress->mark_closed();
+                       }
+                       metrics::disconnects_total()
+                           .with({realm,
+                                  disconnect_reason_label(net::DisconnectReason::KICKED)})
+                           .inc();
+                   });
+               ctx.session_token = admitted.token;
+               ctx.admitted = true;
+               if (admitted.kicked_previous) {
+                   log::info(kCat,
+                             "single-session takeover: kicked prior in-world session",
+                             {log::field("account_id",
+                                         static_cast<std::int64_t>(consumed->account_id)),
+                              log::field("grant_id", grant_id)});
+               }
+           }
        });
 
     // CLOCK_SYNC (#65): the one M0 opcode with a natural echo. The client sends
@@ -859,6 +913,11 @@ struct WorldServer::Impl {
     // Shared world state + AoI grid (#87). Thread-safe internally; shared across
     // every serve_connection so a mover relays to the OTHER sessions in range.
     WorldState world;
+
+    // Single active session per account (#326). Thread-safe internally; shared
+    // across every serve_connection so a second login for an account kicks the
+    // first (kick-old) — an account holds at most one in-world session.
+    ActiveSessionRegistry active_sessions;
 };
 
 WorldServer::WorldServer(const Dispatcher& dispatcher, WorldServerConfig cfg)
@@ -895,6 +954,8 @@ void WorldServer::enqueue(WorldEvent ev) {
 std::uint64_t WorldServer::drained_count() const { return impl_->drained.load(); }
 
 WorldState& WorldServer::world_state() { return impl_->world; }
+
+ActiveSessionRegistry& WorldServer::active_sessions() { return impl_->active_sessions; }
 
 void WorldServer::world_thread_main() {
     // M0 TICK PLACEHOLDER (SAD §2.5): the real tick is
@@ -966,6 +1027,8 @@ void WorldServer::serve_connection(net::Session sess) {
     ctx.labels = cfg_.labels;   // OPS-05: stamp {realm,zone,shard,map} on metrics
     ctx.tracer = cfg_.tracer;   // OPS-05: session-flow trace exporter (#166)
     ctx.world = &impl_->world;  // shared AoI relay registry (#87)
+    ctx.active_sessions = &impl_->active_sessions;  // single-session registry (#326)
+    ctx.kicked = std::make_shared<std::atomic<bool>>(false);  // set if a later login kicks us
     std::optional<db::Connection> auth_conn;
     std::optional<db::Connection> char_conn;
     if (!cfg_.auth_db.user.empty()) {
@@ -994,6 +1057,15 @@ void WorldServer::serve_connection(net::Session sess) {
                 frame = sess.read_frame();
             } catch (const mn::ConnectionClosed&) {
                 log::info(kCat, "connection " + peer + " closed by peer");
+                break;
+            }
+
+            // Single-session takeover (#326): a later login for this account has
+            // kicked us. The KickFn already sent Disconnect{KICKED} + dropped us
+            // from the AoI world; just stop serving so the socket tears down.
+            if (ctx.kicked && ctx.kicked->load()) {
+                log::info(kCat, "connection " + peer +
+                                    " kicked by a newer login (single-session takeover)");
                 break;
             }
 
@@ -1071,6 +1143,13 @@ void WorldServer::serve_connection(net::Session sess) {
             .set(static_cast<double>(ctx.world->session_count()));
     }
     if (ctx.egress) ctx.egress->mark_closed();
+
+    // Single active session per account (#326): release this account's registry
+    // slot. Compare-and-remove by token — if a newer login already took the slot
+    // (this session was kicked), release() no-ops and leaves the new holder intact.
+    if (ctx.admitted && ctx.active_sessions != nullptr) {
+        ctx.active_sessions->release(ctx.account_id, ctx.session_token);
+    }
 
     // OPS-05: this session is leaving — undo the CCU / active-session gauge bumps
     // it made on WORLD_HELLO (exactly once, guarded by entered_metrics), so the
