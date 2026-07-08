@@ -57,8 +57,39 @@ spec:
       {{- end }}
       securityContext:
         {{- toYaml $root.Values.podSecurityContext | nindent 8 }}
-      {{- if and $root.Values.mariadb.enabled $cfg.db.enabled }}
+      {{- if or (eq $root.Values.tls.mode "selfSignedInit") (and $root.Values.mariadb.enabled $cfg.db.enabled) }}
       initContainers:
+      {{- if eq $root.Values.tls.mode "selfSignedInit" }}
+        - name: certgen
+          image: alpine/openssl:3.3.2
+          args:
+            - req
+            - -x509
+            - -newkey
+            - rsa:2048
+            - -nodes
+            - -keyout
+            - /certs/{{ $root.Values.tls.keyKey }}
+            - -out
+            - /certs/{{ $root.Values.tls.certKey }}
+            - -days
+            - "3650"
+            - -subj
+            - /CN={{ $fullname }}
+            - -addext
+            - subjectAltName=DNS:localhost,DNS:{{ $fullname }},DNS:{{ $fullname }}.{{ $root.Release.Namespace }}.svc,IP:127.0.0.1
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tls
+              mountPath: /certs
+      {{- end }}
+      {{- if and $root.Values.mariadb.enabled $cfg.db.enabled }}
         - name: wait-for-db
           image: busybox:1.36
           command:
@@ -75,6 +106,7 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+      {{- end }}
       {{- end }}
       containers:
         - name: {{ $daemon }}
@@ -145,12 +177,15 @@ spec:
           volumeMounts:
             - name: tls
               mountPath: /certs
-              readOnly: true
+              readOnly: {{ ne $root.Values.tls.mode "selfSignedInit" }}
             {{- /* read-only rootfs: give the daemon a writable tmp scratch. */}}
             - name: tmp
               mountPath: /tmp
       volumes:
         - name: tls
+          {{- if eq $root.Values.tls.mode "selfSignedInit" }}
+          emptyDir: {}
+          {{- else }}
           secret:
             secretName: {{ include "meridian.tlsSecretName" $root }}
             items:
@@ -158,6 +193,7 @@ spec:
                 path: {{ $root.Values.tls.certKey }}
               - key: {{ $root.Values.tls.keyKey }}
                 path: {{ $root.Values.tls.keyKey }}
+          {{- end }}
         - name: tmp
           emptyDir: {}
       {{- with $cfg.nodeSelector }}

@@ -45,6 +45,12 @@ tls:
   # If false, `tls.existingSecret` MUST name a Secret with keys server.crt /
   # server.key (or the keys named in tls.certKey / tls.keyKey).
   create: false
+  # Cert-provisioning mode:
+  #   existingSecret : mount tls.existingSecret (real certs — PTR/Prod).
+  #   create         : chart renders a Secret from tls.cert/tls.key PEM.
+  #   selfSignedInit : each pod generates a throwaway self-signed cert into an
+  #                    emptyDir /certs via an initContainer (dev only; no Secret).
+  mode: existingSecret
   # Name of an existing TLS Secret to mount. Used when create=false.
   existingSecret: ""
   # Keys within the Secret holding the cert and key.
