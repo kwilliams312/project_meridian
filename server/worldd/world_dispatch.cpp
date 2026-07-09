@@ -12,11 +12,16 @@
 #include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <vector>
 
 #include "characters.h"  // meridian-characters CRUD: list/create/delete (#286 / D-35)
+#include "currency.h"    // ECO-01 int64 copper: add_money / get_money (quest + trainer)
+#include "gossip.h"      // NPC-01 gossip menu planner (#372)
+#include "item_store.h"  // ITM-01 durable item persistence: mint/place (loot + quest reward)
 #include "map_tick.h"    // per-map tick orchestrator (SAD §2.5 phase order; #349)
 #include "meridian/core/audit.hpp"
 #include "meridian/core/log.hpp"
@@ -24,7 +29,10 @@
 #include "meridian/trace/session_flow.h"
 #include "meridian/trace/span.h"
 #include "meridian/trace/tracer.h"
+#include "npc_def.h"      // NPC-01/02 NpcStore / PlaceholderNpcStore (#372)
+#include "quest_def.h"    // QST-01 QuestStore / PlaceholderQuestStore (#371)
 #include "roster.h"       // M0-frozen race/class roster (validated by create)
+#include "trainer.h"      // NPC-02 trainer plan/learn (#372)
 #include "vendor.h"          // ECO-01 vendor buy/sell/buyback (#370)
 #include "vendor_catalog.h"  // placeholder vendor inventories (M1; mcc #28 later)
 
@@ -35,6 +43,8 @@ namespace fb = flatbuffers;
 namespace mn = meridian::net;
 namespace vend = meridian::vendor;
 namespace itm = meridian::items;
+namespace lo = meridian::loot;
+namespace npc = meridian::npc;
 namespace log = meridian::core::log;
 namespace audit = meridian::core::audit;
 namespace metrics = meridian::metrics::catalog;
@@ -153,6 +163,14 @@ bool verify_payload_for(net::Opcode op, const Frame& f) {
         case net::Opcode::VENDOR_BUY_REQUEST:     return verify_table<mn::VendorBuyRequest>(f);
         case net::Opcode::VENDOR_SELL_REQUEST:    return verify_table<mn::VendorSellRequest>(f);
         case net::Opcode::VENDOR_BUYBACK_REQUEST: return verify_table<mn::VendorBuybackRequest>(f);
+        case net::Opcode::QUEST_ACCEPT:    return verify_table<mn::QuestAccept>(f);
+        case net::Opcode::QUEST_TURN_IN:   return verify_table<mn::QuestTurnIn>(f);
+        case net::Opcode::QUEST_LOG:       return verify_table<mn::QuestLog>(f);
+        case net::Opcode::LOOT_REQUEST:    return verify_table<mn::LootRequest>(f);
+        case net::Opcode::LOOT_TAKE:       return verify_table<mn::LootTake>(f);
+        case net::Opcode::LOOT_RELEASE:    return verify_table<mn::LootRelease>(f);
+        case net::Opcode::GOSSIP_HELLO:    return verify_table<mn::GossipHello>(f);
+        case net::Opcode::TRAINER_LEARN:   return verify_table<mn::TrainerLearn>(f);
         default:                           return false;
     }
 }
@@ -305,6 +323,293 @@ std::int64_t safe_balance(ConnCtx& ctx) {
     }
 }
 
+// ---- quest / npc shared read-only stores (M1 placeholder; mcc #28 later) -----
+// Function-local statics: thread-safe lazy init, immutable after construction, and
+// shared read-only across every connection (like item_templates()/vendor_catalog()).
+// When mcc #28 lands, these are replaced by the world-DB-backed stores behind the
+// same abstract seam (QuestStore / npc::NpcStore).
+const QuestStore& quest_store() {
+    static const PlaceholderQuestStore store;
+    return store;
+}
+const npc::NpcStore& npc_store() {
+    static const npc::PlaceholderNpcStore store;
+    return store;
+}
+
+// Adapt a session's QuestLog to the npc gossip planner's read-only QuestStateView
+// (gossip.h). `can_accept` is gated at the session's server-authoritative level.
+class QuestLogView : public npc::QuestStateView {
+public:
+    QuestLogView(const QuestLog& log, std::uint16_t level) : log_(log), level_(level) {}
+    bool can_accept(std::uint32_t quest_id) const override {
+        return log_.can_accept(quest_id, level_) == AcceptStatus::kOk;
+    }
+    bool is_active(std::uint32_t quest_id) const override { return log_.is_active(quest_id); }
+    bool is_complete(std::uint32_t quest_id) const override { return log_.is_complete(quest_id); }
+
+private:
+    const QuestLog& log_;
+    std::uint16_t level_;
+};
+
+// ---- quest wire enum mapping (lib status -> world.fbs status) ----------------
+
+mn::QuestAcceptStatus to_wire(AcceptStatus s) {
+    switch (s) {
+        case AcceptStatus::kOk:                  return mn::QuestAcceptStatus::OK;
+        case AcceptStatus::kUnknownQuest:        return mn::QuestAcceptStatus::UNKNOWN_QUEST;
+        case AcceptStatus::kAlreadyActive:       return mn::QuestAcceptStatus::ALREADY_ACTIVE;
+        case AcceptStatus::kAlreadyCompleted:    return mn::QuestAcceptStatus::ALREADY_COMPLETED;
+        case AcceptStatus::kLevelTooLow:         return mn::QuestAcceptStatus::LEVEL_TOO_LOW;
+        case AcceptStatus::kMissingPrerequisite: return mn::QuestAcceptStatus::MISSING_PREREQUISITE;
+    }
+    return mn::QuestAcceptStatus::UNKNOWN_QUEST;
+}
+
+mn::QuestTurnInStatus to_wire(TurnInStatus s) {
+    switch (s) {
+        case TurnInStatus::kOk:            return mn::QuestTurnInStatus::OK;
+        case TurnInStatus::kUnknownQuest:  return mn::QuestTurnInStatus::UNKNOWN_QUEST;
+        case TurnInStatus::kNotActive:     return mn::QuestTurnInStatus::NOT_ACTIVE;
+        case TurnInStatus::kWrongNpc:      return mn::QuestTurnInStatus::WRONG_NPC;
+        case TurnInStatus::kIncomplete:    return mn::QuestTurnInStatus::INCOMPLETE;
+        case TurnInStatus::kBadChoice:     return mn::QuestTurnInStatus::BAD_CHOICE;
+        case TurnInStatus::kInventoryFull: return mn::QuestTurnInStatus::INVENTORY_FULL;
+    }
+    return mn::QuestTurnInStatus::UNKNOWN_QUEST;
+}
+
+mn::QuestObjectiveType to_wire(ObjectiveType t) {
+    switch (t) {
+        case ObjectiveType::kKill:    return mn::QuestObjectiveType::KILL;
+        case ObjectiveType::kCollect: return mn::QuestObjectiveType::COLLECT;
+        case ObjectiveType::kDeliver: return mn::QuestObjectiveType::DELIVER;
+        case ObjectiveType::kExplore: return mn::QuestObjectiveType::EXPLORE;
+    }
+    return mn::QuestObjectiveType::KILL;
+}
+
+// The subject content id of an objective (creature / item / zone), for the wire
+// QuestObjectiveState.target_id (the client labels progress without re-reading content).
+std::uint32_t objective_target_id(const QuestObjective& o) {
+    switch (o.type) {
+        case ObjectiveType::kKill:    return o.target_npc_id;
+        case ObjectiveType::kCollect: return o.item_id;
+        case ObjectiveType::kDeliver: return o.item_id;
+        case ObjectiveType::kExplore: return o.zone_id;
+    }
+    return 0;
+}
+
+// ---- quest encoders (S→C, world.fbs; QST-01 #371) ---------------------------
+
+Bytes encode_quest_accept_result(QuestId quest_id, mn::QuestAcceptStatus status) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateQuestAcceptResult(b, quest_id, status));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+Bytes encode_quest_progress(QuestId quest_id, std::uint8_t objective_index,
+                            mn::QuestObjectiveType type, std::uint16_t have,
+                            std::uint16_t need, bool complete) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateQuestProgress(b, quest_id, objective_index, type, have, need, complete));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+Bytes encode_quest_turn_in_result(QuestId quest_id, mn::QuestTurnInStatus status,
+                                  std::uint32_t reward_xp, std::int64_t reward_money,
+                                  const std::vector<QuestRewardItem>& items,
+                                  std::uint16_t new_level) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::QuestRewardItem>> rows;
+    rows.reserve(items.size());
+    for (const auto& it : items) rows.push_back(mn::CreateQuestRewardItem(b, it.item_id, it.count));
+    auto vec = b.CreateVector(rows);
+    b.Finish(mn::CreateQuestTurnInResult(b, quest_id, status, reward_xp, reward_money, vec,
+                                         new_level));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// Build the QuestLog snapshot (S→C) from a session's live QuestLog + the quest defs
+// (for objective type/target + quest level). Active quests only, ascending.
+Bytes encode_quest_log(const QuestLog& log) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::QuestLogEntry>> entries;
+    for (QuestId id : log.active_quests()) {
+        const QuestDef* def = quest_store().find(id);
+        const std::vector<ObjectiveState>* obj = log.objectives(id);
+        std::vector<fb::Offset<mn::QuestObjectiveState>> ostates;
+        if (def != nullptr && obj != nullptr) {
+            for (std::size_t i = 0; i < def->objectives.size() && i < obj->size(); ++i) {
+                const QuestObjective& od = def->objectives[i];
+                const ObjectiveState& os = (*obj)[i];
+                ostates.push_back(mn::CreateQuestObjectiveState(
+                    b, to_wire(od.type), objective_target_id(od), os.have, os.need,
+                    os.complete()));
+            }
+        }
+        auto ovec = b.CreateVector(ostates);
+        entries.push_back(mn::CreateQuestLogEntry(
+            b, id, def != nullptr ? def->level : std::uint16_t{1}, log.is_complete(id), ovec));
+    }
+    auto qvec = b.CreateVector(entries);
+    b.Finish(mn::CreateQuestLog(b, qvec));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// ---- loot wire enum mapping + encoders (S→C, world.fbs; ITM-02 #369) --------
+
+mn::LootStatus to_wire(LootOpenStatus s) {
+    switch (s) {
+        case LootOpenStatus::kOk:            return mn::LootStatus::OK;
+        case LootOpenStatus::kNotALooter:    return mn::LootStatus::NOT_A_LOOTER;
+        case LootOpenStatus::kOutOfRange:    return mn::LootStatus::OUT_OF_RANGE;
+        case LootOpenStatus::kNoSuchCorpse:  return mn::LootStatus::NO_SUCH_CORPSE;
+        case LootOpenStatus::kAlreadyLooted: return mn::LootStatus::ALREADY_LOOTED;
+    }
+    return mn::LootStatus::NO_SUCH_CORPSE;
+}
+
+mn::LootTakeStatus to_wire(LootTakeResult s) {
+    switch (s) {
+        case LootTakeResult::kOk:            return mn::LootTakeStatus::OK;
+        case LootTakeResult::kNotALooter:    return mn::LootTakeStatus::NOT_A_LOOTER;
+        case LootTakeResult::kOutOfRange:    return mn::LootTakeStatus::OUT_OF_RANGE;
+        case LootTakeResult::kAlreadyLooted: return mn::LootTakeStatus::ALREADY_LOOTED;
+        case LootTakeResult::kQuestRequired: return mn::LootTakeStatus::QUEST_REQUIRED;
+        case LootTakeResult::kInventoryFull: return mn::LootTakeStatus::INVENTORY_FULL;
+        case LootTakeResult::kInvalidSlot:   return mn::LootTakeStatus::INVALID_SLOT;
+        case LootTakeResult::kNoSuchCorpse:  return mn::LootTakeStatus::NO_SUCH_CORPSE;
+    }
+    return mn::LootTakeStatus::NO_SUCH_CORPSE;
+}
+
+// The rarity tier of a template (LootItem.quality), 0 (kPoor/common) when unknown.
+std::uint8_t template_quality(std::uint32_t template_id) {
+    const itm::ItemTemplate* t = item_templates().find(template_id);
+    return t != nullptr ? static_cast<std::uint8_t>(t->rarity) : 0;
+}
+
+Bytes encode_loot_response(std::uint64_t corpse_guid, mn::LootStatus status,
+                           std::int64_t copper, const std::vector<lo::LootSlotView>& slots) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::LootItem>> rows;
+    rows.reserve(slots.size());
+    for (const auto& v : slots) {
+        rows.push_back(mn::CreateLootItem(b, static_cast<std::uint32_t>(v.slot),
+                                          v.item_template_id, v.count,
+                                          template_quality(v.item_template_id), v.is_quest()));
+    }
+    auto vec = b.CreateVector(rows);
+    b.Finish(mn::CreateLootResponse(b, corpse_guid, status, copper, vec));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+Bytes encode_loot_result(std::uint64_t corpse_guid, std::uint32_t slot,
+                         mn::LootTakeStatus status, std::uint32_t template_id,
+                         std::uint32_t count, std::int64_t copper) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateLootResult(b, corpse_guid, slot, status, template_id, count, copper));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+Bytes encode_loot_closed(std::uint64_t corpse_guid) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateLootClosed(b, corpse_guid));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// ---- gossip / trainer wire enum mapping + encoders (S→C; NPC-01/02 #372) -----
+
+mn::GossipOptionKind to_wire(npc::GossipOptionKind k) {
+    switch (k) {
+        case npc::GossipOptionKind::kQuestAvailable:  return mn::GossipOptionKind::QUEST_AVAILABLE;
+        case npc::GossipOptionKind::kQuestInProgress: return mn::GossipOptionKind::QUEST_IN_PROGRESS;
+        case npc::GossipOptionKind::kQuestComplete:   return mn::GossipOptionKind::QUEST_COMPLETE;
+        case npc::GossipOptionKind::kVendor:          return mn::GossipOptionKind::VENDOR;
+        case npc::GossipOptionKind::kTrainer:         return mn::GossipOptionKind::TRAINER;
+    }
+    return mn::GossipOptionKind::QUEST_AVAILABLE;
+}
+
+mn::TrainerLearnStatus to_wire(npc::TrainStatus s) {
+    switch (s) {
+        case npc::TrainStatus::kOk:                 return mn::TrainerLearnStatus::OK;
+        case npc::TrainStatus::kNotTrainer:         return mn::TrainerLearnStatus::NOT_TRAINER;
+        case npc::TrainStatus::kUnknownAbility:     return mn::TrainerLearnStatus::UNKNOWN_ABILITY;
+        case npc::TrainStatus::kWrongClass:         return mn::TrainerLearnStatus::WRONG_CLASS;
+        case npc::TrainStatus::kLevelTooLow:        return mn::TrainerLearnStatus::LEVEL_TOO_LOW;
+        case npc::TrainStatus::kAlreadyKnown:       return mn::TrainerLearnStatus::ALREADY_KNOWN;
+        case npc::TrainStatus::kInsufficientFunds:  return mn::TrainerLearnStatus::INSUFFICIENT_FUNDS;
+    }
+    return mn::TrainerLearnStatus::NOT_TRAINER;
+}
+
+// A trainer row's per-player learn eligibility (TrainableState) from its plan status.
+mn::TrainableState trainable_state(npc::TrainStatus s) {
+    switch (s) {
+        case npc::TrainStatus::kOk:                return mn::TrainableState::LEARNABLE;
+        case npc::TrainStatus::kAlreadyKnown:      return mn::TrainableState::ALREADY_KNOWN;
+        case npc::TrainStatus::kWrongClass:        return mn::TrainableState::WRONG_CLASS;
+        case npc::TrainStatus::kLevelTooLow:       return mn::TrainableState::LEVEL_TOO_LOW;
+        case npc::TrainStatus::kInsufficientFunds: return mn::TrainableState::CANT_AFFORD;
+        default:                                   return mn::TrainableState::LEARNABLE;
+    }
+}
+
+Bytes encode_gossip_menu(std::uint64_t npc_guid, const npc::GossipMenu& menu) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::GossipOption>> rows;
+    rows.reserve(menu.options.size());
+    for (const auto& o : menu.options)
+        rows.push_back(mn::CreateGossipOption(b, to_wire(o.kind), o.target_id));
+    auto vec = b.CreateVector(rows);
+    b.Finish(mn::CreateGossipMenu(b, npc_guid, vec));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// One trainer-list row as THIS player sees it (a projection of a TrainerAbility +
+// the player's computed learn eligibility), for the TrainerList S→C wire table.
+struct TrainerRow {
+    std::uint32_t ability_id = 0;
+    std::int64_t  cost = 0;
+    std::uint8_t  required_class = 0;
+    std::uint16_t required_level = 1;
+    mn::TrainableState state = mn::TrainableState::LEARNABLE;
+};
+
+Bytes encode_trainer_list(std::uint64_t npc_guid, const std::vector<TrainerRow>& rows) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::TrainerListEntry>> entries;
+    entries.reserve(rows.size());
+    for (const auto& r : rows)
+        entries.push_back(mn::CreateTrainerListEntry(b, r.ability_id, r.cost, r.required_class,
+                                                     r.required_level, r.state));
+    auto vec = b.CreateVector(entries);
+    b.Finish(mn::CreateTrainerList(b, npc_guid, vec));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+Bytes encode_trainer_learn_result(std::uint64_t npc_guid, std::uint32_t ability_id,
+                                  mn::TrainerLearnStatus status, std::int64_t cost,
+                                  std::int64_t new_balance) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateTrainerLearnResult(b, npc_guid, ability_id, status, cost, new_balance));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// First free backpack index of `inv`, or nullopt when full (loot/quest reward
+// placement target — mirrors the vendor buy path's first-free placement over the
+// public backpack view; Inventory::first_free_backpack is private).
+std::optional<std::uint16_t> first_free_slot(const itm::Inventory& inv) {
+    const auto& slots = inv.backpack();
+    for (std::uint16_t i = 0; i < slots.size(); ++i)
+        if (!slots[i].has_value()) return i;
+    return std::nullopt;
+}
+
 // ---- combat encoders (S→C, world.fbs; CMB-01 #344/#345) ---------------------
 
 // Build a CastStart payload — the D-10 ACCEPT reply. cast_ms 0 = instant.
@@ -395,6 +700,42 @@ void send_s2c(net::Session& sess, ConnCtx& ctx, const Bytes& frame) {
         ctx.egress->emit_frame(frame);
     } else {
         sess.write_frame(frame);
+    }
+}
+
+// Re-sync every active COLLECT objective against the character's current inventory
+// and push a QUEST_PROGRESS for each objective whose progress advanced (the QST-01
+// collect source, driven by an inventory change — e.g. a loot pull). No-op without a
+// quest log or when nothing changed. Called with the session's post-change inventory.
+void sync_collect_and_emit(net::Session& sess, ConnCtx& ctx, const itm::Inventory& inv) {
+    if (!ctx.quests) return;
+    // Snapshot each active quest's per-objective `have` before the sync.
+    std::map<QuestId, std::vector<std::uint16_t>> before;
+    for (QuestId id : ctx.quests->active_quests()) {
+        const std::vector<ObjectiveState>* objs = ctx.quests->objectives(id);
+        if (objs == nullptr) continue;
+        std::vector<std::uint16_t> hv;
+        hv.reserve(objs->size());
+        for (const auto& o : *objs) hv.push_back(o.have);
+        before.emplace(id, std::move(hv));
+    }
+    if (!ctx.quests->sync_collect(inv)) return;  // nothing advanced
+    for (QuestId id : ctx.quests->active_quests()) {
+        const QuestDef* def = quest_store().find(id);
+        const std::vector<ObjectiveState>* objs = ctx.quests->objectives(id);
+        if (def == nullptr || objs == nullptr) continue;
+        auto prev_it = before.find(id);
+        for (std::size_t i = 0; i < objs->size() && i < def->objectives.size(); ++i) {
+            const std::uint16_t prev =
+                (prev_it != before.end() && i < prev_it->second.size()) ? prev_it->second[i] : 0;
+            const ObjectiveState& os = (*objs)[i];
+            if (os.have == prev) continue;
+            send_s2c(sess, ctx,
+                     encode_frame(net::Opcode::QUEST_PROGRESS, 0,
+                                  encode_quest_progress(id, static_cast<std::uint8_t>(i),
+                                                        to_wire(def->objectives[i].type), os.have,
+                                                        os.need, os.complete())));
+        }
     }
 }
 
@@ -1109,6 +1450,15 @@ void Dispatcher::register_m0_stubs() {
            // act on the session's OWN character (server-authoritative).
            ctx.char_id = pc.char_guid;
 
+           // QST-01 / NPC-02 (#371/#372/#388): capture the character's class + level
+           // (the server-authoritative accept/learn gates — read from the DB-loaded
+           // character, never a client field) and stand up this session's quest state
+           // machine over the shared placeholder quest store. Quest progress is
+           // in-memory at M1 (durable character_quest is a later story).
+           ctx.char_class = pc.class_id;
+           ctx.char_level = pc.level;
+           ctx.quests.emplace(quest_store());
+
            // OPS-05: this session is now IN WORLD. Bump CCU (meridian_ccu) and the
            // "active" session gauge (meridian_sessions{state="active"}); the serve
            // loop decrements both on disconnect (guarded by entered_metrics).
@@ -1134,6 +1484,12 @@ void Dispatcher::register_m0_stubs() {
            // created by the AoI block just below.
            ctx.phase = SessionPhase::kInWorld;
            reply(mn::EnterWorldStatus::OK);
+
+           // NOTE (#388): the character's quest log is NOT pushed unsolicited on
+           // enter-world — that would inject a frame into the strict enter-world reply
+           // sequence other flows (char-mgmt, AoI) depend on. The client fetches its
+           // initial log with an explicit QUEST_LOG request (world.fbs QuestLog "sent
+           // on … resync"); the server also resends it after each accept / turn-in.
 
            log::info(kCat, "ENTER_WORLD accepted -> spawned",
                      {log::field("account_id",
@@ -1554,6 +1910,368 @@ void Dispatcher::register_m0_stubs() {
         }
     });
 
+    // --- 0x4xxx QUEST: accept / turn-in / log (QST-01 #371) --------------------
+    // The session's quest state machine (ctx.quests) is emplaced at ENTER_WORLD over
+    // the shared placeholder quest store. Accept gates on the character's server-
+    // authoritative level; turn-in grants durable rewards (reward items minted +
+    // reward copper credited to char_db). Progress + log snapshots are pushed S→C.
+    // Prerequisites mirror the other in-world handlers: pre-handshake -> protocol
+    // close (require_authenticated); authenticated-but-not-spawned -> a typed reject
+    // (the quest enums carry no NOT_IN_WORLD, so the generic "no such quest / not on
+    // the quest" reject is used out-of-phase — no character context exists yet).
+
+    on(net::Opcode::QUEST_ACCEPT, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+        if (!require_authenticated(ctx, "QUEST_ACCEPT")) return;
+        const auto* req = fb::GetRoot<mn::QuestAccept>(f.payload);
+        if (req == nullptr) return;  // verified upstream; defensive
+        const QuestId quest_id = req->quest_id();
+        const std::uint64_t giver_guid = req->giver_guid();
+
+        auto reply = [&](mn::QuestAcceptStatus st) {
+            send_s2c(sess, ctx,
+                     encode_frame(net::Opcode::QUEST_ACCEPT_RESULT, f.seq,
+                                  encode_quest_accept_result(quest_id, st)));
+        };
+
+        if (ctx.phase != SessionPhase::kInWorld || !ctx.quests) {
+            reply(mn::QuestAcceptStatus::UNKNOWN_QUEST);  // out-of-phase: no character
+            return;
+        }
+
+        const QuestDef* def = quest_store().find(quest_id);
+        if (def == nullptr) { reply(mn::QuestAcceptStatus::UNKNOWN_QUEST); return; }
+        // WRONG_GIVER (wire-only, dispatch-added). At M1 an NPC entity guid maps 1:1
+        // to its npc_template id (no NPC entities spawn yet — the mcc #28 spawn seam);
+        // giver_guid == 0 is "unspecified / self-serve" and skips the check.
+        if (giver_guid != 0 &&
+            static_cast<std::uint32_t>(giver_guid) != def->giver_npc_id) {
+            reply(mn::QuestAcceptStatus::WRONG_GIVER);
+            return;
+        }
+
+        const AcceptStatus st = ctx.quests->accept(quest_id, ctx.char_level);
+        reply(to_wire(st));
+        if (st != AcceptStatus::kOk) return;
+
+        // The deliver item of a deliver objective is granted on accept (quest.schema
+        // note) — mint it durably so the deliver flow is real. Best-effort: a DB fault
+        // does not undo the (in-memory) accept; it is logged.
+        if (ctx.char_db != nullptr && ctx.char_id != 0) {
+            try {
+                itm::Inventory place =
+                    itm::load_inventory(*ctx.char_db, ctx.char_id, item_templates());
+                for (const QuestObjective& o : def->objectives) {
+                    if (o.type != ObjectiveType::kDeliver) continue;
+                    std::optional<std::uint16_t> slot = first_free_slot(place);
+                    if (!slot) break;
+                    itm::ItemInstance minted = itm::mint_instance(*ctx.char_db, o.item_id, 1);
+                    itm::place_item(*ctx.char_db, ctx.char_id, /*bag=*/0,
+                                    itm::backpack_placement_slot(*slot), minted.item_guid);
+                    place.add(minted);
+                }
+            } catch (const std::exception& e) {
+                log::warn(kCat, "QUEST_ACCEPT deliver-item grant failed",
+                          {log::field("error", e.what())});
+            }
+        }
+
+        // Resync the client's quest log (a QUEST_PROGRESS/QuestLog follows an accept).
+        send_s2c(sess, ctx, encode_frame(net::Opcode::QUEST_LOG, f.seq,
+                                         encode_quest_log(*ctx.quests)));
+    });
+
+    on(net::Opcode::QUEST_TURN_IN, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+        if (!require_authenticated(ctx, "QUEST_TURN_IN")) return;
+        const auto* req = fb::GetRoot<mn::QuestTurnIn>(f.payload);
+        if (req == nullptr) return;
+        const QuestId quest_id = req->quest_id();
+        const std::uint32_t npc_id = static_cast<std::uint32_t>(req->turn_in_guid());
+        const int choice_index = req->choice_index();
+
+        auto reply = [&](mn::QuestTurnInStatus st, std::uint32_t xp, std::int64_t money,
+                         const std::vector<QuestRewardItem>& items) {
+            send_s2c(sess, ctx,
+                     encode_frame(net::Opcode::QUEST_TURN_IN_RESULT, f.seq,
+                                  encode_quest_turn_in_result(quest_id, st, xp, money, items,
+                                                              ctx.char_level)));
+        };
+
+        if (ctx.phase != SessionPhase::kInWorld || !ctx.quests) {
+            reply(mn::QuestTurnInStatus::NOT_ACTIVE, 0, 0, {});  // out-of-phase
+            return;
+        }
+        if (ctx.char_db == nullptr || ctx.char_id == 0) {  // defensive (unreachable in-world)
+            reply(mn::QuestTurnInStatus::UNKNOWN_QUEST, 0, 0, {});
+            return;
+        }
+
+        try {
+            itm::Inventory inv =
+                itm::load_inventory(*ctx.char_db, ctx.char_id, item_templates());
+            RewardGrant grant;
+            const TurnInStatus st =
+                ctx.quests->turn_in(quest_id, npc_id, inv, choice_index, grant);
+            if (st != TurnInStatus::kOk) {
+                reply(to_wire(st), 0, 0, {});
+                return;
+            }
+
+            // Persist the reward bundle durably: mint + place each reward stack at a
+            // free backpack slot (turn_in verified room), then credit reward copper.
+            itm::Inventory place =
+                itm::load_inventory(*ctx.char_db, ctx.char_id, item_templates());
+            for (const QuestRewardItem& ri : grant.items) {
+                std::optional<std::uint16_t> slot = first_free_slot(place);
+                if (!slot) break;  // defensive: turn_in reserved room
+                itm::ItemInstance minted =
+                    itm::mint_instance(*ctx.char_db, ri.item_id, ri.count);
+                itm::place_item(*ctx.char_db, ctx.char_id, /*bag=*/0,
+                                itm::backpack_placement_slot(*slot), minted.item_guid);
+                place.add(minted);
+            }
+            if (grant.money > 0)
+                itm::add_money(*ctx.char_db, ctx.char_id, grant.money);
+
+            // new_level is reported as the current level: reward XP is not persisted at
+            // M1 (durable XP/level is CHR-03/mcc #28) — the amount is still surfaced.
+            reply(mn::QuestTurnInStatus::OK, grant.xp, static_cast<std::int64_t>(grant.money),
+                  grant.items);
+            send_s2c(sess, ctx, encode_frame(net::Opcode::QUEST_LOG, f.seq,
+                                             encode_quest_log(*ctx.quests)));
+        } catch (const std::exception& e) {
+            log::warn(kCat, "QUEST_TURN_IN failed", {log::field("error", e.what())});
+            reply(mn::QuestTurnInStatus::UNKNOWN_QUEST, 0, 0, {});  // defensive (no INTERNAL enum)
+        }
+    });
+
+    // QUEST_LOG (C→S resync request): the client asks for its authoritative quest log
+    // snapshot (world.fbs QuestLog "sent on enter-world and on resync"). Replies with
+    // the same S→C QuestLog table.
+    on(net::Opcode::QUEST_LOG, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+        if (!require_authenticated(ctx, "QUEST_LOG")) return;
+        if (ctx.quests) {
+            send_s2c(sess, ctx, encode_frame(net::Opcode::QUEST_LOG, f.seq,
+                                             encode_quest_log(*ctx.quests)));
+            return;
+        }
+        // Not spawned yet — an empty log.
+        fb::FlatBufferBuilder b;
+        std::vector<fb::Offset<mn::QuestLogEntry>> none;
+        b.Finish(mn::CreateQuestLog(b, b.CreateVector(none)));
+        send_s2c(sess, ctx,
+                 encode_frame(net::Opcode::QUEST_LOG, f.seq,
+                              Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize())));
+    });
+
+    // --- 0x50xx LOOT: open / take / release a corpse loot window (ITM-02 #369) --
+    // The corpse loot lives in the shared, thread-safe LootRegistry (ctx.loot); each
+    // request re-runs the loot session's server-side gates (ownership / in-range /
+    // not-already-looted / quest gate). A take moves the stack (or the copper) into
+    // the character's DURABLE inventory (mint + place / add_money on char_db). The
+    // looter is the session's OWN char_id + authoritative position — never a client
+    // field. The quest gate reads the session's live quest log.
+
+    on(net::Opcode::LOOT_REQUEST, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+        if (!require_authenticated(ctx, "LOOT_REQUEST")) return;
+        const auto* req = fb::GetRoot<mn::LootRequest>(f.payload);
+        if (req == nullptr) return;
+        const std::uint64_t corpse_guid = req->corpse_guid();
+
+        auto reply = [&](mn::LootStatus st, std::int64_t copper,
+                         const std::vector<lo::LootSlotView>& slots) {
+            send_s2c(sess, ctx,
+                     encode_frame(net::Opcode::LOOT_RESPONSE, f.seq,
+                                  encode_loot_response(corpse_guid, st, copper, slots)));
+        };
+
+        if (ctx.phase != SessionPhase::kInWorld || ctx.loot == nullptr || !ctx.movement) {
+            reply(mn::LootStatus::NO_SUCH_CORPSE, 0, {});  // out-of-phase / no registry
+            return;
+        }
+        const Position& p = ctx.movement->authoritative();
+        const lo::LootPoint looter_pos{p.x, p.y, p.z};
+        const lo::QuestPredicate has_quest = [&ctx](std::uint32_t q) {
+            return ctx.quests && ctx.quests->is_active(q);
+        };
+        const LootWindow w = ctx.loot->open(corpse_guid, ctx.char_id, looter_pos, has_quest);
+        reply(to_wire(w.status), static_cast<std::int64_t>(w.copper), w.slots);
+        if (w.status == LootOpenStatus::kOk) ctx.open_corpse = corpse_guid;
+    });
+
+    on(net::Opcode::LOOT_TAKE, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+        if (!require_authenticated(ctx, "LOOT_TAKE")) return;
+        const auto* req = fb::GetRoot<mn::LootTake>(f.payload);
+        if (req == nullptr) return;
+        const std::uint64_t corpse_guid = req->corpse_guid();
+        const std::uint32_t slot = req->slot();
+        const bool money = req->money();
+
+        auto reply = [&](mn::LootTakeStatus st, std::uint32_t template_id,
+                         std::uint32_t count, std::int64_t copper) {
+            send_s2c(sess, ctx,
+                     encode_frame(net::Opcode::LOOT_RESULT, f.seq,
+                                  encode_loot_result(corpse_guid, slot, st, template_id, count,
+                                                     copper)));
+        };
+        auto close_if_looted = [&](bool fully_looted) {
+            if (!fully_looted) return;
+            send_s2c(sess, ctx, encode_frame(net::Opcode::LOOT_CLOSED, f.seq,
+                                             encode_loot_closed(corpse_guid)));
+            if (ctx.open_corpse && *ctx.open_corpse == corpse_guid) ctx.open_corpse.reset();
+        };
+
+        if (ctx.phase != SessionPhase::kInWorld || ctx.loot == nullptr || !ctx.movement ||
+            ctx.char_db == nullptr || ctx.char_id == 0) {
+            reply(mn::LootTakeStatus::NO_SUCH_CORPSE, 0, 0, 0);  // out-of-phase / no registry
+            return;
+        }
+        const Position& p = ctx.movement->authoritative();
+        const lo::LootPoint looter_pos{p.x, p.y, p.z};
+        const lo::QuestPredicate has_quest = [&ctx](std::uint32_t q) {
+            return ctx.quests && ctx.quests->is_active(q);
+        };
+
+        if (money) {
+            const TakeMoneyOutcome mo = ctx.loot->take_money(corpse_guid, ctx.char_id, looter_pos);
+            if (mo.status != LootTakeResult::kOk) {
+                reply(to_wire(mo.status), 0, 0, 0);
+                return;
+            }
+            try {
+                itm::add_money(*ctx.char_db, ctx.char_id, mo.copper);
+            } catch (const std::exception& e) {
+                // No INTERNAL status on the loot wire; the copper left the corpse. Log
+                // loudly and still report the take (best-effort, degraded — M1).
+                log::warn(kCat, "LOOT_TAKE money credit failed", {log::field("error", e.what())});
+            }
+            reply(mn::LootTakeStatus::OK, 0, 0, static_cast<std::int64_t>(mo.copper));
+            close_if_looted(mo.fully_looted);
+            return;
+        }
+
+        // Item take: load the real inventory (capacity), note the free slot the loot
+        // will land in, run the validated take, then persist the minted stack durably.
+        try {
+            itm::Inventory inv =
+                itm::load_inventory(*ctx.char_db, ctx.char_id, item_templates());
+            const std::optional<std::uint16_t> target = first_free_slot(inv);
+            const TakeItemOutcome io = ctx.loot->take_item(corpse_guid, ctx.char_id, looter_pos,
+                                                           slot, has_quest, inv);
+            if (io.status != LootTakeResult::kOk) {
+                reply(to_wire(io.status), 0, 0, 0);
+                return;
+            }
+            if (target) {  // kOk implies room (else kInventoryFull) so target is set
+                itm::ItemInstance minted = itm::mint_instance(
+                    *ctx.char_db, io.stack.item_template_id, io.stack.count);
+                itm::place_item(*ctx.char_db, ctx.char_id, /*bag=*/0,
+                                itm::backpack_placement_slot(*target), minted.item_guid);
+            }
+            reply(mn::LootTakeStatus::OK, io.stack.item_template_id, io.stack.count, 0);
+            // Advance any collect objective the pull satisfied (QUEST_PROGRESS S→C).
+            sync_collect_and_emit(sess, ctx, inv);
+            close_if_looted(io.fully_looted);
+        } catch (const std::exception& e) {
+            log::warn(kCat, "LOOT_TAKE item persist failed", {log::field("error", e.what())});
+            reply(mn::LootTakeStatus::NO_SUCH_CORPSE, 0, 0, 0);  // defensive (no INTERNAL enum)
+        }
+    });
+
+    on(net::Opcode::LOOT_RELEASE, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+        if (!require_authenticated(ctx, "LOOT_RELEASE")) return;
+        const auto* req = fb::GetRoot<mn::LootRelease>(f.payload);
+        if (req == nullptr) return;
+        const std::uint64_t corpse_guid = req->corpse_guid();
+        // Close THIS session's loot window (per-connection state). The corpse's shared
+        // loot is untouched — a release just stops this looter viewing it.
+        if (ctx.open_corpse && *ctx.open_corpse == corpse_guid) ctx.open_corpse.reset();
+        send_s2c(sess, ctx, encode_frame(net::Opcode::LOOT_CLOSED, f.seq,
+                                         encode_loot_closed(corpse_guid)));
+    });
+
+    // --- 0x52xx NPC: gossip menu + trainer list / learn (NPC-01/02 #372) -------
+    // The gossip menu + the trainer eligibility/cost are computed on the SERVER from
+    // the placeholder NPC store, gated by the session's live quest state + class/level.
+    // At M1 the wire npc_guid maps 1:1 to its npc_template id (no NPC entities spawn
+    // yet — the mcc #28 spawn seam). A learn debits copper from character.money over
+    // the wire (server-authoritative price; the client never supplies it).
+
+    on(net::Opcode::GOSSIP_HELLO, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+        if (!require_authenticated(ctx, "GOSSIP_HELLO")) return;
+        const auto* req = fb::GetRoot<mn::GossipHello>(f.payload);
+        if (req == nullptr) return;
+        const std::uint64_t npc_guid = req->npc_guid();
+
+        auto empty_menu = [&]() {
+            const npc::GossipMenu none;
+            send_s2c(sess, ctx, encode_frame(net::Opcode::GOSSIP_MENU, f.seq,
+                                             encode_gossip_menu(npc_guid, none)));
+        };
+        if (ctx.phase != SessionPhase::kInWorld || !ctx.quests) { empty_menu(); return; }
+        const npc::NpcDef* def = npc_store().find(static_cast<npc::NpcId>(npc_guid));
+        if (def == nullptr) { empty_menu(); return; }
+
+        const QuestLogView view(*ctx.quests, ctx.char_level);
+        const npc::GossipMenu menu = npc::build_gossip_menu(*def, view);
+        send_s2c(sess, ctx, encode_frame(net::Opcode::GOSSIP_MENU, f.seq,
+                                         encode_gossip_menu(npc_guid, menu)));
+
+        // A trainer NPC also gets its per-player ability list pushed (TrainerList S→C).
+        if (def->is_trainer) {
+            const std::int64_t balance = safe_balance(ctx);
+            std::vector<TrainerRow> rows;
+            rows.reserve(def->trainer_abilities.size());
+            for (const npc::TrainerAbility& ta : def->trainer_abilities) {
+                const bool known = ctx.learned.knows(ta.ability_id);
+                const npc::TrainPlan plan = npc::plan_learn(
+                    *def, ta.ability_id, ctx.char_class, ctx.char_level, balance, known);
+                rows.push_back(TrainerRow{ta.ability_id, static_cast<std::int64_t>(ta.cost),
+                                          ta.required_class, ta.required_level,
+                                          trainable_state(plan.status)});
+            }
+            send_s2c(sess, ctx, encode_frame(net::Opcode::TRAINER_LIST, f.seq,
+                                             encode_trainer_list(npc_guid, rows)));
+        }
+    });
+
+    on(net::Opcode::TRAINER_LEARN, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+        if (!require_authenticated(ctx, "TRAINER_LEARN")) return;
+        const auto* req = fb::GetRoot<mn::TrainerLearn>(f.payload);
+        if (req == nullptr) return;
+        const std::uint64_t npc_guid = req->npc_guid();
+        const std::uint32_t ability_id = req->ability_id();
+
+        auto reply = [&](mn::TrainerLearnStatus st, std::int64_t cost, std::int64_t balance) {
+            send_s2c(sess, ctx,
+                     encode_frame(net::Opcode::TRAINER_LEARN_RESULT, f.seq,
+                                  encode_trainer_learn_result(npc_guid, ability_id, st, cost,
+                                                              balance)));
+        };
+
+        if (ctx.phase != SessionPhase::kInWorld) {
+            reply(mn::TrainerLearnStatus::NOT_TRAINER, 0, 0);  // out-of-phase
+            return;
+        }
+        if (ctx.char_db == nullptr || ctx.char_id == 0) {  // defensive (unreachable in-world)
+            reply(mn::TrainerLearnStatus::NOT_TRAINER, 0, 0);
+            return;
+        }
+        const npc::NpcDef* def = npc_store().find(static_cast<npc::NpcId>(npc_guid));
+        if (def == nullptr) { reply(mn::TrainerLearnStatus::NOT_TRAINER, 0, safe_balance(ctx)); return; }
+
+        try {
+            const npc::LearnResult r = npc::learn_ability(
+                *ctx.char_db, ctx.char_id, *def, ability_id, ctx.char_class, ctx.char_level,
+                ctx.learned);
+            const std::int64_t cost =
+                (r.status == npc::TrainStatus::kOk) ? static_cast<std::int64_t>(r.cost) : 0;
+            reply(to_wire(r.status), cost, static_cast<std::int64_t>(r.new_balance));
+        } catch (const std::exception& e) {
+            log::warn(kCat, "TRAINER_LEARN failed", {log::field("error", e.what())});
+            reply(mn::TrainerLearnStatus::NOT_TRAINER, 0, safe_balance(ctx));  // defensive
+        }
+    });
+
     // No handler is registered for server→client opcodes (HANDSHAKE_OK,
     // MOVEMENT_STATE, ENTITY_ENTER/UPDATE/LEAVE, CHAR_*_RESPONSE, CHAT_DELIVER/
     // CHAT_REJECTED, VENDOR_*_RESULT): a client sending one is out-of-direction and
@@ -1583,6 +2301,11 @@ struct WorldServer::Impl {
     // across every serve_connection so a second login for an account kicks the
     // first (kick-old) — an account holds at most one in-world session.
     ActiveSessionRegistry active_sessions;
+
+    // Shared corpse-loot registry (ITM-02 wire; #388). Thread-safe; shared across
+    // every serve_connection so eligible looters open/take the same corpse session.
+    // Seeded by the world-thread creature-death hook (#369) — or a test.
+    LootRegistry loot;
 
     // The read-only ability template store (#343), loaded once at construction
     // with the M1 placeholder set (epic #28 swaps the source behind the store).
@@ -1638,6 +2361,8 @@ std::uint64_t WorldServer::drained_count() const { return impl_->drained.load();
 WorldState& WorldServer::world_state() { return impl_->world; }
 
 ActiveSessionRegistry& WorldServer::active_sessions() { return impl_->active_sessions; }
+
+LootRegistry& WorldServer::loot_registry() { return impl_->loot; }
 
 void WorldServer::world_thread_main() {
     // The per-map map tick (SAD §2.5 / §3.2), 20 Hz with a 40 ms soft budget
@@ -1742,6 +2467,7 @@ void WorldServer::serve_connection(net::Session sess) {
     ctx.world = &impl_->world;  // shared AoI relay registry (#87)
     ctx.abilities = &impl_->abilities;  // shared ability template store (#343 / CMB-01)
     ctx.active_sessions = &impl_->active_sessions;  // single-session registry (#326)
+    ctx.loot = &impl_->loot;  // shared corpse loot registry (ITM-02 wire; #388)
     ctx.kicked = std::make_shared<std::atomic<bool>>(false);  // set if a later login kicks us
     std::optional<db::Connection> auth_conn;
     std::optional<db::Connection> char_conn;
