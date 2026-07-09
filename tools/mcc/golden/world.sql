@@ -8,33 +8,52 @@ SET FOREIGN_KEY_CHECKS = 0;
 INSERT INTO world_manifest
   (pack_namespace, pack_version, id_band, content_hash, schema_version, mcc_version, built_at)
 VALUES
-  ('core', '0.1.0', 0, '3866e1af351061e11b918637b92c882ba2141b1feff8e2cbfb4326378f4ed3b8', 1, '0.0.0', '1970-01-01 00:00:00');
+  ('core', '0.1.0', 0, '5290bd2e99fd5e997bc2b526838182cd6347e8c3806255be089fda4ec6e2cc82', 1, '0.0.0', '1970-01-01 00:00:00');
 
--- npc_template (3 rows)
+-- npc_template (8 rows)
 INSERT INTO npc_template (id, name, subtitle, level_min, level_max, creature_type, `rank`, faction, stat_health, stat_mana, stat_armor, stat_damage_min, stat_damage_max, stat_attack_speed_ms, ai_behavior, ai_aggro_radius_m, ai_leash_radius_m, ai_call_for_help_radius_m, ai_flee_at_health_pct, move_walk_speed_mps, move_run_speed_mps, vendor_ref_id, loot_table_ref_id, loot_money_min, loot_money_max, visual_model_id, visual_scale, visual_sound_set_id) VALUES
   (25, 'Kobold Digmaster', 'Mining Supervisor', 5, 5, 'humanoid', 'elite', 'hostile', 420, NULL, 90, 11, 16, 2200, 'aggressive', 22, 70, NULL, NULL, NULL, NULL, NULL, 21, 60, 140, 5, 1.15, 31),
   (26, 'Kobold Miner', NULL, 3, 4, 'humanoid', 'normal', 'hostile', 120, NULL, 45, 6, 9, 2000, 'aggressive', 18, 55, 12, 15, NULL, NULL, NULL, 21, 12, 38, 6, NULL, 31),
-  (27, 'Quartermaster Bren', 'Emberfall Supplies', 10, 10, 'humanoid', 'normal', 'friendly', 800, NULL, 200, 15, 22, 2000, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 36, NULL, NULL, NULL, 4, NULL, 30);
+  (27, 'Quartermaster Bren', 'Emberfall Supplies', 10, 10, 'humanoid', 'normal', 'friendly', 800, NULL, 200, 15, 22, 2000, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 36, NULL, NULL, NULL, 4, NULL, 30),
+  (60, 'The Cindermaw', 'Terror of the Sunken Gallery', 8, 8, 'elemental', 'elite', 'hostile', 1400, NULL, 160, 24, 33, 2400, 'aggressive', 26, 90, NULL, 0, NULL, NULL, NULL, 57, 220, 480, 38, 1.6, 73),
+  (61, 'Ember Wisp', 'Ashvent Drift', 5, 6, 'elemental', 'normal', 'hostile', 95, NULL, 20, 8, 12, 1800, 'aggressive', 14, 45, NULL, 0, NULL, NULL, NULL, 58, 3, 14, 39, 0.9, 74),
+  (62, 'Foreman Dain', 'Cinderdeep Survivor', 8, 8, 'humanoid', 'normal', 'friendly', 640, NULL, 150, 12, 18, 2000, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 41, NULL, 30),
+  (63, 'Kobold Firecaller', 'Cinder Cultist', 5, 6, 'humanoid', 'normal', 'hostile', 140, NULL, 40, 9, 13, 2100, 'aggressive', 20, 60, 14, 20, NULL, NULL, NULL, 59, 20, 55, 6, 1.05, 31),
+  (64, 'Warden Sela', 'Emberfall Trailwarden', 10, 10, 'humanoid', 'normal', 'friendly', 900, NULL, 240, 18, 26, 1900, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 40, NULL, 30);
 
--- npc_ability (2 rows)
+-- npc_ability (3 rows)
 INSERT INTO npc_ability (npc_id, ability_id, priority, cooldown_override_ms, use_at_health_below_pct) VALUES
   (25, 2, 0, 6000, NULL),
-  (26, 2, 0, NULL, 80);
+  (26, 2, 0, NULL, 80),
+  (63, 2, 0, NULL, 70);
 
--- item_template (5 rows)
+-- item_template (13 rows)
 INSERT INTO item_template (id, name, flavor_text, item_class, subclass, slot, rarity, required_level, item_level, is_unique, binding, stack_size, weapon_damage_min, weapon_damage_max, weapon_speed_ms, weapon_school, armor, effect_on_use_id, price_sell, price_buy, visual_icon_id, visual_model_id) VALUES
   (16, 'Bren''s Signet', 'The quartermaster''s seal, good for a discount he''ll deny offering.', 'armor', 'misc', 'finger', 'uncommon', 4, 9, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 380, NULL, 12, NULL),
   (17, 'Kobold Ear', 'Proof of a culling. Bren doesn''t ask how you got it.', 'quest', NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 20, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 8, NULL),
   (18, 'Miner''s Lamp Charm', 'Still faintly warm. Kobolds swear by them; kobolds swear at everything.', 'armor', 'misc', 'trinket', 'uncommon', 4, 9, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 380, NULL, 9, NULL),
   (19, 'Minor Healing Potion', NULL, 'consumable', NULL, NULL, 'common', 1, 1, FALSE, 'none', 5, NULL, NULL, NULL, NULL, NULL, 1, 38, 150, 11, NULL),
-  (20, 'Rusty Pickaxe', 'Generations of kobold thumbs have worn the haft smooth.', 'weapon', 'mace_1h', 'main_hand', 'uncommon', 3, 8, FALSE, 'on_equip', 1, 9, 14, 2600, NULL, NULL, NULL, 425, NULL, 10, 13);
+  (20, 'Rusty Pickaxe', 'Generations of kobold thumbs have worn the haft smooth.', 'weapon', 'mace_1h', 'main_hand', 'uncommon', 3, 8, FALSE, 'on_equip', 1, 9, 14, 2600, NULL, NULL, NULL, 425, NULL, 10, 13),
+  (49, 'Charred Totem', 'A firecaller''s fetish, scorched black. It hums when the deep stirs.', 'quest', NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 20, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 42, NULL),
+  (50, 'Cinder Heart', 'It beats once for every breath you hold. Bren will want to see this.', 'quest', NULL, NULL, 'uncommon', 1, 1, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 43, NULL),
+  (51, 'Deep Survey Scrap', 'Foreman Dain''s charcoal map of the sunken galleries, torn but legible.', 'quest', NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 5, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 47, NULL),
+  (52, 'Ember Mote', 'A fleck of the mountain''s slow fire. It never quite goes cold.', 'quest', NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 20, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 44, NULL),
+  (53, 'Emberforged Pick', 'Reforged in the vent-heat of Cinderdeep. It bites where rust only bruised.', 'weapon', 'mace_1h', 'main_hand', 'uncommon', 6, 12, FALSE, 'on_equip', 1, 12, 18, 2600, NULL, NULL, NULL, 720, NULL, 45, NULL),
+  (54, 'Charm of the Hollow', 'Braided ash-reed and river-glass. The wardens give them to those who come back.', 'armor', 'misc', 'neck', 'uncommon', 5, 11, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 560, NULL, 46, NULL),
+  (55, 'Spare Miner''s Lamp', 'Trimmed, filled, and lit. Someone in the dark will bless you for it.', 'quest', NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 5, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 9, NULL),
+  (56, 'Warden''s Crest', 'Sela''s own crest, pressed into your hand. It opens doors in Emberfall.', 'armor', 'misc', 'trinket', 'rare', 7, 14, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 1050, NULL, 48, NULL);
 
--- item_stat (4 rows)
+-- item_stat (9 rows)
 INSERT INTO item_stat (item_id, stat, amount) VALUES
   (16, 'intellect', 2),
   (16, 'spirit', 2),
   (18, 'stamina', 3),
-  (20, 'strength', 2);
+  (20, 'strength', 2),
+  (53, 'strength', 3),
+  (54, 'spirit', 3),
+  (54, 'stamina', 2),
+  (56, 'agility', 4),
+  (56, 'stamina', 3);
 
 -- ability (2 rows)
 INSERT INTO ability (id, name, description, school, target, range_m, cast_time_ms, cast_channel_ms, cooldown_ms, triggers_gcd, resource_type, resource_amount, av_cast_anim, av_cast_vfx_id, av_cast_sfx_id, av_impact_vfx_id, av_impact_sfx_id) VALUES
@@ -47,40 +66,100 @@ INSERT INTO ability_effect (ability_id, ordinal, kind, amount_min, amount_max, c
   (2, 0, 'damage', 8, 13, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
   (2, 1, 'aura', NULL, NULL, NULL, NULL, 9000, NULL, 'damage', 2, 3, 3000);
 
--- quest_template (2 rows)
+-- quest_template (10 rows)
 INSERT INTO quest_template (id, name, summary, offer_text, completion_text, level, required_level, zone_ref_id, giver_npc_id, turn_in_npc_id, reward_xp, reward_money) VALUES
   (28, 'Culling the Kobolds', 'Kill 8 Kobold Miners in Cinderdeep Mine for Quartermaster Bren.', 'The kobolds crawled out of Cinderdeep like ants from a kicked hill, and every wagon they hit is food that doesn''t reach the village. Thin them out for me — eight ought to make the rest reconsider.', 'Eight fewer thieving hands in the hollow. You''ve earned this, and my thanks.', 4, 2, 37, 27, NULL, 340, 250),
-  (29, 'Ears for Evidence', 'Collect 6 Kobold Ears for Quartermaster Bren.', 'The village council thinks I exaggerate the kobold problem. Fine. Bring me ears. Councilors respect ears.', 'Six. Ha! Let''s see the council call that "a modest infestation."', 5, 3, 37, 27, NULL, 420, 400);
+  (29, 'Ears for Evidence', 'Collect 6 Kobold Ears for Quartermaster Bren.', 'The village council thinks I exaggerate the kobold problem. Fine. Bring me ears. Councilors respect ears.', 'Six. Ha! Let''s see the council call that "a modest infestation."', 5, 3, 37, 27, NULL, 420, 400),
+  (65, 'Charter of the Hollow', 'Carry Dain''s survey to Warden Sela and read it at the Charter Stone.', 'I''ve torn my survey down to what matters and marked the deep beast''s den on it. Get it to Warden Sela — and read it aloud at the old Charter Stone, where Emberfall swears its watches. Make this the Hollow''s business, not just mine.', 'Dain''s hand, and his warning, both. A den in the sunken gallery — a beast the firecallers have been feeding. The charter''s spoken now; the Hollow acts. Meet me at the vent shelf. We end this.', 7, 5, 37, 62, 64, 700, 650),
+  (66, 'Emberblight', 'Scatter 6 Ember Wisps on the ashvents and gather 8 Ember Motes.', 'The vents breed wisps when the mountain runs hot, and a hot mountain is a mountain about to speak. Scatter the drift up there and bring me their motes — I read the deep by how fierce they burn.', 'Eight, and every one still warm. The mountain isn''t just hot, warden''s honor — it''s building to something. Keep that blade loose.', 6, 4, 37, 64, NULL, 520, 450),
+  (67, 'Heart of the Cindermaw', 'Slay the Cindermaw in the Sunken Gallery and cut out its Cinder Heart.', 'The firecallers weren''t worshipping the deep. They were feeding it — and it grew into the Cindermaw. It nests in the sunken gallery now, and it will not stay there. End it, and bring me its heart, so Emberfall knows the deep is answered.', 'Still warm, still beating. You carried the whole Hollow down into that dark and carried it back out. Emberfall breathes easier tonight because you didn''t. Take a warden''s crest — you''ve more than earned the name.', 8, 6, 37, 64, NULL, 1200, 1500),
+  (68, 'Silence the Firecallers', 'Kill 6 Kobold Firecallers before they finish their chant.', 'Counting totems is one thing. Stopping the hands that plant them is another. The firecallers keep up a chant down there day and night — put six of them to silence and maybe the deep stops listening back.', 'The chant''s broken for now. You can hear the drip of the galleries again instead of that awful droning. Six fewer voices calling the dark up.', 7, 5, 37, 62, NULL, 640, 600),
+  (69, 'Sparks in the Dark', 'Carry a spare lamp to Foreman Dain and scout the Sunken Gallery.', 'Dain went down after the foreman''s shift never came up, and now he hasn''t come up either. Take him a lamp — a lit one, mind — and see how deep the rot goes. If the galleries have flooded with kobolds, I want to hear it from you.', 'A friendly light. You have no idea. Set it there — and thank you for putting eyes on the deep. It''s worse than Bren fears.', 5, 3, 37, 27, 62, 380, 300),
+  (70, 'The Deep Tally', 'Recover 5 Charred Totems from the firecallers in the lower galleries.', 'The firecallers plant those scorched totems at every gallery mouth — wards, or worse. I want five of them in my hands so I can count how far they''ve dug. Every totem you pull is a room we take back.', 'Five. So they hold the third gallery and half the fourth. That''s the tally I feared. Bless you for the count, even if the number''s grim.', 7, 5, 37, 62, NULL, 620, 550),
+  (71, 'Trail of the Digmasters', 'Kill 4 Kobold Digmasters ranging onto the low trail.', 'It isn''t just miners on the trail now — the digmasters are out, and where a digmaster walks, a work-gang follows. Break four of them and the gangs lose their nerve. Do it before they reach the village road.', 'Four supervisors down. The gangs are already drifting back to the dark. You bought the low trail a week of quiet — spend it well.', 6, 4, 37, 64, NULL, 480, 420),
+  (72, 'Warden''s Watch', 'Climb to the Ashvent Overlook and take in the ridge with Warden Sela.', 'Bren keeps you looking down at the mine. I need you looking up. Climb to the Ashvent Overlook — the high shelf above the vents — and see what I see. Then we''ll talk about what''s coming off that ridge.', 'Now you''ve seen it. Wisps drifting off the vents, stalkers on the low trail. The Hollow''s edges are fraying. Good — you came back. Most don''t climb twice.', 4, 3, 37, 64, NULL, 300, 200);
 
--- quest_objective (2 rows)
+-- quest_objective (14 rows)
 INSERT INTO quest_objective (quest_id, ordinal, type, target_npc_id, item_id, to_npc_id, zone_ref_id, poi, count) VALUES
   (28, 0, 'kill', 26, NULL, NULL, NULL, NULL, 8),
-  (29, 0, 'collect', NULL, 17, NULL, NULL, NULL, 6);
+  (29, 0, 'collect', NULL, 17, NULL, NULL, NULL, 6),
+  (65, 0, 'deliver', NULL, 51, 64, NULL, NULL, NULL),
+  (65, 1, 'explore', NULL, NULL, NULL, 37, 'charter_stone', NULL),
+  (66, 0, 'kill', 61, NULL, NULL, NULL, NULL, 6),
+  (66, 1, 'collect', NULL, 52, NULL, NULL, NULL, 8),
+  (67, 0, 'kill', 60, NULL, NULL, NULL, NULL, 1),
+  (67, 1, 'collect', NULL, 50, NULL, NULL, NULL, 1),
+  (68, 0, 'kill', 63, NULL, NULL, NULL, NULL, 6),
+  (69, 0, 'deliver', NULL, 55, 62, NULL, NULL, NULL),
+  (69, 1, 'explore', NULL, NULL, NULL, 37, 'sunken_gallery', NULL),
+  (70, 0, 'collect', NULL, 49, NULL, NULL, NULL, 5),
+  (71, 0, 'kill', 25, NULL, NULL, NULL, NULL, 4),
+  (72, 0, 'explore', NULL, NULL, NULL, 37, 'ashvent_overlook', NULL);
 
--- quest_prereq (1 rows)
+-- quest_prereq (12 rows)
 INSERT INTO quest_prereq (quest_id, prereq_quest_id) VALUES
-  (29, 28);
+  (29, 28),
+  (65, 68),
+  (65, 70),
+  (66, 72),
+  (67, 65),
+  (67, 66),
+  (67, 71),
+  (68, 69),
+  (69, 28),
+  (70, 69),
+  (71, 72),
+  (72, 28);
 
--- quest_reward (3 rows)
+-- quest_reward (15 rows)
 INSERT INTO quest_reward (quest_id, is_choice, ordinal, item_id, count) VALUES
   (28, FALSE, 0, 19, 3),
   (29, TRUE, 0, 18, 1),
-  (29, TRUE, 1, 16, 1);
+  (29, TRUE, 1, 16, 1),
+  (65, FALSE, 0, 54, 1),
+  (66, TRUE, 0, 54, 1),
+  (66, TRUE, 1, 18, 1),
+  (67, FALSE, 0, 56, 1),
+  (67, TRUE, 0, 53, 1),
+  (67, TRUE, 1, 54, 1),
+  (68, TRUE, 0, 54, 1),
+  (68, TRUE, 1, 16, 1),
+  (69, FALSE, 0, 19, 3),
+  (70, FALSE, 0, 19, 3),
+  (71, FALSE, 0, 53, 1),
+  (72, FALSE, 0, 19, 2);
 
--- loot_table (1 rows)
+-- loot_table (4 rows)
 INSERT INTO loot_table (id, money_min, money_max) VALUES
-  (21, 5, 20);
+  (21, 5, 20),
+  (57, 40, 120),
+  (58, 2, 9),
+  (59, 6, 22);
 
--- loot_group (1 rows)
+-- loot_group (4 rows)
 INSERT INTO loot_group (loot_table_id, ordinal, name, pick, chance_pct) VALUES
-  (21, 0, 'common_drops', 1, 40);
+  (21, 0, 'common_drops', 1, 40),
+  (57, 0, 'molten_hoard', 1, 60),
+  (58, 0, 'wisp_residue', 1, 25),
+  (59, 0, 'cultist_pockets', 1, 35);
 
--- loot_entry (4 rows)
+-- loot_entry (15 rows)
 INSERT INTO loot_entry (loot_table_id, entry_ordinal, group_ordinal, item_id, nested_table_id, chance_pct, weight, quantity_min, quantity_max, quest_ref_id) VALUES
   (21, 0, NULL, 17, NULL, 80, NULL, NULL, NULL, 29),
   (21, 1, NULL, 20, NULL, 3, NULL, NULL, NULL, NULL),
   (21, 2, 0, 19, NULL, NULL, 30, NULL, NULL, NULL),
-  (21, 3, 0, 18, NULL, NULL, 3, NULL, NULL, NULL);
+  (21, 3, 0, 18, NULL, NULL, 3, NULL, NULL, NULL),
+  (57, 0, NULL, 50, NULL, 100, NULL, NULL, NULL, 67),
+  (57, 1, 0, 53, NULL, NULL, 6, NULL, NULL, NULL),
+  (57, 2, 0, 54, NULL, NULL, 6, NULL, NULL, NULL),
+  (57, 3, 0, 19, NULL, NULL, 20, NULL, NULL, NULL),
+  (58, 0, NULL, 52, NULL, 75, NULL, NULL, NULL, 66),
+  (58, 1, 0, 19, NULL, NULL, 20, NULL, NULL, NULL),
+  (58, 2, 0, 52, NULL, NULL, 3, NULL, NULL, NULL),
+  (59, 0, NULL, 49, NULL, 70, NULL, NULL, NULL, 70),
+  (59, 1, NULL, 20, NULL, 2, NULL, NULL, NULL, NULL),
+  (59, 2, 0, 19, NULL, NULL, 25, NULL, NULL, NULL),
+  (59, 3, 0, 18, NULL, NULL, 4, NULL, NULL, NULL);
 
 -- vendor_inventory (1 rows)
 INSERT INTO vendor_inventory (id) VALUES
@@ -98,40 +177,58 @@ INSERT INTO vendor_inventory_buys (vendor_id, item_class) VALUES
   (36, 'trade_good'),
   (36, 'weapon');
 
--- spawn_point (5 rows)
+-- spawn_point (14 rows)
 INSERT INTO spawn_point (id, zone_ref_id, npc_id, pos_x, pos_y, pos_z, orientation_deg, respawn_min, respawn_max, wander_radius_m) VALUES
-  (1048575, 37, 27, 126, 8.5, -244, 200, 60, 60, NULL),
-  (1048576, 37, 26, -295, 21, 88, 0, 120, 180, 8),
-  (1048577, 37, 26, -318, 22.5, 104, 0, 120, 180, 8),
-  (1048578, 37, 26, -332, 23, 79, 45, 120, 180, NULL),
-  (1048579, 37, 25, -320, 22, 92, 0, 300, 420, NULL);
+  (1048575, 37, 62, -356, -18, 146, 90, 60, 60, NULL),
+  (1048576, 37, 61, -176, 63.5, 44, 0, 90, 150, 12),
+  (1048577, 37, 61, -192, 64, 30, 0, 90, 150, 12),
+  (1048578, 37, 61, -168, 64.5, 52, 0, 90, 150, 10),
+  (1048579, 37, 63, -348, -16, 138, 30, 150, 240, 6),
+  (1048580, 37, 63, -372, -17, 158, 210, 150, 240, 6),
+  (1048581, 37, 63, -366, -18.5, 132, 0, 150, 240, 6),
+  (1048582, 37, 60, -360, -18, 168, 180, 600, 900, NULL),
+  (1048583, 37, 27, 126, 8.5, -244, 200, 60, 60, NULL),
+  (1048584, 37, 64, 110, 8.5, -230, 315, 60, 60, NULL),
+  (1048585, 37, 26, -295, 21, 88, 0, 120, 180, 8),
+  (1048586, 37, 26, -318, 22.5, 104, 0, 120, 180, 8),
+  (1048587, 37, 26, -332, 23, 79, 45, 120, 180, NULL),
+  (1048588, 37, 25, -320, 22, 92, 0, 300, 420, NULL);
 
--- patrol_path (1 rows)
+-- patrol_path (2 rows)
 INSERT INTO patrol_path (spawn_point_id, `loop`) VALUES
-  (1048579, TRUE);
+  (1048582, TRUE),
+  (1048588, TRUE);
 
--- patrol_waypoint (4 rows)
+-- patrol_waypoint (7 rows)
 INSERT INTO patrol_waypoint (spawn_point_id, ordinal, pos_x, pos_y, pos_z, wait_seconds) VALUES
-  (1048579, 0, -320, 22, 92, 5),
-  (1048579, 1, -300, 21.2, 85, 0),
-  (1048579, 2, -308, 21.8, 110, 8),
-  (1048579, 3, -330, 23, 100, 0);
+  (1048582, 0, -360, -18, 168, 10),
+  (1048582, 1, -344, -17, 150, 0),
+  (1048582, 2, -376, -18.5, 140, 6),
+  (1048588, 0, -320, 22, 92, 5),
+  (1048588, 1, -300, 21.2, 85, 0),
+  (1048588, 2, -308, 21.8, 110, 8),
+  (1048588, 3, -330, 23, 100, 0);
 
 -- zone (1 rows)
 INSERT INTO zone (id, name, level_min, level_max, start_zone, music_explore_id, music_tension_id, music_combat_id, ambience_id) VALUES
   (37, 'Emberfall Hollow', 1, 10, TRUE, 23, 24, 22, 3);
 
--- area (2 rows)
+-- area (5 rows)
 INSERT INTO area (zone_id, poi, name, pos_x, pos_y, pos_z, discovery_radius_m, discovery_xp) VALUES
+  (37, 'ashvent_overlook', 'Ashvent Overlook', -180, 64, 40, 40, 130),
+  (37, 'charter_stone', 'Old Charter Stone', 96, 9, -212, 30, 90),
   (37, 'cinderdeep_mine', 'Cinderdeep Mine', -310, 22, 95, 45, 110),
-  (37, 'emberfall_village', 'Emberfall Village', 120, 8.5, -240, 60, 85);
+  (37, 'emberfall_village', 'Emberfall Village', 120, 8.5, -240, 60, 85),
+  (37, 'sunken_gallery', 'Sunken Gallery', -360, -18, 150, 35, 160);
 
 -- graveyard (1 rows)
 INSERT INTO graveyard (zone_id, ordinal, pos_x, pos_y, pos_z, orientation_deg) VALUES
   (37, 0, 140, 9, -255, 180);
 
--- gossip (1 rows)
+-- gossip (3 rows)
 INSERT INTO gossip (npc_id, `text`) VALUES
-  (27, 'Mind the mine roads, traveler — the kobolds have gotten bold since the foreman stopped coming back. If you''re headed that way, I''ll make it worth your while.');
+  (27, 'Mind the mine roads, traveler — the kobolds have gotten bold since the foreman stopped coming back. If you''re headed that way, I''ll make it worth your while.'),
+  (62, 'You''re the one Bren sent? Thank the deep — I''d about run out of lamp oil and nerve both. The firecallers took the lower galleries. Help me map what''s left and I''ll see the Hollow knows what''s brewing down here.'),
+  (64, 'The village looks to Bren for its stores and to me for its borders. The ridge is loud lately — wisps on the ashvents, stalkers on the low trail. Walk it with me a while, and I''ll teach you what the Hollow answers to.');
 
 SET FOREIGN_KEY_CHECKS = 1;
