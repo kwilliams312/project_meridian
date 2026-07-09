@@ -6,36 +6,74 @@ map:                         # append-only; local index (SAD §2.4)
   core:ability.minor_healing: 1
   core:ability.pickaxe_slam: 2
   core:amb.zone01.forest_day: 3
+  core:art.char.cindermaw: 38
+  core:art.char.ember_wisp: 39
+  core:art.char.human.female.warden: 40
+  core:art.char.human.male.foreman: 41
   core:art.char.human.male.quartermaster: 4
   core:art.char.kobold.digmaster: 5
   core:art.char.kobold.miner: 6
   core:art.env.zone01.kit.wall_stone_a: 7
+  core:art.icon.item.charred_totem: 42
+  core:art.icon.item.cinder_heart: 43
+  core:art.icon.item.ember_mote: 44
+  core:art.icon.item.emberforged_pick: 45
+  core:art.icon.item.hollow_charm: 46
   core:art.icon.item.kobold_ear: 8
   core:art.icon.item.lamp_charm: 9
+  core:art.icon.item.map_scrap: 47
   core:art.icon.item.pickaxe_rusty: 10
   core:art.icon.item.potion_red_small: 11
   core:art.icon.item.signet_bronze: 12
+  core:art.icon.item.warden_crest: 48
   core:art.item.weapon.pickaxe_rusty: 13
   core:art.vfx.heal.sparkle_small: 14
   core:art.vfx.impact.dust_small: 15
   core:item.brens_signet: 16
+  core:item.charred_totem: 49
+  core:item.cinder_heart: 50
+  core:item.deep_survey_scrap: 51
+  core:item.ember_mote: 52
+  core:item.emberforged_pick: 53
+  core:item.hollow_charm: 54
   core:item.kobold_ear: 17
   core:item.miners_lamp_charm: 18
   core:item.minor_healing_potion: 19
   core:item.rusty_pickaxe: 20
+  core:item.spare_lamp: 55
+  core:item.warden_crest: 56
+  core:loot.cindermaw: 57
+  core:loot.ember_wisp: 58
+  core:loot.kobold_firecaller: 59
   core:loot.kobold_miner: 21
   core:mus.zone01.combat: 22
   core:mus.zone01.explore: 23
   core:mus.zone01.tension: 24
+  core:npc.cindermaw: 60
+  core:npc.ember_wisp: 61
+  core:npc.foreman_dain: 62
   core:npc.kobold_digmaster: 25
+  core:npc.kobold_firecaller: 63
   core:npc.kobold_miner: 26
   core:npc.quartermaster_bren: 27
+  core:npc.warden_sela: 64
+  core:quest.charter_of_the_hollow: 65
   core:quest.culling_the_kobolds: 28
   core:quest.ears_for_evidence: 29
+  core:quest.emberblight: 66
+  core:quest.heart_of_the_cindermaw: 67
+  core:quest.silence_the_firecallers: 68
+  core:quest.sparks_in_the_dark: 69
+  core:quest.the_deep_tally: 70
+  core:quest.trail_of_the_digmasters: 71
+  core:quest.wardens_watch: 72
+  core:sfx.char.cindermaw: 73
+  core:sfx.char.ember_wisp: 74
   core:sfx.char.human_male: 30
   core:sfx.char.kobold: 31
   core:sfx.combat.impact.pickaxe: 32
   core:sfx.item.potion_drink: 33
+  core:spawn.zone01_cinderdeep_deep: 75
   core:spawn.zone01_emberfall_village: 34
   core:spawn.zone01_kobold_camp: 35
   core:vendor.bren_general_goods: 36

@@ -1,0 +1,10 @@
+schema: meridian/item@1
+id: core:item.cinder_heart
+name: Cinder Heart
+flavor_text: It beats once for every breath you hold. Bren will want to see this.
+item_class: quest
+rarity: uncommon
+binding: on_pickup
+stack_size: 1
+visual:
+  icon: core:art.icon.item.cinder_heart

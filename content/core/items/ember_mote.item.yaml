@@ -1,0 +1,10 @@
+schema: meridian/item@1
+id: core:item.ember_mote
+name: Ember Mote
+flavor_text: A fleck of the mountain's slow fire. It never quite goes cold.
+item_class: quest
+rarity: common
+binding: on_pickup
+stack_size: 20
+visual:
+  icon: core:art.icon.item.ember_mote

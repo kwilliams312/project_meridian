@@ -1,0 +1,10 @@
+schema: meridian/item@1
+id: core:item.charred_totem
+name: Charred Totem
+flavor_text: A firecaller's fetish, scorched black. It hums when the deep stirs.
+item_class: quest
+rarity: common
+binding: on_pickup
+stack_size: 20
+visual:
+  icon: core:art.icon.item.charred_totem

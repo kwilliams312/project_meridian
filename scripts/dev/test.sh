@@ -90,6 +90,11 @@ if [ "$WITH_DB" -eq 1 ]; then
   # worldd/account/db tests use the auth schema; point NAME at meridian_auth.
   db_export_env meridian_auth
 
+  # The IT-M1 chain-load test (worldd-itm1-chain-load) shells out to `mcc emit-sql`
+  # and creates its OWN throwaway world DB; point it at the freshly built mcc so it
+  # runs for real rather than SKIPping. Harmless for the other DB tests.
+  export MERIDIAN_MCC_BIN="${BUILD_ROOT}/mcc/mcc"
+
   log "ctest — server (DB-backed: authd-login, worldd-session, worldd-relay, meridian-db, account)"
   ctest --test-dir "${BUILD_ROOT}/server" --output-on-failure \
     || { warn "server ctest (DB-backed) had failures"; fail=1; }

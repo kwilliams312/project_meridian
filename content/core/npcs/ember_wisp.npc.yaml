@@ -1,0 +1,25 @@
+schema: meridian/npc@1
+id: core:npc.ember_wisp
+name: Ember Wisp
+subtitle: Ashvent Drift
+level: { min: 5, max: 6 }
+creature_type: elemental
+rank: normal
+faction: hostile
+stats:
+  health: 95
+  armor: 20
+  damage: { min: 8, max: 12 }
+  attack_speed_ms: 1800
+ai:
+  behavior: aggressive
+  aggro_radius_m: 14
+  leash_radius_m: 45
+  flee_at_health_pct: 0
+loot:
+  table: loot.ember_wisp
+  money: { min: 3, max: 14 }
+visual:
+  model: core:art.char.ember_wisp
+  scale: 0.9
+  sound_set: core:sfx.char.ember_wisp

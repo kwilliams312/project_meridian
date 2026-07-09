@@ -496,6 +496,34 @@ target_link_libraries(worldd-content-load-db-test
 set_target_properties(worldd-content-load-db-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-content-load-db COMMAND worldd-content-load-db-test)
 
+# --- IT-M1 10-quest CHAIN content consistency + load test (#394). ---------------
+# The content half of the epic-#20 exit criterion. Unlike worldd-content-load-db
+# (which self-seeds fixture rows), this test runs the REAL pipeline end to end: it
+# invokes `mcc emit-sql` on content/core, loads the real world DDL + the emitted DML
+# into a throwaway MariaDB, constructs the #390 DB stores over it, and asserts the
+# authored 10-quest chain is internally consistent — all 10 quests load, the
+# prerequisite graph is a valid DAG, every kill/collect/deliver target + explore POI
+# resolves, every reward + giver/turn-in NPC resolves, and the loot tables actually
+# drop the collect-objective items. TOOL- + ENV-GUARDED: needs a MariaDB
+# (MERIDIAN_WORLDDB_*/MERIDIAN_DB_*), a mariadb/mysql client, and an mcc binary;
+# SKIPS (exit 0) otherwise, so it is inert in the plain server ctest and runs for
+# real under test.sh --db / the DB CI job. Paths (content root, world DDL, default
+# mcc binary) are baked in as compile definitions; MERIDIAN_MCC_BIN overrides the
+# binary at runtime.
+add_executable(worldd-itm1-chain-load-test
+  test/itm1_chain_load_it.cpp
+)
+target_link_libraries(worldd-itm1-chain-load-test
+  PRIVATE
+    meridian::world-dispatch
+)
+target_compile_definitions(worldd-itm1-chain-load-test PRIVATE
+  ITM1_CONTENT_DIR="${CMAKE_SOURCE_DIR}/../content"
+  ITM1_WORLD_DDL_DIR="${CMAKE_SOURCE_DIR}/../schema/sql/world"
+  ITM1_MCC_BIN="${CMAKE_BINARY_DIR}/../mcc/mcc")
+set_target_properties(worldd-itm1-chain-load-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-itm1-chain-load COMMAND worldd-itm1-chain-load-test)
+
 # --- Combat tick + seeded GOLDEN sim-harness scenarios (CMB-01/02; #349). ------
 # The epic-#18 capstone. PURE (no DB, no socket): drives the MapTick orchestrator
 # (map_tick.{h,cpp}) — the single-threaded per-map tick in SAD §2.5 phase order —

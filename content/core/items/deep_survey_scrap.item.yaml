@@ -1,0 +1,10 @@
+schema: meridian/item@1
+id: core:item.deep_survey_scrap
+name: Deep Survey Scrap
+flavor_text: Foreman Dain's charcoal map of the sunken galleries, torn but legible.
+item_class: quest
+rarity: common
+binding: on_pickup
+stack_size: 5
+visual:
+  icon: core:art.icon.item.map_scrap

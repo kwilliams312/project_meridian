@@ -1,0 +1,13 @@
+# IF-8 sidecar (meridian/asset@1). Example-pack placeholder: the LFS source file
+# lands with the first art/audio drop (M0 pipeline proof); provenance is complete now.
+schema: meridian/asset@1
+id: core:sfx.char.ember_wisp
+class: sfx
+source: assets/audio/sfx/char_ember_wisp.wav
+license: CC-BY-4.0
+provenance:
+  source_tier: original
+  authors: [meridian-contributors]
+sfx:
+  category: npc.vocal
+  attenuation: medium

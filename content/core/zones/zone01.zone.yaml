@@ -21,6 +21,21 @@ pois:
     position: { x: -310.0, y: 22.0, z: 95.0 }
     discovery_radius_m: 45
     discovery_xp: 110
+  - id: ashvent_overlook
+    name: Ashvent Overlook
+    position: { x: -180.0, y: 64.0, z: 40.0 }
+    discovery_radius_m: 40
+    discovery_xp: 130
+  - id: sunken_gallery
+    name: Sunken Gallery
+    position: { x: -360.0, y: -18.0, z: 150.0 }
+    discovery_radius_m: 35
+    discovery_xp: 160
+  - id: charter_stone
+    name: Old Charter Stone
+    position: { x: 96.0, y: 9.0, z: -212.0 }
+    discovery_radius_m: 30
+    discovery_xp: 90
 graveyards:
   - position: { x: 140.0, y: 9.0, z: -255.0 }
     orientation_deg: 180

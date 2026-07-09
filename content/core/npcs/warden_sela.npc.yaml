@@ -1,0 +1,20 @@
+schema: meridian/npc@1
+id: core:npc.warden_sela
+name: Warden Sela
+subtitle: Emberfall Trailwarden
+level: { min: 10, max: 10 }
+creature_type: humanoid
+faction: friendly
+stats:
+  health: 900
+  armor: 240
+  damage: { min: 18, max: 26 }
+  attack_speed_ms: 1900
+interaction:
+  gossip_text: >-
+    The village looks to Bren for its stores and to me for its borders. The
+    ridge is loud lately — wisps on the ashvents, stalkers on the low trail.
+    Walk it with me a while, and I'll teach you what the Hollow answers to.
+visual:
+  model: core:art.char.human.female.warden
+  sound_set: core:sfx.char.human_male

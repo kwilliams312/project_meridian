@@ -1,0 +1,20 @@
+# The Cindermaw (elite) drops. The cinder heart is quest-gated to Heart of the
+# Cindermaw (Q10). An exclusive pick-group offers one of the two reward-grade drops.
+schema: meridian/loot@1
+id: core:loot.cindermaw
+money: { min: 40, max: 120 }
+entries:
+  - item: item.cinder_heart
+    chance_pct: 100
+    quest: quest.heart_of_the_cindermaw
+groups:
+  - name: molten_hoard
+    pick: 1
+    chance_pct: 60
+    entries:
+      - item: item.emberforged_pick
+        weight: 6
+      - item: item.hollow_charm
+        weight: 6
+      - item: item.minor_healing_potion
+        weight: 20

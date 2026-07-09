@@ -1,0 +1,19 @@
+# Kobold Firecaller drops. The charred totem is quest-gated to The Deep Tally (Q7).
+schema: meridian/loot@1
+id: core:loot.kobold_firecaller
+money: { min: 6, max: 22 }
+entries:
+  - item: item.charred_totem
+    chance_pct: 70
+    quest: quest.the_deep_tally
+  - item: item.rusty_pickaxe
+    chance_pct: 2
+groups:
+  - name: cultist_pockets
+    pick: 1
+    chance_pct: 35
+    entries:
+      - item: item.minor_healing_potion
+        weight: 25
+      - item: item.miners_lamp_charm
+        weight: 4

@@ -1,0 +1,30 @@
+# Collect quest. Charred totems are quest-gated in loot.kobold_firecaller (ITM-02).
+schema: meridian/quest@1
+id: core:quest.the_deep_tally
+name: The Deep Tally
+summary: Recover 5 Charred Totems from the firecallers in the lower galleries.
+offer_text: >-
+  The firecallers plant those scorched totems at every gallery mouth — wards,
+  or worse. I want five of them in my hands so I can count how far they've dug.
+  Every totem you pull is a room we take back.
+completion_text: >-
+  Five. So they hold the third gallery and half the fourth. That's the tally I
+  feared. Bless you for the count, even if the number's grim.
+level: 7
+required_level: 5
+zone: zone.zone01
+giver: npc.foreman_dain
+prerequisites:
+  quests:
+    - quest.sparks_in_the_dark
+objectives:
+  - type: collect
+    item: item.charred_totem
+    count: 5
+rewards:
+  xp: 620
+  money: 550
+  items:
+    - item: item.minor_healing_potion
+      count: 3
+script: null

@@ -1,0 +1,50 @@
+# Cinderdeep deep galleries + ashvent shelf — the escalation content for the
+# IT-M1 chain. Foreman Dain (rescued survivor / deep quest giver) must spawn
+# somewhere (lint L035); the firecallers and the Cindermaw hold the sunken
+# gallery, and ember wisps drift off the ashvent overlook.
+schema: meridian/spawn@1
+id: core:spawn.zone01_cinderdeep_deep
+zone: zone.zone01
+spawns:
+  - npc: npc.foreman_dain
+    position: { x: -356.0, y: -18.0, z: 146.0 }
+    orientation_deg: 90
+    respawn_seconds: { min: 60, max: 60 }
+  - npc: npc.ember_wisp
+    position: { x: -176.0, y: 63.5, z: 44.0 }
+    respawn_seconds: { min: 90, max: 150 }
+    wander_radius_m: 12
+  - npc: npc.ember_wisp
+    position: { x: -192.0, y: 64.0, z: 30.0 }
+    respawn_seconds: { min: 90, max: 150 }
+    wander_radius_m: 12
+  - npc: npc.ember_wisp
+    position: { x: -168.0, y: 64.5, z: 52.0 }
+    respawn_seconds: { min: 90, max: 150 }
+    wander_radius_m: 10
+  - npc: npc.kobold_firecaller
+    position: { x: -348.0, y: -16.0, z: 138.0 }
+    orientation_deg: 30
+    respawn_seconds: { min: 150, max: 240 }
+    wander_radius_m: 6
+  - npc: npc.kobold_firecaller
+    position: { x: -372.0, y: -17.0, z: 158.0 }
+    orientation_deg: 210
+    respawn_seconds: { min: 150, max: 240 }
+    wander_radius_m: 6
+  - npc: npc.kobold_firecaller
+    position: { x: -366.0, y: -18.5, z: 132.0 }
+    respawn_seconds: { min: 150, max: 240 }
+    wander_radius_m: 6
+  - npc: npc.cindermaw
+    position: { x: -360.0, y: -18.0, z: 168.0 }
+    orientation_deg: 180
+    respawn_seconds: { min: 600, max: 900 }
+    patrol:
+      loop: true
+      waypoints:
+        - position: { x: -360.0, y: -18.0, z: 168.0 }
+          wait_seconds: 10
+        - position: { x: -344.0, y: -17.0, z: 150.0 }
+        - position: { x: -376.0, y: -18.5, z: 140.0 }
+          wait_seconds: 6
