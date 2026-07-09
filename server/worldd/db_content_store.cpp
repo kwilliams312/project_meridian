@@ -55,6 +55,18 @@ std::uint16_t as_u16(const db::Cell& c, std::uint16_t dflt = 0) {
 
 std::string as_str(const db::Cell& c) { return c.has_value() ? *c : std::string(); }
 
+// A FLOAT/DOUBLE column, parsed from its text cell. NULL / non-numeric -> default.
+// The meridian::db result layer round-trips FLOAT result columns as text since the
+// #393 fix (#413), so area pos_x/y/z + discovery_radius_m read directly here.
+float as_f32(const db::Cell& c, float dflt = 0.0f) {
+    if (!c.has_value()) return dflt;
+    try {
+        return std::stof(*c);
+    } catch (...) {
+        return dflt;
+    }
+}
+
 // An optional copper amount: NULL -> nullopt (schema "omit = unsellable / not sold").
 std::optional<itm::Copper> as_opt_copper(const db::Cell& c) {
     if (!c.has_value()) return std::nullopt;
@@ -512,6 +524,45 @@ std::vector<std::uint32_t> DbVendorCatalog::ids() const {
 }
 
 // =============================================================================
+// load_area_trigger_volumes  (area / POI rows -> discovery TriggerVolumes)
+// =============================================================================
+std::vector<TriggerVolume> load_area_trigger_volumes(db::Connection& world_db) {
+    // One discovery volume per authored POI. ORDER BY (zone_id, poi) gives a
+    // deterministic id assignment + event order (the `area` PK has no numeric id, so
+    // ids are synthesized 1..N in this order). pos_* + discovery_radius_m are FLOAT
+    // (readable directly since #413) — the box is the POI centre inflated by the
+    // discovery radius on (x, y); z spans full range (the M1 flat map is a single
+    // plane, matching placeholder_area_triggers()).
+    db::Result areas = world_db.execute(
+        "SELECT zone_id, poi, pos_x, pos_y, pos_z, discovery_radius_m "
+        "FROM area ORDER BY zone_id, poi");
+
+    std::vector<TriggerVolume> volumes;
+    volumes.reserve(areas.rows.size());
+    TriggerId next_id = 1;
+    for (const db::Row& r : areas.rows) {
+        TriggerVolume v;
+        v.id = next_id++;
+        v.kind = TriggerKind::kDiscovery;   // POI discovery (POI_DISCOVERED + explore credit)
+        v.area_id = as_u32(r[0]);           // zone_id — the explore-objective join key
+        v.name_id = 0;                      // `area.name` is text; no idmap numeric id here
+        v.poi = as_str(r[1]);               // authored zone-local POI id (the join key)
+        const float cx = as_f32(r[2]);
+        const float cy = as_f32(r[3]);
+        (void)as_f32(r[4]);                 // pos_z: ignored — z spans full range (flat map)
+        const float radius = as_f32(r[5], 40.0f);  // schema default 40 m
+        v.min_x = cx - radius;
+        v.max_x = cx + radius;
+        v.min_y = cy - radius;
+        v.max_y = cy + radius;
+        // min_z / max_z keep their full-range defaults (TriggerVolume) — the flat map
+        // ignores z, so a POI's pos_z does not gate membership at M1.
+        volumes.push_back(std::move(v));
+    }
+    return volumes;
+}
+
+// =============================================================================
 // load_world_content
 // =============================================================================
 WorldContent load_world_content(db::Connection& world_db) {
@@ -521,6 +572,7 @@ WorldContent load_world_content(db::Connection& world_db) {
     content.quests = std::make_unique<DbQuestStore>(world_db);
     content.npcs = std::make_unique<DbNpcStore>(world_db);
     content.loot = std::make_unique<DbLootTableStore>(world_db);
+    content.area_triggers = load_area_trigger_volumes(world_db);
     return content;
 }
 

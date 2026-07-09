@@ -81,6 +81,7 @@ void create_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS vendor_inventory_item",
         "DROP TABLE IF EXISTS vendor_inventory",
         "DROP TABLE IF EXISTS npc_template",
+        "DROP TABLE IF EXISTS area",
     };
     for (const char* d : drops) c.execute(d);
 
@@ -154,6 +155,13 @@ void create_tables(db::Connection& c) {
         "  loot_table_ref_id INT UNSIGNED NULL, loot_money_min BIGINT UNSIGNED NULL,"
         "  loot_money_max BIGINT UNSIGNED NULL, PRIMARY KEY (id)"
         ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // area — POI rows the #398 area-trigger volume loader reads (pos + radius FLOATs).
+    c.execute(
+        "CREATE TABLE area ("
+        "  zone_id INT UNSIGNED NOT NULL, poi VARCHAR(64) NOT NULL, name VARCHAR(80) NOT NULL,"
+        "  pos_x FLOAT NOT NULL, pos_y FLOAT NOT NULL, pos_z FLOAT NOT NULL,"
+        "  discovery_radius_m FLOAT NOT NULL DEFAULT 40, discovery_xp INT UNSIGNED NOT NULL DEFAULT 0,"
+        "  PRIMARY KEY (zone_id, poi)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 }
 
 void drop_tables(db::Connection& c) {
@@ -164,6 +172,7 @@ void drop_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS loot_entry",      "DROP TABLE IF EXISTS loot_group",
         "DROP TABLE IF EXISTS loot_table",      "DROP TABLE IF EXISTS vendor_inventory_item",
         "DROP TABLE IF EXISTS vendor_inventory", "DROP TABLE IF EXISTS npc_template",
+        "DROP TABLE IF EXISTS area",
     };
     for (const char* d : drops) c.execute(d);
 }
@@ -231,6 +240,15 @@ void seed_fixture(db::Connection& c) {
         "INSERT INTO loot_entry (loot_table_id, entry_ordinal, group_ordinal, item_id, nested_table_id, "
         "chance_pct, weight, quantity_min, quantity_max, quest_ref_id) "
         "VALUES (5, 2, 0, 2, NULL, NULL, 1, NULL, NULL, NULL)");
+
+    // Two POI rows (zone 20): 'ridge_overlook' (radius 40) + 'old_well' (radius 25).
+    // The #398 loader turns each into a discovery TriggerVolume carrying (zone_id, poi).
+    c.execute(
+        "INSERT INTO area (zone_id, poi, name, pos_x, pos_y, pos_z, discovery_radius_m, "
+        "discovery_xp) VALUES (20, 'ridge_overlook', 'Ridge Overlook', 100, 200, 5, 40, 120)");
+    c.execute(
+        "INSERT INTO area (zone_id, poi, name, pos_x, pos_y, pos_z, discovery_radius_m, "
+        "discovery_xp) VALUES (20, 'old_well', 'The Old Well', -50, -80, 0, 25, 60)");
 
     // Vendor 10: item1 (no override -> template buy 150), item3 (override 500).
     c.execute("INSERT INTO vendor_inventory (id) VALUES (10)");
@@ -422,6 +440,36 @@ int main() {
                 }
             }
             check("unknown vendor -> nullptr", content.vendor->listings(99999) == nullptr);
+        }
+
+        // ---- area-trigger POI volumes (#398) -----------------------------------
+        {
+            check("two POI discovery volumes loaded from area rows",
+                  content.area_triggers.size() == 2);
+            // Locate each authored POI volume by its (zone_id, poi) join key.
+            const worldd::TriggerVolume* ridge = nullptr;
+            const worldd::TriggerVolume* well = nullptr;
+            for (const auto& v : content.area_triggers) {
+                if (v.area_id == 20 && v.poi == "ridge_overlook") ridge = &v;
+                if (v.area_id == 20 && v.poi == "old_well") well = &v;
+            }
+            check("ridge_overlook volume: zone 20, discovery kind",
+                  ridge && ridge->kind == worldd::TriggerKind::kDiscovery);
+            check("old_well volume: zone 20, discovery kind",
+                  well && well->kind == worldd::TriggerKind::kDiscovery);
+            if (ridge) {
+                // Box is the POI centre (100,200) inflated by radius 40 on (x,y).
+                check("ridge_overlook box centred on pos +/- discovery_radius",
+                      ridge->min_x == 60.0f && ridge->max_x == 140.0f &&
+                          ridge->min_y == 160.0f && ridge->max_y == 240.0f);
+                worldd::Position centre;
+                centre.x = 100.0f; centre.y = 200.0f; centre.z = 0.0f;
+                check("player at the POI centre is inside the volume", ridge->contains(centre));
+            }
+            if (well) {
+                check("old_well box uses its own 25 m radius",
+                      well->min_x == -75.0f && well->max_x == -25.0f);
+            }
         }
 
         drop_tables(conn);

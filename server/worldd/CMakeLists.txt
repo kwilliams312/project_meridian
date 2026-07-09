@@ -545,6 +545,30 @@ target_compile_definitions(worldd-itm1-chain-load-test PRIVATE
 set_target_properties(worldd-itm1-chain-load-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-itm1-chain-load COMMAND worldd-itm1-chain-load-test)
 
+# --- DB-loaded area-trigger POI -> explore crediting test (#398). ---------------
+# Proves the last content-load link: the world-DB `area` (POI) rows load (via
+# load_world_content) into discovery TriggerVolumes carrying the real `poi`, and a
+# player crossing a DB-loaded volume credits the matching AUTHORED explore objective
+# (on_explore(zone_id, poi)) — NOT a synthetic placeholder volume. Runs the real
+# pipeline like worldd-itm1-chain-load: mcc emit-sql content/core -> throwaway MariaDB
+# (world DDL + emitted DML) -> load_world_content -> drive AreaTriggerSet + QuestLog.
+# Same TOOL-/ENV-guards (MERIDIAN_WORLDDB_*/MERIDIAN_DB_* + a mariadb/mysql client + an
+# mcc binary); SKIPS (exit 0) otherwise — inert in the plain server ctest, real under
+# test.sh --db / the DB CI job.
+add_executable(worldd-explore-trigger-db-test
+  test/explore_trigger_db_it.cpp
+)
+target_link_libraries(worldd-explore-trigger-db-test
+  PRIVATE
+    meridian::world-dispatch
+)
+target_compile_definitions(worldd-explore-trigger-db-test PRIVATE
+  ITM1_CONTENT_DIR="${CMAKE_SOURCE_DIR}/../content"
+  ITM1_WORLD_DDL_DIR="${CMAKE_SOURCE_DIR}/../schema/sql/world"
+  ITM1_MCC_BIN="${CMAKE_BINARY_DIR}/../mcc/mcc")
+set_target_properties(worldd-explore-trigger-db-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-explore-trigger-db COMMAND worldd-explore-trigger-db-test)
+
 # --- IT-M1 10-quest CHAIN server-side HARNESS (#399; epic #20 EXIT CRITERION). --
 # The capstone. Boots the DB-loaded IT-M1 content (mcc emit-sql content/core -> a
 # throwaway MariaDB it owns, carrying world DDL + auth + characters schemas), stands
