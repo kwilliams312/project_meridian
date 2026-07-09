@@ -63,4 +63,18 @@ CreateResult create_account(db::Connection& conn, const CreateRequest& req,
     }
 }
 
+bool set_gm_level(db::Connection& conn, const std::string& username,
+                  std::uint8_t gm_level) {
+    if (username.empty()) {
+        throw std::invalid_argument("username must not be empty");
+    }
+    // Parameterized UPDATE — username + level bind through placeholders, never
+    // concatenated (meridian-db safety rule). affected_rows==1 => the account
+    // existed and was updated; 0 => no such username.
+    db::Result r = conn.execute(
+        "UPDATE account SET gm_level = ? WHERE username = ?",
+        {db::Param{static_cast<std::int64_t>(gm_level)}, db::Param{username}});
+    return r.affected_rows == 1;
+}
+
 }  // namespace meridian::account

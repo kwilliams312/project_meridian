@@ -29,6 +29,7 @@ const char* action_name(Action action) {
         case Action::kSessionEnter:  return "session_enter";
         case Action::kSessionLeave:  return "session_leave";
         case Action::kMovementRejected: return "movement_rejected";
+        case Action::kGmCommand:        return "gm_command";
     }
     return "unknown";
 }

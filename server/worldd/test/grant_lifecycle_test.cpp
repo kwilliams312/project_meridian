@@ -114,10 +114,17 @@ int main() {
 
         // --- Seed an account + two realms (session_grant FKs both). -----------
         const std::string username = "grantlc_it_" + std::to_string(std::rand());
+        // Seed a GM account (gm_level=2) so the consume's account JOIN has a
+        // NON-default level to carry — proving a session learns its GM level from
+        // the grant/account join at handshake, not merely that the column exists
+        // (OPS-02a #417).
+        const std::uint8_t seeded_gm_level = 2;  // D-16: 2 = GM
         db.execute("DELETE FROM account WHERE username = ?", {db::Param{username}});
         db.execute(
-            "INSERT INTO account (username, srp_salt, srp_verifier) VALUES (?, ?, ?)",
-            {db::Param{username}, blob(Bytes(32, 0x11)), blob(Bytes(32, 0x22))});
+            "INSERT INTO account (username, srp_salt, srp_verifier, gm_level) "
+            "VALUES (?, ?, ?, ?)",
+            {db::Param{username}, blob(Bytes(32, 0x11)), blob(Bytes(32, 0x22)),
+             db::Param{static_cast<std::int64_t>(seeded_gm_level)}});
         db::Result ar = db.execute("SELECT id FROM account WHERE username = ?",
                                    {db::Param{username}});
         account_id = cell_u64(ar.rows.at(0)[0]);
@@ -166,6 +173,9 @@ int main() {
                 check("CREATE: realm_id matches", g->realm_id == realm_id);
                 check("CREATE: session_key is 32 bytes", g->session_key.size() == 32);
                 check("CREATE: session_key round-trips", g->session_key == session_key);
+                // The session learns its GM level from the account JOIN (#417).
+                check("CREATE: gm_level carried from the account (D-16 GM=2)",
+                      g->gm_level == seeded_gm_level);
             }
             check("CREATE: grant now marked consumed", grant_consumed(db, g_ok));
         }

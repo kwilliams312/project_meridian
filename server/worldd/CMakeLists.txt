@@ -25,6 +25,7 @@ add_library(world-dispatch STATIC
   world_boot.cpp
   movement_validation.cpp
   movement_audit.cpp
+  gm_command.cpp
   aoi_grid.cpp
   area_triggers.cpp
   combat_unit.cpp
@@ -220,6 +221,24 @@ target_link_libraries(worldd-chat-test
 )
 set_target_properties(worldd-chat-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-chat COMMAND worldd-chat-test)
+
+# --- GM COMMAND FRAMEWORK UNIT test (OPS-02a; #417). --------------------------
+# PURE (no DB, no socket, no session): drives the gm_command framework directly
+# with CAPTURING reply + audit sinks (both std::function seams), so it asserts the
+# exact parse / permission-gate / audit / execute path the live chat handler runs
+# without standing up a TLS session. Proves the story's acceptance: `.help` from a
+# GM-level session lists the available commands + audits a SUCCESS; from a player
+# session it is DENIED + a GM-audit failure is emitted; an unknown command is
+# rejected + audited. Always runs in the plain server ctest (no MERIDIAN_DB_*).
+add_executable(worldd-gm-command-test
+  test/gm_command_test.cpp
+)
+target_link_libraries(worldd-gm-command-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-gm-command-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-gm-command COMMAND worldd-gm-command-test)
 
 # --- Combat ability/effect data model + store UNIT test (CMB-01 foundation; #343).
 # PURE (no DB, no socket, no session): drives the AbilityStore load + O(1) lookup

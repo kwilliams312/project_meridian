@@ -21,6 +21,7 @@
 
 #include "characters.h"  // meridian-characters CRUD: list/create/delete (#286 / D-35)
 #include "currency.h"    // ECO-01 int64 copper: add_money / get_money (quest + trainer)
+#include "gm_command.h"  // OPS-02a GM command framework: registry + parse + gate + audit (#417)
 #include "gossip.h"      // NPC-01 gossip menu planner (#372)
 #include "item_store.h"  // ITM-01 durable item persistence: mint/place (loot + quest reward)
 #include "map_tick.h"    // per-map tick orchestrator (SAD §2.5 phase order; #349)
@@ -1133,6 +1134,10 @@ void Dispatcher::register_m0_stubs() {
            // is NEVER logged — only the account + grant id + realm target.
            ctx.account_id = consumed->account_id;
            ctx.grant_id = grant_id;
+           // The session learns its GM level here (OPS-02a, #417) — the grant
+           // consume's JOIN to account carried account.gm_level. Authoritative
+           // for the whole session; the chat-path GM command gate reads it.
+           ctx.gm_level = consumed->gm_level;
            audit::emit(audit::Record{
                .action = audit::Action::kGrantConsumed,
                .outcome = audit::Outcome::kSuccess,
@@ -1860,6 +1865,46 @@ void Dispatcher::register_m0_stubs() {
                      encode_frame(net::Opcode::CHAT_REJECTED, f.seq,
                                   encode_chat_rejected(channel, reason, target)));
         };
+
+        // GM COMMAND interception (OPS-02a, #417). A chat line beginning with the
+        // GM command prefix ('.') is a GM COMMAND, not a chat message — handled
+        // here BEFORE the normal say/yell/whisper/zone routing so it never reaches
+        // the chat switch. Commands ride the EXISTING CHAT_MESSAGE opcode (no new
+        // wire opcode, no world.fbs change); the server parses + permission-gates
+        // on the session's gm_level (learnt at WORLD_HELLO) and records EVERY
+        // attempt — allowed AND denied — on the append-only GM audit stream. A GM
+        // command is legal at character-select too (a GM need not be spawned), so
+        // this precedes the in-world requirement below.
+        if (gm::is_command(text)) {
+            // Rate-gate like any chat line (commands ride the chat opcode): an
+            // over-rate command is dropped with the shared drop counter — no
+            // parse, no dispatch, no audit.
+            if (!ctx.chat_intake.admit(steady_now_ms())) {
+                metrics::opcode_dropped_total()
+                    .with(ctx.labels.rzs_opcode_reason(
+                        opcode_label(static_cast<std::uint16_t>(net::Opcode::CHAT_MESSAGE)),
+                        "rate_limit"))
+                    .inc();
+                reject(mn::ChatRejectReason::RATE_LIMITED);
+                return;
+            }
+            gm::dispatch_command(
+                gm::Registry::builtin(), text, ctx.account_id, ctx.gm_level,
+                // Reply sink: a server SYSTEM line back to the SENDER only. Rides
+                // the existing CHAT_DELIVER opcode (no new wire opcode) with a 0
+                // sender_guid + "System" sender_name so the client renders it as a
+                // system message.
+                [&](const std::string& line) {
+                    send_s2c(sess, ctx,
+                             encode_frame(net::Opcode::CHAT_DELIVER, f.seq,
+                                          encode_chat_deliver_payload(
+                                              mn::ChatChannel::WHISPER,
+                                              /*sender_guid=*/0, "System", line)));
+                },
+                // Audit sink: the append-only GM audit stream (OPS-05 #92).
+                [](const audit::Record& rec) { audit::emit(rec); });
+            return;
+        }
 
         // Must be SPAWNED in-world (char-select chat is a client bug, not hostile —
         // REJECT, do not disconnect; mirrors the CAST_REQUEST not-in-world path).

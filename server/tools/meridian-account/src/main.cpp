@@ -46,17 +46,25 @@ constexpr int kUsage = 1;
 constexpr int kDbError = 2;
 constexpr int kDuplicate = 3;
 constexpr int kPasswordError = 4;
+constexpr int kNotFound = 5;  // set-gm-level: no account with that username
 
 const char* env(const char* k) { return std::getenv(k); }
 
 void usage(std::FILE* out) {
     std::fprintf(out,
-        "meridian-account — Project Meridian account-creation CLI (ACC-03)\n"
+        "meridian-account — Project Meridian account CLI (ACC-03 / OPS-02a)\n"
         "\n"
         "Usage:\n"
         "  meridian-account create --username U [--password P] [--gm-level N] [--email E]\n"
         "                          [--db-host H] [--db-port P] [--db-user U]\n"
         "                          [--db-pass P] [--db-name N] [--db-socket S]\n"
+        "  meridian-account set-gm-level --username U --gm-level N\n"
+        "                          [--db-host H] [--db-port P] [--db-user U]\n"
+        "                          [--db-pass P] [--db-name N] [--db-socket S]\n"
+        "\n"
+        "  create      : register a new account (SRP6a verifier).\n"
+        "  set-gm-level: change an existing account's GM level (D-16 ladder:\n"
+        "                0 player < 1 helper < 2 GM < 3 admin).\n"
         "\n"
         "  If --password is omitted it is read from stdin (no echo on a TTY).\n"
         "\n"
@@ -219,6 +227,80 @@ int cmd_create(int argc, char** argv) {
     }
 }
 
+// set-gm-level --username U --gm-level N : grant/revoke GM rights on an existing
+// account (OPS-02a #417). Keyed by the unique username; N is the D-16 raw level.
+int cmd_set_gm_level(int argc, char** argv) {
+    std::optional<std::string> username;
+    std::optional<long> gm_level;
+    DbFlags db;
+
+    for (int i = 0; i < argc; ++i) {
+        std::string a = argv[i];
+        auto need = [&](std::optional<std::string>& dst) -> bool {
+            const char* v = take_value(argc, argv, i);
+            if (!v) { std::fprintf(stderr, "error: %s requires a value\n", a.c_str()); return false; }
+            dst = v; return true;
+        };
+        if (a == "--username") { if (!need(username)) return kUsage; }
+        else if (a == "--gm-level") {
+            const char* v = take_value(argc, argv, i);
+            if (!v) { std::fprintf(stderr, "error: --gm-level requires a value\n"); return kUsage; }
+            char* end = nullptr;
+            long lvl = std::strtol(v, &end, 10);
+            if (*end != '\0' || lvl < 0 || lvl > 255) {
+                std::fprintf(stderr, "error: --gm-level must be 0..255\n");
+                return kUsage;
+            }
+            gm_level = lvl;
+        }
+        else if (a == "--db-host") { if (!need(db.host)) return kUsage; }
+        else if (a == "--db-port") {
+            const char* v = take_value(argc, argv, i);
+            if (!v) { std::fprintf(stderr, "error: --db-port requires a value\n"); return kUsage; }
+            db.port = static_cast<unsigned>(std::atoi(v));
+        }
+        else if (a == "--db-user") { if (!need(db.user)) return kUsage; }
+        else if (a == "--db-pass") { if (!need(db.pass)) return kUsage; }
+        else if (a == "--db-name") { if (!need(db.name)) return kUsage; }
+        else if (a == "--db-socket") { if (!need(db.socket)) return kUsage; }
+        else { std::fprintf(stderr, "error: unknown option '%s'\n", a.c_str()); return kUsage; }
+    }
+
+    if (!username || username->empty()) {
+        std::fprintf(stderr, "error: --username is required\n");
+        return kUsage;
+    }
+    if (!gm_level) {
+        std::fprintf(stderr, "error: --gm-level is required\n");
+        return kUsage;
+    }
+
+    meridian::db::ConnectParams cp = build_conn_params(db);
+    if (cp.user.empty()) {
+        std::fprintf(stderr,
+            "error: no DB user configured (set --db-user or MERIDIAN_DB_USER)\n");
+        return kUsage;
+    }
+
+    try {
+        meridian::db::Connection conn(cp);
+        bool updated = meridian::account::set_gm_level(
+            conn, *username, static_cast<std::uint8_t>(*gm_level));
+        if (!updated) {
+            std::fprintf(stderr, "error: no account named '%s'\n", username->c_str());
+            return kNotFound;
+        }
+        std::printf("set account '%s' gm_level=%ld\n", username->c_str(), *gm_level);
+        return kOk;
+    } catch (const meridian::db::DbError& e) {
+        std::fprintf(stderr, "error: database error (%u): %s\n", e.code(), e.what());
+        return kDbError;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "error: %s\n", e.what());
+        return kDbError;
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -227,6 +309,7 @@ int main(int argc, char** argv) {
     std::string sub = argv[1];
     if (sub == "-h" || sub == "--help" || sub == "help") { usage(stdout); return kOk; }
     if (sub == "create") return cmd_create(argc - 2, argv + 2);
+    if (sub == "set-gm-level") return cmd_set_gm_level(argc - 2, argv + 2);
 
     std::fprintf(stderr, "error: unknown subcommand '%s'\n\n", sub.c_str());
     usage(stderr);

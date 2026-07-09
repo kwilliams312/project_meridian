@@ -263,10 +263,16 @@ std::optional<GrantConsumed> validate_and_consume_grant(
             return std::nullopt;
         }
 
-        // Won the row: fetch the bound {account, realm, session_key}.
+        // Won the row: fetch the bound {account, realm, session_key} plus the
+        // account's GM level (account.gm_level) via a JOIN — the session learns
+        // its GM permission level here, at the handshake, from the same read
+        // (OPS-02a, #417). The FK guarantees the account row exists (the grant
+        // could not have been written without it), so the JOIN never drops the
+        // row. Parameterized — grant_id binds as a decimal string (full u64).
         db::Result sel = db.execute(
-            "SELECT account_id, realm_id, session_key FROM session_grant "
-            "WHERE grant_id = ?",
+            "SELECT g.account_id, g.realm_id, g.session_key, a.gm_level "
+            "FROM session_grant g JOIN account a ON a.id = g.account_id "
+            "WHERE g.grant_id = ?",
             {db::Param{grant_str}});
         if (sel.rows.size() != 1) {
             // Extremely unlikely (we just UPDATEd it) — treat as a DB error.
@@ -278,6 +284,7 @@ std::optional<GrantConsumed> validate_and_consume_grant(
         g.account_id = cell_u64(r[0]);
         g.realm_id = static_cast<std::uint32_t>(cell_u64(r[1]));
         if (r[2].has_value()) g.session_key.assign(r[2]->begin(), r[2]->end());
+        g.gm_level = static_cast<std::uint8_t>(cell_u64(r[3]));
 
         // Realm binding (SAD §5.3). The grant is already consumed at this point;
         // a wrong-realm grant is still a reject (this worldd is not its realm),

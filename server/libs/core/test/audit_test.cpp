@@ -374,6 +374,7 @@ int test_vocab() {
     CHECK(std::string(audit::action_name(audit::Action::kSessionEnter)) == "session_enter");
     CHECK(std::string(audit::action_name(audit::Action::kSessionLeave)) == "session_leave");
     CHECK(std::string(audit::action_name(audit::Action::kMovementRejected)) == "movement_rejected");
+    CHECK(std::string(audit::action_name(audit::Action::kGmCommand)) == "gm_command");
     CHECK(std::string(audit::outcome_name(audit::Outcome::kSuccess)) == "success");
     CHECK(std::string(audit::outcome_name(audit::Outcome::kFailure)) == "failure");
     CHECK(audit::level_for(audit::Outcome::kSuccess) == mlog::Level::Info);

@@ -93,6 +93,12 @@ enum class Action {
     kMovementRejected, // worldd: an OPS-03 movement-validation violation (anti-cheat,
                        //         #420) — snap-back correction + audit flag. `reason`
                        //         is the reject kind (speed/teleport/bounds/flag/...).
+    kGmCommand,        // worldd: a GM command attempt (OPS-02a, #417) — ALLOWED or
+                       //         DENIED. `target` is the command, `reason` the denial
+                       //         classification (insufficient_level/unknown_command),
+                       //         and `extra` carries the actor's gm_level + args. Both
+                       //         outcomes are recorded on the append-only GM audit
+                       //         stream (PRD §6).
 };
 
 // The stable JSON `action` string for an Action (e.g. "login_failure"). This is

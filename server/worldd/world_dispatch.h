@@ -294,6 +294,14 @@ struct ConnCtx {
     std::uint64_t account_id = 0;
     std::uint64_t grant_id = 0;
 
+    // GM permission level for this session's account (OPS-02a, #417). Captured on
+    // a valid WORLD_HELLO from the grant-consume JOIN to account.gm_level (D-16
+    // ladder: 0 player < 1 helper < 2 GM < 3 admin), so it is authoritative for
+    // the whole session — the GM command framework (gm_command.h) gates every
+    // `.`-command at the chat path on this value. 0 (player) until authenticated;
+    // a plain player never clears any command's threshold.
+    std::uint8_t gm_level = 0;
+
     // Single active session per account (#326). `active_sessions` is the shared,
     // account-keyed registry (set by serve_connection; null in the DB-less
     // dispatch smoke test, where no account ever authenticates). On a valid

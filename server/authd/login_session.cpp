@@ -385,17 +385,19 @@ LoginResult run_login(net::Session& sess, db::Connection& db,
     // Parameterized — the username binds through a prepared-statement parameter,
     // never concatenated (backend standards; meridian-db contract).
     db::Result acct = db.execute(
-        "SELECT id, srp_salt, srp_verifier FROM account WHERE username = ?",
+        "SELECT id, srp_salt, srp_verifier, gm_level FROM account WHERE username = ?",
         {db::Param{username}});
 
     Bytes salt, verifier;
     std::uint64_t account_id = 0;
+    std::uint8_t gm_level = 0;  // account's GM tier (D-16; #417) — exposed via result
     bool known_user = (acct.rows.size() == 1);
     if (known_user) {
         const db::Row& r = acct.rows[0];
         account_id = cell_u64(r[0]);
         if (r[1].has_value()) salt.assign(r[1]->begin(), r[1]->end());
         if (r[2].has_value()) verifier.assign(r[2]->begin(), r[2]->end());
+        gm_level = static_cast<std::uint8_t>(cell_u64(r[3]));
     } else {
         // Anti-enumeration: fabricate a stable fake salt + a throwaway verifier
         // so an unknown user is indistinguishable from a wrong password. We
@@ -415,6 +417,7 @@ LoginResult run_login(net::Session& sess, db::Connection& db,
         verifier = v.verifier;
     }
     result.account_id = account_id;
+    result.gm_level = gm_level;  // 0 for an unknown user (anti-enumeration path)
 
     srp::ServerSession srp(username, salt, verifier, cfg.srp_params);
     sess.write_frame(encode_srp_challenge(salt, srp.B()));
