@@ -1,0 +1,8 @@
+// Zone-01 TENSION stem — adaptive layer L3 (rhythmic ostinato).
+// Pure synthesis only (no sample banks): deterministic, source_tier original.
+// D dorian, 96 bpm, 4/4. Self-contained one-bar loop; the renderer repeats it
+// across the sidecar's declared 96 bars and wraps a seamless tail.
+stack(
+  note("d2 d2 a2 d2").s("sawtooth").gain(0.34),  // driving low ostinato
+  note("~ f3 ~ f3").s("triangle").gain(0.24)     // syncopated upper stab
+)

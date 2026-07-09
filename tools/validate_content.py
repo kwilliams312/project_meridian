@@ -378,7 +378,14 @@ def validate(
     ] = []  # (file, location, normalized asset ref)
     pack_namespaces: dict[Path, str] = {}
     spawn_namespaces: set[str] = set()
-    files = sorted(content_dir.rglob("*.yaml"))
+    # `*.render.yaml` files are auxiliary strudel-render manifests (issue #410), not
+    # content entities: they sit beside a music_stem sidecar so the L023 lint can find
+    # them, and the strudel_render tool consumes them. They carry no `meridian/<type>@1`
+    # envelope, so skip them from discovery entirely — otherwise file_type() returns
+    # None and they'd trip a spurious L001 "bad filename".
+    files = sorted(
+        p for p in content_dir.rglob("*.yaml") if not p.name.endswith(".render.yaml")
+    )
 
     def rel(path: Path) -> Path:
         try:

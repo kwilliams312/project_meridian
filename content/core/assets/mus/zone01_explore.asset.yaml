@@ -4,6 +4,7 @@ schema: meridian/asset@1
 id: core:mus.zone01.explore
 class: music_stem
 source: assets/audio/mus/zone01/explore.wav
+extra_sources: [assets/audio/mus/zone01/explore.strudel]
 license: CC-BY-4.0
 provenance:
   source_tier: original

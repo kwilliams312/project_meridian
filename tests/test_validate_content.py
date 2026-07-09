@@ -599,6 +599,25 @@ class TestStemManifestLint:
         )
         assert "L023" not in codes(res.errors)
 
+    def test_render_manifest_not_flagged_as_bad_filename(self, tmp_path):
+        # A *.render.yaml manifest is an auxiliary strudel-render artifact, not a
+        # content entity — discovery must skip it, so it never trips L001.
+        manifest = (
+            "schema: meridian/strudel-render@1\n"
+            "pattern: assets/audio/mus/explore.strudel\n"
+            "variant: 0\n"
+            "tail_seconds: 4.0\n"
+            "sample_banks: []\n"
+        )
+        res = run(
+            tmp_path,
+            {
+                "tp/assets/mus/z1_explore.asset.yaml": self.STRUDEL_STEM,
+                "tp/assets/mus/z1_explore.render.yaml": manifest,
+            },
+        )
+        assert "L001" not in codes(res.errors)
+
 
 @pytest.mark.integration
 class TestRepoContent:

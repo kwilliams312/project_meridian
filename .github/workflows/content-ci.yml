@@ -22,6 +22,30 @@ jobs:
       - name: Run test suite
         run: uv run pytest -q
 
+  # Strudel stem-render pipeline (#410). Two guarantees for the dev-only Node tool
+  # that renders zone-01's adaptive music stems from their committed .strudel
+  # sources: (1) the renderer's own test suite is green, and (2) a deterministic
+  # `--all --check` render of every music_stem sidecar succeeds (seam < 0.2,
+  # derived provenance matches the sidecar). The renderer uses a headless-Chromium
+  # backend, so Playwright's chromium is installed. Note: `--all` globs
+  # content/**/*.asset.yaml relative to CWD, so the check step runs from the repo
+  # root (default working-directory), NOT from tools/strudel_render.
+  strudel-render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install + test renderer
+        working-directory: tools/strudel_render
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm test
+      - name: Render all stems (deterministic check)
+        run: ./tools/strudel_render/node_modules/.bin/tsx tools/strudel_render/src/cli.ts --all --check
+
   # Builds the mcc C++ compiler and runs `mcc check` (its structural lint layer,
   # L001-L011/PARSE), then cross-checks it against the Python reference validator.
   # This is the parity gate that lets mcc gradually subsume validate_content.py:
