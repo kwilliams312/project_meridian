@@ -1,20 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # MACHINE-MANAGED by .github/workflows/cd.yml — do NOT edit by hand.
-#
-# Immutable image pin for the Dev realm (issue #380). On every push to `dev`,
-# cd.yml's `pin` job rewrites the tags below to the just-built <short-sha> and
-# commits it back ([skip ci]). ArgoCD then sees a manifest diff and drives the
-# rollout declaratively — no `kubectl rollout restart`, no moving-tag staleness.
-#
-# This file is listed AFTER realms/dev/values.yaml in apps/meridian-dev.yaml, so
-# these tags override the moving :dev tag there. The "dev" placeholders below are
-# only the pre-first-build fallback (behaves like the old moving tag) and are
-# overwritten by the first cd.yml run on dev.
+# Immutable image pin for the Dev realm (issue #380): the just-built
+# <short-sha>, committed back on every push to dev so ArgoCD sees a
+# manifest diff and drives the rollout declaratively. Overrides the
+# moving :dev tag from realms/dev/values.yaml (loaded before this file).
 image:
-  tag: "dev"
+  tag: "31e8c05"
 mariadb:
   image:
-    tag: "dev"
+    tag: "31e8c05"
 seed:
   accountImage:
-    tag: "dev"
+    tag: "31e8c05"
