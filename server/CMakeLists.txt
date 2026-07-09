@@ -108,6 +108,15 @@ add_subdirectory(loot)
 # (int64 copper, no client-trusted prices). Ships a DB-free unit test (the economy
 # rules) and a DB-backed integration test that self-SKIPs without MERIDIAN_DB_*.
 add_subdirectory(vendor)
+# npc: the M1 NPC interaction system (NPC-01/02; #372). Server-authoritative gossip
+# menus (options gated by quest state via a QuestStateView seam + vendor/trainer
+# role flags) and trainers (learn an ability for copper, gated by class + level),
+# with a read-only NPC datastore seam (placeholder set now, mcc #28 later). Builds
+# on meridian::items for the ECO-01 copper debit on `character.money`; the "vendor"
+# gossip option is a role FLAG (no dependency on meridian::vendor). Ships a DB-free
+# unit test (gossip state options, trainer plan) and a DB-backed integration test
+# (copper debit) that self-SKIPs without MERIDIAN_DB_*.
+add_subdirectory(npc)
 
 # --- Daemons (server/README.md process table; SAD §2.1 / §2.5). --------------
 add_subdirectory(authd)

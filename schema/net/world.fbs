@@ -136,6 +136,27 @@ enum Opcode : uint16 {
   VENDOR_BUYBACK_REQUEST  = 0x5105,  // C→S  repurchase a recently-sold item by buyback slot
   VENDOR_BUYBACK_RESULT   = 0x5106,  // S→C  typed outcome: restored item + re-debited copper
 
+  // --- 0x52xx  NPC interaction   (M1 — NPC-01/02: gossip + trainers, #372) ---
+  // Server-authoritative NPC interaction (server PRD §4-M1 NPC-01/02; epic #20).
+  // The client opens gossip on a targeted NPC (GOSSIP_HELLO); the server computes
+  // the menu — quest options gated by the player's quest state (available / in-
+  // progress / complete-turn-in-able) plus vendor/trainer role options — and
+  // replies (GOSSIP_MENU). For a TRAINER, the server also sends the per-player
+  // ability list (TRAINER_LIST: each entry priced in copper + a class/level gate +
+  // the player's learn state). The client asks to learn one ability (TRAINER_LEARN)
+  // and the server validates (right class, high enough level, not already known,
+  // enough copper), debits the copper, grants the ability, and replies with a typed
+  // outcome (TRAINER_LEARN_RESULT). The server computes EVERY option, cost, and
+  // eligibility — the client never decides them (Principle 1, "server is law").
+  // NPC/gossip/trainer data is placeholder content at M1 (real via mcc #28). This
+  // block takes 0x52xx — DISJOINT from quests (0x4xxx), loot (0x5001..0x5006) and
+  // vendors (0x51xx). Append within 0x5201..0x520F; never renumber.
+  GOSSIP_HELLO         = 0x5201,  // C→S  open gossip on a targeted NPC (by entity guid)
+  GOSSIP_MENU          = 0x5202,  // S→C  the computed gossip menu (options gated by state)
+  TRAINER_LIST         = 0x5203,  // S→C  a trainer NPC's per-player ability list (cost + gates + state)
+  TRAINER_LEARN        = 0x5204,  // C→S  learn one ability from a trainer NPC
+  TRAINER_LEARN_RESULT = 0x5205,  // S→C  typed learn outcome (learned + copper debited, or a reason)
+
   // --- 0x6xxx  chat / social     (M1 — SOC-01: chat router, #367) ---
   // Server-authoritative chat routing in worldd (server SAD §2.5 "spatial chat
   // stays here", §3.8). say/yell are delivered by the AoI grid (#87 — say = a
@@ -987,6 +1008,115 @@ table VendorBuybackResult {
 }
 
 // ===========================================================================
+// 0x52xx — NPC interaction  (M1 — NPC-01/02: gossip + trainers, #372)
+// ===========================================================================
+// Server-authoritative NPC interaction (server PRD §4-M1 NPC-01/02; epic #20). The
+// gossip menu + the trainer eligibility/cost are computed on the SERVER (server/npc,
+// meridian::npc) from placeholder NPC content (real via mcc #28); these tables are
+// only the wire projection — the client never decides which options appear, what an
+// ability costs, or whether a learn is allowed (Principle 1, "server is law").
+//
+// Flow: client opens gossip on a targeted NPC (GossipHello → GossipMenu listing the
+// options the server computed from quest state + role flags). For a trainer NPC the
+// server also sends TrainerList (the abilities it teaches, each priced in copper with
+// its class/level gate + the player's per-ability learn state). The client asks to
+// learn one (TrainerLearn → TrainerLearnResult): on OK the server debited the copper
+// from character.money and granted the ability; otherwise a typed reason and nothing
+// moved.
+
+/// The kind of a gossip option — mirrors gossip.h GossipOptionKind. A quest option's
+/// `target_id` is the quest id; a vendor/trainer option carries 0.
+enum GossipOptionKind : uint16 {
+  QUEST_AVAILABLE   = 0,   // the player may accept this quest here (a giver + gates pass)
+  QUEST_IN_PROGRESS = 1,   // the quest is in the player's log, objectives not all complete
+  QUEST_COMPLETE    = 2,   // objectives complete + this NPC is the turn-in (turn it in here)
+  VENDOR            = 3,   // "browse goods" — the NPC's vendor role flag
+  TRAINER           = 4,   // "train abilities" — the NPC's trainer role flag
+}
+
+/// C→S. Open gossip on a targeted NPC. The account/character is the session's own
+/// (grant-derived) — never a field. The server replies with the GossipMenu it
+/// computed for THIS player's quest state + the NPC's roles.
+table GossipHello {
+  npc_guid:uint64;         // the targeted NPC entity guid to talk to
+}
+
+/// One computed gossip option (a row of the menu). `target_id` is the quest id for
+/// the quest option kinds, 0 for VENDOR / TRAINER.
+table GossipOption {
+  kind:GossipOptionKind = QUEST_AVAILABLE;
+  target_id:uint32;        // quest id (quest options); 0 for vendor/trainer
+}
+
+/// S→C. The gossip menu for an NPC as THIS player sees it: the options the server
+/// computed (quest options gated by quest state, then a vendor option, then a trainer
+/// option). An NPC the player cannot usefully interact with yields an empty list.
+table GossipMenu {
+  npc_guid:uint64;
+  options:[GossipOption];
+}
+
+/// This player's learn state for one trainable ability — mirrors trainer.h
+/// TrainStatus's rejection axes, so the client can grey out an ineligible row and
+/// show why. LEARNABLE means all gates pass right now (the player may buy it).
+enum TrainableState : uint16 {
+  LEARNABLE     = 0,   // right class + high enough level + not known + affordable
+  ALREADY_KNOWN = 1,   // the player already knows it
+  WRONG_CLASS   = 2,   // the player's class is not the ability's required class
+  LEVEL_TOO_LOW = 3,   // the player's level is below the required level
+  CANT_AFFORD   = 4,   // right class + level + not known, but not enough copper
+}
+
+/// One trainable ability as THIS player sees it (a row of the trainer window). All
+/// server-computed: `cost` is content copper (never client-supplied), the gate is
+/// the ability's class/level requirement, and `state` is the player's eligibility.
+table TrainerListEntry {
+  ability_id:uint32;       // -> AbilityStore id (the ability taught)
+  cost:int64;              // copper to learn (ECO-01, server-computed)
+  required_class:uint8;    // roster.h Class id gate (0 = any class)
+  required_level:uint16;   // minimum character level to learn
+  state:TrainableState = LEARNABLE;  // this player's learn eligibility for the row
+}
+
+/// S→C. A trainer NPC's ability list for THIS player (sent when the player opens a
+/// trainer's train option). The client renders the train window from it; the server
+/// re-validates on the actual TrainerLearn (the list is a display projection).
+table TrainerList {
+  npc_guid:uint64;
+  entries:[TrainerListEntry];
+}
+
+/// C→S. Learn one ability from a trainer NPC. The cost is NOT a field — it is the
+/// server's content value (Principle 1); the client only names the NPC + ability.
+table TrainerLearn {
+  npc_guid:uint64;
+  ability_id:uint32;
+}
+
+/// Typed outcome of a learn attempt (mirrors trainer.h TrainStatus).
+enum TrainerLearnStatus : uint16 {
+  OK                 = 0,   // learned — the copper was debited + the ability granted
+  NOT_TRAINER        = 1,   // the NPC is not a trainer
+  UNKNOWN_ABILITY    = 2,   // the NPC does not teach this ability id
+  WRONG_CLASS        = 3,   // the character's class is not the ability's required class
+  LEVEL_TOO_LOW      = 4,   // the character's level is below the required level
+  ALREADY_KNOWN      = 5,   // the character already knows this ability
+  INSUFFICIENT_FUNDS = 6,   // the character cannot afford the cost (nothing debited)
+}
+
+/// S→C. The result of a TrainerLearn. On OK, `cost` copper was debited from
+/// character.money and `new_balance` is the balance AFTER the debit; the ability is
+/// now known. On any non-OK status nothing changed and `new_balance` is the
+/// UNCHANGED balance (server-authoritative — the client never predicts it).
+table TrainerLearnResult {
+  npc_guid:uint64;
+  ability_id:uint32;
+  status:TrainerLearnStatus = OK;
+  cost:int64;              // copper debited on OK (0 otherwise)
+  new_balance:int64;       // balance after the debit (unchanged on any rejection)
+}
+
+// ===========================================================================
 // RESERVED RANGES — commented placeholders only (do NOT define tables until milestone).
 // Each names its opcode range and the owning future issue / SAD section.
 // ===========================================================================
@@ -996,11 +1126,16 @@ table VendorBuybackResult {
 // 0x4xxx  quest state       — DEFINED above (M1, QST-01 #371): QuestAccept / QuestAcceptResult /
 //                             QuestProgress / QuestTurnIn / QuestTurnInResult / QuestLog (accept from a
 //                             giver, objective tracking, turn-in + reward grant; server PRD §4-M1).
-//                             Gossip menus + scripted quest events (QST-02) are a later issue.
+//                             NPC gossip menus (which surface these quest options) are DEFINED in the 0x52xx
+//                             block (M1, NPC-01 #372); scripted quest events (QST-02) are a later issue.
 // 0x5xxx  inventory/economy — LOOT (0x5001..0x5006) DEFINED above (M1, ITM-02 #369): LootRequest / LootResponse /
 //                             LootTake / LootResult / LootRelease / LootClosed. VENDORS (0x5101..0x5106) DEFINED
 //                             above (M1, ECO-01 #370): VendorBuy/Sell/Buyback Request+Result — the 0x51xx sub-band,
 //                             disjoint from loot's 0x50xx. Bank/trade (ECO-05/SOC-03) + inventory-move ops append later.
+//                             NPC interaction (0x5201..0x5205) DEFINED above (M1, NPC-01/02 #372): GossipHello /
+//                             GossipMenu / TrainerList / TrainerLearn / TrainerLearnResult (gossip menus gated by
+//                             quest state + vendor/trainer role flags; trainers learn abilities for copper, class/
+//                             level gated). Disjoint 0x52xx block; server PRD §4-M1.
 // 0x6xxx  chat / social     — DEFINED above (M1, SOC-01 #367): ChatMessage / ChatDeliver / ChatRejected
 //                             (say/yell via AoI #87, whisper cross-session, zone broadcast; server SAD §2.5/§3.8).
 //                             Social lists + cross-shard routing via servicesd are M3.

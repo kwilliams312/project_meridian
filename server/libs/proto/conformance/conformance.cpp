@@ -1707,6 +1707,144 @@ std::vector<Message> build_corpus() {
                  expect(m->balance() == 700, "if2_vendor_buyback_result.balance");
                }});
 
+  // ---- 0x52xx NPC interaction (gossip + trainers; NPC-01/02 #372) -----------
+  // Canonical NPC entity guid shared across the gossip/trainer messages.
+
+  // GossipHello — C->S open gossip on a targeted NPC.
+  c.push_back({"if2_gossip_hello", "IF-2", "GOSSIP_HELLO (0x5201)",
+               "C->S open gossip on an NPC entity",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateGossipHello(b, /*npc_guid=*/0x00000000AABB0001ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::GossipHello>(nullptr),
+                             "if2_gossip_hello verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::GossipHello>(buf.data());
+                 expect(m->npc_guid() == 0x00000000AABB0001ULL,
+                        "if2_gossip_hello.npc_guid");
+               }});
+
+  // GossipMenu — S->C two options: an available quest + the trainer role option.
+  c.push_back({"if2_gossip_menu", "IF-2", "GOSSIP_MENU (0x5202)",
+               "S->C menu: quest 800001 available + a trainer option",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::GossipOption>> opts;
+                 opts.push_back(mn::CreateGossipOption(
+                     b, mn::GossipOptionKind::QUEST_AVAILABLE, /*target_id=*/800001u));
+                 opts.push_back(mn::CreateGossipOption(
+                     b, mn::GossipOptionKind::TRAINER, /*target_id=*/0u));
+                 auto ov = b.CreateVector(opts);
+                 b.Finish(mn::CreateGossipMenu(b, /*npc_guid=*/0x00000000AABB0001ULL, ov));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::GossipMenu>(nullptr),
+                             "if2_gossip_menu verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::GossipMenu>(buf.data());
+                 expect(m->npc_guid() == 0x00000000AABB0001ULL, "if2_gossip_menu.npc_guid");
+                 const auto* opts = m->options();
+                 if (!expect(opts != nullptr && opts->size() == 2,
+                             "if2_gossip_menu has 2 options"))
+                   return;
+                 expect(opts->Get(0)->kind() == mn::GossipOptionKind::QUEST_AVAILABLE &&
+                            opts->Get(0)->target_id() == 800001u,
+                        "if2_gossip_menu.options[0] (quest available)");
+                 expect(opts->Get(1)->kind() == mn::GossipOptionKind::TRAINER &&
+                            opts->Get(1)->target_id() == 0u,
+                        "if2_gossip_menu.options[1] (trainer)");
+               }});
+
+  // TrainerList — S->C two entries: a learnable Vanguard strike + an unaffordable heal.
+  c.push_back({"if2_trainer_list", "IF-2", "TRAINER_LIST (0x5203)",
+               "S->C trainer list: strike (learnable) + heal (can't afford)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::TrainerListEntry>> entries;
+                 entries.push_back(mn::CreateTrainerListEntry(
+                     b, /*ability_id=*/0xF0000001u, /*cost=*/50, /*required_class=*/1u,
+                     /*required_level=*/2u, mn::TrainableState::LEARNABLE));
+                 entries.push_back(mn::CreateTrainerListEntry(
+                     b, /*ability_id=*/0xF0000003u, /*cost=*/120, /*required_class=*/0u,
+                     /*required_level=*/5u, mn::TrainableState::CANT_AFFORD));
+                 auto ev = b.CreateVector(entries);
+                 b.Finish(mn::CreateTrainerList(b, /*npc_guid=*/0x00000000AABB0001ULL, ev));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::TrainerList>(nullptr),
+                             "if2_trainer_list verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::TrainerList>(buf.data());
+                 expect(m->npc_guid() == 0x00000000AABB0001ULL, "if2_trainer_list.npc_guid");
+                 const auto* e = m->entries();
+                 if (!expect(e != nullptr && e->size() == 2,
+                             "if2_trainer_list has 2 entries"))
+                   return;
+                 const auto* e0 = e->Get(0);
+                 expect(e0->ability_id() == 0xF0000001u && e0->cost() == 50 &&
+                            e0->required_class() == 1u && e0->required_level() == 2u &&
+                            e0->state() == mn::TrainableState::LEARNABLE,
+                        "if2_trainer_list.entries[0] (learnable strike)");
+                 const auto* e1 = e->Get(1);
+                 expect(e1->ability_id() == 0xF0000003u && e1->cost() == 120 &&
+                            e1->required_class() == 0u && e1->required_level() == 5u &&
+                            e1->state() == mn::TrainableState::CANT_AFFORD,
+                        "if2_trainer_list.entries[1] (unaffordable heal)");
+               }});
+
+  // TrainerLearn — C->S learn one ability (no cost field — server owns the price).
+  c.push_back({"if2_trainer_learn", "IF-2", "TRAINER_LEARN (0x5204)",
+               "C->S learn ability 0xF0000001 from an NPC",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateTrainerLearn(b, /*npc_guid=*/0x00000000AABB0001ULL,
+                                                 /*ability_id=*/0xF0000001u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::TrainerLearn>(nullptr),
+                             "if2_trainer_learn verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::TrainerLearn>(buf.data());
+                 expect(m->npc_guid() == 0x00000000AABB0001ULL, "if2_trainer_learn.npc_guid");
+                 expect(m->ability_id() == 0xF0000001u, "if2_trainer_learn.ability_id");
+               }});
+
+  // TrainerLearnResult — S->C learn OK: 50 copper debited, 150 left.
+  c.push_back({"if2_trainer_learn_result", "IF-2", "TRAINER_LEARN_RESULT (0x5205)",
+               "S->C learn OK: 50 copper debited, new balance 150",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateTrainerLearnResult(
+                     b, /*npc_guid=*/0x00000000AABB0001ULL, /*ability_id=*/0xF0000001u,
+                     mn::TrainerLearnStatus::OK, /*cost=*/50, /*new_balance=*/150));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::TrainerLearnResult>(nullptr),
+                             "if2_trainer_learn_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::TrainerLearnResult>(buf.data());
+                 expect(m->npc_guid() == 0x00000000AABB0001ULL,
+                        "if2_trainer_learn_result.npc_guid");
+                 expect(m->ability_id() == 0xF0000001u,
+                        "if2_trainer_learn_result.ability_id");
+                 expect(m->status() == mn::TrainerLearnStatus::OK,
+                        "if2_trainer_learn_result.status");
+                 expect(m->cost() == 50, "if2_trainer_learn_result.cost");
+                 expect(m->new_balance() == 150, "if2_trainer_learn_result.new_balance");
+               }});
+
   return c;
 }
 
