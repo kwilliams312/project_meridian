@@ -66,6 +66,7 @@
 #include "leveling.h"          // xp_for_kill / grant_xp (CHR-03 #360)
 #include "movement_damage.h"   // MovementDamageState / MovementEnv / MovementDamageParams (#362)
 #include "movement_validation.h"  // Position
+#include "quest_log.h"         // QuestLog / QuestStore — quest state machine (QST-01 #371)
 
 namespace meridian::worldd {
 
@@ -141,6 +142,19 @@ public:
     // (a released dead player) this is the corpse-run position (#359).
     void set_player_position(ObjectGuid guid, const Position& pos);
 
+    // Install the quest datastore (QST-01 #371). When set, each player added
+    // afterwards gets a QuestLog and creature kills advance that killer's kill
+    // objectives from on_unit_died (the "kill count via on_unit_died" seam). Left
+    // unset (the default), the tick runs with NO quest state — existing combat/
+    // death golden scenarios are unaffected (no quest events are emitted). Borrowed;
+    // must outlive the tick (the boot-loaded store).
+    void set_quest_store(const QuestStore* store) { quest_store_ = store; }
+
+    // The quest log of an in-world player (nullptr if the guid names no player or
+    // no quest store is installed). The dispatch/accept path drives accept + query
+    // through this; tests inspect objective progress through it.
+    QuestLog* player_quest_log(ObjectGuid guid);
+
     // The map's graveyard — where a released ghost is sent (CMB-03 #359). A single
     // per-map point for M1; the "nearest graveyard from world data" lookup is the
     // documented seam (content epic #28). Defaults to the origin.
@@ -211,6 +225,7 @@ private:
         AuraContainer       auras;
         std::uint32_t       xp_into_level = 0;  // XP toward the next level (resets on level-up, #360)
         MovementDamageState move_dmg;           // per-player fall/breath tracker (#362)
+        std::unique_ptr<QuestLog> quests;       // quest state machine (QST-01 #371); null if no store
         PlayerCombatant(Player u, const MovementDamageParams& mdp)
             : unit(std::move(u)), auras(unit), move_dmg(mdp) {}
     };
@@ -269,6 +284,7 @@ private:
     std::uint64_t       now_ms_ = 0;
     std::uint64_t       tick_no_ = 0;
 
+    const QuestStore* quest_store_ = nullptr;  // quest defs (QST-01 #371); null = no quests
     CreatureAi ai_;  // server creatures (owns Creature + AI state + respawn timers)
     DeathStateMachine deaths_;  // dead players' death flow + corpses (CMB-03 #359)
     Position graveyard_;        // per-map release destination (world-data seam, #359)

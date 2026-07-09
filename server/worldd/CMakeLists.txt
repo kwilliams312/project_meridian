@@ -32,6 +32,8 @@ add_library(world-dispatch STATIC
   aura_container.cpp
   death_state.cpp
   leveling.cpp
+  quest_def.cpp
+  quest_log.cpp
   world_state.cpp
   active_sessions.cpp
   ability_store.cpp
@@ -49,6 +51,7 @@ target_link_libraries(world-dispatch
     meridian::proto
     meridian::db
     meridian::characters  # char-management handlers: list/create/delete CRUD (#286 / D-35)
+    meridian::items    # quest rewards + collect objectives: inventory/currency/item templates (ITM-01 #366)
     meridian::metrics  # OPS-05 session/opcode/movement/tick/disconnect metrics (#164)
     meridian::trace    # OPS-05 session-flow trace: the worldd.enter_world span (#166)
     Threads::Threads
@@ -475,6 +478,24 @@ target_link_libraries(worldd-death-state-test
 )
 set_target_properties(worldd-death-state-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-death-state COMMAND worldd-death-state-test)
+
+# --- Quest state machine UNIT test (QST-01 #371). -----------------------------
+# PURE (no DB, no socket, no clock, no RNG): drives the quest state machine
+# (quest_def.h placeholder chain + quest_log.h) directly — accept gating
+# (level + prerequisite), the four objective sources (kill / collect / deliver /
+# explore), can't-turn-in-incomplete, wrong-NPC turn-in, and the reward grant
+# (items minted into the inventory + XP/copper amounts). Also drives the kill
+# objective END-TO-END through the MapTick on_unit_died hook (the #359/#365 seam).
+# Deterministic, so it always runs in the plain server ctest (no MariaDB).
+add_executable(worldd-quest-test
+  test/quest_test.cpp
+)
+target_link_libraries(worldd-quest-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-quest-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-quest COMMAND worldd-quest-test)
 
 # --- Death + XP END-TO-END through the MapTick hook (CMB-03 #359 + CHR-03 #360).
 # PURE (no DB, no socket): drives the MapTick orchestrator through the SINGLE

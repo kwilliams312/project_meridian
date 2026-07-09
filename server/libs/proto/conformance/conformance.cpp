@@ -1217,6 +1217,184 @@ std::vector<Message> build_corpus() {
                         "if2_chat_rejected.target");
                }});
 
+  // ==== IF-2 quest state (world.fbs; QST-01 #371) ==========================
+  // The quest flow contract: accept (C->S) + typed result (S->C), objective
+  // progress (S->C), turn-in (C->S) + typed result with the reward bundle (S->C),
+  // and the active quest-log snapshot (S->C). Canonical instances mirror the M1
+  // placeholder chain (Q1 "Culling the Kobolds": kill 3 kobolds → 50 XP + 120c +
+  // 2 potions).
+
+  // QuestAccept — C->S accept a quest from a targeted giver NPC.
+  c.push_back({"if2_quest_accept", "IF-2", "QUEST_ACCEPT (0x4001)",
+               "C->S accept quest 800001 from a giver entity",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateQuestAccept(b, /*quest_id=*/800001u,
+                                                /*giver_guid=*/0x00000000AABB0001ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::QuestAccept>(nullptr),
+                             "if2_quest_accept verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::QuestAccept>(buf.data());
+                 expect(m->quest_id() == 800001u, "if2_quest_accept.quest_id");
+                 expect(m->giver_guid() == 0x00000000AABB0001ULL,
+                        "if2_quest_accept.giver_guid");
+               }});
+
+  // QuestAcceptResult — S->C typed accept outcome (OK).
+  c.push_back({"if2_quest_accept_result", "IF-2", "QUEST_ACCEPT_RESULT (0x4002)",
+               "S->C accept outcome: status=OK for quest 800001",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateQuestAcceptResult(b, /*quest_id=*/800001u,
+                                                      mn::QuestAcceptStatus::OK));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::QuestAcceptResult>(nullptr),
+                             "if2_quest_accept_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::QuestAcceptResult>(buf.data());
+                 expect(m->quest_id() == 800001u, "if2_quest_accept_result.quest_id");
+                 expect(m->status() == mn::QuestAcceptStatus::OK,
+                        "if2_quest_accept_result.status");
+               }});
+
+  // QuestProgress — S->C an objective advanced (kill 2/3).
+  c.push_back({"if2_quest_progress", "IF-2", "QUEST_PROGRESS (0x4003)",
+               "S->C objective 0 (KILL) advanced to 2/3",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateQuestProgress(b, /*quest_id=*/800001u,
+                                                  /*objective_index=*/0u,
+                                                  mn::QuestObjectiveType::KILL,
+                                                  /*have=*/2u, /*need=*/3u,
+                                                  /*complete=*/false));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::QuestProgress>(nullptr),
+                             "if2_quest_progress verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::QuestProgress>(buf.data());
+                 expect(m->quest_id() == 800001u, "if2_quest_progress.quest_id");
+                 expect(m->objective_index() == 0u, "if2_quest_progress.objective_index");
+                 expect(m->type() == mn::QuestObjectiveType::KILL,
+                        "if2_quest_progress.type");
+                 expect(m->have() == 2u, "if2_quest_progress.have");
+                 expect(m->need() == 3u, "if2_quest_progress.need");
+                 expect(m->complete() == false, "if2_quest_progress.complete");
+               }});
+
+  // QuestTurnIn — C->S turn a completed quest in (with a reward choice).
+  c.push_back({"if2_quest_turn_in", "IF-2", "QUEST_TURN_IN (0x4004)",
+               "C->S turn in quest 800002 at a turn-in entity, choice 0",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateQuestTurnIn(b, /*quest_id=*/800002u,
+                                                /*turn_in_guid=*/0x00000000AABB0002ULL,
+                                                /*choice_index=*/0));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::QuestTurnIn>(nullptr),
+                             "if2_quest_turn_in verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::QuestTurnIn>(buf.data());
+                 expect(m->quest_id() == 800002u, "if2_quest_turn_in.quest_id");
+                 expect(m->turn_in_guid() == 0x00000000AABB0002ULL,
+                        "if2_quest_turn_in.turn_in_guid");
+                 expect(m->choice_index() == 0, "if2_quest_turn_in.choice_index");
+               }});
+
+  // QuestTurnInResult — S->C turn-in outcome + the reward bundle (vector of items).
+  c.push_back({"if2_quest_turn_in_result", "IF-2", "QUEST_TURN_IN_RESULT (0x4005)",
+               "S->C turn-in OK: 50 XP, 120 copper, 2x item 900007, new level 2",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::QuestRewardItem>> items;
+                 items.push_back(mn::CreateQuestRewardItem(b, /*item_id=*/900007u,
+                                                           /*count=*/2u));
+                 auto iv = b.CreateVector(items);
+                 b.Finish(mn::CreateQuestTurnInResult(
+                     b, /*quest_id=*/800001u, mn::QuestTurnInStatus::OK,
+                     /*reward_xp=*/50u, /*reward_money=*/120, iv, /*new_level=*/2u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::QuestTurnInResult>(nullptr),
+                             "if2_quest_turn_in_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::QuestTurnInResult>(buf.data());
+                 expect(m->quest_id() == 800001u, "if2_quest_turn_in_result.quest_id");
+                 expect(m->status() == mn::QuestTurnInStatus::OK,
+                        "if2_quest_turn_in_result.status");
+                 expect(m->reward_xp() == 50u, "if2_quest_turn_in_result.reward_xp");
+                 expect(m->reward_money() == 120, "if2_quest_turn_in_result.reward_money");
+                 expect(m->new_level() == 2u, "if2_quest_turn_in_result.new_level");
+                 const auto* items = m->reward_items();
+                 if (!expect(items != nullptr && items->size() == 1,
+                             "if2_quest_turn_in_result has 1 reward item"))
+                   return;
+                 expect(items->Get(0)->item_id() == 900007u,
+                        "if2_quest_turn_in_result.reward_items[0].item_id");
+                 expect(items->Get(0)->count() == 2u,
+                        "if2_quest_turn_in_result.reward_items[0].count");
+               }});
+
+  // QuestLog — S->C the active quest-log snapshot (entry + its objectives; nested
+  // vectors of tables, the richest quest wire shape).
+  c.push_back({"if2_quest_log", "IF-2", "QUEST_LOG (0x4006)",
+               "S->C log snapshot: quest 800001 with a KILL objective (1/3)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::QuestObjectiveState>> objs;
+                 objs.push_back(mn::CreateQuestObjectiveState(
+                     b, mn::QuestObjectiveType::KILL, /*target_id=*/700010u,
+                     /*have=*/1u, /*need=*/3u, /*complete=*/false));
+                 auto ov = b.CreateVector(objs);
+                 std::vector<fb::Offset<mn::QuestLogEntry>> entries;
+                 entries.push_back(mn::CreateQuestLogEntry(
+                     b, /*quest_id=*/800001u, /*level=*/2u, /*complete=*/false, ov));
+                 auto ev = b.CreateVector(entries);
+                 b.Finish(mn::CreateQuestLog(b, ev));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::QuestLog>(nullptr),
+                             "if2_quest_log verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::QuestLog>(buf.data());
+                 const auto* quests = m->quests();
+                 if (!expect(quests != nullptr && quests->size() == 1,
+                             "if2_quest_log has 1 quest"))
+                   return;
+                 const auto* e0 = quests->Get(0);
+                 expect(e0->quest_id() == 800001u, "if2_quest_log[0].quest_id");
+                 expect(e0->level() == 2u, "if2_quest_log[0].level");
+                 expect(e0->complete() == false, "if2_quest_log[0].complete");
+                 const auto* objs = e0->objectives();
+                 if (!expect(objs != nullptr && objs->size() == 1,
+                             "if2_quest_log[0] has 1 objective"))
+                   return;
+                 expect(objs->Get(0)->type() == mn::QuestObjectiveType::KILL,
+                        "if2_quest_log[0].objectives[0].type");
+                 expect(objs->Get(0)->target_id() == 700010u,
+                        "if2_quest_log[0].objectives[0].target_id");
+                 expect(objs->Get(0)->have() == 1u,
+                        "if2_quest_log[0].objectives[0].have");
+                 expect(objs->Get(0)->need() == 3u,
+                        "if2_quest_log[0].objectives[0].need");
+               }});
+
   return c;
 }
 
