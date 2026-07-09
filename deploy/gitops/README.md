@@ -13,6 +13,11 @@ The `meridian-root` app-of-apps then syncs everything in `apps/`.
 - `realms/<r>/`     that realm's Helm values overlay
 
 ## Dev realm
-Ephemeral MariaDB, self-signed TLS, NodePort authd 31710 / worldd 31720,
-amd64-pinned (temporary until Phase 2). `:dev` images (`:latest` until the
-per-branch tag is first published).
+Ephemeral MariaDB, self-signed TLS. Images are pinned to the immutable
+`<short-sha>` via GitOps write-back (issue #380): cd.yml's `pin` job rewrites
+`realms/dev/image.yaml` on every push to `dev`, and ArgoCD rolls the Deployments
+off that manifest diff — no `kubectl rollout restart`, no moving-tag staleness.
+`realms/dev/image.yaml` is machine-managed; do not hand-edit it.
+
+PTR still repulls its moving `:ptr` tag via rollout-restart, and Prod is
+manual-sync; extending the immutable pin to both is a follow-up (issue #380).
