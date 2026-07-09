@@ -94,6 +94,14 @@ add_subdirectory(characters)
 # currency logic) and a DB-backed integration test that self-SKIPs without
 # MERIDIAN_DB_*.
 add_subdirectory(items)
+# loot: the M1 loot system (ITM-02; #369). Loot tables (weighted groups + quantity
+# ranges + money) with a read-only datastore seam (placeholder set now, mcc #28
+# later), the deterministic seeded loot roll, and the corpse loot-session window
+# (ownership / in-range / not-already-looted / quest-gated validation + transfer
+# into a player inventory via meridian::items #366). worldd's map tick rolls a
+# creature's loot table into a session on its corpse at kill time; ships a DB-free
+# unit test (seeded determinism, statistical drop rates, session validation).
+add_subdirectory(loot)
 
 # --- Daemons (server/README.md process table; SAD §2.1 / §2.5). --------------
 add_subdirectory(authd)

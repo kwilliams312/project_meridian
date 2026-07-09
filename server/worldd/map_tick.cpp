@@ -92,7 +92,16 @@ std::string TickEvent::to_line() const {
 // MapTick
 // ---------------------------------------------------------------------------
 MapTick::MapTick(const AbilityStore& abilities, std::uint64_t rng_seed, std::uint32_t dt_ms)
-    : abilities_(abilities), rng_(rng_seed), dt_ms_(dt_ms == 0 ? kTickDtMs : dt_ms) {}
+    : abilities_(abilities),
+      rng_(rng_seed),
+      dt_ms_(dt_ms == 0 ? kTickDtMs : dt_ms),
+      owned_loot_tables_(std::make_unique<loot::PlaceholderLootTableStore>()),
+      loot_tables_(owned_loot_tables_.get()),
+      // Derive the loot seed from the map seed so loot is reproducible for a given
+      // map, but on a SEPARATE stream from the combat rng_ (mixed with the golden
+      // ratio so the two seeds never coincide). loot_rng_ is reseeded per corpse.
+      loot_seed_(rng_seed ^ 0x9E3779B97F4A7C15ULL),
+      loot_rng_(loot_seed_) {}
 
 ObjectGuid MapTick::add_player(ObjectGuid guid, const Position& pos, const UnitStats& stats,
                                std::uint8_t char_class) {
@@ -476,7 +485,8 @@ void MapTick::on_unit_died(ObjectGuid victim_guid, Unit& victim, ObjectGuid kill
     if (victim.type() == ObjectType::kPlayer) {
         handle_player_death(victim_guid, victim, phase, out);   // #359
     } else if (victim.type() == ObjectType::kCreature) {
-        award_kill_xp(victim_guid, victim, killer_guid, phase, out);  // #360
+        award_kill_xp(victim_guid, victim, killer_guid, phase, out);       // #360
+        roll_creature_loot(victim_guid, victim, killer_guid, phase, out);  // #369
     }
 }
 
@@ -543,6 +553,79 @@ void MapTick::award_kill_xp(ObjectGuid victim_guid, Unit& victim, ObjectGuid kil
     emit(out, phase,
          "level_up guid=" + u(kg) + " level=" + u(kl) + "->" + u(lp.level) + " hp=" +
              u(killer.max_health()) + " res=" + u(killer.max_resource()));
+}
+
+// ---------------------------------------------------------------------------
+// Loot on creature death (ITM-02 #369). Roll the dead creature's loot table (if
+// any) into a session on its corpse; a client loots from it with server-side
+// validation (loot_session.h). Uses a SEPARATE seeded loot RNG (never the combat
+// rng_) reseeded per corpse — so a roll is a pure function of (map seed, victim
+// guid) and the combat golden stream is unaffected.
+// ---------------------------------------------------------------------------
+ObjectGuid MapTick::resolve_killer_player(ObjectGuid victim_guid,
+                                          ObjectGuid killer_guid) const {
+    // The direct killing blow names the caster; a periodic/environment death names
+    // no one, so fall back to the top threat holder (mirrors award_kill_xp, #360).
+    ObjectGuid kg = killer_guid;
+    if (players_.find(kg) == players_.end()) kg = ai_.top_threat(victim_guid);
+    return players_.find(kg) != players_.end() ? kg : 0;
+}
+
+void MapTick::roll_creature_loot(ObjectGuid victim_guid, Unit& victim,
+                                 ObjectGuid killer_guid, TickPhase phase,
+                                 std::vector<TickEvent>& out) {
+    if (loot_tables_ == nullptr) return;
+    const auto& creature = static_cast<const Creature&>(victim);
+    const loot::LootTable* table = loot_tables_->find(creature.template_id());
+    if (table == nullptr) return;  // this creature drops nothing (no loot table)
+
+    // Reseed the loot RNG per corpse so the roll depends only on (map seed, victim
+    // guid) — reproducible, and independent of tick timing / the combat stream.
+    loot_rng_.reseed(loot_seed_ ^ (victim_guid * 0x9E3779B97F4A7C15ULL));
+    loot::LootRoll roll = loot::roll_loot(*table, loot_rng_);
+    if (roll.empty()) return;  // rolled nothing this time — no session
+
+    // Eligible looters: the resolved killer player (direct or top-threat). No
+    // player killer → no owner (loot is unlootable, e.g. an environment kill).
+    const ObjectGuid owner = resolve_killer_player(victim_guid, killer_guid);
+    std::vector<loot::LooterId> owners;
+    if (owner != 0) owners.push_back(owner);
+
+    const Position p = victim.position();
+    const loot::LootPoint corpse_pt{p.x, p.y, p.z};
+    const std::size_t item_count = roll.stacks.size();
+    const items::Copper copper = roll.copper;
+    loot_sessions_.insert_or_assign(
+        victim_guid,
+        loot::LootSession(victim_guid, corpse_pt, std::move(roll), std::move(owners)));
+
+    emit(out, phase,
+         "loot_roll corpse=" + u(victim_guid) + " owner=" + u(owner) + " items=" +
+             u(item_count) + " copper=" + u(static_cast<std::uint64_t>(copper)));
+}
+
+const loot::LootSession* MapTick::loot_session(ObjectGuid corpse_guid) const {
+    auto it = loot_sessions_.find(corpse_guid);
+    return it == loot_sessions_.end() ? nullptr : &it->second;
+}
+
+loot::LootSession* MapTick::loot_session_mut(ObjectGuid corpse_guid) {
+    auto it = loot_sessions_.find(corpse_guid);
+    return it == loot_sessions_.end() ? nullptr : &it->second;
+}
+
+loot::LootStack MapTick::take_loot(ObjectGuid corpse_guid, ObjectGuid looter,
+                                   const Position& looter_pos, std::size_t slot,
+                                   const loot::QuestPredicate& has_quest,
+                                   items::Inventory& inv) {
+    auto it = loot_sessions_.find(corpse_guid);
+    if (it == loot_sessions_.end()) throw loot::NoSuchCorpse();
+    const loot::LootPoint pt{looter_pos.x, looter_pos.y, looter_pos.z};
+    loot::LootStack got = it->second.take_item(looter, pt, slot, has_quest, inv);
+    // Drop the session once the corpse's SHARED loot is exhausted (the map may then
+    // despawn the corpse). Personal quest stacks do not keep it alive.
+    if (it->second.fully_looted()) loot_sessions_.erase(it);
+    return got;
 }
 
 // ---------------------------------------------------------------------------

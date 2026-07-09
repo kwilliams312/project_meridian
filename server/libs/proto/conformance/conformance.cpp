@@ -1395,6 +1395,160 @@ std::vector<Message> build_corpus() {
                         "if2_quest_log[0].objectives[0].need");
                }});
 
+  // ==== IF-2 inventory / loot (world.fbs; ITM-02 #369) ======================
+  // Server-authoritative corpse looting. The roll + the four validation gates
+  // (ownership / in-range / not-already-looted / quest) live in the server loot
+  // session; these messages are its wire projection. The goldens freeze the loot
+  // window shape (incl. the vector-of-LootItem) + the take result.
+
+  // LootRequest — C->S open the loot window on a corpse.
+  c.push_back({"if2_loot_request", "IF-2", "LOOT_REQUEST (0x5001)",
+               "C->S open the loot window on a corpse",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateLootRequest(b, /*corpse_guid=*/0xC0FFEE0000000042ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::LootRequest>(nullptr),
+                             "if2_loot_request verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::LootRequest>(buf.data());
+                 expect(m->corpse_guid() == 0xC0FFEE0000000042ULL,
+                        "if2_loot_request.corpse_guid");
+               }});
+
+  // LootResponse — S->C the loot window: money + two slots (a common item and a
+  // quest item) — exercises the vector-of-LootItem + the quest_item / quality flags.
+  c.push_back({"if2_loot_response", "IF-2", "LOOT_RESPONSE (0x5002)",
+               "S->C loot window: 45 copper + a common item + a quest item",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::LootItem>> items;
+                 items.push_back(mn::CreateLootItem(b, /*slot=*/0u,
+                                                    /*item_template_id=*/900007u,
+                                                    /*count=*/3u, /*quality=*/1u,
+                                                    /*quest_item=*/false));
+                 items.push_back(mn::CreateLootItem(b, /*slot=*/1u,
+                                                    /*item_template_id=*/900009u,
+                                                    /*count=*/1u, /*quality=*/0u,
+                                                    /*quest_item=*/true));
+                 auto iv = b.CreateVector(items);
+                 b.Finish(mn::CreateLootResponse(b, /*corpse_guid=*/0xC0FFEE0000000042ULL,
+                                                 mn::LootStatus::OK, /*copper=*/45,
+                                                 iv));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::LootResponse>(nullptr),
+                             "if2_loot_response verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::LootResponse>(buf.data());
+                 expect(m->corpse_guid() == 0xC0FFEE0000000042ULL,
+                        "if2_loot_response.corpse_guid");
+                 expect(m->status() == mn::LootStatus::OK, "if2_loot_response.status");
+                 expect(m->copper() == 45, "if2_loot_response.copper");
+                 const auto* items = m->items();
+                 if (!expect(items != nullptr && items->size() == 2,
+                             "if2_loot_response has 2 items"))
+                   return;
+                 const auto* i0 = items->Get(0);
+                 expect(i0->slot() == 0u && i0->item_template_id() == 900007u &&
+                            i0->count() == 3u && i0->quality() == 1u &&
+                            i0->quest_item() == false,
+                        "if2_loot_response.items[0] (common)");
+                 const auto* i1 = items->Get(1);
+                 expect(i1->slot() == 1u && i1->item_template_id() == 900009u &&
+                            i1->count() == 1u && i1->quest_item() == true,
+                        "if2_loot_response.items[1] (quest)");
+               }});
+
+  // LootTake — C->S take one slot (an item take: money = false).
+  c.push_back({"if2_loot_take", "IF-2", "LOOT_TAKE (0x5003)",
+               "C->S take slot 1 (an item, not the money)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateLootTake(b, /*corpse_guid=*/0xC0FFEE0000000042ULL,
+                                             /*slot=*/1u, /*money=*/false));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::LootTake>(nullptr),
+                             "if2_loot_take verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::LootTake>(buf.data());
+                 expect(m->corpse_guid() == 0xC0FFEE0000000042ULL,
+                        "if2_loot_take.corpse_guid");
+                 expect(m->slot() == 1u, "if2_loot_take.slot");
+                 expect(m->money() == false, "if2_loot_take.money");
+               }});
+
+  // LootResult — S->C an item take succeeded (item_template_id + count moved).
+  c.push_back({"if2_loot_result", "IF-2", "LOOT_RESULT (0x5004)",
+               "S->C take OK: item 900009 x1 moved to inventory",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateLootResult(b, /*corpse_guid=*/0xC0FFEE0000000042ULL,
+                                               /*slot=*/1u, mn::LootTakeStatus::OK,
+                                               /*item_template_id=*/900009u,
+                                               /*count=*/1u, /*copper=*/0));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::LootResult>(nullptr),
+                             "if2_loot_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::LootResult>(buf.data());
+                 expect(m->corpse_guid() == 0xC0FFEE0000000042ULL,
+                        "if2_loot_result.corpse_guid");
+                 expect(m->slot() == 1u, "if2_loot_result.slot");
+                 expect(m->status() == mn::LootTakeStatus::OK, "if2_loot_result.status");
+                 expect(m->item_template_id() == 900009u,
+                        "if2_loot_result.item_template_id");
+                 expect(m->count() == 1u, "if2_loot_result.count");
+                 expect(m->copper() == 0, "if2_loot_result.copper");
+               }});
+
+  // LootRelease — C->S close the loot window.
+  c.push_back({"if2_loot_release", "IF-2", "LOOT_RELEASE (0x5005)",
+               "C->S close the loot window",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateLootRelease(b, /*corpse_guid=*/0xC0FFEE0000000042ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::LootRelease>(nullptr),
+                             "if2_loot_release verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::LootRelease>(buf.data());
+                 expect(m->corpse_guid() == 0xC0FFEE0000000042ULL,
+                        "if2_loot_release.corpse_guid");
+               }});
+
+  // LootClosed — S->C the loot window closed.
+  c.push_back({"if2_loot_closed", "IF-2", "LOOT_CLOSED (0x5006)",
+               "S->C the loot window closed (released / looted-out)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateLootClosed(b, /*corpse_guid=*/0xC0FFEE0000000042ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::LootClosed>(nullptr),
+                             "if2_loot_closed verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::LootClosed>(buf.data());
+                 expect(m->corpse_guid() == 0xC0FFEE0000000042ULL,
+                        "if2_loot_closed.corpse_guid");
+               }});
+
   return c;
 }
 

@@ -104,7 +104,22 @@ enum Opcode : uint16 {
   QUEST_TURN_IN_RESULT = 0x4005,  // S→C  typed turn-in outcome + rewards granted
   QUEST_LOG            = 0x4006,  // S→C  the character's active quest log snapshot
 
-  // --- 0x5xxx  inventory/economy (reserved — see placeholder below) ---
+  // --- 0x5xxx  inventory / loot / economy  (M1 — ITM-02: loot, #369, epic #20) ---
+  // Server-authoritative corpse looting (server PRD §4-M1: "loot generation from
+  // loot tables at kill time, loot window sessions … loot items into inventory
+  // with server-side validation"). On a creature death the server rolls the
+  // creature's loot table into a per-corpse loot SESSION; the client opens the
+  // window (LOOT_REQUEST → LOOT_RESPONSE), pulls a slot or the money (LOOT_TAKE →
+  // LOOT_RESULT, validated: ownership / in-range / not-already-looted / quest gate),
+  // and closes it (LOOT_RELEASE → LOOT_CLOSED). Loot occupies the LOW end of the
+  // 0x5xxx range; vendors/economy (ECO, #370) take 0x5010+ so the two parallel
+  // stories keep DISTINCT opcode blocks. Append within 0x5001..0x500F; never renumber.
+  LOOT_REQUEST  = 0x5001,  // C→S  open the loot window on a corpse (by guid)
+  LOOT_RESPONSE = 0x5002,  // S→C  the loot window: money + the slots THIS looter sees
+  LOOT_TAKE     = 0x5003,  // C→S  take one slot (or the money pile) from the corpse
+  LOOT_RESULT   = 0x5004,  // S→C  the outcome of a take (moved item/copper, or a reason)
+  LOOT_RELEASE  = 0x5005,  // C→S  close the loot window
+  LOOT_CLOSED   = 0x5006,  // S→C  the loot window closed (released / corpse looted-out)
 
   // --- 0x6xxx  chat / social     (M1 — SOC-01: chat router, #367) ---
   // Server-authoritative chat routing in worldd (server SAD §2.5 "spatial chat
@@ -741,6 +756,107 @@ table QuestLog {
 }
 
 // ===========================================================================
+// 0x5xxx — inventory / loot / economy  (M1 — ITM-02: loot, #369, epic #20)
+// ===========================================================================
+// Server-authoritative corpse looting (server PRD §4-M1 ITM-02; server SAD §2.5
+// "loot-table evaluation + loot sessions", §4.4 world-DB `loot_table` family). The
+// loot roll (weighted drops + quantity ranges + money) and the four validation
+// gates (ownership, in-range, not-already-looted, quest-gate) are computed in the
+// server loot session (server/loot); these tables are only its wire projection —
+// the client never rolls loot or decides eligibility (Principle 1, "server is law").
+//
+// Flow: creature dies → server rolls its table into a corpse session → client opens
+// the window (LootRequest → LootResponse listing the slots THIS looter may take +
+// the money) → client pulls a slot or the money (LootTake → LootResult) → client
+// closes it (LootRelease → LootClosed). A quest item appears in LootResponse ONLY
+// for a looter who holds the required quest.
+
+/// C→S. Open the loot window on a corpse (the dead creature's entity guid). The
+/// account/character is the session's own — never a field. The server replies with
+/// a LootResponse listing what THIS looter may currently take.
+table LootRequest {
+  corpse_guid:uint64;    // the corpse (dead-creature) entity guid to loot
+}
+
+/// Typed result of opening a loot window (mirrors the server's ownership/range
+/// pre-checks). On OK the LootResponse carries the lootable slots + money.
+enum LootStatus:uint16 {
+  OK             = 0,   // window open — items/copper follow
+  NOT_A_LOOTER   = 1,   // this player is not an eligible looter of the corpse
+  OUT_OF_RANGE   = 2,   // too far from the corpse to loot
+  NO_SUCH_CORPSE = 3,   // no corpse / no loot session by that guid
+  ALREADY_LOOTED = 4,   // the corpse's shared loot is exhausted
+}
+
+/// One lootable slot as this looter sees it (a row of the loot window). `quality`
+/// is the item's rarity tier (item.schema.yaml rarity: 0=poor … 5=legendary) for
+/// the client's colour; `quest_item` flags a quest-gated drop.
+table LootItem {
+  slot:uint32;              // stable slot index within this corpse's loot
+  item_template_id:uint32;  // -> world DB item_template (IF-9)
+  count:uint32;             // stack size dropped in this slot
+  quality:uint8 = 0;        // rarity tier (Rarity)
+  quest_item:bool = false;  // true = a quest-gated drop (visible only to eligible looters)
+}
+
+/// S→C. The loot window for a corpse: the money pile + the slots THIS looter may
+/// currently take (common slots not yet looted + quest slots they qualify for).
+/// A non-OK `status` carries no items (the pre-check failed).
+table LootResponse {
+  corpse_guid:uint64;
+  status:LootStatus = OK;
+  copper:int64;             // money available to take (0 = none / already taken)
+  items:[LootItem];         // the slots visible to this looter (empty unless OK)
+}
+
+/// C→S. Take one slot from the corpse — or the money pile when `money` is true
+/// (then `slot` is ignored). The server re-validates ownership / range / not-taken
+/// / quest eligibility and, on success, transfers the stack into the looter's
+/// inventory (server-authoritative — no client-trusted move).
+table LootTake {
+  corpse_guid:uint64;
+  slot:uint32;              // slot to take (ignored when money = true)
+  money:bool = false;       // true = take the copper pile instead of a slot
+}
+
+/// Typed outcome of a LootTake (mirrors the server loot-session errors 1:1 so the
+/// client can surface the exact reason).
+enum LootTakeStatus:uint16 {
+  OK             = 0,   // taken — item_template_id/count (or copper) moved to inventory
+  NOT_A_LOOTER   = 1,   // not an eligible looter of this corpse
+  OUT_OF_RANGE   = 2,   // too far from the corpse
+  ALREADY_LOOTED = 3,   // that slot / the money was already taken
+  QUEST_REQUIRED = 4,   // a quest slot, and the looter is not on the quest
+  INVENTORY_FULL = 5,   // no room in the looter's inventory (loot stays on the corpse)
+  INVALID_SLOT   = 6,   // no such slot on this corpse
+  NO_SUCH_CORPSE = 7,   // no corpse / no loot session by that guid
+}
+
+/// S→C. The result of a LootTake. On OK, an item take carries item_template_id +
+/// count (copper = 0); a money take carries copper (item_template_id/count = 0).
+/// On any non-OK status nothing moved and the reason is `status`.
+table LootResult {
+  corpse_guid:uint64;
+  slot:uint32;              // the slot taken (0 for a money take)
+  status:LootTakeStatus = OK;
+  item_template_id:uint32;  // item moved on OK (0 for money / failure)
+  count:uint32;             // stack moved on OK (0 for money / failure)
+  copper:int64;             // copper moved on a money take (0 otherwise)
+}
+
+/// C→S. Close the loot window (the client walked away / finished). Empty beyond the
+/// corpse id — acts on the session's own looting.
+table LootRelease {
+  corpse_guid:uint64;
+}
+
+/// S→C. The loot window on a corpse closed — either the client released it, or the
+/// corpse's shared loot was fully taken (the corpse may now despawn).
+table LootClosed {
+  corpse_guid:uint64;
+}
+
+// ===========================================================================
 // RESERVED RANGES — commented placeholders only (do NOT define tables until milestone).
 // Each names its opcode range and the owning future issue / SAD section.
 // ===========================================================================
@@ -751,7 +867,9 @@ table QuestLog {
 //                             QuestProgress / QuestTurnIn / QuestTurnInResult / QuestLog (accept from a
 //                             giver, objective tracking, turn-in + reward grant; server PRD §4-M1).
 //                             Gossip menus + scripted quest events (QST-02) are a later issue.
-// 0x5xxx  inventory/economy — inventory, loot rolls, vendor/economy (loot.*, vendor.*). Future issue.
+// 0x5xxx  inventory/economy — LOOT (0x5001..0x5006) DEFINED above (M1, ITM-02 #369): LootRequest / LootResponse /
+//                             LootTake / LootResult / LootRelease / LootClosed. Vendors/economy (ECO, #370) take
+//                             0x5010+ (distinct block); bag/inventory move/equip ops append later within 0x5xxx.
 // 0x6xxx  chat / social     — DEFINED above (M1, SOC-01 #367): ChatMessage / ChatDeliver / ChatRejected
 //                             (say/yell via AoI #87, whisper cross-session, zone broadcast; server SAD §2.5/§3.8).
 //                             Social lists + cross-shard routing via servicesd are M3.

@@ -68,6 +68,11 @@
 #include "movement_validation.h"  // Position
 #include "quest_log.h"         // QuestLog / QuestStore — quest state machine (QST-01 #371)
 
+#include "inventory.h"        // meridian::items::Inventory (loot → inventory transfer, #366)
+#include "loot_roll.h"        // meridian::loot::LootRng (ITM-02 #369)
+#include "loot_session.h"     // meridian::loot::LootSession / QuestPredicate (ITM-02 #369)
+#include "loot_table.h"       // meridian::loot::LootTableStore / PlaceholderLootTableStore
+
 namespace meridian::worldd {
 
 // The map tick rate + soft budget (SAD §8.1: "50 ms hard / 40 ms soft per map",
@@ -159,6 +164,31 @@ public:
     // per-map point for M1; the "nearest graveyard from world data" lookup is the
     // documented seam (content epic #28). Defaults to the origin.
     void set_graveyard(const Position& pos) { graveyard_ = pos; }
+
+    // --- loot (ITM-02 #369) --------------------------------------------------
+    // The loot-table source a dying creature rolls on. Defaults to the M1
+    // placeholder set (loot_table.cpp) so loot works out of the box; a boot path
+    // or a test overrides it (the mcc #28 world-DB store implements the same seam).
+    // `store` must outlive the tick.
+    void set_loot_tables(const loot::LootTableStore& store) { loot_tables_ = &store; }
+
+    // The loot session on a corpse (the dead creature's guid), or nullptr if that
+    // corpse has no loot / was never rolled / is fully looted-and-cleared. A worldd
+    // loot handler (or a test) reads/mutates it to serve a client's loot pull.
+    const loot::LootSession* loot_session(ObjectGuid corpse_guid) const;
+    loot::LootSession* loot_session_mut(ObjectGuid corpse_guid);
+    std::size_t loot_session_count() const { return loot_sessions_.size(); }
+
+    // Convenience for the loot handler / tests: pull one slot of the corpse's loot
+    // into `inv`, applying the loot session's full server-side validation
+    // (ownership / in-range / not-already-looted / quest gate) and the inventory
+    // add. `looter_pos` is the player's authoritative position (the range check
+    // vs the corpse). Throws loot::NoSuchCorpse if the corpse has no session, else
+    // the same loot::/items:: errors the session throws. On the final shared pull
+    // the session is dropped (corpse fully looted → despawn).
+    loot::LootStack take_loot(ObjectGuid corpse_guid, ObjectGuid looter,
+                              const Position& looter_pos, std::size_t slot,
+                              const loot::QuestPredicate& has_quest, items::Inventory& inv);
 
     // --- death-flow requests (C→S; drained in the death phase) --------------
     // Request an early graveyard release for a dead player (C→S RELEASE_REQUEST,
@@ -255,6 +285,17 @@ private:
     // #360: award XP to the killer player (resolved directly or via threat).
     void award_kill_xp(ObjectGuid victim_guid, Unit& victim, ObjectGuid killer_guid,
                        TickPhase phase, std::vector<TickEvent>& out);
+    // #369 (ITM-02): roll the dead creature's loot table (if any) into a loot
+    // session on its corpse. The eligible looters are the resolved killer player
+    // (direct or top-threat, mirroring award_kill_xp attribution). Uses a SEPARATE
+    // seeded loot RNG (never the combat rng_, so combat's byte-stable stream is
+    // unperturbed), reseeded per corpse so the roll is a pure function of (map
+    // seed, victim guid). Emits one deterministic `loot_roll` event when it drops.
+    void roll_creature_loot(ObjectGuid victim_guid, Unit& victim, ObjectGuid killer_guid,
+                            TickPhase phase, std::vector<TickEvent>& out);
+    // The player guid credited with a creature kill (direct killer if a player,
+    // else the top threat holder). 0 if no player is attributable.
+    ObjectGuid resolve_killer_player(ObjectGuid victim_guid, ObjectGuid killer_guid) const;
 
     // Fall/swim environmental damage (#362), run inside the combat phase: evaluate
     // each player's fall/breath tracker against its current position + this tick's
@@ -300,6 +341,16 @@ private:
     MovementEnv          env_;               // flat ground, no water (M0 default)
     MovementDamageParams move_dmg_params_;   // production curve by default
 
+    // Loot (ITM-02 #369): the loot-table seam (owned placeholder default,
+    // overridable via set_loot_tables), a SEPARATE seeded loot RNG (never perturbs
+    // the combat rng_), and the live loot sessions keyed by corpse (dead-creature)
+    // guid. A creature death rolls its table into a session here; a client loots
+    // from it with server validation (loot_session.h).
+    std::unique_ptr<loot::PlaceholderLootTableStore> owned_loot_tables_;
+    const loot::LootTableStore* loot_tables_;   // -> owned_loot_tables_ unless overridden
+    std::uint64_t             loot_seed_;        // base seed for per-corpse loot rolls
+    loot::LootRng             loot_rng_;         // reseeded per corpse (determinism)
+    std::unordered_map<ObjectGuid, loot::LootSession> loot_sessions_;
 };
 
 }  // namespace meridian::worldd
