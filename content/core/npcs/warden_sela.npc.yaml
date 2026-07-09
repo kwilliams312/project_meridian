@@ -15,6 +15,16 @@ interaction:
     The village looks to Bren for its stores and to me for its borders. The
     ridge is loud lately — wisps on the ashvents, stalkers on the low trail.
     Walk it with me a while, and I'll teach you what the Hollow answers to.
+  trainer:
+    # A field mend anyone can learn once they've walked the ridge a while.
+    - ability: core:ability.minor_healing
+      cost: 500
+      required_level: 4
+    # The warden's own overhead strike — she'll only pass it to front-liners.
+    - ability: core:ability.pickaxe_slam
+      cost: 1200
+      required_class: vanguard
+      required_level: 8
 visual:
   model: core:art.char.human.female.warden
   sound_set: core:sfx.char.human_male

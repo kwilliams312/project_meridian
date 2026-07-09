@@ -24,12 +24,12 @@
 // wholesale nightly").
 //
 // SCOPE (schema fidelity): the load maps each authored world-DB row set onto the
-// existing seam struct. Where the current world DDL has NO column for a seam field,
-// that field keeps its default:
-//   * NPC TRAINER abilities (NpcDef::is_trainer / trainer_abilities) have NO world-
-//     DDL home yet (there is no npc_trainer table — trainers are the deferred mcc
-//     #28 scope). A DB-loaded NpcDef is therefore never a trainer; the trainer path
-//     keeps using the placeholder store in DB-free tests. See db_content_store.cpp.
+// existing seam struct. Every M1 seam field now has a world-DDL home:
+//   * NPC TRAINER abilities (NpcDef::is_trainer / trainer_abilities) load from the
+//     npc_trainer / npc_trainer_ability tables (#392): an NPC with any taught-ability
+//     row is a trainer, and each row carries the ability ref + copper cost + class /
+//     level gate the live #388 TRAINER_LIST/TRAINER_LEARN path reads. So a DB-loaded
+//     trainer works end-to-end from authored content. See db_content_store.cpp.
 //
 // PARAMETERIZED SQL ONLY (CONTRIBUTING.md backend rule): every query binds through
 // meridian::db prepared-statement parameters; no value is ever concatenated in.
@@ -88,10 +88,10 @@ private:
 
 // --- DB-backed NPC store (NPC-01/02 seam, npc_def.h) -------------------------
 // Loads npc_template into NpcDef: id, name, the vendor role FLAG (vendor_ref_id set),
-// and the quest giver/turn-in participation (cross-referenced from quest_template's
-// giver_npc_id / turn_in_npc_id — the DDL keeps that link on the quest side). Trainer
-// abilities have no world-DDL home yet (deferred mcc #28); a DB-loaded NPC is never a
-// trainer.
+// the quest giver/turn-in participation (cross-referenced from quest_template's
+// giver_npc_id / turn_in_npc_id — the DDL keeps that link on the quest side), and the
+// trainer role (is_trainer + trainer_abilities) from npc_trainer_ability (#392): a
+// taught-ability row makes the NPC a trainer and carries the cost + class/level gate.
 class DbNpcStore : public npc::NpcStore {
 public:
     explicit DbNpcStore(db::Connection& world_db);

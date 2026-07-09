@@ -317,6 +317,26 @@ void emit_npc(std::uint32_t id, const YAML::Node& n, const std::string& ns,
         Row& gr = new_row(cx.tbl("gossip"), id);
         gr.cells = {Val::u(id), Val::str(as_str(inter["gossip_text"]))};
     }
+
+    // interaction.trainer[] -> npc_trainer (role marker) + npc_trainer_ability (the
+    // taught set). Each item is an ability ref + copper cost + class/level gate.
+    if (has(inter, "trainer") && inter["trainer"].IsSequence() &&
+        inter["trainer"].size() > 0) {
+        Row& tr = new_row(cx.tbl("npc_trainer"), id);
+        tr.cells = {Val::u(id)};
+        for (const auto& t : inter["trainer"]) {
+            const std::uint32_t ability_id =
+                cx.ref(t["ability"], ns, file, "$.interaction.trainer[].ability");
+            Row& ar = new_row(cx.tbl("npc_trainer_ability"), id);
+            ar.sort_key2 = std::to_string(ability_id);
+            ar.cells = {
+                Val::u(id), Val::u(ability_id),
+                Val::u(static_cast<std::uint64_t>(as_int(t["cost"]))),
+                has(t, "required_class") ? Val::str(as_str(t["required_class"])) : Val::null(),
+                has(t, "required_level") ? Val::num(as_int(t["required_level"])) : Val::num(1),
+            };
+        }
+    }
 }
 
 void emit_item(std::uint32_t id, const YAML::Node& n, const std::string& ns,
@@ -725,6 +745,8 @@ std::map<std::string, Table> make_tables() {
         "move_walk_speed_mps","move_run_speed_mps","vendor_ref_id","loot_table_ref_id","loot_money_min",
         "loot_money_max","visual_model_id","visual_scale","visual_sound_set_id"});
     add("npc_ability", {"npc_id","ability_id","priority","cooldown_override_ms","use_at_health_below_pct"});
+    add("npc_trainer", {"npc_id"});
+    add("npc_trainer_ability", {"npc_id","ability_id","cost_copper","required_class","required_level"});
     add("item_template", {"id","name","flavor_text","item_class","subclass","slot","rarity","required_level",
         "item_level","is_unique","binding","stack_size","weapon_damage_min","weapon_damage_max","weapon_speed_ms",
         "weapon_school","armor","effect_on_use_id","price_sell","price_buy","visual_icon_id","visual_model_id"});
@@ -762,7 +784,7 @@ std::map<std::string, Table> make_tables() {
 // families in the exact order the schema loader declares them, so a plain
 // `mysql < world.sql` loads without FK ordering surprises (also FK-checks off).
 const std::vector<std::string> kEmitOrder = {
-    "npc_template", "npc_ability",
+    "npc_template", "npc_ability", "npc_trainer", "npc_trainer_ability",
     "item_template", "item_stat", "item_effect_on_equip",
     "ability", "ability_effect", "ability_effect_stat_mod",
     "quest_template", "quest_objective", "quest_prereq", "quest_reward",

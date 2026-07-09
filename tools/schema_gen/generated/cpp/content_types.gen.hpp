@@ -189,6 +189,13 @@ enum class NpcFaction {
     Hostile,
 };
 
+enum class NpcInteractionTrainerRequiredClass {
+    Vanguard,
+    Runcaller,
+    Warden,
+    Mender,
+};
+
 enum class NpcRank {
     Normal,
     Elite,
@@ -277,9 +284,17 @@ struct NpcMovement {
     std::optional<double> run_speed_mps;  // optional
 };
 
+struct NpcInteractionTrainer {
+    AbilityRef ability;
+    std::int64_t cost;  // Copper cost to learn this ability.
+    std::optional<NpcInteractionTrainerRequiredClass> required_class;  // Class gate — only this class may learn the ability. Omit = any class.
+    std::optional<std::int64_t> required_level;  // Minimum character level to learn.
+};
+
 struct NpcInteraction {
     std::optional<std::string> gossip_text;  // Single-page gossip for v1; gossip graphs are an M2 schema.
     std::optional<VendorRef> vendor;  // optional
+    std::vector<NpcInteractionTrainer> trainer;  // Abilities this NPC teaches (NPC-02). A non-empty list makes the NPC a trainer and surfaces the "train" gossip option. Every gate is server-authoritative content — the client never supplies cost/level/class (Principle 1).
 };
 
 struct NpcLoot {
