@@ -89,7 +89,21 @@ enum Opcode : uint16 {
   // of the quest range (0x4xxx). Append within this range; never renumber.
   POI_DISCOVERED = 0x9001,   // S→C  character discovered a point of interest
 
-  // --- 0x4xxx  quest / gossip    (reserved — see placeholder below) ---
+  // --- 0x4xxx  quest state       (M1 — QST-01: quest state machine, #371) ---
+  // Server-authoritative quest flow (server PRD §4-M1 QST-01; epic #20). The
+  // client asks to ACCEPT a quest from a targeted giver NPC and to TURN a completed
+  // quest IN at the turn-in NPC; the server validates (level + prerequisites;
+  // objectives complete; correct NPC; reward choice; backpack room) and replies
+  // with a typed result. Objective PROGRESS and the full quest LOG are server-
+  // pushed — the client only DISPLAYS quest state, never predicts it (Principle 1).
+  // Quest defs are server content (placeholder set at M1; real chain via mcc #28).
+  QUEST_ACCEPT         = 0x4001,  // C→S  accept a quest offered by a giver NPC
+  QUEST_ACCEPT_RESULT  = 0x4002,  // S→C  typed accept outcome (accepted / gated)
+  QUEST_PROGRESS       = 0x4003,  // S→C  an objective advanced toward its goal
+  QUEST_TURN_IN        = 0x4004,  // C→S  turn a completed quest in at the turn-in NPC
+  QUEST_TURN_IN_RESULT = 0x4005,  // S→C  typed turn-in outcome + rewards granted
+  QUEST_LOG            = 0x4006,  // S→C  the character's active quest log snapshot
+
   // --- 0x5xxx  inventory/economy (reserved — see placeholder below) ---
 
   // --- 0x6xxx  chat / social     (M1 — SOC-01: chat router, #367) ---
@@ -604,13 +618,139 @@ table ChatRejected {
 }
 
 // ===========================================================================
+// 0x4xxx — quest state  (M1 — QST-01: quest state machine, #371)
+// ===========================================================================
+// Server-authoritative quest flow (server PRD §4-M1 QST-01; epic #20). Accept from
+// a giver, track objectives (kill / collect / deliver / explore), validate turn-in
+// at the turn-in NPC, and grant rewards (items + copper + XP). All state and every
+// gate live on the server (quest_log.h); these messages are the client contract.
+// The mcc #28 content seam supplies the real quest defs (placeholder set at M1).
+
+/// C→S. Accept a quest offered by a giver NPC. `giver_guid` is the targeted NPC
+/// entity — the server validates it actually offers `quest_id` and that the
+/// character passes the level + prerequisite gates before adding it to the log.
+table QuestAccept {
+  quest_id:uint32;      // quest_template.id to accept
+  giver_guid:uint64;    // the targeted giver NPC entity (0 = unspecified/self-serve)
+}
+
+/// Typed outcome of an accept attempt (mirrors quest_log.h AcceptStatus, plus the
+/// wire-only WRONG_GIVER / LOG_FULL the dispatch layer adds).
+enum QuestAcceptStatus : uint16 {
+  OK                   = 0,   // accepted — the quest is now in the character's log
+  UNKNOWN_QUEST        = 1,   // no such quest in the server's content
+  ALREADY_ACTIVE       = 2,   // already in the log
+  ALREADY_COMPLETED    = 3,   // already turned in (not repeatable at M1)
+  LEVEL_TOO_LOW        = 4,   // character level below the quest's required_level
+  MISSING_PREREQUISITE = 5,   // a prerequisite quest is not yet completed
+  WRONG_GIVER          = 6,   // the targeted NPC does not offer this quest
+  LOG_FULL             = 7,   // the character's quest log is at capacity
+}
+
+/// S→C. Result of a QuestAccept. On OK the quest is in the log (a QuestLog snapshot
+/// / QuestProgress follows); otherwise `status` names the typed rejection.
+table QuestAcceptResult {
+  quest_id:uint32;
+  status:QuestAcceptStatus = OK;
+}
+
+/// The objective kind — mirrors quest_objective.type (kill/collect/deliver/explore).
+enum QuestObjectiveType : uint16 {
+  KILL    = 0,
+  COLLECT = 1,
+  DELIVER = 2,
+  EXPLORE = 3,
+}
+
+/// One objective's live state within a QuestLogEntry. `target_id` is the
+/// objective's subject content id — the creature (kill), item (collect/deliver) or
+/// zone (explore) id — so the client can label progress without re-reading content.
+table QuestObjectiveState {
+  type:QuestObjectiveType = KILL;
+  target_id:uint32;      // subject content id (npc / item / zone), per `type`
+  have:uint16;           // units accumulated
+  need:uint16;           // goal
+  complete:bool = false;
+}
+
+/// S→C. A single objective advanced. `objective_index` is its position in the
+/// quest's objective list; have/need/complete are the new state. Pushed whenever a
+/// kill/collect/deliver/explore source moves the needle.
+table QuestProgress {
+  quest_id:uint32;
+  objective_index:uint8;
+  type:QuestObjectiveType = KILL;
+  have:uint16;
+  need:uint16;
+  complete:bool = false;
+}
+
+/// C→S. Turn a completed quest in at the turn-in NPC. `turn_in_guid` is the
+/// targeted NPC entity (server validates it is the quest's turn-in NPC).
+/// `choice_index` selects rewards.choice_items[] (>= 0) for a choice-reward quest,
+/// or -1 when the quest offers no reward choice.
+table QuestTurnIn {
+  quest_id:uint32;
+  turn_in_guid:uint64;
+  choice_index:int32 = -1;
+}
+
+/// Typed outcome of a turn-in attempt (mirrors quest_log.h TurnInStatus).
+enum QuestTurnInStatus : uint16 {
+  OK             = 0,   // turned in — rewards granted, quest completed
+  UNKNOWN_QUEST  = 1,   // no such quest in the server's content
+  NOT_ACTIVE     = 2,   // not in the log (never accepted / already done)
+  WRONG_NPC      = 3,   // this NPC is not the quest's turn-in NPC
+  INCOMPLETE     = 4,   // one or more objectives not yet complete
+  BAD_CHOICE     = 5,   // choice_index missing/out of range for a choice-reward quest
+  INVENTORY_FULL = 6,   // no backpack room for the reward items (nothing changed)
+}
+
+/// A reward item actually granted at turn-in (item template id + count).
+table QuestRewardItem {
+  item_id:uint32;
+  count:uint16 = 1;
+}
+
+/// S→C. Turn-in outcome. On OK the reward was granted: `reward_items` were minted
+/// into the backpack, `reward_xp` and `reward_money` (copper) were applied via the
+/// leveling / economy paths, and `new_level` is the character's level after any XP
+/// roll-up. On any non-OK status nothing changed.
+table QuestTurnInResult {
+  quest_id:uint32;
+  status:QuestTurnInStatus = OK;
+  reward_xp:uint32;
+  reward_money:int64;        // copper (ECO-01)
+  reward_items:[QuestRewardItem];
+  new_level:uint16;
+}
+
+/// One active quest in the log snapshot: the quest id, its level (log coloring),
+/// whether every objective is complete (ready to turn in), and the live objectives.
+table QuestLogEntry {
+  quest_id:uint32;
+  level:uint16;
+  complete:bool = false;
+  objectives:[QuestObjectiveState];
+}
+
+/// S→C. The character's active quest log (sent on enter-world and on resync). The
+/// authoritative snapshot the client renders its quest tracker from.
+table QuestLog {
+  quests:[QuestLogEntry];
+}
+
+// ===========================================================================
 // RESERVED RANGES — commented placeholders only (do NOT define tables until milestone).
 // Each names its opcode range and the owning future issue / SAD section.
 // ===========================================================================
 //
 // 0x3xxx  combat            — DEFINED above (M1, CMB-01): CastRequest / CastStart / CastFailed / CastResult;
 //                             (M1, CMB-03 #359): DeathState / ReleaseRequest / GhostState / ResurrectRequest / ResurrectResult.
-// 0x4xxx  quest / gossip    — quest state, gossip menus (content schemas: quest.*, gossip). Future issue.
+// 0x4xxx  quest state       — DEFINED above (M1, QST-01 #371): QuestAccept / QuestAcceptResult /
+//                             QuestProgress / QuestTurnIn / QuestTurnInResult / QuestLog (accept from a
+//                             giver, objective tracking, turn-in + reward grant; server PRD §4-M1).
+//                             Gossip menus + scripted quest events (QST-02) are a later issue.
 // 0x5xxx  inventory/economy — inventory, loot rolls, vendor/economy (loot.*, vendor.*). Future issue.
 // 0x6xxx  chat / social     — DEFINED above (M1, SOC-01 #367): ChatMessage / ChatDeliver / ChatRejected
 //                             (say/yell via AoI #87, whisper cross-session, zone broadcast; server SAD §2.5/§3.8).

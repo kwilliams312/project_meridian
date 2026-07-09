@@ -97,9 +97,17 @@ MapTick::MapTick(const AbilityStore& abilities, std::uint64_t rng_seed, std::uin
 ObjectGuid MapTick::add_player(ObjectGuid guid, const Position& pos, const UnitStats& stats,
                                std::uint8_t char_class) {
     Player p(guid, pos, stats, /*account_id=*/0, char_class, /*name=*/"");
-    players_.emplace(guid,
-                     std::make_unique<PlayerCombatant>(std::move(p), move_dmg_params_));
+    auto pc = std::make_unique<PlayerCombatant>(std::move(p), move_dmg_params_);
+    // Give the player a quest log when a quest store is installed (QST-01 #371) —
+    // the "kill count via on_unit_died" seam feeds this killer's kill objectives.
+    if (quest_store_ != nullptr) pc->quests = std::make_unique<QuestLog>(*quest_store_);
+    players_.emplace(guid, std::move(pc));
     return guid;
+}
+
+QuestLog* MapTick::player_quest_log(ObjectGuid guid) {
+    auto it = players_.find(guid);
+    return it == players_.end() ? nullptr : it->second->quests.get();
 }
 
 ObjectGuid MapTick::add_creature(const CreatureSpawnDef& def) {
@@ -499,6 +507,16 @@ void MapTick::award_kill_xp(ObjectGuid victim_guid, Unit& victim, ObjectGuid kil
 
     Player& killer = pit->second->unit;
     std::uint32_t& xp_into = pit->second->xp_into_level;
+
+    // Quest kill objectives (QST-01 #371): a creature death advances the killer's
+    // matching kill objectives, independent of the XP award (a grey mob gives no
+    // XP but still counts for a kill quest). Gated on an installed quest store so
+    // combat/death golden scenarios without quests emit no new events.
+    if (quest_store_ != nullptr && pit->second->quests) {
+        const std::uint32_t npc_tid = static_cast<Creature&>(victim).template_id();
+        if (pit->second->quests->on_kill(npc_tid))
+            emit(out, phase, "quest_kill killer=" + u(kg) + " npc=" + u(npc_tid));
+    }
 
     const std::uint16_t kl = killer.level();
     const std::uint32_t xp = xp_for_kill(victim.level(), kl);
