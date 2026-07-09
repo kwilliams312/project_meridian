@@ -1,0 +1,9 @@
+schema: meridian/asset@1
+id: core:mus.fixture.no_manifest
+class: music_stem
+source: assets/audio/mus/fixture/synth.wav
+extra_sources: [assets/audio/mus/fixture/synth.strudel]
+license: CC0-1.0
+provenance: { source_tier: original, authors: [test] }
+loudness: { lufs_integrated: -16.0, true_peak_dbtp: -1.0 }
+music: { stem_set: mus.fixture, layer: L1, bpm: 120, time_signature: "4/4", length_bars: 4, key: c_major, loop: true }
