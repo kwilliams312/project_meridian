@@ -262,15 +262,42 @@ Bytes enc_movement_intent(std::uint32_t seq, std::uint32_t flags, float x, float
 // validates the intent, advances authoritative state, and replies MovementState.
 struct MoveResult {
     bool handshake_ok = false;
-    bool got_state = false;      // a MovementState reply came back
+    bool got_state = false;      // the FIRST MovementState reply (legal move) came back
     float state_x = 0.0f, state_y = 0.0f, state_z = 0.0f;
     std::uint32_t ack_seq = 0;
+    // OPS-03a (#420): an OPTIONAL SECOND intent on the SAME in-world connection —
+    // used to prove an ILLEGAL move is rejected + snapped back on the live path,
+    // WITHOUT a second ENTER_WORLD (which would hit single-active-session, #326).
+    bool got_state2 = false;     // the second MovementState (correction) came back
+    float state2_x = 0.0f, state2_y = 0.0f, state2_z = 0.0f;
+    std::uint32_t ack_seq2 = 0;
 };
+
+// Decode a MOVEMENT_STATE reply frame into (x,y,z,ack). Returns false if the next
+// frame is not a MovementState (or none arrived).
+bool recv_movement_state(Client& c, float& x, float& y, float& z, std::uint32_t& ack) {
+    std::optional<Bytes> ms = c.recv_frame();
+    if (!ms) return false;
+    std::optional<mw::Frame> rf = mw::decode_frame(*ms);
+    if (!rf || rf->opcode != mn::Opcode::MOVEMENT_STATE) return false;
+    Bytes pl(rf->payload, rf->payload + rf->payload_len);
+    const auto* st = decode<mn::MovementState>(pl);
+    if (!st) return false;
+    x = st->x(); y = st->y(); z = st->z(); ack = st->ack_seq();
+    return true;
+}
 
 MoveResult drive_hello_then_move(std::uint16_t port, std::uint64_t grant_id,
                                  std::uint32_t build, std::uint64_t character_id,
                                  std::uint32_t flags, float x,
-                                 float y, float z, std::uint64_t client_time_ms) {
+                                 float y, float z, std::uint64_t client_time_ms,
+                                 // OPTIONAL second intent (default: none). When
+                                 // second_move is true, a further MovementIntent is
+                                 // sent on the SAME connection after the first reply.
+                                 bool second_move = false, std::uint32_t flags2 = 0,
+                                 float x2 = 0.0f, float y2 = 0.0f, float z2 = 0.0f,
+                                 std::uint32_t intent_seq2 = 8,
+                                 std::uint64_t client_time_ms2 = 0) {
     MoveResult r;
     Client c(port);
     if (!c.connected()) return r;
@@ -301,23 +328,21 @@ MoveResult drive_hello_then_move(std::uint16_t port, std::uint64_t grant_id,
         return r;
     }
 
-    // Now send a MovementIntent on the in-world connection.
+    // First MovementIntent (the legal move) on the in-world connection.
     c.send_frame(mw::encode_frame(mn::Opcode::MOVEMENT_INTENT, /*seq=*/3,
                                   enc_movement_intent(7, flags, x, y, z, client_time_ms)));
-    std::optional<Bytes> ms = c.recv_frame();
-    if (ms) {
-        std::optional<mw::Frame> rf = mw::decode_frame(*ms);
-        if (rf && rf->opcode == mn::Opcode::MOVEMENT_STATE) {
-            Bytes pl(rf->payload, rf->payload + rf->payload_len);
-            const auto* st = decode<mn::MovementState>(pl);
-            if (st) {
-                r.got_state = true;
-                r.state_x = st->x();
-                r.state_y = st->y();
-                r.state_z = st->z();
-                r.ack_seq = st->ack_seq();
-            }
-        }
+    r.got_state = recv_movement_state(c, r.state_x, r.state_y, r.state_z, r.ack_seq);
+
+    // OPS-03a (#420): an OPTIONAL second intent on the SAME session — the server
+    // ALWAYS replies a MovementState (accept = advance; reject = snap-back), so the
+    // client can block on exactly one reply. Reusing the session avoids a second
+    // ENTER_WORLD (single-active-session, #326).
+    if (second_move && r.got_state) {
+        c.send_frame(mw::encode_frame(mn::Opcode::MOVEMENT_INTENT, /*seq=*/4,
+                                      enc_movement_intent(intent_seq2, flags2, x2, y2, z2,
+                                                          client_time_ms2)));
+        r.got_state2 =
+            recv_movement_state(c, r.state2_x, r.state2_y, r.state2_z, r.ack_seq2);
     }
     return r;
 }
@@ -545,7 +570,8 @@ int main() {
         seed_grant(db, grant_ok, account_id, realm_id, session_key, client_build,
                    "DATE_ADD(UTC_TIMESTAMP(), INTERVAL 30 SECOND)");
         // A second valid grant used by the movement leg (section G): handshake +
-        // MOVEMENT_INTENT on the SAME connection (#86 authoritative-state proof).
+        // ENTER_WORLD + a LEGAL then an ILLEGAL MovementIntent on the SAME
+        // connection (#86 authoritative-state proof + #420 reject/snap-back proof).
         seed_grant(db, grant_move, account_id, realm_id, session_key, client_build,
                    "DATE_ADD(UTC_TIMESTAMP(), INTERVAL 30 SECOND)");
         seed_grant(db, grant_expired, account_id, realm_id, session_key, client_build,
@@ -638,23 +664,40 @@ int main() {
         check("F: wrong-realm grant got a Disconnect", f.is_disconnect);
 
         // ===== G. MOVEMENT after handshake -> authoritative MovementState =====
-        // Handshake on grant_move, then send a LEGAL movement intent (a small
-        // step from the 64 m spawn) on the same connection. The server validates
-        // it, advances authoritative state, and replies MovementState (#86). This
-        // proves the authoritative path over a REAL established session (the pure
-        // unit test proves the validator; this proves the wired serve loop).
+        // + OPS-03a (#420) REJECT -> live SNAP-BACK correction, on the SAME session.
+        // Handshake on grant_move, ENTER_WORLD once, then send TWO intents on the
+        // one in-world connection:
+        //   (1) a LEGAL 0.20 m walk step from the (64,64) spawn — accepted, the
+        //       authoritative position advances to ~64.20 (#86 authoritative path).
+        //   (2) an ILLEGAL move — a Swim mode flag (selector value 4) on the flat
+        //       bootstrap map, which has NO liquid volume: "swim on dry land" (SAD
+        //       §5.5 flag legality). The full envelope REJECTS it and replies a
+        //       snap-back MovementState at the LAST authoritative position (~64.20),
+        //       NOT the cheated position — reject + snap-back on the wired serve
+        //       loop, end-to-end (the pure unit test proves the rule; this proves
+        //       the wiring). Reusing the one session avoids a second ENTER_WORLD
+        //       (single-active-session, #326).
         {
-            // Spawn is the play-area centre (64, 64, 0). A 0.20 m walk step to
-            // (64.20, 64, 0) at t=100 is inside the walk budget (accept).
-            MoveResult g = drive_hello_then_move(port, grant_move, client_build,
-                                                 char_move,
-                                                 /*flags=Walk*/ 1, 64.20f, 64.0f, 0.0f,
-                                                 /*client_time_ms=*/100);
+            MoveResult g = drive_hello_then_move(
+                port, grant_move, client_build, char_move,
+                /*flags=Walk*/ 1, /*x=*/64.20f, /*y=*/64.0f, /*z=*/0.0f,
+                /*client_time_ms=*/100,
+                // Second, ILLEGAL intent on the same session: swim on dry land.
+                /*second_move=*/true, /*flags2=Swim*/ mw::movement::kModeSwim,
+                /*x2=*/64.40f, /*y2=*/64.0f, /*z2=*/0.0f,
+                /*intent_seq2=*/8, /*client_time_ms2=*/200);
             check("G: handshake ok on the movement connection", g.handshake_ok);
-            check("G: server replied MovementState to the intent", g.got_state);
+            check("G: server replied MovementState to the legal intent", g.got_state);
             check("G: MovementState acks the intent seq", g.ack_seq == 7);
             check("G: authoritative advanced to the validated position",
                   g.got_state && g.state_x > 64.19f && g.state_x < 64.21f);
+            // The illegal second move: server still replies (snap-back correction).
+            check("G: server replied a MovementState to the illegal move", g.got_state2);
+            check("G: the correction acks the illegal intent seq", g.ack_seq2 == 8);
+            // Snap-back holds the LAST authoritative position (~64.20, from move 1),
+            // NOT the cheated 64.40 — reject + snap-back proven on the live path.
+            check("G: illegal move corrected back to last authoritative (~64.20, not 64.40)",
+                  g.got_state2 && g.state2_x > 64.19f && g.state2_x < 64.21f);
         }
 
         server.join();

@@ -142,6 +142,36 @@ constexpr MoveMode mode_from_state_flags(std::uint32_t state_flags) {
     }
 }
 
+// --- Direction / action flag bits (the block ABOVE the 3-bit mode selector) ----
+// The server's copy of the CANONICAL state_flags bit layout the client encodes
+// (movement_constants.h §2b, #102/#247). These MUST match the client header +
+// movement_fixture.h client_flags byte-for-byte — the same documented-sync-point
+// discipline as the numeric constants (static_asserts pin them below). The
+// validator's FLAG-LEGALITY check (OPS-03a, #420 / SAD §5.5 "flag legality")
+// reads these to reject impossible flag combinations.
+inline constexpr std::uint32_t kFlagFwd     = 1u << 3;  // moving forward
+inline constexpr std::uint32_t kFlagBack    = 1u << 4;  // moving backward
+inline constexpr std::uint32_t kFlagStrafeL = 1u << 5;  // strafing left
+inline constexpr std::uint32_t kFlagStrafeR = 1u << 6;  // strafing right
+inline constexpr std::uint32_t kFlagJump    = 1u << 7;  // jump action
+inline constexpr std::uint32_t kFlagWalk    = 1u << 8;  // walk-toggle
+
+// Every bit a legit M0 client can set: the 3-bit mode selector plus the six
+// direction/action flags above. Bits 9..31 are RESERVED (0) at M0 — swim/sit/fly
+// land at M1. An intent carrying ANY reserved bit is a fabricated flag (e.g. a
+// "fly" hack, SAD §5.5 "no fly flag") and the validator rejects it.
+inline constexpr std::uint32_t kStateFlagsKnownMask =
+    kStateFlagsModeMask | kFlagFwd | kFlagBack | kFlagStrafeL | kFlagStrafeR |
+    kFlagJump | kFlagWalk;                                     // == 0x1FF
+inline constexpr std::uint32_t kStateFlagsReservedMask = ~kStateFlagsKnownMask;
+
+// The Swim mode selector value (M1-reserved locomotion, movement-spike.md §2 —
+// "MoveMode::Swim is reserved in the header, not implemented" at M0). It does not
+// fit the M0 enum; it is named here only so the flag-legality check can classify a
+// "swim on dry land" claim (SAD §5.5 "swim only in liquid volumes"). At M0 the
+// bootstrap map has NO liquid volume, so a Swim mode is ALWAYS illegal.
+inline constexpr std::uint32_t kModeSwim = 4u;
+
 // ===========================================================================
 // 4. Acceleration — [SPIKE-LOCKED]
 // ===========================================================================
@@ -176,6 +206,16 @@ inline constexpr float    kHeightTolerance     = 4.0f;   // [LOCKED: SAD §5.5 "
 // kMaxPacketDisplacement.) A single-packet displacement above this is corrected.
 inline constexpr float    kMaxPacketDisplacement =
     kRunSpeed * (1.0f / kMovementIntentMaxHz) * kSpeedTolerance;  // ≈ 0.69 m
+
+// TELEPORT hard-violation budget (OPS-03a, #420 / SAD §5.5 "teleport — displacement
+// > window budget = hard violation"). A single-packet horizontal jump larger than a
+// FULL sliding-window's worth of running at the tolerance cap is not a fast mover —
+// it is a position teleport (blink/warp). Derived purely from the LOCKED constants
+// (run speed × the 2 s window × ×1.15): 6.0 × 2.0 × 1.15 = 13.8 m. A jump above this
+// is classified as a teleport (its own violation kind) BEFORE the graduated speed
+// checks, so a warp is named honestly rather than folded into "speed".
+inline constexpr float    kTeleportHardBudget =
+    kRunSpeed * static_cast<float>(kSpeedWindowSeconds) * kSpeedTolerance;  // = 13.8 m
 
 // ===========================================================================
 // 7. World query geometry — [LOCKED] + M0 flat-world ground (D-19)
@@ -245,6 +285,25 @@ static_assert(static_cast<std::uint32_t>(MoveMode::Idle) == 0u, "MoveMode::Idle 
 static_assert(static_cast<std::uint32_t>(MoveMode::Walk) == 1u, "MoveMode::Walk must occupy state_flags value 1");
 static_assert(static_cast<std::uint32_t>(MoveMode::Run)  == 2u, "MoveMode::Run must occupy state_flags value 2");
 static_assert(static_cast<std::uint32_t>(MoveMode::Jump) == 3u, "MoveMode::Jump must occupy state_flags value 3");
+
+// #420 flag-layout contract: the direction/action bits sit ABOVE the mode field and
+// must be disjoint from it; the known mask is exactly the low 9 bits (mode + 6
+// flags); Swim occupies mode value 4. If the client shifts a flag or widens the
+// known set without a matching two-file PR, the flag-legality tests + these pins
+// trip loudly (mirrors the client header §2b + movement_fixture.h client_flags).
+static_assert(kFlagFwd == (1u << 3),   "flag-bit drift vs #102/#247 (kFlagFwd)");
+static_assert(kFlagWalk == (1u << 8),  "flag-bit drift vs #102/#247 (kFlagWalk)");
+static_assert((kStateFlagsKnownMask & kStateFlagsModeMask) == kStateFlagsModeMask,
+              "the known mask must contain the mode selector");
+static_assert(kStateFlagsKnownMask == 0x1FFu,
+              "known state_flags = mode (0x7) + 6 direction/action bits (bits 3..8)");
+static_assert((kStateFlagsKnownMask & kStateFlagsReservedMask) == 0u,
+              "known and reserved state_flags masks must be disjoint");
+static_assert(kModeSwim == 4u, "Swim mode selector value drift (#420)");
+static_assert((kModeSwim & kStateFlagsModeMask) == kModeSwim,
+              "Swim must be a low-3-bit mode selector value");
+static_assert(kTeleportHardBudget > kMaxPacketDisplacement,
+              "teleport budget must exceed the per-packet cap (else every fast move teleports)");
 
 }  // namespace meridian::worldd::movement
 

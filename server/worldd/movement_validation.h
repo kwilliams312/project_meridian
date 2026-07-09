@@ -57,12 +57,44 @@
 //       ground(x,y) is the flat plane kFlatGroundZ = 0 (bounds-only, no
 //       heightfield consumption yet).
 //
-// Any R2..R5 violation ⇒ REJECT ⇒ snap-back correction MovementState at the last
-// authoritative position (the mover reconciles). R1 rate excess ⇒ silently
-// dropped (no correction — it is throttling, not a cheat). The v0 policy ladder
-// stops at "correct (snap-back)"; the SAD §5.5 "N violations/min ⇒ kick ⇒ audit"
-// escalation is a later story (v1 full envelope, M0-exit row shows v0 = speed +
-// bounds only).
+// ─── v1 FULL ENVELOPE (OPS-03a, #420 — the rest of SAD §5.5) ─────────────────
+// The v0 rules R1..R5 above are the M0 speed+bounds floor. The M1 anti-cheat
+// foundation (epic #21, OPS-03) adds the remaining SAD §5.5 checks, evaluated on
+// each intake-admitted intent (order given in validate_move):
+//
+//   R6. TELEPORT (SAD §5.5 "teleport — displacement > window budget = hard
+//       violation"). A single-packet horizontal jump beyond kTeleportHardBudget
+//       (a full 2 s window of running at the ×1.15 cap = 13.8 m, #101 constants)
+//       is not a fast mover but a warp/blink — rejected as its OWN kind, checked
+//       BEFORE the graduated speed checks so it is named honestly.
+//
+//   R7. FLAG LEGALITY (SAD §5.5 "swim only in liquid volumes, no fly flag";
+//       PRD §4-M1 "can't claim swim on dry land, can't fly"). Rejected: a Swim
+//       mode selector while NOT in a liquid volume (swim on dry land — M0 has no
+//       liquid, so always); ANY reserved bit set (bits 9..31, a fabricated/fly
+//       flag); contradictory direction flags (forward+back or strafeL+strafeR at
+//       once). The known/reserved masks are the #102/#247 canonical layout
+//       (movement_constants.h §2b).
+//
+//   R8. MONOTONIC SEQUENCE (SAD §5.5 "ack counter the client must echo"; PRD §4-M1
+//       "teleport/ack counter — client can't skip forced-move acks"). Within a
+//       session, MovementIntent.seq must strictly increase; a seq <= the last
+//       processed seq is a REPLAY or OUT-OF-ORDER intent and is rejected.
+//
+//   R9. FORCED-MOVE ACK FREEZE (SAD §5.5 "forced moves carry an ack counter …
+//       un-acked counters freeze intake"). After the server issues a forced move
+//       (GM teleport / knockback / transfer placement, via force_correction), an
+//       intent whose seq predates the forced ack barrier is a stale in-flight
+//       packet and is rejected until the client's counter catches up (see
+//       force_correction). The forced correction also clears the speed window.
+//
+// Any R2..R9 violation ⇒ REJECT ⇒ snap-back correction MovementState at the last
+// authoritative position (the mover reconciles) AND an append-only ANTI-CHEAT
+// AUDIT entry on the OPS-05 audit stream (server PRD §6; the dispatch emits it via
+// meridian/core/audit — see movement_audit.h). R1 rate excess ⇒ silently dropped
+// (no correction, no audit — it is throttling, not a cheat). The policy ladder's
+// escalation beyond "correct (snap-back) + audit" (SAD §5.5 "N violations/min ⇒
+// kick") is config-driven GM tooling, a later story.
 
 #ifndef MERIDIAN_WORLDD_MOVEMENT_VALIDATION_H
 #define MERIDIAN_WORLDD_MOVEMENT_VALIDATION_H
@@ -100,11 +132,17 @@ struct MovementIntentPod {
 // snap-back MovementState regardless, denying the client an oracle for WHICH
 // check tripped — same principle as the grant-reject reasons in #84).
 enum class MoveReject : std::uint8_t {
-    kNone = 0,          // accepted (not a rejection)
-    kSpeedPerPacket,    // R2 — per-packet displacement over cap
-    kSpeedWindow,       // R3 — sliding-2 s-window displacement over cap
-    kOutOfBounds,       // R4 — outside map bounds
-    kZOutOfRange,       // R5 — z too far from ground sample
+    kNone = 0,           // accepted (not a rejection)
+    kSpeedPerPacket,     // R2 — per-packet displacement over cap
+    kSpeedWindow,        // R3 — sliding-2 s-window displacement over cap
+    kOutOfBounds,        // R4 — outside map bounds
+    kZOutOfRange,        // R5 — z too far from ground sample
+    // --- v1 full envelope (OPS-03a, #420) ---------------------------------
+    kTeleport,           // R6 — single-packet jump beyond the teleport hard budget
+    kIllegalFlag,        // R7 — illegal state-flag combination (swim on dry land,
+                         //      fabricated/fly bit, contradictory direction flags)
+    kStaleSequence,      // R8 — replayed / out-of-order intent (seq <= last processed)
+    kUnackedForcedMove,  // R9 — intent predates an un-acked forced move (intake frozen)
 };
 
 // The outcome of validating one intake-admitted intent. `accepted` says whether
@@ -170,13 +208,22 @@ public:
     // it; the first intent measures Δt from the spawn time.)
     bool has_processed() const { return processed_any_; }
 
-    // Validate one intake-admitted intent against R2..R5 (PURE — no clock, no I/O:
-    // `now_ms` is passed in, and equals intent.client_time_ms at the session path,
-    // or a test-supplied value in unit tests). Returns the MoveDecision WITHOUT
-    // mutating state — the caller applies it via apply(). Splitting validate from
-    // apply lets a test check a decision without committing it, and lets the
-    // caller stamp session fields onto the state before broadcast.
-    MoveDecision validate_move(const MovementIntentPod& intent, std::uint64_t now_ms) const;
+    // Validate one intake-admitted intent against the full v1 envelope (PURE — no
+    // clock, no I/O: `now_ms` is passed in, and equals intent.client_time_ms at the
+    // session path, or a test-supplied value in unit tests). Returns the
+    // MoveDecision WITHOUT mutating state — the caller applies it via apply().
+    // Splitting validate from apply lets a test check a decision without committing
+    // it, and lets the caller stamp session fields onto the state before broadcast.
+    //
+    // `in_liquid` is the environment fact the FLAG-LEGALITY check needs (SAD §5.5
+    // "swim only in liquid volumes, IF-6 metadata"): true iff the mover's (x,y) is
+    // inside a liquid volume. At M0 the flat bootstrap map has NO liquid, so the
+    // caller passes false and a Swim-mode intent is always the "swim on dry land"
+    // illegal-flag reject; the parameter is the seam an M1 water-volume sampler
+    // fills in unchanged. Defaulted false so the pure/DB-free callers (golden
+    // fixture, unit tests) stay wire-free.
+    MoveDecision validate_move(const MovementIntentPod& intent, std::uint64_t now_ms,
+                               bool in_liquid = false) const;
 
     // Commit a decision: on an ACCEPTED move, advance the authoritative position,
     // push the displacement into the sliding window, and record seq/flags/time as
@@ -188,6 +235,26 @@ public:
     // validate_move result.
     void apply(const MoveDecision& decision, const MovementIntentPod& intent,
                std::uint64_t now_ms);
+
+    // FORCED MOVE (OPS-03a, #420 / SAD §5.5 "forced moves — knockback, GM teleport —
+    // carry an ack counter the client must echo; un-acked counters freeze intake").
+    // The server applies a forced correction (a GM .tele, a knockback, a
+    // shard-transfer placement) by moving the authoritative position AND arming an
+    // ack barrier: `ack_seq` is the sequence value the client must reach/echo before
+    // its intents resume being validated. Until then, an intent with seq < ack_seq
+    // is a STALE pre-teleport packet still in flight and is rejected with
+    // kUnackedForcedMove (intake frozen, no snap-back oracle). Because the position
+    // is authoritatively reset, the sliding speed window is CLEARED (SAD §5.5 "a
+    // shard transfer resets the sliding window" — the teleport itself can never trip
+    // a speed violation on the next legit move). `ack_seq` must exceed the last
+    // processed seq so the acknowledging intent also satisfies the monotonic guard.
+    // No live M0 source arms this yet (GM teleport / knockback land with their own
+    // stories); it is the validated mechanism the envelope requires.
+    void force_correction(const Position& corrected, std::uint32_t ack_seq);
+
+    // Is a forced move currently awaiting the client's ack? (test/diagnostic.)
+    bool awaiting_forced_ack() const { return awaiting_forced_ack_; }
+    std::uint32_t forced_ack_seq() const { return forced_ack_seq_; }
 
     // Sliding-window bookkeeping accessor (test/diagnostic): total displacement
     // currently retained in the trailing kSpeedWindowSeconds window.
@@ -216,6 +283,11 @@ private:
     std::uint32_t last_seq_ = 0;
     std::uint32_t last_flags_ = 0;
     std::uint64_t last_time_ms_ = 0;
+
+    // Forced-move ack barrier (#420). Armed by force_correction(); disarmed once an
+    // intent with seq >= forced_ack_seq_ is processed (the client has acknowledged).
+    bool          awaiting_forced_ack_ = false;
+    std::uint32_t forced_ack_seq_ = 0;
 
     std::deque<WindowSample> window_;  // trailing 2 s displacement samples
 };

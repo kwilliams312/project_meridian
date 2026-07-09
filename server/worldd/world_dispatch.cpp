@@ -24,6 +24,7 @@
 #include "gossip.h"      // NPC-01 gossip menu planner (#372)
 #include "item_store.h"  // ITM-01 durable item persistence: mint/place (loot + quest reward)
 #include "map_tick.h"    // per-map tick orchestrator (SAD §2.5 phase order; #349)
+#include "movement_audit.h"  // OPS-03a anti-cheat audit record builder (#420)
 #include "meridian/core/audit.hpp"
 #include "meridian/core/log.hpp"
 #include "meridian/metrics/catalog.h"
@@ -1259,24 +1260,37 @@ void Dispatcher::register_m0_stubs() {
             return;
         }
 
-        // R2..R5 — validate against the shared constants, then commit the
+        // R2..R9 — validate against the shared constants (the full OPS-03a envelope:
+        // speed windows, teleport/ack, bounds, z, flag legality), then commit the
         // decision to the authoritative state (advance on accept, snap-back on
         // reject). At M0 the per-connection movement state is single-threaded by
         // construction (one IO worker per connection); the seam onto the shared
-        // world thread is the WorldServer queue (#87).
-        MoveDecision decision = ctx.movement->validate_move(pod, pod.client_time_ms);
+        // world thread is the WorldServer queue (#87). `in_liquid` is false at M0 —
+        // the flat bootstrap map (D-19) has NO liquid volume, so a Swim-mode intent
+        // is always the "swim on dry land" illegal-flag reject; the M1 water-volume
+        // sampler fills this seam unchanged (SAD §5.5 "swim only in liquid volumes").
+        MoveDecision decision =
+            ctx.movement->validate_move(pod, pod.client_time_ms, /*in_liquid=*/false);
         ctx.movement->apply(decision, pod, pod.client_time_ms);
 
-        // OPS-05: a REJECTED intent is BOTH a movement-check violation (by kind —
-        // meridian_movement_violations_total{...,kind}) AND a snap-back correction
-        // issued to the client (meridian_movement_corrections_total{...}). These
-        // are the Player-experience dashboard's correction/snap-back rate panels.
+        // OPS-05 + OPS-03a: a REJECTED intent is a movement-check violation (by kind
+        // — meridian_movement_violations_total{...,kind}), a snap-back correction to
+        // the client (meridian_movement_corrections_total{...}), AND an append-only
+        // ANTI-CHEAT AUDIT flag on the OPS-05 audit stream (server PRD §6 / SAD §5.5
+        // policy ladder). The metrics feed the Player-experience dashboard panels;
+        // the audit record is the durable, GM-reviewable anti-cheat trail.
         if (!decision.accepted) {
             metrics::movement_violations_total()
                 .with({ctx.labels.realm, ctx.labels.zone, ctx.labels.shard,
                        move_reject_kind(decision.reject)})
                 .inc();
             metrics::movement_corrections_total().with(ctx.labels.rzs()).inc();
+            // Anti-cheat audit (#420): attribute the flag to the session's account +
+            // grant, name the offending entity + reject cause + snapped-back position.
+            // No secret material (see movement_audit.h / core::audit no-secrets rule).
+            audit::emit(build_movement_reject_audit(
+                ctx.account_id, ctx.grant_id, ctx.movement->entity_guid(),
+                decision.reject, decision.pos, decision.ack_seq));
         }
 
         // The authoritative timestamp for this MovementState (SAD §5.5 / world.fbs

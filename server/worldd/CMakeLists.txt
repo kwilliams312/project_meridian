@@ -24,6 +24,7 @@ add_library(world-dispatch STATIC
   world_session.cpp
   world_boot.cpp
   movement_validation.cpp
+  movement_audit.cpp
   aoi_grid.cpp
   area_triggers.cpp
   combat_unit.cpp
