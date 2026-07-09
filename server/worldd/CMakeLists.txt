@@ -34,6 +34,7 @@ add_library(world-dispatch STATIC
   leveling.cpp
   quest_def.cpp
   quest_log.cpp
+  loot_registry.cpp
   world_state.cpp
   active_sessions.cpp
   ability_store.cpp
@@ -54,6 +55,7 @@ target_link_libraries(world-dispatch
     meridian::items    # ITM-01 item model + inventory/currency — quest rewards/collect (#371) + loot transfer (#369)
     meridian::loot     # ITM-02 loot tables + rolls + corpse loot sessions (#369)
     meridian::vendor   # ECO-01 vendor buy/sell/buyback handlers (#370) — pulls meridian::items
+    meridian::npc      # NPC-01/02 gossip menus + trainers (#372) — pulls meridian::items
 
     meridian::metrics  # OPS-05 session/opcode/movement/tick/disconnect metrics (#164)
     meridian::trace    # OPS-05 session-flow trace: the worldd.enter_world span (#166)
@@ -322,6 +324,51 @@ target_link_libraries(worldd-combat-wire-test
 )
 set_target_properties(worldd-combat-wire-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-combat-wire COMMAND worldd-combat-wire-test)
+
+# --- Quest / loot / gossip / trainer WIRE round-trip test (issue #388). --------
+# Self-contained (no DB): stands the REAL TLS listener + world serve loop on an
+# ephemeral port; a test-installed WORLD_HELLO handler promotes the connection
+# in-world (DB-free) with a quest log + synthetic class/level, and the test seeds
+# the shared loot registry with a corpse. Proves the QST-01 / ITM-02 / NPC-01/02
+# opcode families are LIVE on the session dispatch path — quest accept + log
+# snapshot, gossip menu (state-gated) + a pushed trainer list, loot window open +
+# release, and the typed rejections (unknown/already-active quest, wrong giver,
+# unknown/foreign corpse, pre-handshake close). The DB-asserting flows (loot ->
+# inventory, turn-in reward money, trainer copper debit) are the DB-backed
+# worldd-quest-loot-npc test. Always runs in the plain server ctest.
+add_executable(worldd-quest-loot-npc-wire-test
+  test/quest_loot_npc_wire_test.cpp
+)
+target_link_libraries(worldd-quest-loot-npc-wire-test
+  PRIVATE
+    meridian::world-dispatch
+    meridian::npc
+    Threads::Threads
+)
+set_target_properties(worldd-quest-loot-npc-wire-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-quest-loot-npc-wire COMMAND worldd-quest-loot-npc-wire-test)
+
+# --- Quest / loot / gossip / trainer LIVE-SESSION DB integration test (#388). --
+# The acceptance bar: drives the QST-01 / ITM-02 / NPC-01/02 opcodes over a REAL
+# TLS session against a REAL MariaDB and asserts the DURABLE side effects — looted
+# ore rows land in the character's DB inventory, loot money + quest reward + trainer
+# debit all move character.money over the wire, and out-of-phase / wrong-looter
+# requests get typed rejects. CREATE-TABLE-IF-NOT-EXISTS the character / item /
+# inventory tables (mirrors 0001_init_characters.up.sql) so the same DB is the
+# characters DB. Reads MERIDIAN_DB_* and SKIPS (exit 0) when none are set — inert in
+# the plain server ctest, real only in the worldd-session CI job / test.sh --db.
+add_executable(worldd-quest-loot-npc-db-test
+  test/quest_loot_npc_db_it.cpp
+)
+target_link_libraries(worldd-quest-loot-npc-db-test
+  PRIVATE
+    meridian::world-dispatch
+    meridian::characters
+    meridian::npc
+    Threads::Threads
+)
+set_target_properties(worldd-quest-loot-npc-db-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-quest-loot-npc-db COMMAND worldd-quest-loot-npc-db-test)
 
 # --- Area triggers + POI discovery UNIT test (WLD-01/03; #368). ---------------
 # PURE (no DB, no socket, no TLS): exercises BOTH layers directly —

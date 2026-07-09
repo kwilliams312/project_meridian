@@ -53,7 +53,10 @@
 #include "active_sessions.h"
 #include "buyback.h"  // vendor::BuybackQueue — per-session buyback state (ECO-01, #370)
 #include "combat_resolver.h"
+#include "loot_registry.h"  // shared corpse loot registry (ITM-02 wire; #388)
 #include "movement_validation.h"
+#include "quest_log.h"  // QuestLog — per-session quest state machine (QST-01 #371)
+#include "trainer.h"    // npc::LearnedAbilitySet — per-session learned abilities (NPC-02 #372)
 #include "world_generated.h"
 #include "world_metrics.h"
 #include "world_session.h"
@@ -194,6 +197,39 @@ struct ConnCtx {
     // are inert until kInWorld — char_id is 0 pre-spawn and the handlers reject.
     std::uint64_t char_id = 0;
     vendor::BuybackQueue buyback;
+
+    // The spawned character's class + level (roster.h ids), captured at ENTER_WORLD
+    // from the loaded owned character. The trainer path (NPC-02, #372) gates a learn
+    // on class + level; the quest path (QST-01, #371) gates an accept on level. Both
+    // are server-authoritative — read from the DB-loaded character, never a client
+    // field. 0 / 1 pre-spawn (the handlers reject before kInWorld).
+    std::uint8_t char_class = 0;
+    std::uint16_t char_level = 1;
+
+    // QUEST state (QST-01, #371). This session's quest state machine — accept /
+    // objective progress / turn-in — a pure, in-memory per-character log (like the
+    // combat/movement state above; single-threaded per connection). Emplaced at
+    // ENTER_WORLD over the shared placeholder QuestStore; std::nullopt until spawned.
+    // At M1 quest progress is NOT persisted (the durable character_quest store is a
+    // later story / mcc #28); reward ITEMS + copper granted at turn-in ARE durable
+    // (minted/credited to char_db). The reward XP is reported but not persisted
+    // (CHR-03 leveling is in-memory in MapTick).
+    std::optional<QuestLog> quests;
+
+    // LOOT (ITM-02, #369/#388). `loot` is the SHARED, thread-safe corpse-loot
+    // registry (set by serve_connection from the WorldServer; may be null in the
+    // DB-less smoke path). `open_corpse` is THIS session's currently-open loot
+    // window (the corpse guid), set on a LOOT_REQUEST(OK) and cleared on
+    // LOOT_RELEASE / when the corpse is fully looted — the per-connection "open loot
+    // session" state (mirrors the vendor buyback queue's per-session scope).
+    LootRegistry* loot = nullptr;
+    std::optional<std::uint64_t> open_corpse;
+
+    // TRAINER (NPC-02, #372). This session's IN-MEMORY learned-ability set. At M1
+    // there is no durable character_ability table (trainer.h file header) — the
+    // COPPER debit IS durable (character.money via char_db); the learned row is
+    // per-session. std::nullopt-free (empty until a first learn), like `buyback`.
+    npc::LearnedAbilitySet learned;
 
     // Combat (CMB-01, #344/#345). `abilities` is the shared, read-only ability
     // template store (#343), set by serve_connection from the WorldServer; the
@@ -416,6 +452,12 @@ public:
     // it (kick-old on collision) so an account holds at most one in-world session.
     // Exposed for tests that assert active_count()/is_active().
     ActiveSessionRegistry& active_sessions();
+
+    // The shared corpse-loot registry (ITM-02 wire; #388). One per server, keyed by
+    // corpse guid; the LOOT_* dispatch handlers open/take/release against it. The
+    // world-thread creature-death hook (#369) seeds it; a test seeds it directly to
+    // drive the loot wire path. Exposed so tests can insert a corpse's loot session.
+    LootRegistry& loot_registry();
 
 private:
     void world_thread_main();
