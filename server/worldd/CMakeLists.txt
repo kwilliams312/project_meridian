@@ -712,6 +712,36 @@ target_compile_definitions(worldd-itm1-chain-run-test PRIVATE
 set_target_properties(worldd-itm1-chain-run-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-itm1-chain-run COMMAND worldd-itm1-chain-run-test)
 
+# --- OPS-03c INSTRUMENTED CHEAT-CLIENT regression suite (#422, epic #21 EXIT). ---
+# THE epic-#21 exit criterion: "speedhack/teleport/dupe attempts from the cheat client
+# are all rejected and logged." Stands up a LIVE worldd session (real TLS listener +
+# serve loop, throwaway MariaDB owning world+auth+characters + mcc content) like the
+# #399 chain-run, then drives a battery of deliberate exploit attempts (speedhack /
+# teleport / fabricated-flag movement, double-take loot dupe, impossible economy delta)
+# and asserts EACH is REJECTED server-side (snap-back / typed error, no illegal gain)
+# AND RECORDED on the OPS-05 anti-cheat/economy audit stream (captured from stdout).
+# Same DB-gated skip contract as the chain-run: needs MERIDIAN_WORLDDB_*/MERIDIAN_DB_*,
+# a mariadb/mysql client, and an mcc binary; SKIPS (exit 0) otherwise — inert in the
+# plain server ctest, real under scripts/dev/test.sh --db / the DB CI job.
+add_executable(worldd-cheat-client-suite-test
+  test/cheat_client_suite_it.cpp
+)
+target_link_libraries(worldd-cheat-client-suite-test
+  PRIVATE
+    meridian::world-dispatch
+    meridian::characters
+    meridian::npc
+    Threads::Threads
+)
+target_compile_definitions(worldd-cheat-client-suite-test PRIVATE
+  CHEAT_CONTENT_DIR="${CMAKE_SOURCE_DIR}/../content"
+  CHEAT_WORLD_DDL_DIR="${CMAKE_SOURCE_DIR}/../schema/sql/world"
+  CHEAT_AUTH_MIGRATIONS_DIR="${CMAKE_SOURCE_DIR}/db/auth/migrations"
+  CHEAT_CHAR_MIGRATIONS_DIR="${CMAKE_SOURCE_DIR}/db/characters/migrations"
+  CHEAT_MCC_BIN="${CMAKE_BINARY_DIR}/../mcc/mcc")
+set_target_properties(worldd-cheat-client-suite-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-cheat-client-suite COMMAND worldd-cheat-client-suite-test)
+
 # --- Combat tick + seeded GOLDEN sim-harness scenarios (CMB-01/02; #349). ------
 # The epic-#18 capstone. PURE (no DB, no socket): drives the MapTick orchestrator
 # (map_tick.{h,cpp}) — the single-threaded per-map tick in SAD §2.5 phase order —
