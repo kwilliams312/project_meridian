@@ -7,6 +7,7 @@
 #include "world_dispatch.h"
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -144,6 +145,7 @@ bool verify_payload_for(net::Opcode op, const Frame& f) {
         case net::Opcode::CHAR_DELETE_REQUEST: return verify_table<mn::CharDeleteRequest>(f);
         case net::Opcode::ENTER_WORLD_REQUEST: return verify_table<mn::EnterWorldRequest>(f);
         case net::Opcode::CAST_REQUEST:        return verify_table<mn::CastRequest>(f);
+        case net::Opcode::CHAT_MESSAGE:        return verify_table<mn::ChatMessage>(f);
         default:                           return false;
     }
 }
@@ -225,6 +227,18 @@ Bytes encode_char_delete(mn::CharDeleteStatus status) {
 Bytes encode_enter_world_response(mn::EnterWorldStatus status) {
     fb::FlatBufferBuilder b;
     b.Finish(mn::CreateEnterWorldResponse(b, status));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// ---- chat encoders (S→C, world.fbs; SOC-01 #367) ---------------------------
+
+// Build a ChatRejected payload — the typed refusal reply. `target` echoes the
+// attempted whisper target (empty for non-whisper) so the client can surface it.
+Bytes encode_chat_rejected(mn::ChatChannel channel, mn::ChatRejectReason reason,
+                           const std::string& target) {
+    fb::FlatBufferBuilder b;
+    auto t = b.CreateString(target);
+    b.Finish(mn::CreateChatRejected(b, channel, reason, t));
     return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
 }
 
@@ -319,6 +333,16 @@ void send_s2c(net::Session& sess, ConnCtx& ctx, const Bytes& frame) {
     } else {
         sess.write_frame(frame);
     }
+}
+
+// Whether a chat body is empty or all-whitespace (#367). Not a content filter —
+// just the shape check that rejects a blank line (no profanity/content filter at
+// M1). ASCII whitespace is sufficient for the M1 chat surface.
+bool is_blank(const std::string& s) {
+    for (unsigned char c : s) {
+        if (std::isspace(c) == 0) return false;
+    }
+    return true;
 }
 
 // A monotonic ms clock for the GCD/cast timers (steady, never wall-clock).
@@ -1067,6 +1091,7 @@ void Dispatcher::register_m0_stubs() {
                id.entity_guid = pc.char_guid;
                id.type_id = pc.class_id;     // M0: class stands in for type_id
                id.char_class = pc.class_id;  // #328: relay the class so clients color by class
+               id.name = pc.name;            // #367: the whisper name key + ChatDeliver sender_name
                EnterResult er = ctx.world->enter(
                    id, spawn,
                    [egress](net::Opcode op, const Bytes& payload) {
@@ -1234,10 +1259,108 @@ void Dispatcher::register_m0_stubs() {
         }
     });
 
+    // --- 0x6xxx CHAT: server-authoritative chat router (SOC-01 #367) -----------
+    // ONE client opcode (CHAT_MESSAGE) whose `channel` selects the routing (server
+    // SAD §2.5 "spatial chat stays here", §3.8):
+    //   • SAY / YELL — spatial, delivered by the AoI grid (#87) to the sessions
+    //     within a radius (say = local, yell = wider);
+    //   • WHISPER    — routed cross-session to the named target (v0.1 "via the bus
+    //     to a world-thread manager" — the in-process registry at M1; #88 over the
+    //     real bus at M3);
+    //   • ZONE       — the zone/general channel broadcast to all in-world sessions.
+    // The server validates sender state (must be spawned) + applies the chat rate
+    // class (OPS-03, ctx.chat_intake) and refuses empty/over-length/over-rate
+    // sends with a typed ChatRejected. No profanity/content filter at M1.
+    on(net::Opcode::CHAT_MESSAGE, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+        // A chat frame before the handshake is a protocol error (mirrors CAST /
+        // MOVEMENT_INTENT) — ask the serve loop to close.
+        if (!ctx.authenticated) {
+            log::warn(kCat, "CHAT_MESSAGE before handshake — rejecting");
+            ctx.disconnect = true;
+            ctx.disconnect_reason = net::DisconnectReason::PROTOCOL_MISMATCH;
+            ctx.disconnect_message = "chat before handshake";
+            return;
+        }
+
+        const auto* msg = fb::GetRoot<mn::ChatMessage>(f.payload);
+        if (msg == nullptr) return;  // verified upstream; defensive
+        const mn::ChatChannel channel = msg->channel();
+        const std::string target = msg->target() ? msg->target()->str() : std::string();
+        const std::string text = msg->text() ? msg->text()->str() : std::string();
+
+        auto reject = [&](mn::ChatRejectReason reason) {
+            send_s2c(sess, ctx,
+                     encode_frame(net::Opcode::CHAT_REJECTED, f.seq,
+                                  encode_chat_rejected(channel, reason, target)));
+        };
+
+        // Must be SPAWNED in-world (char-select chat is a client bug, not hostile —
+        // REJECT, do not disconnect; mirrors the CAST_REQUEST not-in-world path).
+        if (ctx.phase != SessionPhase::kInWorld || ctx.world == nullptr || !ctx.entered) {
+            reject(mn::ChatRejectReason::NOT_IN_WORLD);
+            return;
+        }
+
+        // Rate class (OPS-03): drop an over-rate send with a typed reject + the
+        // Errors-dashboard drop counter (mirrors MOVEMENT_INTENT's rate drop).
+        if (!ctx.chat_intake.admit(steady_now_ms())) {
+            metrics::opcode_dropped_total()
+                .with(ctx.labels.rzs_opcode_reason(
+                    opcode_label(static_cast<std::uint16_t>(net::Opcode::CHAT_MESSAGE)),
+                    "rate_limit"))
+                .inc();
+            reject(mn::ChatRejectReason::RATE_LIMITED);
+            log::debug(kCat, "CHAT_MESSAGE dropped (rate class)");
+            return;
+        }
+
+        // Shape checks (NOT a content filter — none at M1): reject a blank or an
+        // over-length body. Server is authoritative — no silent truncation.
+        if (is_blank(text)) {
+            reject(mn::ChatRejectReason::EMPTY);
+            return;
+        }
+        if (text.size() > kChatMaxTextBytes) {
+            reject(mn::ChatRejectReason::TOO_LONG);
+            return;
+        }
+
+        switch (channel) {
+            case mn::ChatChannel::SAY:
+            case mn::ChatChannel::YELL:
+                // Spatial: delivered by the #87 grid to the sessions in range.
+                ctx.world->deliver_spatial(ctx.slot, channel, text);
+                break;
+            case mn::ChatChannel::WHISPER: {
+                // Directed cross-session by target name.
+                const ChatWhisperOutcome outcome =
+                    ctx.world->whisper(ctx.slot, target, text);
+                if (outcome == ChatWhisperOutcome::kNoTarget) {
+                    reject(mn::ChatRejectReason::NO_TARGET);
+                } else if (outcome == ChatWhisperOutcome::kTargetOffline) {
+                    reject(mn::ChatRejectReason::TARGET_OFFLINE);
+                }
+                // kDelivered: the target got it; the sender's client local-echoes
+                // "To X: …" (no S→C ack needed at M1).
+                break;
+            }
+            case mn::ChatChannel::ZONE:
+                // Channel: broadcast to every in-world session on this shard.
+                ctx.world->deliver_channel(ctx.slot, text);
+                break;
+            default:
+                // An out-of-range channel enum — malformed input. Drop + log; the
+                // wire verifier accepted the table but not the enum domain.
+                log::warn(kCat, "CHAT_MESSAGE unknown channel=" +
+                                    std::to_string(static_cast<int>(channel)) + " — dropped");
+                break;
+        }
+    });
+
     // No handler is registered for server→client opcodes (HANDSHAKE_OK,
-    // MOVEMENT_STATE, ENTITY_ENTER/UPDATE/LEAVE, CHAR_*_RESPONSE): a client
-    // sending one is out-of-direction and is treated as an unknown opcode
-    // (Disconnect).
+    // MOVEMENT_STATE, ENTITY_ENTER/UPDATE/LEAVE, CHAR_*_RESPONSE, CHAT_DELIVER/
+    // CHAT_REJECTED): a client sending one is out-of-direction and is treated as
+    // an unknown opcode (Disconnect).
 }
 
 // ---------------------------------------------------------------------------

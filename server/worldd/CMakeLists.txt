@@ -192,6 +192,24 @@ target_link_libraries(worldd-aoi-test
 set_target_properties(worldd-aoi-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-aoi COMMAND worldd-aoi-test)
 
+# --- Chat router UNIT test (SOC-01; #367). ------------------------------------
+# PURE (no DB, no socket, no session): drives WorldState's chat routing directly
+# with CAPTURING egress sinks (the EgressFn is a std::function, so a test lambda
+# records exactly the frames the router emits). Proves the story's acceptance
+# list deterministically — say reaches in-range only, yell reaches wider, whisper
+# routes to the named target across sessions (and TARGET_OFFLINE for an unknown
+# name), zone broadcasts to all — plus the OPS-03 chat rate class (ChatIntake).
+# Always runs in the plain server ctest (no MERIDIAN_DB_* needed).
+add_executable(worldd-chat-test
+  test/world_chat_test.cpp
+)
+target_link_libraries(worldd-chat-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-chat-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-chat COMMAND worldd-chat-test)
+
 # --- Combat ability/effect data model + store UNIT test (CMB-01 foundation; #343).
 # PURE (no DB, no socket, no session): drives the AbilityStore load + O(1) lookup
 # and the placeholder ability set's shape directly. It always runs in the plain

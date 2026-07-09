@@ -1140,6 +1140,83 @@ std::vector<Message> build_corpus() {
                  expect(m->name_id() == 0x00000007u, "if2_poi_discovered.name_id");
                }});
 
+  // ==== IF-2 chat / social (world.fbs; SOC-01 #367) =========================
+
+  // ChatMessage — C->S a WHISPER (the channel that carries a target name), so the
+  // golden pins BOTH string fields (target + text) and the channel enum.
+  c.push_back({"if2_chat_message", "IF-2", "CHAT_MESSAGE (0x6001)",
+               "C->S whisper to \"Brynn\": target + text + channel",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 auto target = b.CreateString("Brynn");
+                 auto text = b.CreateString("meet me at the gate");
+                 b.Finish(mn::CreateChatMessage(b, mn::ChatChannel::WHISPER, target, text));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::ChatMessage>(nullptr),
+                             "if2_chat_message verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::ChatMessage>(buf.data());
+                 expect(m->channel() == mn::ChatChannel::WHISPER, "if2_chat_message.channel");
+                 expect(m->target() && m->target()->str() == "Brynn",
+                        "if2_chat_message.target");
+                 expect(m->text() && m->text()->str() == "meet me at the gate",
+                        "if2_chat_message.text");
+               }});
+
+  // ChatDeliver — S->C a SAY line delivered with the author's guid + name.
+  c.push_back({"if2_chat_deliver", "IF-2", "CHAT_DELIVER (0x6002)",
+               "S->C say from Aldric: channel + sender guid/name + text",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 auto name = b.CreateString("Aldric");
+                 auto text = b.CreateString("hail, travellers");
+                 b.Finish(mn::CreateChatDeliver(b, mn::ChatChannel::SAY,
+                                                /*sender_guid=*/0x00000000AABBCCDDULL,
+                                                name, text));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::ChatDeliver>(nullptr),
+                             "if2_chat_deliver verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::ChatDeliver>(buf.data());
+                 expect(m->channel() == mn::ChatChannel::SAY, "if2_chat_deliver.channel");
+                 expect(m->sender_guid() == 0x00000000AABBCCDDULL,
+                        "if2_chat_deliver.sender_guid");
+                 expect(m->sender_name() && m->sender_name()->str() == "Aldric",
+                        "if2_chat_deliver.sender_name");
+                 expect(m->text() && m->text()->str() == "hail, travellers",
+                        "if2_chat_deliver.text");
+               }});
+
+  // ChatRejected — S->C a WHISPER refused because the target is offline.
+  c.push_back({"if2_chat_rejected", "IF-2", "CHAT_REJECTED (0x6003)",
+               "S->C whisper refused: TARGET_OFFLINE, echoes target",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 auto target = b.CreateString("Brynn");
+                 b.Finish(mn::CreateChatRejected(b, mn::ChatChannel::WHISPER,
+                                                 mn::ChatRejectReason::TARGET_OFFLINE,
+                                                 target));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::ChatRejected>(nullptr),
+                             "if2_chat_rejected verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::ChatRejected>(buf.data());
+                 expect(m->channel() == mn::ChatChannel::WHISPER, "if2_chat_rejected.channel");
+                 expect(m->reason() == mn::ChatRejectReason::TARGET_OFFLINE,
+                        "if2_chat_rejected.reason");
+                 expect(m->target() && m->target()->str() == "Brynn",
+                        "if2_chat_rejected.target");
+               }});
+
   return c;
 }
 

@@ -123,4 +123,40 @@ std::unordered_set<AoiId> AoiGrid::interest_set(
     return out;
 }
 
+std::unordered_set<AoiId> AoiGrid::within_radius(AoiId self, float radius) const {
+    std::unordered_set<AoiId> out;
+    if (radius <= 0.0f) return out;
+
+    auto self_pos_it = positions_.find(self);
+    if (self_pos_it == positions_.end()) return out;  // self not tracked
+    const Position& self_pos = self_pos_it->second;
+    const CellCoord self_cell = cell_of(self_pos);
+
+    // Size the neighbour block to the requested radius (no hysteresis, one-shot):
+    // a candidate up to `radius` away can be at most ceil(radius / cell) cells
+    // off in either axis, so a (2k+1)×(2k+1) block is exactly sufficient. This is
+    // the SAD §2.5 cell-visitor "notify observers within R of P" — a wide yell
+    // (k > 1) and a tight say (k = 1) are both covered.
+    const std::int32_t k =
+        static_cast<std::int32_t>(std::ceil(radius / kAoiCellSizeM));
+
+    for (std::int32_t dy = -k; dy <= k; ++dy) {
+        for (std::int32_t dx = -k; dx <= k; ++dx) {
+            const CellKey key{self_cell.cx + dx, self_cell.cy + dy};
+            auto bit = ids_by_cell_.find(key);
+            if (bit == ids_by_cell_.end()) continue;
+
+            for (AoiId cand : bit->second) {
+                if (cand == self) continue;  // never notify oneself via the grid
+                auto cpit = positions_.find(cand);
+                if (cpit == positions_.end()) continue;  // defensive
+                if (horizontal_distance(self_pos, cpit->second) <= radius) {
+                    out.insert(cand);
+                }
+            }
+        }
+    }
+    return out;
+}
+
 }  // namespace meridian::worldd
