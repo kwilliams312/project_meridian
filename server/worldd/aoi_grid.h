@@ -93,6 +93,16 @@ static_assert(kAoiLeaveRadiusM <= kAoiCellSizeM,
               "leave radius must fit inside a cell's 3x3 neighbour reach so no "
               "in-range partner is missed by the neighbour-block query");
 
+// Chat say/yell radii (SOC-01 #367) — spatial tuning, so they live here with the
+// AoI radii and feed within_radius(). say = a TIGHT local radius; yell = WIDER
+// (the story's "say = local cell radius, yell = wider"). Traceable to SAD §2.5
+// (default interest R = 90 m) scaled for the M0 128 m play area (D-19). Unlike
+// the movement enter/leave band, these are one-shot (no hysteresis) and yell may
+// exceed a single cell — within_radius sizes its scan block to the radius.
+inline constexpr float kChatSayRadiusM  = 25.0f;   // /say — local
+inline constexpr float kChatYellRadiusM = 90.0f;   // /yell — wider (SAD default R)
+static_assert(kChatYellRadiusM > kChatSayRadiusM, "yell must reach wider than say");
+
 // A discrete cell coordinate on the uniform grid.
 struct CellCoord {
     std::int32_t cx = 0;
@@ -147,6 +157,17 @@ public:
     // empty.
     std::unordered_set<AoiId> interest_set(
         AoiId self, const std::unordered_set<AoiId>& previous) const;
+
+    // Compute the set of OTHER tracked session ids whose horizontal distance from
+    // `self` is ≤ `radius` — a PURE, ONE-SHOT radius query with NO hysteresis (a
+    // chat/say/yell "notify observers within R of P" visitor, SAD §2.5, distinct
+    // from the movement interest set's sticky enter/leave band). `self` is never
+    // in the result; an untracked `self` yields the empty set. Unlike
+    // interest_set (whose 3×3 block assumes radius ≤ cell size), this scans a
+    // (2k+1)×(2k+1) block sized to the requested radius (k = ceil(radius /
+    // cell)), so an arbitrary radius — a wide yell, a small say — is covered
+    // exactly. Used by the SOC-01 chat router (#367) for spatial say/yell.
+    std::unordered_set<AoiId> within_radius(AoiId self, float radius) const;
 
 private:
     // Bucket key for the by-cell index.

@@ -182,6 +182,7 @@ struct ConnCtx {
 
     std::optional<SessionMovementState> movement;  // authoritative movement (#86), post-auth
     MovementIntake intake;                          // ≤ 10/s intent-rate gate (#86)
+    ChatIntake chat_intake;                         // chat rate class (OPS-03; #367)
 
     // Combat (CMB-01, #344/#345). `abilities` is the shared, read-only ability
     // template store (#343), set by serve_connection from the WorldServer; the

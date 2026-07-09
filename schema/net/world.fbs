@@ -91,7 +91,19 @@ enum Opcode : uint16 {
 
   // --- 0x4xxx  quest / gossip    (reserved — see placeholder below) ---
   // --- 0x5xxx  inventory/economy (reserved — see placeholder below) ---
-  // --- 0x6xxx  chat / social     (reserved — see placeholder below) ---
+
+  // --- 0x6xxx  chat / social     (M1 — SOC-01: chat router, #367) ---
+  // Server-authoritative chat routing in worldd (server SAD §2.5 "spatial chat
+  // stays here", §3.8). say/yell are delivered by the AoI grid (#87 — say = a
+  // local radius, yell = wider); whisper is routed cross-session by target name
+  // (v0.1 routed it "via the bus to a world-thread manager" — the in-process
+  // in-world registry at M1; #88 addresses it over the real bus at M3);
+  // zone/general is a channel broadcast. The server validates sender state +
+  // applies the dispatcher rate class (OPS-03). No profanity filter at M1.
+  CHAT_MESSAGE  = 0x6001,  // C→S  send a chat message (say/yell/whisper/zone)
+  CHAT_DELIVER  = 0x6002,  // S→C  a chat message delivered to this client
+  CHAT_REJECTED = 0x6003,  // S→C  the send was refused (typed reason)
+
   // --- 0x7xxx  group / instance  (reserved — see placeholder below) ---
   // --- 0x8xxx  shard / transfer  (reserved — see placeholder below) ---
   // --- 0xExxx  GM                (reserved — see placeholder below) ---
@@ -528,6 +540,70 @@ table LevelUp {
 }
 
 // ===========================================================================
+// 0x6xxx — chat / social  (M1 — SOC-01: chat router, #367)
+// ===========================================================================
+// Server-authoritative chat (server SAD §2.5 "spatial chat stays here", §3.8).
+// The client sends ONE ChatMessage per line; the channel selects the routing:
+//   • SAY / YELL — spatial: delivered by the AoI grid (#87) to the sessions
+//     within a radius of the sender (say = a local radius, yell = wider). Never
+//     leaves the map — AoI visitors on the shard, shard-local by construction.
+//   • WHISPER    — directed: routed cross-session to the named target (v0.1 "via
+//     the bus to a world-thread manager"; #88 over the real bus at M3). `target`
+//     is the recipient's character name (case-insensitive).
+//   • ZONE       — channel: broadcast to every in-world session (the zone/general
+//     channel; realm-wide across shards at M3 via servicesd).
+// The server validates sender state (must be in-world) + applies the dispatcher
+// chat rate class (OPS-03) and drops empty/over-length/over-rate sends with a
+// typed ChatRejected. No profanity/content filtering at M1 (later).
+
+/// The routing channel a ChatMessage selects (server SAD §2.5 / §3.8).
+enum ChatChannel : uint16 {
+  SAY     = 0,   // spatial, local AoI radius
+  YELL    = 1,   // spatial, wider AoI radius
+  WHISPER = 2,   // directed to a named target (cross-session)
+  ZONE    = 3,   // zone/general channel broadcast
+}
+
+/// C→S. Send one chat line. `target` is meaningful only for WHISPER (the
+/// recipient's character name, case-insensitive) and ignored otherwise. `text`
+/// is the message body; the server rejects empty/whitespace-only or over-length
+/// bodies (ChatRejected). Chat rate class (OPS-03).
+table ChatMessage {
+  channel:ChatChannel = SAY;
+  target:string;          // WHISPER recipient name (ignored for other channels)
+  text:string;            // the message body
+}
+
+/// S→C. A chat line delivered to this client. `sender_guid` is the author's
+/// entity guid (0 = system); `sender_name` is its display name; `channel` is how
+/// it was routed (so the client renders it in the right chat tab / bubble).
+table ChatDeliver {
+  channel:ChatChannel = SAY;
+  sender_guid:uint64;
+  sender_name:string;
+  text:string;
+}
+
+/// Typed reason a ChatMessage was refused (mirrors the server's chat validation).
+enum ChatRejectReason : uint16 {
+  NOT_IN_WORLD   = 0,   // sender is authenticated but not spawned in-world
+  RATE_LIMITED   = 1,   // over the chat rate class (OPS-03) — slow down
+  EMPTY          = 2,   // empty / whitespace-only body
+  TOO_LONG       = 3,   // body exceeds the server's max chat length
+  NO_TARGET      = 4,   // WHISPER with no / empty target name
+  TARGET_OFFLINE = 5,   // WHISPER target name not currently in-world
+}
+
+/// S→C. The server refused a ChatMessage. `channel` echoes the attempted
+/// channel; `target` echoes the attempted WHISPER target (empty otherwise) so
+/// the client can surface "X is not online".
+table ChatRejected {
+  channel:ChatChannel = SAY;
+  reason:ChatRejectReason = NOT_IN_WORLD;
+  target:string;
+}
+
+// ===========================================================================
 // RESERVED RANGES — commented placeholders only (do NOT define tables until milestone).
 // Each names its opcode range and the owning future issue / SAD section.
 // ===========================================================================
@@ -536,7 +612,9 @@ table LevelUp {
 //                             (M1, CMB-03 #359): DeathState / ReleaseRequest / GhostState / ResurrectRequest / ResurrectResult.
 // 0x4xxx  quest / gossip    — quest state, gossip menus (content schemas: quest.*, gossip). Future issue.
 // 0x5xxx  inventory/economy — inventory, loot rolls, vendor/economy (loot.*, vendor.*). Future issue.
-// 0x6xxx  chat / social     — chat channels, whisper, social lists (cross-shard, server SAD §3.8). Future issue.
+// 0x6xxx  chat / social     — DEFINED above (M1, SOC-01 #367): ChatMessage / ChatDeliver / ChatRejected
+//                             (say/yell via AoI #87, whisper cross-session, zone broadcast; server SAD §2.5/§3.8).
+//                             Social lists + cross-shard routing via servicesd are M3.
 // 0x7xxx  group / instance  — party/raid, instance lifecycle. Future issue.
 // 0x8xxx  shard / transfer  — ShardTransferRequest/Deny/Begin, AoIRefreshBegin/End, ShardPresence
 //                             (server SAD §5.2.1, D-23; client handling A-13). M3. Future issue.

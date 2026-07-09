@@ -59,10 +59,13 @@
 #ifndef MERIDIAN_WORLDD_WORLD_STATE_H
 #define MERIDIAN_WORLDD_WORLD_STATE_H
 
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -105,6 +108,54 @@ struct EntityIdentity {
     std::uint8_t char_class = 0;  // M0-frozen class id (roster.h Class; #328) — relayed
                                   // on EntityEnter so every client colors the placeholder
                                   // capsule by class. 0 = unset/unknown.
+    std::string name;             // character name (#367 SOC-01) — the whisper name key
+                                  // (case-insensitive) + the ChatDeliver sender_name. Empty
+                                  // for the D-11 placeholder (no characters DB): such a
+                                  // session is unaddressable by whisper but still chats
+                                  // spatially / on channels by guid.
+};
+
+// ---------------------------------------------------------------------------
+// SOC-01 chat limits (#367). Clean-room from server SAD §2.5 + §3.8 (slow-mode
+// chat rate). The say/yell RADII are spatial tuning and live in aoi_grid.h
+// (kChatSayRadiusM / kChatYellRadiusM) next to the AoI radii.
+// ---------------------------------------------------------------------------
+// Server-enforced max chat body length (bytes). An over-length send is refused
+// with ChatRejected{TOO_LONG} — no silent truncation (server is authoritative).
+inline constexpr std::size_t kChatMaxTextBytes = 255;
+
+// Chat rate class (OPS-03): max chat sends admitted per rolling 1 s per
+// connection. Over-rate sends are refused with ChatRejected{RATE_LIMITED}.
+inline constexpr int kChatMaxPerSecond = 5;
+
+// ---------------------------------------------------------------------------
+// ChatIntake — the per-connection chat rate gate (OPS-03 rate class; #367).
+// ---------------------------------------------------------------------------
+// Mirrors MovementIntake (the existing dispatcher rate mechanism): a sliding
+// 1 s window that admits at most kChatMaxPerSecond sends, dropping the rest. One
+// per connection (single-threaded on its IO worker, like MovementIntake), so it
+// needs no locking.
+class ChatIntake {
+public:
+    // Admit a chat send arriving at `now_ms` (a steady ms clock) if fewer than
+    // kChatMaxPerSecond sends were admitted in the trailing 1000 ms; otherwise
+    // drop it. Expires stamps older than the window on each call.
+    bool admit(std::uint64_t now_ms);
+
+    std::uint64_t dropped() const { return dropped_; }
+    std::uint64_t admitted() const { return admitted_; }
+
+private:
+    std::deque<std::uint64_t> window_;  // admit timestamps within the last 1000 ms
+    std::uint64_t dropped_ = 0;
+    std::uint64_t admitted_ = 0;
+};
+
+// The outcome of a whisper (WorldState::whisper) — routed cross-session by name.
+enum class ChatWhisperOutcome {
+    kDelivered,      // the named in-world target received the whisper
+    kNoTarget,       // no / empty target name supplied
+    kTargetOffline,  // the name is not held by any in-world session
 };
 
 // ---------------------------------------------------------------------------
@@ -259,6 +310,38 @@ public:
     using AreaTriggerHook = std::function<void(AoiId guid, const TriggerEvent&)>;
     void set_area_trigger_hook(AreaTriggerHook hook);
 
+    // -----------------------------------------------------------------------
+    // SOC-01 chat routing (#367). Server-authoritative chat delivery over the
+    // entered sessions' egress sinks — the SAME per-subscriber s2c channel the
+    // AoI relay uses (SAD §2.5 "spatial chat stays here"; §3.8). At M1 worldd is
+    // the in-process "world-thread manager" the v0.1 SAD routes whisper/zone to;
+    // #88 re-addresses these call sites over the real bus at M3. All are
+    // thread-safe (take mtx_) and a no-op for an unentered `from`.
+    // -----------------------------------------------------------------------
+
+    // SAY / YELL — SPATIAL. Deliver a ChatDeliver(channel) to `from` (its own
+    // echo) and to every OTHER entered session within the channel's radius (say =
+    // kChatSayRadiusM, yell = kChatYellRadiusM), found via the #87 grid's
+    // within_radius visitor. `channel` must be SAY or YELL. Returns how many
+    // clients received it (including the sender's echo).
+    std::size_t deliver_spatial(SessionSlot from, net::ChatChannel channel,
+                                const std::string& text);
+
+    // WHISPER — DIRECTED / CROSS-SESSION. Deliver a ChatDeliver(WHISPER) to the
+    // in-world session whose character name equals `target_name` (case-
+    // insensitive). A session never whispers itself into being its own target
+    // through the name index (a self-whisper by name still delivers — the client
+    // decides how to render it). Returns kNoTarget for an empty name,
+    // kTargetOffline when no in-world session holds it, else kDelivered.
+    ChatWhisperOutcome whisper(SessionSlot from, const std::string& target_name,
+                               const std::string& text);
+
+    // ZONE — CHANNEL. Deliver a ChatDeliver(ZONE) to EVERY entered session
+    // (including the sender). At M1 the zone/general channel membership is "all
+    // in-world sessions on this shard" (one map); realm-wide-across-shards
+    // membership via servicesd is M3 (SAD §3.8). Returns the recipient count.
+    std::size_t deliver_channel(SessionSlot from, const std::string& text);
+
 private:
     struct SessionRec {
         // The wire projection relayed on EntityEnter (guid + type_id + char_class).
@@ -294,10 +377,19 @@ private:
     // `self`'s client; every crossing fires the OnAreaTrigger hook. Caller holds mtx_.
     void fire_area_triggers(SessionRec& self);
 
+    // Emit a ChatDeliver(channel) for (`sender_guid`, `sender_name`, `text`) to
+    // the session at `to`. Caller holds mtx_. (#367)
+    void send_chat(SessionRec& to, net::ChatChannel channel, AoiId sender_guid,
+                   const std::string& sender_name, const std::string& text);
+
     mutable std::mutex mtx_;
     AoiGrid grid_;
     std::unordered_map<SessionSlot, SessionRec> sessions_;
     std::unordered_map<AoiId, SessionSlot> slot_by_guid_;
+    // Case-insensitive character-name → slot index, for whisper routing (#367).
+    // Keyed by the lower-cased name; a session with an empty name (D-11
+    // placeholder) is absent, so it is unaddressable by whisper.
+    std::unordered_map<std::string, SessionSlot> slot_by_name_ci_;
     SessionSlot next_slot_ = 1;
 
     // Per-map combat RNG. A fixed default seed keeps a single-worker M0 boot
@@ -335,6 +427,14 @@ std::vector<std::uint8_t> encode_entity_leave_payload(AoiId subject_guid,
 std::vector<std::uint8_t> encode_poi_discovered_payload(TriggerId trigger_id,
                                                         std::uint32_t area_id,
                                                         std::uint32_t name_id);
+
+// ChatDeliver payload (#367 SOC-01): the routed channel + the author's guid/name
+// + the body. Public so the chat integration test can decode what the router
+// emits and the serve loop can share the encoder.
+std::vector<std::uint8_t> encode_chat_deliver_payload(net::ChatChannel channel,
+                                                      AoiId sender_guid,
+                                                      const std::string& sender_name,
+                                                      const std::string& text);
 
 }  // namespace meridian::worldd
 

@@ -8,6 +8,10 @@
 
 #include <flatbuffers/flatbuffers.h>
 
+#include <algorithm>
+#include <cctype>
+#include <string>
+
 #include "meridian/core/log.hpp"
 #include "meridian/net/tls_listener.h"
 
@@ -21,6 +25,16 @@ namespace mn = meridian::net;
 namespace log = meridian::core::log;
 
 constexpr const char* kCat = "worldd.aoi";
+
+// ASCII lower-case a name for the case-insensitive whisper index (#367). Names
+// are the M0-frozen roster's ASCII set (server/characters roster), so a byte-wise
+// tolower is sufficient — no locale/Unicode folding is in scope at M1.
+std::string to_lower_ascii(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (unsigned char c : s) out.push_back(static_cast<char>(std::tolower(c)));
+    return out;
+}
 
 }  // namespace
 
@@ -121,6 +135,36 @@ std::vector<std::uint8_t> encode_poi_discovered_payload(TriggerId trigger_id,
     auto d = mn::CreatePoiDiscovered(b, trigger_id, area_id, name_id);
     b.Finish(d);
     return std::vector<std::uint8_t>(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+std::vector<std::uint8_t> encode_chat_deliver_payload(net::ChatChannel channel,
+                                                      AoiId sender_guid,
+                                                      const std::string& sender_name,
+                                                      const std::string& text) {
+    fb::FlatBufferBuilder b;
+    auto name = b.CreateString(sender_name);
+    auto body = b.CreateString(text);
+    auto d = mn::CreateChatDeliver(b, channel, sender_guid, name, body);
+    b.Finish(d);
+    return std::vector<std::uint8_t>(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// ---------------------------------------------------------------------------
+// ChatIntake — per-connection chat rate gate (OPS-03; #367)
+// ---------------------------------------------------------------------------
+
+bool ChatIntake::admit(std::uint64_t now_ms) {
+    // Expire stamps older than the trailing 1000 ms window (front is oldest).
+    while (!window_.empty() && now_ms - window_.front() >= 1000) {
+        window_.pop_front();
+    }
+    if (window_.size() >= static_cast<std::size_t>(kChatMaxPerSecond)) {
+        ++dropped_;
+        return false;
+    }
+    window_.push_back(now_ms);
+    ++admitted_;
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -224,16 +268,21 @@ EnterResult WorldState::enter(const EntityIdentity& identity, const Position& sp
     // Build the session's Unit (#342): a Player spawned at `spawn` with clean-room
     // placeholder stats picked by the M0-frozen class id (the D-11 placeholder
     // pattern — no content pipeline yet). The Unit OWNS the authoritative position
-    // that the grid mirrors; account/name are not carried on the AoI enter path
-    // (0 / empty here) — the dispatcher can enrich the Player later without
-    // touching this relay. Player() ctor spawns it alive at full health.
+    // that the grid mirrors. The character name (#367) flows through so the Player
+    // carries it and the whisper name index below can address this session; it is
+    // empty for the D-11 placeholder (no characters DB). Player() ctor spawns it
+    // alive at full health.
     SessionRec rec;
     rec.identity = id;
     rec.unit = Player(id.entity_guid, spawn, placeholder_player_stats(id.char_class),
-                      /*account_id=*/0, id.char_class, /*name=*/std::string{});
+                      /*account_id=*/0, id.char_class, id.name);
     rec.egress = std::move(egress);
     sessions_.emplace(slot, std::move(rec));
     slot_by_guid_[id.entity_guid] = slot;
+    // Whisper name index (#367): a NON-empty name makes this session addressable by
+    // whisper. Case-insensitive key. A duplicate name (should not happen — names
+    // are unique per the characters CRUD) resolves to the most recent entrant.
+    if (!id.name.empty()) slot_by_name_ci_[to_lower_ascii(id.name)] = slot;
     grid_.upsert(id.entity_guid, spawn);
 
     // Initial interest set: who this newcomer can already see. Compute against an
@@ -384,6 +433,16 @@ void WorldState::leave(SessionSlot slot) {
     slot_by_guid_.erase(self.identity.entity_guid);
     // Drop this character's area-trigger bookkeeping (occupancy + discovered).
     triggers_.remove(self.identity.entity_guid);
+    // Drop the whisper name index entry — but ONLY if it still points at THIS slot
+    // (a later same-name entrant would have overwritten it; a compare-and-erase
+    // keeps that newer session addressable). (#367)
+    if (!self.identity.name.empty()) {
+        const std::string key = to_lower_ascii(self.identity.name);
+        auto nit = slot_by_name_ci_.find(key);
+        if (nit != slot_by_name_ci_.end() && nit->second == slot) {
+            slot_by_name_ci_.erase(nit);
+        }
+    }
     log::info(kCat, "session left slot=" + std::to_string(slot) + " guid=" +
                         std::to_string(self.identity.entity_guid));
     sessions_.erase(sit);
@@ -424,6 +483,102 @@ const Unit* WorldState::unit_for_guid(AoiId guid) const {
     auto it = sessions_.find(sit->second);
     if (it == sessions_.end()) return nullptr;
     return &it->second.unit;
+}
+
+// ---------------------------------------------------------------------------
+// SOC-01 chat routing (#367)
+// ---------------------------------------------------------------------------
+
+void WorldState::send_chat(SessionRec& to, net::ChatChannel channel, AoiId sender_guid,
+                           const std::string& sender_name, const std::string& text) {
+    if (!to.egress) return;
+    to.egress(mn::Opcode::CHAT_DELIVER,
+              encode_chat_deliver_payload(channel, sender_guid, sender_name, text));
+}
+
+std::size_t WorldState::deliver_spatial(SessionSlot from, net::ChatChannel channel,
+                                        const std::string& text) {
+    std::lock_guard<std::mutex> lk(mtx_);
+
+    auto fit = sessions_.find(from);
+    if (fit == sessions_.end()) return 0;  // sender not in world
+    SessionRec& sender = fit->second;
+    const AoiId sender_guid = sender.identity.entity_guid;
+    const std::string sender_name = sender.identity.name;
+
+    const float radius =
+        (channel == mn::ChatChannel::YELL) ? kChatYellRadiusM : kChatSayRadiusM;
+
+    std::size_t recipients = 0;
+
+    // The sender always sees its own line (say/yell echo). Deliver it first.
+    send_chat(sender, channel, sender_guid, sender_name, text);
+    ++recipients;
+
+    // Every OTHER session within the channel's radius, via the #87 grid visitor.
+    const std::unordered_set<AoiId> in_range =
+        grid_.within_radius(sender_guid, radius);
+    for (AoiId guid : in_range) {
+        std::optional<SessionSlot> other = slot_of_guid(guid);
+        if (!other) continue;
+        auto oit = sessions_.find(*other);
+        if (oit == sessions_.end()) continue;
+        send_chat(oit->second, channel, sender_guid, sender_name, text);
+        ++recipients;
+    }
+
+    log::debug(kCat, "chat spatial channel=" +
+                         std::to_string(static_cast<int>(channel)) + " from guid=" +
+                         std::to_string(sender_guid) + " -> " +
+                         std::to_string(recipients) + " recipient(s)");
+    return recipients;
+}
+
+ChatWhisperOutcome WorldState::whisper(SessionSlot from, const std::string& target_name,
+                                       const std::string& text) {
+    std::lock_guard<std::mutex> lk(mtx_);
+
+    if (target_name.empty()) return ChatWhisperOutcome::kNoTarget;
+
+    auto fit = sessions_.find(from);
+    if (fit == sessions_.end()) return ChatWhisperOutcome::kTargetOffline;  // sender gone
+    const AoiId sender_guid = fit->second.identity.entity_guid;
+    const std::string sender_name = fit->second.identity.name;
+
+    auto nit = slot_by_name_ci_.find(to_lower_ascii(target_name));
+    if (nit == slot_by_name_ci_.end()) return ChatWhisperOutcome::kTargetOffline;
+    auto tit = sessions_.find(nit->second);
+    if (tit == sessions_.end()) return ChatWhisperOutcome::kTargetOffline;  // defensive
+
+    // Deliver to the target across sessions — the recipient's shard worker need
+    // not be involved (SAD §3.8); at M1 both live in this worldd, so it is a
+    // direct egress write to the named session's channel.
+    send_chat(tit->second, mn::ChatChannel::WHISPER, sender_guid, sender_name, text);
+    log::debug(kCat, "chat whisper from guid=" + std::to_string(sender_guid) +
+                         " -> \"" + target_name + "\" (slot " +
+                         std::to_string(nit->second) + ")");
+    return ChatWhisperOutcome::kDelivered;
+}
+
+std::size_t WorldState::deliver_channel(SessionSlot from, const std::string& text) {
+    std::lock_guard<std::mutex> lk(mtx_);
+
+    auto fit = sessions_.find(from);
+    if (fit == sessions_.end()) return 0;  // sender not in world
+    const AoiId sender_guid = fit->second.identity.entity_guid;
+    const std::string sender_name = fit->second.identity.name;
+
+    // Zone/general membership at M1 = every in-world session on this shard
+    // (one map); realm-wide-across-shards membership via servicesd is M3.
+    std::size_t recipients = 0;
+    for (auto& [slot, rec] : sessions_) {
+        (void)slot;
+        send_chat(rec, mn::ChatChannel::ZONE, sender_guid, sender_name, text);
+        ++recipients;
+    }
+    log::debug(kCat, "chat zone from guid=" + std::to_string(sender_guid) + " -> " +
+                         std::to_string(recipients) + " recipient(s)");
+    return recipients;
 }
 
 }  // namespace meridian::worldd
