@@ -392,6 +392,25 @@ target_link_libraries(worldd-quest-loot-npc-db-test
 set_target_properties(worldd-quest-loot-npc-db-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-quest-loot-npc-db COMMAND worldd-quest-loot-npc-db-test)
 
+# --- Trainer-vs-DB-content LIVE-SESSION integration test (issue #392). ---------
+# The live half of #392: a real TLS session drives GOSSIP_HELLO -> TRAINER_LIST +
+# TRAINER_LEARN against a world server whose NPC seam is a DbNpcStore loaded from
+# seeded npc_trainer / npc_trainer_ability rows (install_content_stores) — proving a
+# DB-loaded trainer works end-to-end (learn debits character.money; every rejection
+# axis leaves it untouched). Reads MERIDIAN_DB_* and SKIPS (exit 0) when unset.
+add_executable(worldd-trainer-db-wire-test
+  test/trainer_db_wire_it.cpp
+)
+target_link_libraries(worldd-trainer-db-wire-test
+  PRIVATE
+    meridian::world-dispatch
+    meridian::characters
+    meridian::npc
+    Threads::Threads
+)
+set_target_properties(worldd-trainer-db-wire-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-trainer-db-wire COMMAND worldd-trainer-db-wire-test)
+
 # --- Area triggers + POI discovery UNIT test (WLD-01/03; #368). ---------------
 # PURE (no DB, no socket, no TLS): exercises BOTH layers directly —
 #   (1) the AreaTriggerSet core (point-in-box membership, enter/leave fire ONCE
@@ -544,6 +563,63 @@ target_compile_definitions(worldd-itm1-chain-load-test PRIVATE
   ITM1_MCC_BIN="${CMAKE_BINARY_DIR}/../mcc/mcc")
 set_target_properties(worldd-itm1-chain-load-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-itm1-chain-load COMMAND worldd-itm1-chain-load-test)
+
+# --- DB-loaded area-trigger POI -> explore crediting test (#398). ---------------
+# Proves the last content-load link: the world-DB `area` (POI) rows load (via
+# load_world_content) into discovery TriggerVolumes carrying the real `poi`, and a
+# player crossing a DB-loaded volume credits the matching AUTHORED explore objective
+# (on_explore(zone_id, poi)) — NOT a synthetic placeholder volume. Runs the real
+# pipeline like worldd-itm1-chain-load: mcc emit-sql content/core -> throwaway MariaDB
+# (world DDL + emitted DML) -> load_world_content -> drive AreaTriggerSet + QuestLog.
+# Same TOOL-/ENV-guards (MERIDIAN_WORLDDB_*/MERIDIAN_DB_* + a mariadb/mysql client + an
+# mcc binary); SKIPS (exit 0) otherwise — inert in the plain server ctest, real under
+# test.sh --db / the DB CI job.
+add_executable(worldd-explore-trigger-db-test
+  test/explore_trigger_db_it.cpp
+)
+target_link_libraries(worldd-explore-trigger-db-test
+  PRIVATE
+    meridian::world-dispatch
+)
+target_compile_definitions(worldd-explore-trigger-db-test PRIVATE
+  ITM1_CONTENT_DIR="${CMAKE_SOURCE_DIR}/../content"
+  ITM1_WORLD_DDL_DIR="${CMAKE_SOURCE_DIR}/../schema/sql/world"
+  ITM1_MCC_BIN="${CMAKE_BINARY_DIR}/../mcc/mcc")
+set_target_properties(worldd-explore-trigger-db-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-explore-trigger-db COMMAND worldd-explore-trigger-db-test)
+
+# --- IT-M1 10-quest CHAIN server-side HARNESS (#399; epic #20 EXIT CRITERION). --
+# The capstone. Boots the DB-loaded IT-M1 content (mcc emit-sql content/core -> a
+# throwaway MariaDB it owns, carrying world DDL + auth + characters schemas), stands
+# up a REAL worldd session (WORLD_HELLO -> ENTER_WORLD over TLS), and drives the full
+# 10-quest 'Emberfall Hollow' DAG to completion over the LIVE dispatch path — kill via
+# MapTick + the quest-credit bus, collect via LOOT_TAKE, deliver via GOSSIP_HELLO,
+# explore via a synthetic content-keyed TriggerVolume crossing. Asserts ZERO client-
+# trusted outcomes (only intents in, server QUEST_PROGRESS/turn-in results out),
+# server-side PREREQ GATING (convergence quest rejected before its prereqs), a valid
+# topological completion (convergence quest last), and durable reward money. Same
+# TOOL-/ENV-guards as worldd-itm1-chain-load (MERIDIAN_WORLDDB_*/MERIDIAN_DB_* + a
+# mariadb/mysql client + an mcc binary); SKIPS (exit 0) otherwise — inert in the plain
+# server ctest, real under test.sh --db / the DB CI job. Paths (content root, world
+# DDL, auth + characters migrations, default mcc) are compile definitions.
+add_executable(worldd-itm1-chain-run-test
+  test/itm1_chain_run_it.cpp
+)
+target_link_libraries(worldd-itm1-chain-run-test
+  PRIVATE
+    meridian::world-dispatch
+    meridian::characters
+    meridian::npc
+    Threads::Threads
+)
+target_compile_definitions(worldd-itm1-chain-run-test PRIVATE
+  ITM1_CONTENT_DIR="${CMAKE_SOURCE_DIR}/../content"
+  ITM1_WORLD_DDL_DIR="${CMAKE_SOURCE_DIR}/../schema/sql/world"
+  ITM1_AUTH_MIGRATIONS_DIR="${CMAKE_SOURCE_DIR}/db/auth/migrations"
+  ITM1_CHAR_MIGRATIONS_DIR="${CMAKE_SOURCE_DIR}/db/characters/migrations"
+  ITM1_MCC_BIN="${CMAKE_BINARY_DIR}/../mcc/mcc")
+set_target_properties(worldd-itm1-chain-run-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-itm1-chain-run COMMAND worldd-itm1-chain-run-test)
 
 # --- Combat tick + seeded GOLDEN sim-harness scenarios (CMB-01/02; #349). ------
 # The epic-#18 capstone. PURE (no DB, no socket): drives the MapTick orchestrator

@@ -43,6 +43,65 @@ std::uint32_t count_items(const items::Inventory& inv, std::uint32_t template_id
     return n;
 }
 
+namespace {
+
+// The objective items a turn-in hands over (removed from the inventory): each
+// collect objective's item x its goal count, each deliver objective's item x1.
+// kill / explore contribute nothing. Deterministic (objective order).
+std::vector<QuestRewardItem> objective_consumables(const QuestDef& d) {
+    std::vector<QuestRewardItem> out;
+    for (const QuestObjective& o : d.objectives) {
+        if (o.type == ObjectiveType::kCollect)
+            out.push_back(QuestRewardItem{o.item_id, o.count});
+        else if (o.type == ObjectiveType::kDeliver)
+            out.push_back(QuestRewardItem{o.item_id, std::uint16_t{1}});
+    }
+    return out;
+}
+
+// How many BACKPACK slots removing `want` (item x count each) would empty — a slot
+// frees only when the whole stack is taken. Pure (no mutation): lets turn_in judge
+// room BEFORE any change so the operation stays all-or-nothing.
+std::uint16_t freed_slots_for(const items::Inventory& inv,
+                              const std::vector<QuestRewardItem>& want) {
+    std::uint16_t freed = 0;
+    for (const QuestRewardItem& w : want) {
+        std::uint32_t remaining = w.count;
+        for (std::uint16_t i = 0; i < inv.backpack_capacity() && remaining > 0; ++i) {
+            const items::ItemInstance* inst = inv.backpack_at(i);
+            if (inst == nullptr || inst->template_id != w.item_id) continue;
+            if (inst->stack <= remaining) { remaining -= inst->stack; ++freed; }
+            else { remaining = 0; }
+        }
+    }
+    return freed;
+}
+
+// Remove `want` (item x count each) from the backpack, returning what was ACTUALLY
+// removed (best-effort — a deliver item completed via the NPC interaction may no
+// longer be held). Coalesced per item id.
+std::vector<QuestRewardItem> consume_from_backpack(items::Inventory& inv,
+                                                   const std::vector<QuestRewardItem>& want) {
+    std::vector<QuestRewardItem> removed;
+    for (const QuestRewardItem& w : want) {
+        std::uint32_t remaining = w.count;
+        std::uint32_t got = 0;
+        for (std::uint16_t i = 0; i < inv.backpack_capacity() && remaining > 0; ++i) {
+            const items::ItemInstance* inst = inv.backpack_at(i);
+            if (inst == nullptr || inst->template_id != w.item_id) continue;
+            const std::uint32_t take = std::min<std::uint32_t>(remaining, inst->stack);
+            const items::Inventory::Removed r = inv.remove_from_backpack(i, take);
+            got += r.count;
+            remaining -= r.count;
+        }
+        if (got > 0)
+            removed.push_back(QuestRewardItem{w.item_id, static_cast<std::uint16_t>(got)});
+    }
+    return removed;
+}
+
+}  // namespace
+
 // ---------------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------------
@@ -220,15 +279,26 @@ TurnInStatus QuestLog::turn_in(QuestId id, std::uint32_t npc_id,
     if (!d->choice_items.empty())
         rewards.push_back(d->choice_items[static_cast<std::size_t>(choice_index)]);
 
-    // Room check (all-or-nothing): reserve one free backpack slot per reward stack.
-    // Conservative — a stackable reward that tops up an existing stack needs no new
-    // slot, so this never under-reserves; it may reject a turn-in that would fit via
-    // top-up, acceptable for the M1 reward sizes. Nothing is mutated on failure.
-    if (inv.backpack_free() < rewards.size())
+    // The objective items handed over on turn-in (QST-01): a collect objective's items
+    // and a deliver objective's item are CONSUMED from the inventory (the "collect N
+    // for X" / "deliver to X" verbs — the character gives them up). Without this the
+    // backpack fills across a long quest chain and later turn-ins spuriously report
+    // kInventoryFull (the items are never used again). Derived from OUR quest objective
+    // semantics (quest.schema.yaml), no GPL source consulted.
+    const std::vector<QuestRewardItem> consumables = objective_consumables(*d);
+
+    // Room check (all-or-nothing): reserve one free backpack slot per reward stack,
+    // CREDITING the slots the consumption frees. Conservative on the reward side (a
+    // stackable reward that tops up an existing stack needs no new slot, so this never
+    // under-reserves). Nothing is mutated until this passes.
+    const std::uint16_t freed = freed_slots_for(inv, consumables);
+    if (static_cast<std::size_t>(inv.backpack_free()) + freed < rewards.size())
         return TurnInStatus::kInventoryFull;
 
-    // Grant: mint each reward stack into the backpack (guid 0 = unminted; the DB
-    // layer mints a durable item_instance on persist, per the split/loot convention).
+    // Consume the objective items (best-effort; records what was actually removed for
+    // the durable layer), then grant: mint each reward stack into the freed backpack
+    // (guid 0 = unminted; the DB layer mints a durable item_instance on persist).
+    std::vector<QuestRewardItem> consumed = consume_from_backpack(inv, consumables);
     for (const QuestRewardItem& r : rewards) {
         items::ItemInstance inst;
         inst.template_id = r.item_id;
@@ -242,6 +312,7 @@ TurnInStatus QuestLog::turn_in(QuestId id, std::uint32_t npc_id,
     out.xp = d->reward_xp;
     out.money = d->reward_money;
     out.items = std::move(rewards);
+    out.consumed = std::move(consumed);
     return TurnInStatus::kOk;
 }
 

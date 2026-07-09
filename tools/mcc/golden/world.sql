@@ -8,7 +8,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 INSERT INTO world_manifest
   (pack_namespace, pack_version, id_band, content_hash, schema_version, mcc_version, built_at)
 VALUES
-  ('core', '0.1.0', 0, 'f0090eb6ddfbf85a3a377c196c467e26cb1a0e3e5f9ccdb60351bfc3f52df326', 1, '0.0.0', '1970-01-01 00:00:00');
+  ('core', '0.1.0', 0, '91bb089fdfbb2fa6959ae2e8eb19bb6fe491434aa58ee24dba11194529d3ef0a', 1, '0.0.0', '1970-01-01 00:00:00');
 
 -- npc_template (8 rows)
 INSERT INTO npc_template (id, name, subtitle, level_min, level_max, creature_type, `rank`, faction, stat_health, stat_mana, stat_armor, stat_damage_min, stat_damage_max, stat_attack_speed_ms, ai_behavior, ai_aggro_radius_m, ai_leash_radius_m, ai_call_for_help_radius_m, ai_flee_at_health_pct, move_walk_speed_mps, move_run_speed_mps, vendor_ref_id, loot_table_ref_id, loot_money_min, loot_money_max, visual_model_id, visual_scale, visual_sound_set_id) VALUES
@@ -26,6 +26,15 @@ INSERT INTO npc_ability (npc_id, ability_id, priority, cooldown_override_ms, use
   (25, 2, 0, 6000, NULL),
   (26, 2, 0, NULL, 80),
   (63, 2, 0, NULL, 70);
+
+-- npc_trainer (1 rows)
+INSERT INTO npc_trainer (npc_id) VALUES
+  (64);
+
+-- npc_trainer_ability (2 rows)
+INSERT INTO npc_trainer_ability (npc_id, ability_id, cost_copper, required_class, required_level) VALUES
+  (64, 1, 500, NULL, 4),
+  (64, 2, 1200, 'vanguard', 8);
 
 -- item_template (13 rows)
 INSERT INTO item_template (id, name, flavor_text, item_class, subclass, slot, rarity, required_level, item_level, is_unique, binding, stack_size, weapon_damage_min, weapon_damage_max, weapon_speed_ms, weapon_school, armor, effect_on_use_id, price_sell, price_buy, visual_icon_id, visual_model_id) VALUES

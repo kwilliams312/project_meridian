@@ -430,10 +430,20 @@ int main(int argc, char** argv) {
     meridian::worldd::WorldServer world(dispatcher, cfg.world);
 
     // Area triggers + POI discovery (#368; WLD-01/03): load the trigger volume set
-    // the map tick evaluates against player positions. M1 uses a deterministic
-    // PLACEHOLDER set on the flat bootstrap map; real volumes arrive compiled into
-    // world content (mcc #28) — load_area_triggers() is that seam.
-    world.world_state().load_area_triggers(meridian::worldd::placeholder_area_triggers());
+    // the map tick evaluates against player positions. When a world DB is wired, the
+    // AUTHORED `area` (POI) rows are loaded into discovery volumes carrying the real
+    // `poi` (#398) — so a crossing credits explore objectives against authored content
+    // (on_explore(zone_id, poi)). With no world DB (content.quests null) the M1
+    // deterministic PLACEHOLDER set on the flat bootstrap map stands in.
+    if (content.quests) {
+        const std::size_t n = content.area_triggers.size();
+        world.world_state().load_area_triggers(std::move(content.area_triggers));
+        meridian::core::log::info(
+            kDaemonName,
+            "area-trigger POI volumes loaded from world DB: " + std::to_string(n));
+    } else {
+        world.world_state().load_area_triggers(meridian::worldd::placeholder_area_triggers());
+    }
 
     // Install the DB-backed loot tables on the per-map tick (#390) when world content
     // was loaded, so a creature death rolls AUTHORED loot rather than the placeholder

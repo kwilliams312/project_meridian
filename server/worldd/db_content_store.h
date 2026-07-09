@@ -24,12 +24,12 @@
 // wholesale nightly").
 //
 // SCOPE (schema fidelity): the load maps each authored world-DB row set onto the
-// existing seam struct. Where the current world DDL has NO column for a seam field,
-// that field keeps its default:
-//   * NPC TRAINER abilities (NpcDef::is_trainer / trainer_abilities) have NO world-
-//     DDL home yet (there is no npc_trainer table — trainers are the deferred mcc
-//     #28 scope). A DB-loaded NpcDef is therefore never a trainer; the trainer path
-//     keeps using the placeholder store in DB-free tests. See db_content_store.cpp.
+// existing seam struct. Every M1 seam field now has a world-DDL home:
+//   * NPC TRAINER abilities (NpcDef::is_trainer / trainer_abilities) load from the
+//     npc_trainer / npc_trainer_ability tables (#392): an NPC with any taught-ability
+//     row is a trainer, and each row carries the ability ref + copper cost + class /
+//     level gate the live #388 TRAINER_LIST/TRAINER_LEARN path reads. So a DB-loaded
+//     trainer works end-to-end from authored content. See db_content_store.cpp.
 //
 // PARAMETERIZED SQL ONLY (CONTRIBUTING.md backend rule): every query binds through
 // meridian::db prepared-statement parameters; no value is ever concatenated in.
@@ -48,6 +48,7 @@
 
 #include "meridian/db/connection.h"
 
+#include "area_triggers.h"    // meridian::worldd::TriggerVolume — DB-loaded POI volumes (#398)
 #include "item_template.h"    // meridian::items::TemplateStore / ItemTemplate
 #include "loot_table.h"       // meridian::loot::LootTableStore / LootTable
 #include "npc_def.h"          // meridian::npc::NpcStore / NpcDef
@@ -87,10 +88,10 @@ private:
 
 // --- DB-backed NPC store (NPC-01/02 seam, npc_def.h) -------------------------
 // Loads npc_template into NpcDef: id, name, the vendor role FLAG (vendor_ref_id set),
-// and the quest giver/turn-in participation (cross-referenced from quest_template's
-// giver_npc_id / turn_in_npc_id — the DDL keeps that link on the quest side). Trainer
-// abilities have no world-DDL home yet (deferred mcc #28); a DB-loaded NPC is never a
-// trainer.
+// the quest giver/turn-in participation (cross-referenced from quest_template's
+// giver_npc_id / turn_in_npc_id — the DDL keeps that link on the quest side), and the
+// trainer role (is_trainer + trainer_abilities) from npc_trainer_ability (#392): a
+// taught-ability row makes the NPC a trainer and carries the cost + class/level gate.
 class DbNpcStore : public npc::NpcStore {
 public:
     explicit DbNpcStore(db::Connection& world_db);
@@ -134,6 +135,23 @@ private:
     std::unordered_map<std::uint32_t, std::vector<vendor::VendorListing>> by_vendor_;
 };
 
+// --- DB-backed area-trigger / POI volumes (#398, WLD-03) ---------------------
+// Build one discovery TriggerVolume per authored `area` (POI) row: the pos_x/y/z +
+// discovery_radius_m FLOAT columns (readable since the #393 FLOAT-read fix) become
+// an axis-aligned box centred on the POI, and area.zone_id + area.poi become the
+// volume's area_id + poi — the SAME join key a kExplore quest objective matches on
+// (QST-01 #396: a discovery crossing credits the explore objective whose
+// (zone_id, poi) == (this area_id, this poi)). So a player crossing a DB-loaded POI
+// volume fires an ENTER carrying the authored poi, and on_explore(zone_id, poi)
+// credits the matching objective against real content — no synthetic volume needed.
+//
+// Membership is a point-in-box test on (x, y) with the z axis spanning full range
+// (the M1 flat map is a single plane; z is ignored, mirroring the placeholder set).
+// Ids are assigned 1..N in (zone_id, poi) load order (the `area` PK has no numeric
+// id) — stable for the per-character occupancy bookkeeping, since the whole set is
+// loaded once at boot.
+std::vector<TriggerVolume> load_area_trigger_volumes(db::Connection& world_db);
+
 // --- The loaded world content bundle -----------------------------------------
 // Owns one of each DB-backed store, loaded from the world DB at boot. Held for the
 // process lifetime (main() owns it) so the pointers install_content_stores() /
@@ -145,6 +163,10 @@ struct WorldContent {
     std::unique_ptr<DbQuestStore>     quests;
     std::unique_ptr<DbNpcStore>       npcs;
     std::unique_ptr<DbLootTableStore> loot;
+    // The authored POI discovery volumes (area rows) the map tick evaluates against
+    // player positions — carries the real `poi` so explore objectives credit against
+    // authored content (#398). Empty when the world DB has no `area` rows.
+    std::vector<TriggerVolume>        area_triggers;
 };
 
 // Load every content store from the (already-boot-verified) world DB connection.

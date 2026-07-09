@@ -79,3 +79,34 @@ CREATE TABLE npc_ability (
   CONSTRAINT fk_npcability_npc FOREIGN KEY (npc_id)     REFERENCES npc_template (id),
   CONSTRAINT fk_npcability_abl FOREIGN KEY (ability_id) REFERENCES ability (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- npc_trainer — the trainer role marker (NPC-02, #392)
+--   Mirrors npc.schema.yaml interaction.trainer. One row per NPC that
+--   teaches abilities; presence of the row (and its npc_trainer_ability
+--   children) is what surfaces the "train" gossip option. The parent table
+--   is the FK anchor for npc_trainer_ability and the "is a trainer" flag.
+-- ---------------------------------------------------------------------
+CREATE TABLE npc_trainer (
+  npc_id                   INT UNSIGNED NOT NULL,           -- -> npc_template.id
+  PRIMARY KEY (npc_id),
+  CONSTRAINT fk_npctrainer_npc FOREIGN KEY (npc_id) REFERENCES npc_template (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- npc_trainer_ability — interaction.trainer[] taught abilities (NPC-02, #392)
+--   Mirrors npc.schema.yaml interaction.trainer[] items. Each row is one
+--   ability the trainer teaches, with its copper cost + class/level gate.
+--   required_class is the class-name ENUM (NULL = any class may learn),
+--   mapped to the roster Class id (roster.h) by the worldd loader.
+-- ---------------------------------------------------------------------
+CREATE TABLE npc_trainer_ability (
+  npc_id                   INT UNSIGNED NOT NULL,           -- -> npc_trainer.npc_id
+  ability_id               INT UNSIGNED NOT NULL,           -- ability (abilityRef) -> ability.id
+  cost_copper              BIGINT UNSIGNED NOT NULL DEFAULT 0,  -- cost (money, copper)
+  required_class           ENUM('vanguard','runcaller','warden','mender') NULL,  -- NULL = any class
+  required_level           SMALLINT UNSIGNED NOT NULL DEFAULT 1, -- min character level to learn
+  PRIMARY KEY (npc_id, ability_id),
+  CONSTRAINT fk_npctrainerabl_trainer FOREIGN KEY (npc_id)     REFERENCES npc_trainer (npc_id),
+  CONSTRAINT fk_npctrainerabl_ability FOREIGN KEY (ability_id) REFERENCES ability (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

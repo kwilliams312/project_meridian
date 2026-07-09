@@ -184,6 +184,40 @@ void scenario_collect() {
     check("reward XP is 40", r.xp == 40);
     check("chosen reward item (shortsword) minted", count_items(inv, kSword) == 1);
     check("exactly one reward item granted (the choice)", r.items.size() == 1);
+    // Turn-in CONSUMES the collect objective's items (handed over) — the 5 ore are
+    // removed from the inventory and reported for the durable layer to persist.
+    check("collect items consumed on turn-in (no ore left)", count_items(inv, kOre) == 0);
+    check("turn-in reports the consumed collect items",
+          r.consumed.size() == 1 && r.consumed[0].item_id == kOre && r.consumed[0].count == 5);
+}
+
+// ===========================================================================
+// A3b. Consumption frees room: a backpack with no free slot still turns in a
+// collect quest because handing over the collected items frees their slot.
+// ===========================================================================
+void scenario_collect_consumption_frees_room() {
+    std::printf("A3b. turn-in consumes collect items → frees the room for the reward\n");
+    PlaceholderQuestStore quests;
+    it::PlaceholderTemplateStore templates;
+    QuestLog log(quests);
+    // A tiny 1-slot backpack: the only slot holds the 5 collected ore. Without
+    // consumption the single reward (the choice item) would not fit (kInventoryFull);
+    // consuming the ore frees the slot so the turn-in succeeds.
+    it::Inventory inv(templates, /*backpack_capacity=*/1);
+
+    check("accept Q2", log.accept(kQ2, 1) == AcceptStatus::kOk);
+    it::ItemInstance ore;
+    ore.template_id = kOre;
+    ore.stack = 5;
+    inv.add(ore);
+    check("backpack is full (1/1 slot)", inv.backpack_free() == 0);
+    check("collect completes", (log.sync_collect(inv), log.is_complete(kQ2)));
+
+    RewardGrant r;
+    check("turn-in succeeds despite a full backpack (consumption frees the slot)",
+          log.turn_in(kQ2, kSmith, inv, /*choice=*/0, r) == TurnInStatus::kOk);
+    check("the ore is gone, the reward took its slot", count_items(inv, kOre) == 0);
+    check("the reward item occupies the freed slot", count_items(inv, kSword) == 1);
 }
 
 // ===========================================================================
@@ -346,6 +380,7 @@ int main() {
     scenario_accept_gating();
     scenario_kill();
     scenario_collect();
+    scenario_collect_consumption_frees_room();
     scenario_deliver();
     scenario_explore_chain();
     scenario_map_tick_kill_hook();
