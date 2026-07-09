@@ -56,8 +56,10 @@
 #include "item_template.h"   // items::TemplateStore (content-store install seam, #390)
 #include "loot_registry.h"  // shared corpse loot registry (ITM-02 wire; #388)
 #include "loot_table.h"      // loot::LootTableStore (WorldServer::set_loot_tables, #390)
+#include "map_tick.h"        // TickEvent — route_tick_events kill-credit routing (#396)
 #include "movement_validation.h"
 #include "npc_def.h"         // npc::NpcStore (content-store install seam, #390)
+#include "quest_credit.h"  // MapTick→session quest-kill credit registry (QST-01 event-bus, #396)
 #include "quest_log.h"  // QuestLog — per-session quest state machine (QST-01 #371)
 #include "trainer.h"    // npc::LearnedAbilitySet — per-session learned abilities (NPC-02 #372)
 #include "vendor_catalog.h"  // vendor::VendorCatalog (content-store install seam, #390)
@@ -231,6 +233,18 @@ struct ConnCtx {
     // (CHR-03 leveling is in-memory in MapTick).
     std::optional<QuestLog> quests;
 
+    // QUEST-KILL credit bus (QST-01 event-bus, #396). `quest_credit` is the SHARED,
+    // thread-safe MapTick→session kill registry (set by serve_connection; null in
+    // the DB-less smoke path). At ENTER_WORLD this session REGISTERS its entity guid
+    // (`credit_guid`, saved so the serve loop can unregister on teardown); the world
+    // thread PUSHES creature-kill credits keyed by that guid, and this session DRAINS
+    // + applies them on its own IO worker (poll_quest_credits) — keeping ctx.quests
+    // single-threaded (the world thread never touches it). `credit_guid` is 0 until
+    // registered.
+    QuestCreditRegistry* quest_credit = nullptr;
+    ObjectGuid credit_guid = 0;
+    QuestCreditToken credit_token = 0;  // this registration's holder id (ABA guard on unregister)
+
     // LOOT (ITM-02, #369/#388). `loot` is the SHARED, thread-safe corpse-loot
     // registry (set by serve_connection from the WorldServer; may be null in the
     // DB-less smoke path). `open_corpse` is THIS session's currently-open loot
@@ -384,6 +398,14 @@ struct WorldEvent {
     Bytes payload;  // owned copy — the frame buffer is gone by drain time
 };
 
+// Route one map tick's events to the quest-kill credit bus (QST-01 event-bus, #396):
+// for each TickEventKind::kCreatureKill delta, push the credit (killer guid + victim
+// template id) to `reg`, which retains it only for a registered in-world session. The
+// world thread calls this each tick after MapTick::advance(); the integration test
+// calls it with a real MapTick's deltas to exercise the exact same routing. Non-kill
+// deltas are ignored here (they are the AoI/flush stream, handled elsewhere).
+void route_tick_events(const std::vector<TickEvent>& deltas, QuestCreditRegistry& reg);
+
 struct WorldServerConfig {
     // Map/IO worker pool size. Defaults to a small pool; main() can size it from
     // hardware_concurrency. The SAD's "M ≈ cores − 3" sizing is a later concern —
@@ -473,6 +495,12 @@ public:
     // world-thread creature-death hook (#369) seeds it; a test seeds it directly to
     // drive the loot wire path. Exposed so tests can insert a corpse's loot session.
     LootRegistry& loot_registry();
+
+    // The shared MapTick→session quest-kill credit registry (QST-01 event-bus, #396).
+    // One per server: the world thread pushes creature-kill credits (route_tick_events)
+    // keyed by killer guid; each in-world session registers its guid + drains its own
+    // credits. Exposed so a test can register a guid / push a kill / assert isolation.
+    QuestCreditRegistry& quest_credit();
 
     // Install a world-DB-backed loot-table store on the per-map tick (#390),
     // replacing the placeholder loot tables the tick rolls on creature death. The

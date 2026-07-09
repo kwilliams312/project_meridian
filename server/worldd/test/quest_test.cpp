@@ -280,21 +280,20 @@ CreatureSpawnDef kobold(Position home) {
     return d;
 }
 
-void scenario_map_tick_kill_hook() {
-    std::printf("B. kill objective through the MapTick on_unit_died hook (#359/#365)\n");
-    PlaceholderQuestStore quests;
-    const AbilityStore abilities = load_placeholder_ability_store();
-    MapTick mt(abilities, /*rng_seed=*/0x0371ULL, /*dt_ms=*/1600);
-    mt.set_quest_store(&quests);  // install BEFORE add_player so the player gets a quest log
+// Count the kCreatureKill events in a MapTick log crediting `killer` for a `npc`
+// template death (the typed event-bus payload the world loop routes; #396).
+std::size_t count_kill_events(const MapTick& mt, ObjectGuid killer, std::uint32_t npc) {
+    std::size_t n = 0;
+    for (const TickEvent& ev : mt.log()) {
+        if (ev.kind == TickEventKind::kCreatureKill && ev.killer_guid == killer &&
+            ev.npc_template_id == npc)
+            ++n;
+    }
+    return n;
+}
 
-    const ObjectGuid pl = mt.add_player(1, at(0, 0), attacker_stats(5));
-    QuestLog* qlog = mt.player_quest_log(pl);
-    check("player has a quest log (store installed)", qlog != nullptr);
-    if (qlog == nullptr) return;
-    check("accept Q1 on the live log", qlog->accept(kQ1, 5) == AcceptStatus::kOk);
-
-    // Grind three kobolds: each death flows through on_unit_died → the killer's
-    // kill objective advances. The player is durable (1000 HP) and never dies.
+// Grind three kobolds through a MapTick and return how many died (durable player).
+int grind_three_kobolds(MapTick& mt, ObjectGuid pl) {
     int killed = 0;
     for (int i = 0; i < 3; ++i) {
         const ObjectGuid crt = mt.add_creature(kobold(at(2, 0)));
@@ -306,17 +305,38 @@ void scenario_map_tick_kill_hook() {
         }
         if (cu->is_dead()) ++killed;
     }
-    check("three kobolds died", killed == 3);
-    check("kill objective advanced to complete via the hook", qlog->is_complete(kQ1));
+    return killed;
+}
 
-    // The tick event stream recorded exactly three quest-kill progress events.
-    const std::string log = mt.log_text();
-    auto count = [&](const std::string& needle) {
-        std::size_t n = 0, pos = 0;
-        while ((pos = log.find(needle, pos)) != std::string::npos) { ++n; pos += needle.size(); }
-        return n;
-    };
-    check("exactly three quest_kill events emitted", count("quest_kill killer=1") == 3);
+void scenario_map_tick_kill_hook() {
+    std::printf("B. MapTick reports creature kills as typed events (QST-01 event-bus; #396)\n");
+    const AbilityStore abilities = load_placeholder_ability_store();
+
+    // --- reporting ENABLED: each creature death emits a typed kCreatureKill --------
+    // carrying the killer guid + victim template id (the world loop routes this to
+    // the killer's SESSION; MapTick no longer owns any quest log).
+    {
+        MapTick mt(abilities, /*rng_seed=*/0x0371ULL, /*dt_ms=*/1600);
+        mt.set_report_kills(true);
+        const ObjectGuid pl = mt.add_player(1, at(0, 0), attacker_stats(5));
+        check("three kobolds died", grind_three_kobolds(mt, pl) == 3);
+        check("exactly three kCreatureKill events crediting the killer",
+              count_kill_events(mt, pl, kKobold) == 3);
+    }
+
+    // --- reporting DISABLED (the default): no kill event is emitted, so combat/death
+    // golden scenarios are byte-identical. ---------------------------------------
+    {
+        MapTick mt(abilities, /*rng_seed=*/0x0371ULL, /*dt_ms=*/1600);
+        const ObjectGuid pl = mt.add_player(1, at(0, 0), attacker_stats(5));
+        check("three kobolds died", grind_three_kobolds(mt, pl) == 3);
+        std::size_t kill_events = 0;
+        for (const TickEvent& ev : mt.log())
+            if (ev.kind == TickEventKind::kCreatureKill) ++kill_events;
+        check("no kCreatureKill events when reporting is off", kill_events == 0);
+        check("no quest_kill text line when reporting is off",
+              mt.log_text().find("quest_kill") == std::string::npos);
+    }
 }
 
 }  // namespace

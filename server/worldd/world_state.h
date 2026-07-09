@@ -212,6 +212,10 @@ private:
 struct EnterResult {
     SessionSlot slot = 0;
     AoiId entity_guid = 0;
+    // Area-trigger crossings the spawn position produced (#368/#396). A character
+    // that logs in already standing inside a discovery volume fires it here; the
+    // ENTER_WORLD handler credits any explore quest objective these satisfy.
+    std::vector<TriggerEvent> triggers;
 };
 
 // The base for synthetic per-session entity guids assigned when the D-11
@@ -250,10 +254,13 @@ public:
     // session in the grid to `pos`, recompute its interest set with hysteresis,
     // and relay the enter/update/leave deltas both ways (see the file header).
     // `ack_seq` / `state_flags` / `server_time_ms` are echoed into the
-    // EntityUpdate/MovementState fields. No-op if `slot` is not entered.
-    // Thread-safe.
-    void on_movement(SessionSlot slot, const Position& pos, std::uint32_t ack_seq,
-                     std::uint32_t state_flags, std::uint64_t server_time_ms);
+    // EntityUpdate/MovementState fields. Returns the mover's area-trigger crossings
+    // this move produced (#368/#396) so the caller can credit explore quest
+    // objectives on the session path; empty if `slot` is not entered or nothing
+    // crossed. Thread-safe.
+    std::vector<TriggerEvent> on_movement(SessionSlot slot, const Position& pos,
+                                          std::uint32_t ack_seq, std::uint32_t state_flags,
+                                          std::uint64_t server_time_ms);
 
     // Remove a session (world-leave / disconnect): send EntityLeave{DESPAWNED} to
     // everyone who currently sees it and drop it from the grid + registry.
@@ -374,8 +381,10 @@ private:
 
     // Evaluate `self`'s current authoritative position against the trigger volumes
     // and dispatch each crossing: a first-time discovery sends POI_DISCOVERED to
-    // `self`'s client; every crossing fires the OnAreaTrigger hook. Caller holds mtx_.
-    void fire_area_triggers(SessionRec& self);
+    // `self`'s client; every crossing fires the OnAreaTrigger hook. Returns the
+    // crossings so the caller can surface them (explore crediting, #396). Caller
+    // holds mtx_.
+    std::vector<TriggerEvent> fire_area_triggers(SessionRec& self);
 
     // Emit a ChatDeliver(channel) for (`sender_guid`, `sender_name`, `text`) to
     // the session at `to`. Caller holds mtx_. (#367)

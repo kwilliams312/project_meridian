@@ -66,7 +66,6 @@
 #include "leveling.h"          // xp_for_kill / grant_xp (CHR-03 #360)
 #include "movement_damage.h"   // MovementDamageState / MovementEnv / MovementDamageParams (#362)
 #include "movement_validation.h"  // Position
-#include "quest_log.h"         // QuestLog / QuestStore — quest state machine (QST-01 #371)
 
 #include "inventory.h"        // meridian::items::Inventory (loot → inventory transfer, #366)
 #include "loot_roll.h"        // meridian::loot::LootRng (ITM-02 #369)
@@ -102,6 +101,16 @@ enum class TickPhase : std::uint8_t {
 
 const char* tick_phase_name(TickPhase p);
 
+// The typed CLASS of a tick event, so the world loop can consume a structured
+// event without parsing `text`. Most events are kGeneric (their meaning lives in
+// the byte-stable `text`); a few carry structured payload the world loop routes.
+enum class TickEventKind : std::uint8_t {
+    kGeneric = 0,       // meaning is in `text` only (the default for every event)
+    kCreatureKill = 1,  // a creature died to a player — carries killer_guid + npc_template_id
+                        // (the QST-01 event-bus seam: the world loop credits the KILLER's
+                        // session quest log; MapTick no longer owns quest state).
+};
+
 // One deterministic tick event. `text` is the byte-stable golden line; the typed
 // fields let a test assert programmatically without parsing. The event stream a
 // tick returns is the map's "AoI delta build → flush" seam in miniature — the set
@@ -111,6 +120,14 @@ struct TickEvent {
     std::uint64_t now_ms = 0;     // map-tick clock at the START of this tick
     TickPhase     phase = TickPhase::kInbound;
     std::string   text;           // deterministic "kind key=val …" content
+
+    // Structured payload (kGeneric leaves these zero). The world loop reads these
+    // on a kCreatureKill to route the kill to the killer's session (see MapTick's
+    // on_unit_died / world_dispatch route_tick_events). NOT part of to_line() — the
+    // golden stream is unchanged by their presence.
+    TickEventKind kind = TickEventKind::kGeneric;
+    ObjectGuid    killer_guid = 0;        // kCreatureKill: the crediting player's guid
+    std::uint32_t npc_template_id = 0;    // kCreatureKill: the victim creature's template id
 
     std::string to_line() const;  // "t=<tick> now=<ms> <phase> <text>"
 };
@@ -147,18 +164,15 @@ public:
     // (a released dead player) this is the corpse-run position (#359).
     void set_player_position(ObjectGuid guid, const Position& pos);
 
-    // Install the quest datastore (QST-01 #371). When set, each player added
-    // afterwards gets a QuestLog and creature kills advance that killer's kill
-    // objectives from on_unit_died (the "kill count via on_unit_died" seam). Left
-    // unset (the default), the tick runs with NO quest state — existing combat/
-    // death golden scenarios are unaffected (no quest events are emitted). Borrowed;
-    // must outlive the tick (the boot-loaded store).
-    void set_quest_store(const QuestStore* store) { quest_store_ = store; }
-
-    // The quest log of an in-world player (nullptr if the guid names no player or
-    // no quest store is installed). The dispatch/accept path drives accept + query
-    // through this; tests inspect objective progress through it.
-    QuestLog* player_quest_log(ObjectGuid guid);
+    // Enable quest-kill REPORTING (QST-01 #371, event-bus). When on, a creature
+    // that dies to a player emits a typed kCreatureKill TickEvent (killer guid +
+    // victim template id) the world loop routes to the KILLER's session — which
+    // owns the authoritative quest log (ctx.quests) and applies on_kill. MapTick
+    // itself no longer owns any quest state (the owner-signed-off decision on epic
+    // #20: no shared mutable ownership between MapTick and sessions). Left OFF (the
+    // default), no kill event is emitted, so existing combat/death golden scenarios
+    // are byte-identical.
+    void set_report_kills(bool on) { report_kills_ = on; }
 
     // The map's graveyard — where a released ghost is sent (CMB-03 #359). A single
     // per-map point for M1; the "nearest graveyard from world data" lookup is the
@@ -255,7 +269,6 @@ private:
         AuraContainer       auras;
         std::uint32_t       xp_into_level = 0;  // XP toward the next level (resets on level-up, #360)
         MovementDamageState move_dmg;           // per-player fall/breath tracker (#362)
-        std::unique_ptr<QuestLog> quests;       // quest state machine (QST-01 #371); null if no store
         PlayerCombatant(Player u, const MovementDamageParams& mdp)
             : unit(std::move(u)), auras(unit), move_dmg(mdp) {}
     };
@@ -315,6 +328,12 @@ private:
     // Emit one event (stamped with the current tick + clock).
     void emit(std::vector<TickEvent>& out, TickPhase phase, std::string text);
 
+    // Emit a typed kCreatureKill event (QST-01 event-bus): the byte-stable text is
+    // the same "quest_kill killer=<g> npc=<t>" line, and the structured fields let
+    // the world loop route the credit to the killer's session without parsing.
+    void emit_kill(std::vector<TickEvent>& out, TickPhase phase, ObjectGuid killer,
+                   std::uint32_t npc_template_id);
+
     // The AuraContainer for any guid (player or creature), created on demand for a
     // creature. nullptr if the guid names no live unit.
     AuraContainer* auras_for(ObjectGuid guid);
@@ -325,7 +344,7 @@ private:
     std::uint64_t       now_ms_ = 0;
     std::uint64_t       tick_no_ = 0;
 
-    const QuestStore* quest_store_ = nullptr;  // quest defs (QST-01 #371); null = no quests
+    bool report_kills_ = false;  // QST-01 event-bus: emit kCreatureKill on a creature death
     CreatureAi ai_;  // server creatures (owns Creature + AI state + respawn timers)
     DeathStateMachine deaths_;  // dead players' death flow + corpses (CMB-03 #359)
     Position graveyard_;        // per-map release destination (world-data seam, #359)
