@@ -1,0 +1,15 @@
+schema: meridian/item@1
+id: itm1:item.iron_trinket
+name: Ironbound Trinket
+item_class: armor
+slot: trinket
+rarity: uncommon
+required_level: 3
+stats:
+  - stat: stamina
+    amount: 4
+price:
+  buy: 800
+  sell: 200
+visual:
+  icon: itm1:art.icon.item.trinket_iron

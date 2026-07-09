@@ -1,0 +1,18 @@
+schema: meridian/npc@1
+id: itm1:npc.gray_wolf
+name: Gray Wolf
+level: { min: 6, max: 7 }
+creature_type: beast
+faction: hostile
+stats:
+  health: 120
+  damage: { min: 8, max: 14 }
+  attack_speed_ms: 1600
+ai:
+  behavior: aggressive
+  aggro_radius_m: 18
+loot:
+  table: itm1:loot.gray_wolf
+  money: { min: 2, max: 6 }
+visual:
+  model: itm1:art.creature.wolf.gray

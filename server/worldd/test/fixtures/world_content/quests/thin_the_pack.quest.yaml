@@ -1,0 +1,22 @@
+schema: meridian/quest@1
+id: itm1:quest.thin_the_pack
+name: Thin the Pack
+summary: Slay 5 Gray Wolves on the north road for Marshal Bren.
+offer_text: >-
+  The wolves have taken three wagons this month. Cull five of them and the rest
+  will think twice before creeping down from the ridge.
+completion_text: Five fewer fangs on the road. You've a steady hand.
+level: 6
+required_level: 4
+giver: itm1:npc.marshal_bren
+objectives:
+  - type: kill
+    target: itm1:npc.gray_wolf
+    count: 5
+rewards:
+  xp: 250
+  money: 300
+  items:
+    - item: itm1:item.healing_draught
+      count: 2
+script: null

@@ -53,10 +53,14 @@
 #include "active_sessions.h"
 #include "buyback.h"  // vendor::BuybackQueue — per-session buyback state (ECO-01, #370)
 #include "combat_resolver.h"
+#include "item_template.h"   // items::TemplateStore (content-store install seam, #390)
 #include "loot_registry.h"  // shared corpse loot registry (ITM-02 wire; #388)
+#include "loot_table.h"      // loot::LootTableStore (WorldServer::set_loot_tables, #390)
 #include "movement_validation.h"
+#include "npc_def.h"         // npc::NpcStore (content-store install seam, #390)
 #include "quest_log.h"  // QuestLog — per-session quest state machine (QST-01 #371)
 #include "trainer.h"    // npc::LearnedAbilitySet — per-session learned abilities (NPC-02 #372)
+#include "vendor_catalog.h"  // vendor::VendorCatalog (content-store install seam, #390)
 #include "world_generated.h"
 #include "world_metrics.h"
 #include "world_session.h"
@@ -65,6 +69,17 @@
 namespace meridian::worldd {
 
 using net::Bytes;
+
+// Install world-DB-backed content stores behind the M1 seams the QUEST/GOSSIP/VENDOR
+// dispatch handlers read (item templates, vendor catalog, quest defs, npc defs),
+// replacing the placeholder set (#390). Call ONCE at boot (main()) AFTER the IF-4
+// manifest check, before serving; the referenced stores must outlive every served
+// connection (main() owns them for the process lifetime). A nullptr leaves that seam
+// on its placeholder default. Not thread-safe — a boot-time, single-threaded set.
+void install_content_stores(const items::TemplateStore* item_store,
+                            const vendor::VendorCatalog* vendor,
+                            const QuestStore* quests,
+                            const npc::NpcStore* npcs);
 
 // IF-2 in-frame header size: u16 opcode + u64 seq, little-endian, ahead of the
 // FlatBuffer payload (see the transport note above).
@@ -458,6 +473,12 @@ public:
     // world-thread creature-death hook (#369) seeds it; a test seeds it directly to
     // drive the loot wire path. Exposed so tests can insert a corpse's loot session.
     LootRegistry& loot_registry();
+
+    // Install a world-DB-backed loot-table store on the per-map tick (#390),
+    // replacing the placeholder loot tables the tick rolls on creature death. The
+    // store must outlive the WorldServer (main() owns the WorldContent bundle). Call
+    // at boot before start(); not thread-safe.
+    void set_loot_tables(const loot::LootTableStore& store);
 
 private:
     void world_thread_main();

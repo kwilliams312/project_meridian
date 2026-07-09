@@ -1,0 +1,15 @@
+schema: meridian/pack@1
+namespace: itm1
+name: IT-M1 world-content-load fixture
+description: >-
+  A minimal hand-authored content pack (issue #390) that exercises the world-DB
+  content-load path end to end: a two-quest chain, the quest-giver + a loot-carrying
+  creature, the items they reward/drop, a loot table, and a vendor. Compiled to
+  world-DB rows by `mcc emit-sql`; loaded + asserted by worldd-content-load-db-test.
+  Lives OUTSIDE /content on purpose (it is a test fixture, not shipped game content),
+  so it is not part of the validated core pack.
+version: 0.1.0
+content_schema_version: 1
+authors:
+  - Meridian contributors
+license: Apache-2.0

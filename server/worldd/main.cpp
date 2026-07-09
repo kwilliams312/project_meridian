@@ -45,6 +45,7 @@
 #include "meridian/trace/exporter.h"
 
 #include "area_triggers.h"
+#include "db_content_store.h"
 #include "world_boot.h"
 #include "world_dispatch.h"
 
@@ -306,6 +307,12 @@ int main(int argc, char** argv) {
     // When no world DB is wired (MERIDIAN_WORLDDB_* unset -> empty user), the
     // check is SKIPPED — the daemon serves without content (dispatcher / session
     // path only), which keeps the DB-less smoke run + dispatch test runnable.
+    // The DB-backed content stores (#390), loaded from the world DB below once the
+    // manifest check passes. Held at main() scope for the PROCESS LIFETIME so the
+    // pointers install_content_stores() / world.set_loot_tables() hand to the seams
+    // stay valid for every served connection. Empty (all null) when no world DB is
+    // wired — the seams then keep the M1 placeholder stores.
+    meridian::worldd::WorldContent content;
     if (!cfg.world_db.user.empty()) {
         std::optional<std::string> expected;
         if (!cfg.expected_content_hash.empty()) expected = cfg.expected_content_hash;
@@ -320,11 +327,32 @@ int main(int argc, char** argv) {
                              boot.reason.c_str());
                 return 3;
             }
+            // --- World-DB content load (#390) ---------------------------------
+            // The manifest check passed, so the world DB is serveable — load the
+            // authored quest / npc / loot / vendor (+ item template) content and
+            // install the DB-backed stores behind the M1 seams. The QUEST/GOSSIP/
+            // VENDOR dispatch handlers (#388) are UNCHANGED — only the concrete store
+            // swaps. A load fault is a hard boot failure (a half-loaded world is not
+            // served), same policy as the connect fault below.
+            content = meridian::worldd::load_world_content(world_db);
+            meridian::worldd::install_content_stores(content.items.get(),
+                                                     content.vendor.get(),
+                                                     content.quests.get(),
+                                                     content.npcs.get());
+            meridian::core::log::info(
+                kDaemonName,
+                "world content loaded (DB-backed stores installed): " +
+                    std::to_string(content.quests->ids().size()) + " quests, " +
+                    std::to_string(content.npcs->ids().size()) + " npcs, " +
+                    std::to_string(content.loot->ids().size()) + " loot tables, " +
+                    std::to_string(content.vendor->ids().size()) + " vendors, " +
+                    std::to_string(content.items->ids().size()) + " item templates");
         } catch (const meridian::db::DbError& e) {
-            // Could not even connect to the world DB. A world DB was explicitly
-            // configured, so a connect failure is a hard boot failure, not a skip.
+            // Could not even connect to the world DB, or a content query failed. A
+            // world DB was explicitly configured, so this is a hard boot failure, not
+            // a skip.
             std::fprintf(stderr,
-                         "%s: world-DB boot refused: cannot connect to world DB: %s\n",
+                         "%s: world-DB boot refused: cannot load world DB: %s\n",
                          kDaemonName, e.what());
             return 3;
         }
@@ -406,6 +434,12 @@ int main(int argc, char** argv) {
     // PLACEHOLDER set on the flat bootstrap map; real volumes arrive compiled into
     // world content (mcc #28) — load_area_triggers() is that seam.
     world.world_state().load_area_triggers(meridian::worldd::placeholder_area_triggers());
+
+    // Install the DB-backed loot tables on the per-map tick (#390) when world content
+    // was loaded, so a creature death rolls AUTHORED loot rather than the placeholder
+    // set. No-op when no world DB is wired (content.loot is null) — the tick keeps its
+    // placeholder loot tables.
+    if (content.loot) world.set_loot_tables(*content.loot);
 
     try {
         meridian::net::TlsListener listener(lc);

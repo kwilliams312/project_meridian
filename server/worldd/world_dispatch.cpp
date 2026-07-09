@@ -269,16 +269,26 @@ Bytes encode_chat_rejected(mn::ChatChannel channel, mn::ChatRejectReason reason,
 
 // ---- vendor encoders + shared data (S→C, world.fbs; ECO-01 #370) ------------
 
-// The M1 PLACEHOLDER item templates + vendor catalog, shared read-only across all
-// connections (thread-safe, immutable after construction — like the ability store).
-// Function-local statics so their init is thread-safe and lazy (C++11 magic
-// statics). When mcc #28 lands, these are replaced by the world-DB-backed stores
-// (the same seams: items::TemplateStore / vendor::VendorCatalog).
+// The M1 content stores behind the seams, shared read-only across all connections
+// (thread-safe, immutable after construction — like the ability store). Each accessor
+// returns the world-DB-backed store INSTALLED at boot (install_content_stores, #390)
+// when one is present, else the M1 PLACEHOLDER set via a function-local static (a
+// thread-safe lazy magic static, so DB-free unit tests keep working unchanged). The
+// installed pointers are set ONCE at boot before any connection is served, and only
+// ever read afterwards, so a plain non-owning pointer needs no lock. When mcc #28
+// lands, the world DB is always present and the placeholder statics fall out of use.
+const itm::TemplateStore* g_db_item_templates = nullptr;   // set by install_content_stores
+const vend::VendorCatalog* g_db_vendor_catalog = nullptr;
+const QuestStore* g_db_quest_store = nullptr;
+const npc::NpcStore* g_db_npc_store = nullptr;
+
 const itm::TemplateStore& item_templates() {
+    if (g_db_item_templates != nullptr) return *g_db_item_templates;
     static const itm::PlaceholderTemplateStore store;
     return store;
 }
 const vend::VendorCatalog& vendor_catalog() {
+    if (g_db_vendor_catalog != nullptr) return *g_db_vendor_catalog;
     static const vend::PlaceholderVendorCatalog cat;
     return cat;
 }
@@ -323,16 +333,16 @@ std::int64_t safe_balance(ConnCtx& ctx) {
     }
 }
 
-// ---- quest / npc shared read-only stores (M1 placeholder; mcc #28 later) -----
-// Function-local statics: thread-safe lazy init, immutable after construction, and
-// shared read-only across every connection (like item_templates()/vendor_catalog()).
-// When mcc #28 lands, these are replaced by the world-DB-backed stores behind the
-// same abstract seam (QuestStore / npc::NpcStore).
+// ---- quest / npc shared read-only stores (M1 placeholder or DB-backed, #390) --
+// Same pattern as item_templates()/vendor_catalog(): the DB-backed store installed
+// at boot when a world DB is present, else the placeholder magic static.
 const QuestStore& quest_store() {
+    if (g_db_quest_store != nullptr) return *g_db_quest_store;
     static const PlaceholderQuestStore store;
     return store;
 }
 const npc::NpcStore& npc_store() {
+    if (g_db_npc_store != nullptr) return *g_db_npc_store;
     static const npc::PlaceholderNpcStore store;
     return store;
 }
@@ -813,6 +823,25 @@ void poll_completed_cast(net::Session& sess, ConnCtx& ctx, std::uint64_t now_ms)
 }
 
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// Content-store installation seam (#390)
+// ---------------------------------------------------------------------------
+// Swap the seams the QUEST/GOSSIP/VENDOR handlers read from the placeholder set to
+// the world-DB-backed stores. Called ONCE at boot (main()), AFTER the IF-4 manifest
+// check succeeds, before any connection is served. The referenced stores must
+// outlive every served connection (main() owns the WorldContent bundle for the
+// process lifetime). A nullptr leaves that seam on its placeholder default. Not
+// thread-safe — a boot-time, single-threaded set (read-only afterwards).
+void install_content_stores(const items::TemplateStore* item_store,
+                            const vendor::VendorCatalog* vendor,
+                            const QuestStore* quests,
+                            const npc::NpcStore* npcs) {
+    g_db_item_templates = item_store;
+    g_db_vendor_catalog = vendor;
+    g_db_quest_store = quests;
+    g_db_npc_store = npcs;
+}
 
 // ---------------------------------------------------------------------------
 // Frame codec
@@ -2363,6 +2392,10 @@ WorldState& WorldServer::world_state() { return impl_->world; }
 ActiveSessionRegistry& WorldServer::active_sessions() { return impl_->active_sessions; }
 
 LootRegistry& WorldServer::loot_registry() { return impl_->loot; }
+
+void WorldServer::set_loot_tables(const loot::LootTableStore& store) {
+    impl_->map.set_loot_tables(store);
+}
 
 void WorldServer::world_thread_main() {
     // The per-map map tick (SAD §2.5 / §3.2), 20 Hz with a 40 ms soft budget
