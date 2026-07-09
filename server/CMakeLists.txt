@@ -75,6 +75,13 @@ add_subdirectory(libs/bus)
 add_subdirectory(libs/srp)
 # db: MariaDB access (#75) — synchronous connection + prepared statements.
 add_subdirectory(libs/db)
+# bans: the OPS-02c moderation model (#419) — account/character/IP bans + chat
+# mutes over the auth + characters DBs (parameterized SQL). A socket-free
+# data-access library shared by authd (login refusal), worldd (session refusal +
+# chat-mute enforcement + GM `.ban`/`.mute` issuance), and operator tooling. Ships
+# a pure unit test + a DB-backed integration test that self-SKIPs without
+# MERIDIAN_DB_*.
+add_subdirectory(libs/bans)
 # net: TLS 1.3 listener + IF-1 length framing for authd (#77) — clean-room from
 # SAD §5.1/§2.1; needs OpenSSL (BSD sockets, no Asio at M0).
 add_subdirectory(libs/net)

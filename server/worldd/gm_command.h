@@ -33,6 +33,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -168,6 +169,42 @@ using SetLevelFn = std::function<SetLevelResult(std::uint32_t requested_level)>;
 // character-select can kick).
 using KickFn = std::function<EffectStatus(const std::string& target_name)>;
 
+// The subject a `.ban` targets (OPS-02c, #419) — mirrors bans::Kind but kept
+// framework-local so gm_command stays free of the meridian::bans dependency (the
+// live dispatch maps this to bans::Kind; a unit test drives it with a fake seam).
+enum class BanSubject {
+    kAccount,    // .ban account <username>
+    kCharacter,  // .ban char <name>
+    kIp,         // .ban ip <address>
+};
+
+// The outcome of .ban — on kApplied, a short human echo of the banned subject.
+struct BanResult {
+    EffectStatus status = EffectStatus::kUnavailable;
+    std::string subject_desc;   // e.g. "account 'Bob'" (kApplied only)
+};
+
+// .ban <account|char|ip> <subject> [duration] [reason] — write a ban record (ADMIN).
+// `duration_seconds` nullopt => permanent. An unknown account/character subject is
+// kTargetOffline; a DB fault is kInternalError; the seam unset is kUnavailable. The
+// server resolves a name→id and inserts the row (bans lib) + audits the issuance.
+using BanFn = std::function<BanResult(BanSubject subject, const std::string& target,
+                                      std::optional<std::uint64_t> duration_seconds,
+                                      const std::string& reason)>;
+
+// The outcome of .mute — on kApplied, the muted character name echo.
+struct MuteResult {
+    EffectStatus status = EffectStatus::kUnavailable;
+    std::string subject_desc;   // e.g. "Bob" (kApplied only)
+};
+
+// .mute <char> [duration] [reason] — silence a character's chat (GM). An unknown
+// character name is kTargetOffline; a DB fault is kInternalError. The server
+// resolves the name→id, inserts the mute (bans lib) + audits the issuance.
+using MuteFn = std::function<MuteResult(const std::string& char_name,
+                                        std::optional<std::uint64_t> duration_seconds,
+                                        const std::string& reason)>;
+
 // The per-dispatch bundle of effect seams. Built by the CALLER of dispatch_command
 // (the live chat handler wires them to ctx/world/db; a unit test wires fakes) and
 // handed to the permitted handler. An unset seam ⇒ the handler reports kUnavailable.
@@ -177,6 +214,8 @@ struct GmEffects {
     AddItemFn  add_item;
     SetLevelFn set_level;
     KickFn     kick;
+    BanFn      ban;   // .ban (OPS-02c, #419) — write an account/character/IP ban
+    MuteFn     mute;  // .mute (OPS-02c, #419) — silence a character's chat
 };
 
 // A command handler: validates the parsed args + calls the effect seams in `fx`,
