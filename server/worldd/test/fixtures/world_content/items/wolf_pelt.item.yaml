@@ -1,0 +1,10 @@
+schema: meridian/item@1
+id: itm1:item.wolf_pelt
+name: Coarse Wolf Pelt
+item_class: trade_good
+rarity: common
+stack_size: 20
+price:
+  sell: 12
+visual:
+  icon: itm1:art.icon.item.pelt_gray

@@ -34,6 +34,7 @@ add_library(world-dispatch STATIC
   leveling.cpp
   quest_def.cpp
   quest_log.cpp
+  db_content_store.cpp
   loot_registry.cpp
   world_state.cpp
   active_sessions.cpp
@@ -472,6 +473,28 @@ target_link_libraries(worldd-boot-db-test
 )
 set_target_properties(worldd-boot-db-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-boot-db COMMAND worldd-boot-db-test)
+
+# --- World-DB CONTENT LOAD DB-backed integration test (#390). -------------------
+# The acceptance bar for the content-load story: seed a world DB with the authored
+# fixture content (server/worldd/test/fixtures/world_content, compiled to world-DB
+# rows by `mcc emit-sql`), construct the DB-backed content stores (DbQuestStore /
+# DbNpcStore / DbLootTableStore / DbVendorCatalog / DbTemplateStore) against it, and
+# assert each returns the authored definitions behind the SAME seam the placeholder
+# store implements — a quest's objectives/rewards/prereqs, an NPC's roles + quest
+# refs, a loot table's entries keyed by creature (with the quest-gated drop + additive
+# money), a vendor's catalog + resolved prices. Self-seeds minimal no-FK tables
+# (mirroring the mcc-emitted rows) so it is deterministic without the full world DDL.
+# Reads MERIDIAN_WORLDDB_* (falls back to MERIDIAN_DB_*) and SKIPS (exit 0) when none
+# are set — inert in the plain server ctest, real only in the DB CI job / test.sh --db.
+add_executable(worldd-content-load-db-test
+  test/content_load_db_it.cpp
+)
+target_link_libraries(worldd-content-load-db-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-content-load-db-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-content-load-db COMMAND worldd-content-load-db-test)
 
 # --- Combat tick + seeded GOLDEN sim-harness scenarios (CMB-01/02; #349). ------
 # The epic-#18 capstone. PURE (no DB, no socket): drives the MapTick orchestrator

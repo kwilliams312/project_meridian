@@ -1,0 +1,11 @@
+schema: meridian/item@1
+id: itm1:item.healing_draught
+name: Draught of Mending
+item_class: consumable
+rarity: common
+stack_size: 5
+price:
+  buy: 150
+  sell: 30
+visual:
+  icon: itm1:art.icon.item.draught_green

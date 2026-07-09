@@ -1,0 +1,13 @@
+schema: meridian/item@1
+id: itm1:item.travelers_boots
+name: Traveler's Boots
+item_class: armor
+slot: feet
+rarity: common
+required_level: 2
+armor: 14
+price:
+  buy: 400
+  sell: 100
+visual:
+  icon: itm1:art.icon.item.boots_leather

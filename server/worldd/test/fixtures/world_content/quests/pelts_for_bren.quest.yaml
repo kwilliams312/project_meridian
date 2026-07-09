@@ -1,0 +1,27 @@
+schema: meridian/quest@1
+id: itm1:quest.pelts_for_bren
+name: Pelts for Bren
+summary: Gather 3 Coarse Wolf Pelts and bring them to Marshal Bren.
+offer_text: >-
+  Good work on the culling. Now bring me three of their pelts — the Wardens need
+  winter linings, and you've earned first pick of the stores.
+completion_text: These will keep a scout warm through the pass. Take your reward.
+level: 7
+required_level: 4
+giver: itm1:npc.marshal_bren
+prerequisites:
+  quests:
+    - itm1:quest.thin_the_pack
+objectives:
+  - type: collect
+    item: itm1:item.wolf_pelt
+    count: 3
+rewards:
+  xp: 320
+  money: 150
+  choice_items:
+    - item: itm1:item.iron_trinket
+      count: 1
+    - item: itm1:item.travelers_boots
+      count: 1
+script: null
