@@ -51,6 +51,7 @@
 
 #include "ability_store.h"
 #include "active_sessions.h"
+#include "buyback.h"  // vendor::BuybackQueue — per-session buyback state (ECO-01, #370)
 #include "combat_resolver.h"
 #include "movement_validation.h"
 #include "world_generated.h"
@@ -183,6 +184,16 @@ struct ConnCtx {
     std::optional<SessionMovementState> movement;  // authoritative movement (#86), post-auth
     MovementIntake intake;                          // ≤ 10/s intent-rate gate (#86)
     ChatIntake chat_intake;                         // chat rate class (OPS-03; #367)
+
+    // Vendors (ECO-01, #370). `char_id` is this session's spawned character
+    // (== character.id, the currency/inventory key), captured at ENTER_WORLD; the
+    // vendor buy/sell/buyback handlers act on it against ctx.char_db (server-
+    // authoritative — never a client-supplied character). `buyback` is THIS
+    // session's per-connection buyback queue (recently-sold items repurchasable
+    // for a bounded window; single-threaded, like `chat_intake`/`combat`). Both
+    // are inert until kInWorld — char_id is 0 pre-spawn and the handlers reject.
+    std::uint64_t char_id = 0;
+    vendor::BuybackQueue buyback;
 
     // Combat (CMB-01, #344/#345). `abilities` is the shared, read-only ability
     // template store (#343), set by serve_connection from the WorldServer; the

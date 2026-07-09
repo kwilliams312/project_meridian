@@ -25,12 +25,16 @@
 #include "meridian/trace/span.h"
 #include "meridian/trace/tracer.h"
 #include "roster.h"       // M0-frozen race/class roster (validated by create)
+#include "vendor.h"          // ECO-01 vendor buy/sell/buyback (#370)
+#include "vendor_catalog.h"  // placeholder vendor inventories (M1; mcc #28 later)
 
 namespace meridian::worldd {
 namespace {
 
 namespace fb = flatbuffers;
 namespace mn = meridian::net;
+namespace vend = meridian::vendor;
+namespace itm = meridian::items;
 namespace log = meridian::core::log;
 namespace audit = meridian::core::audit;
 namespace metrics = meridian::metrics::catalog;
@@ -146,6 +150,9 @@ bool verify_payload_for(net::Opcode op, const Frame& f) {
         case net::Opcode::ENTER_WORLD_REQUEST: return verify_table<mn::EnterWorldRequest>(f);
         case net::Opcode::CAST_REQUEST:        return verify_table<mn::CastRequest>(f);
         case net::Opcode::CHAT_MESSAGE:        return verify_table<mn::ChatMessage>(f);
+        case net::Opcode::VENDOR_BUY_REQUEST:     return verify_table<mn::VendorBuyRequest>(f);
+        case net::Opcode::VENDOR_SELL_REQUEST:    return verify_table<mn::VendorSellRequest>(f);
+        case net::Opcode::VENDOR_BUYBACK_REQUEST: return verify_table<mn::VendorBuybackRequest>(f);
         default:                           return false;
     }
 }
@@ -240,6 +247,62 @@ Bytes encode_chat_rejected(mn::ChatChannel channel, mn::ChatRejectReason reason,
     auto t = b.CreateString(target);
     b.Finish(mn::CreateChatRejected(b, channel, reason, t));
     return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// ---- vendor encoders + shared data (S→C, world.fbs; ECO-01 #370) ------------
+
+// The M1 PLACEHOLDER item templates + vendor catalog, shared read-only across all
+// connections (thread-safe, immutable after construction — like the ability store).
+// Function-local statics so their init is thread-safe and lazy (C++11 magic
+// statics). When mcc #28 lands, these are replaced by the world-DB-backed stores
+// (the same seams: items::TemplateStore / vendor::VendorCatalog).
+const itm::TemplateStore& item_templates() {
+    static const itm::PlaceholderTemplateStore store;
+    return store;
+}
+const vend::VendorCatalog& vendor_catalog() {
+    static const vend::PlaceholderVendorCatalog cat;
+    return cat;
+}
+
+Bytes encode_vendor_buy_result(mn::VendorBuyStatus status, std::uint32_t vendor_id,
+                               std::uint32_t template_id, std::uint32_t quantity,
+                               std::uint64_t item_guid, std::int64_t total_price,
+                               std::int64_t balance) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateVendorBuyResult(b, status, vendor_id, template_id, quantity,
+                                       item_guid, total_price, balance));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+Bytes encode_vendor_sell_result(mn::VendorSellStatus status, std::uint16_t backpack_slot,
+                                std::uint32_t template_id, std::uint32_t quantity,
+                                std::int64_t total_credit, std::int64_t balance,
+                                std::uint16_t buyback_slot) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateVendorSellResult(b, status, backpack_slot, template_id, quantity,
+                                        total_credit, balance, buyback_slot));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+Bytes encode_vendor_buyback_result(mn::VendorBuybackStatus status, std::uint32_t template_id,
+                                   std::uint32_t quantity, std::uint64_t item_guid,
+                                   std::int64_t price, std::int64_t balance) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateVendorBuybackResult(b, status, template_id, quantity, item_guid,
+                                           price, balance));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// Best-effort current balance for a reject reply (the transaction changed nothing,
+// so the client sees the unchanged money). Never throws — a DB fault degrades to 0.
+std::int64_t safe_balance(ConnCtx& ctx) {
+    if (ctx.char_db == nullptr || ctx.char_id == 0) return 0;
+    try {
+        return static_cast<std::int64_t>(itm::get_money(*ctx.char_db, ctx.char_id));
+    } catch (...) {
+        return 0;
+    }
 }
 
 // ---- combat encoders (S→C, world.fbs; CMB-01 #344/#345) ---------------------
@@ -1041,6 +1104,11 @@ void Dispatcher::register_m0_stubs() {
            ctx.movement.emplace(spawn, /*spawn_time_ms=*/0);
            ctx.movement->set_entity_guid(pc.char_guid);  // may be refined below (AoI)
 
+           // ECO-01 (#370): capture the spawned character's id (== character.id,
+           // the currency/inventory key) so the vendor buy/sell/buyback handlers
+           // act on the session's OWN character (server-authoritative).
+           ctx.char_id = pc.char_guid;
+
            // OPS-05: this session is now IN WORLD. Bump CCU (meridian_ccu) and the
            // "active" session gauge (meridian_sessions{state="active"}); the serve
            // loop decrements both on disconnect (guarded by entered_metrics).
@@ -1357,10 +1425,139 @@ void Dispatcher::register_m0_stubs() {
         }
     });
 
+    // --- 0x51xx VENDOR: server-authoritative buy / sell / buyback (ECO-01 #370) -
+    // Each request is validated + applied entirely on the server (does the vendor
+    // sell it / does the player own it / can they afford it / is there space)
+    // against the placeholder vendor catalog + item templates, moving int64 copper
+    // and item instances durably through meridian-vendor's DB path. A request NEVER
+    // carries a price. Prerequisites mirror the other in-world handlers:
+    //   * pre-handshake  -> protocol error (Disconnect), like CHAT/CAST;
+    //   * authenticated but not spawned -> typed NOT_IN_WORLD reject (no close);
+    //   * no characters DB / no char_id -> INTERNAL (cannot touch durable state).
+    // A rejected transaction changes nothing; the reply carries the unchanged
+    // balance (best-effort) so the client can reconcile.
+
+    on(net::Opcode::VENDOR_BUY_REQUEST, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+        if (!require_authenticated(ctx, "VENDOR_BUY_REQUEST")) return;
+        const auto* req = fb::GetRoot<mn::VendorBuyRequest>(f.payload);
+        if (req == nullptr) return;  // verified upstream; defensive
+        const std::uint32_t vendor_id = req->vendor_id();
+        const std::uint32_t template_id = req->item_template_id();
+        const std::uint32_t quantity = req->quantity();
+
+        auto reply = [&](mn::VendorBuyStatus st, std::uint64_t guid,
+                         std::int64_t total, std::int64_t balance) {
+            send_s2c(sess, ctx,
+                     encode_frame(net::Opcode::VENDOR_BUY_RESULT, f.seq,
+                                  encode_vendor_buy_result(st, vendor_id, template_id,
+                                                           quantity, guid, total, balance)));
+        };
+
+        if (ctx.phase != SessionPhase::kInWorld) { reply(mn::VendorBuyStatus::NOT_IN_WORLD, 0, 0, 0); return; }
+        if (ctx.char_db == nullptr || ctx.char_id == 0) { reply(mn::VendorBuyStatus::INTERNAL, 0, 0, 0); return; }
+
+        try {
+            vend::BuyDbResult r = vend::buy_db(*ctx.char_db, ctx.char_id, vendor_catalog(),
+                                               item_templates(), vendor_id, template_id, quantity);
+            reply(mn::VendorBuyStatus::OK, r.item_guid,
+                  static_cast<std::int64_t>(r.total_price),
+                  static_cast<std::int64_t>(r.balance_after));
+        } catch (const vend::UnknownVendor&) {
+            reply(mn::VendorBuyStatus::UNKNOWN_VENDOR, 0, 0, safe_balance(ctx));
+        } catch (const vend::ItemNotSold&) {
+            reply(mn::VendorBuyStatus::NOT_SOLD, 0, 0, safe_balance(ctx));
+        } catch (const itm::UnknownTemplate&) {
+            reply(mn::VendorBuyStatus::NOT_SOLD, 0, 0, safe_balance(ctx));
+        } catch (const itm::BadStackCount&) {
+            reply(mn::VendorBuyStatus::BAD_QUANTITY, 0, 0, safe_balance(ctx));
+        } catch (const itm::InsufficientFunds&) {
+            reply(mn::VendorBuyStatus::INSUFFICIENT_FUNDS, 0, 0, safe_balance(ctx));
+        } catch (const itm::InventoryFull&) {
+            reply(mn::VendorBuyStatus::INVENTORY_FULL, 0, 0, safe_balance(ctx));
+        } catch (const std::exception& e) {
+            log::warn(kCat, "VENDOR_BUY_REQUEST failed", {log::field("error", e.what())});
+            reply(mn::VendorBuyStatus::INTERNAL, 0, 0, safe_balance(ctx));
+        }
+    });
+
+    on(net::Opcode::VENDOR_SELL_REQUEST, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+        if (!require_authenticated(ctx, "VENDOR_SELL_REQUEST")) return;
+        const auto* req = fb::GetRoot<mn::VendorSellRequest>(f.payload);
+        if (req == nullptr) return;
+        const std::uint16_t backpack_slot = req->backpack_slot();
+        const std::uint32_t quantity = req->quantity();
+
+        auto reply = [&](mn::VendorSellStatus st, std::uint32_t template_id,
+                         std::uint32_t qty, std::int64_t credit, std::int64_t balance,
+                         std::uint16_t buyback_slot) {
+            send_s2c(sess, ctx,
+                     encode_frame(net::Opcode::VENDOR_SELL_RESULT, f.seq,
+                                  encode_vendor_sell_result(st, backpack_slot, template_id,
+                                                            qty, credit, balance, buyback_slot)));
+        };
+
+        if (ctx.phase != SessionPhase::kInWorld) { reply(mn::VendorSellStatus::NOT_IN_WORLD, 0, 0, 0, 0, 0); return; }
+        if (ctx.char_db == nullptr || ctx.char_id == 0) { reply(mn::VendorSellStatus::INTERNAL, 0, 0, 0, 0, 0); return; }
+
+        try {
+            vend::SellDbResult r = vend::sell_db(*ctx.char_db, ctx.char_id, ctx.buyback,
+                                                 item_templates(), backpack_slot, quantity);
+            reply(mn::VendorSellStatus::OK, r.item_template_id, r.quantity,
+                  static_cast<std::int64_t>(r.total_credit),
+                  static_cast<std::int64_t>(r.balance_after),
+                  static_cast<std::uint16_t>(r.buyback_slot));
+        } catch (const itm::SlotEmpty&) {
+            reply(mn::VendorSellStatus::SLOT_EMPTY, 0, 0, 0, safe_balance(ctx), 0);
+        } catch (const vend::NotSellable&) {
+            reply(mn::VendorSellStatus::NOT_SELLABLE, 0, 0, 0, safe_balance(ctx), 0);
+        } catch (const itm::BadStackCount&) {
+            reply(mn::VendorSellStatus::BAD_QUANTITY, 0, 0, 0, safe_balance(ctx), 0);
+        } catch (const std::exception& e) {
+            log::warn(kCat, "VENDOR_SELL_REQUEST failed", {log::field("error", e.what())});
+            reply(mn::VendorSellStatus::INTERNAL, 0, 0, 0, safe_balance(ctx), 0);
+        }
+    });
+
+    on(net::Opcode::VENDOR_BUYBACK_REQUEST, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+        if (!require_authenticated(ctx, "VENDOR_BUYBACK_REQUEST")) return;
+        const auto* req = fb::GetRoot<mn::VendorBuybackRequest>(f.payload);
+        if (req == nullptr) return;
+        const std::uint16_t buyback_slot = req->buyback_slot();
+
+        auto reply = [&](mn::VendorBuybackStatus st, std::uint32_t template_id,
+                         std::uint32_t qty, std::uint64_t guid, std::int64_t price,
+                         std::int64_t balance) {
+            send_s2c(sess, ctx,
+                     encode_frame(net::Opcode::VENDOR_BUYBACK_RESULT, f.seq,
+                                  encode_vendor_buyback_result(st, template_id, qty, guid,
+                                                               price, balance)));
+        };
+
+        if (ctx.phase != SessionPhase::kInWorld) { reply(mn::VendorBuybackStatus::NOT_IN_WORLD, 0, 0, 0, 0, 0); return; }
+        if (ctx.char_db == nullptr || ctx.char_id == 0) { reply(mn::VendorBuybackStatus::INTERNAL, 0, 0, 0, 0, 0); return; }
+
+        try {
+            vend::BuybackDbResult r = vend::buyback_db(*ctx.char_db, ctx.char_id, ctx.buyback,
+                                                       item_templates(), buyback_slot);
+            reply(mn::VendorBuybackStatus::OK, r.item_template_id, r.quantity, r.item_guid,
+                  static_cast<std::int64_t>(r.price),
+                  static_cast<std::int64_t>(r.balance_after));
+        } catch (const vend::BuybackSlotEmpty&) {
+            reply(mn::VendorBuybackStatus::EMPTY_SLOT, 0, 0, 0, 0, safe_balance(ctx));
+        } catch (const itm::InsufficientFunds&) {
+            reply(mn::VendorBuybackStatus::INSUFFICIENT_FUNDS, 0, 0, 0, 0, safe_balance(ctx));
+        } catch (const itm::InventoryFull&) {
+            reply(mn::VendorBuybackStatus::INVENTORY_FULL, 0, 0, 0, 0, safe_balance(ctx));
+        } catch (const std::exception& e) {
+            log::warn(kCat, "VENDOR_BUYBACK_REQUEST failed", {log::field("error", e.what())});
+            reply(mn::VendorBuybackStatus::INTERNAL, 0, 0, 0, 0, safe_balance(ctx));
+        }
+    });
+
     // No handler is registered for server→client opcodes (HANDSHAKE_OK,
     // MOVEMENT_STATE, ENTITY_ENTER/UPDATE/LEAVE, CHAR_*_RESPONSE, CHAT_DELIVER/
-    // CHAT_REJECTED): a client sending one is out-of-direction and is treated as
-    // an unknown opcode (Disconnect).
+    // CHAT_REJECTED, VENDOR_*_RESULT): a client sending one is out-of-direction and
+    // is treated as an unknown opcode (Disconnect).
 }
 
 // ---------------------------------------------------------------------------

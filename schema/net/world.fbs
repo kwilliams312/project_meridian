@@ -121,6 +121,21 @@ enum Opcode : uint16 {
   LOOT_RELEASE  = 0x5005,  // C→S  close the loot window
   LOOT_CLOSED   = 0x5006,  // S→C  the loot window closed (released / corpse looted-out)
 
+  // --- 0x5xxx  inventory / economy : vendors  (M1 — ECO-01: vendors, #370, epic #20) ---
+  // Server-authoritative vendor transactions (server PRD §4-M1 ECO-01). buy /
+  // sell / buyback each ride ONE C→S request opcode with a paired S→C result.
+  // All prices + copper balances are server-computed int64 copper — a request
+  // NEVER carries a client-trusted price (the server looks the price up from the
+  // vendor catalog / item template). Vendors take the 0x51xx SUB-band, DISJOINT
+  // from loot's 0x5001..0x5006 above, so the two economy stories never collide on
+  // a value. Append within 0x51xx; never renumber.
+  VENDOR_BUY_REQUEST      = 0x5101,  // C→S  buy a vendor item (vendor_id + template + qty)
+  VENDOR_BUY_RESULT       = 0x5102,  // S→C  typed outcome: minted item + debited copper
+  VENDOR_SELL_REQUEST     = 0x5103,  // C→S  sell an owned backpack item to a vendor
+  VENDOR_SELL_RESULT      = 0x5104,  // S→C  typed outcome: credited copper + buyback slot
+  VENDOR_BUYBACK_REQUEST  = 0x5105,  // C→S  repurchase a recently-sold item by buyback slot
+  VENDOR_BUYBACK_RESULT   = 0x5106,  // S→C  typed outcome: restored item + re-debited copper
+
   // --- 0x6xxx  chat / social     (M1 — SOC-01: chat router, #367) ---
   // Server-authoritative chat routing in worldd (server SAD §2.5 "spatial chat
   // stays here", §3.8). say/yell are delivered by the AoI grid (#87 — say = a
@@ -857,6 +872,121 @@ table LootClosed {
 }
 
 // ===========================================================================
+// 0x5xxx — inventory / economy : vendors  (M1 — ECO-01, #370, epic #20)
+// ===========================================================================
+// Server-authoritative vendor transactions (server PRD §4-M1 ECO-01). The server
+// owns every price and every copper balance — all money is int64 copper (never a
+// FLOAT), and NO request carries a client-supplied price. A buy/sell/buyback is
+// validated end-to-end on the server (vendor sells it / player owns it / player
+// can afford it / has inventory space) against the vendor catalog (placeholder
+// data at M1, real via mcc #28) and the item template's buy/sell price. Each of
+// the three transactions is ONE C→S request opcode paired with a typed S→C
+// result; a rejected transaction changes NO durable state (all-or-nothing).
+//
+// BUYBACK: selling an item pushes it onto a bounded, per-session buyback queue;
+// the player may repurchase a recently-sold item — at the exact copper it was
+// sold for — by its slot in that queue, until the queue evicts it (oldest-out
+// when full). The queue is session-scoped and non-durable (a fresh login starts
+// empty), matching the classic vendor buyback UX.
+
+/// C→S. Buy `quantity` of item template `item_template_id` from vendor
+/// `vendor_id`. The price is the server's (catalog override or the template's
+/// buy price) — never sent by the client. `quantity` is the number of units (a
+/// single stack; must be within the template's max stack).
+table VendorBuyRequest {
+  vendor_id:uint32;         // which vendor (catalog id; placeholder data at M1)
+  item_template_id:uint32;  // the item to buy (world DB item_template id / IF-9)
+  quantity:uint32;          // units to buy (1..=template.max_stack)
+}
+
+/// Typed outcome of a buy (mirrors the server's vendor validation 1:1).
+enum VendorBuyStatus : uint16 {
+  OK                  = 0,   // bought — item_guid minted, total_price debited
+  UNKNOWN_VENDOR      = 1,   // no such vendor in the catalog
+  NOT_SOLD            = 2,   // this vendor does not sell that template (no price)
+  INSUFFICIENT_FUNDS  = 3,   // the player cannot afford total_price
+  INVENTORY_FULL      = 4,   // no backpack space for the purchased stack
+  BAD_QUANTITY        = 5,   // quantity 0 or above the template's max stack
+  NOT_IN_WORLD        = 6,   // session authenticated but not spawned in-world
+  INTERNAL            = 7,   // server/DB error (no characters DB, or a DB failure)
+}
+
+/// S→C. Result of a VendorBuyRequest. On OK the item is minted into the backpack
+/// and `total_price` copper is debited; `balance` is the resulting money. On any
+/// rejection no state changed and item_guid/total_price are 0 (balance echoes the
+/// unchanged money).
+table VendorBuyResult {
+  status:VendorBuyStatus = OK;
+  vendor_id:uint32;
+  item_template_id:uint32;
+  quantity:uint32;
+  item_guid:uint64;      // minted instance guid on OK (0 otherwise)
+  total_price:int64;     // copper debited on OK (0 otherwise)
+  balance:int64;         // the character's money AFTER the transaction
+}
+
+/// C→S. Sell the owned backpack item at `backpack_slot` to a vendor, `quantity`
+/// units of it (clamped server-side to the stack size). The vendor pays the
+/// item template's sell price (server-owned). `vendor_id` records who bought it
+/// (M1 accepts any sellable item at any vendor; buy-filter is mcc #28 content).
+table VendorSellRequest {
+  vendor_id:uint32;         // the vendor being sold to
+  backpack_slot:uint16;     // backpack index of the item to sell
+  quantity:uint32;          // units to sell (clamped to the stack)
+}
+
+/// Typed outcome of a sell.
+enum VendorSellStatus : uint16 {
+  OK             = 0,   // sold — units removed, total_credit credited
+  SLOT_EMPTY     = 1,   // no item at that backpack slot
+  NOT_SELLABLE   = 2,   // the item has no sell price (a quest item etc.)
+  BAD_QUANTITY   = 3,   // quantity 0
+  NOT_IN_WORLD   = 4,   // session authenticated but not spawned in-world
+  INTERNAL       = 5,   // server/DB error
+}
+
+/// S→C. Result of a VendorSellRequest. On OK `quantity` units left the backpack,
+/// `total_credit` copper was credited, and the sold stack was pushed onto the
+/// buyback queue at `buyback_slot` (the index a VendorBuybackRequest names to
+/// repurchase it). On rejection nothing changed.
+table VendorSellResult {
+  status:VendorSellStatus = OK;
+  backpack_slot:uint16;
+  item_template_id:uint32;
+  quantity:uint32;
+  total_credit:int64;    // copper credited on OK (0 otherwise)
+  balance:int64;         // the character's money AFTER the transaction
+  buyback_slot:uint16;   // where the sold item landed in the buyback queue (OK only)
+}
+
+/// C→S. Repurchase the item at `buyback_slot` of the session's buyback queue, for
+/// the exact copper it was sold for (server-owned; not sent by the client).
+table VendorBuybackRequest {
+  buyback_slot:uint16;      // index into the buyback queue (from VendorSellResult)
+}
+
+/// Typed outcome of a buyback.
+enum VendorBuybackStatus : uint16 {
+  OK                  = 0,   // repurchased — item restored, price re-debited
+  EMPTY_SLOT          = 1,   // no buyback entry at that slot (evicted / never sold)
+  INSUFFICIENT_FUNDS  = 2,   // cannot afford the buyback price
+  INVENTORY_FULL      = 3,   // no backpack space to restore the item
+  NOT_IN_WORLD        = 4,   // session authenticated but not spawned in-world
+  INTERNAL            = 5,   // server/DB error
+}
+
+/// S→C. Result of a VendorBuybackRequest. On OK the item is minted back into the
+/// backpack and `price` copper is re-debited; the entry leaves the buyback queue.
+table VendorBuybackResult {
+  status:VendorBuybackStatus = OK;
+  item_template_id:uint32;
+  quantity:uint32;
+  item_guid:uint64;      // re-minted instance guid on OK (0 otherwise)
+  price:int64;           // copper re-debited on OK (0 otherwise)
+  balance:int64;         // the character's money AFTER the transaction
+}
+
+// ===========================================================================
 // RESERVED RANGES — commented placeholders only (do NOT define tables until milestone).
 // Each names its opcode range and the owning future issue / SAD section.
 // ===========================================================================
@@ -868,8 +998,9 @@ table LootClosed {
 //                             giver, objective tracking, turn-in + reward grant; server PRD §4-M1).
 //                             Gossip menus + scripted quest events (QST-02) are a later issue.
 // 0x5xxx  inventory/economy — LOOT (0x5001..0x5006) DEFINED above (M1, ITM-02 #369): LootRequest / LootResponse /
-//                             LootTake / LootResult / LootRelease / LootClosed. Vendors/economy (ECO, #370) take
-//                             0x5010+ (distinct block); bag/inventory move/equip ops append later within 0x5xxx.
+//                             LootTake / LootResult / LootRelease / LootClosed. VENDORS (0x5101..0x5106) DEFINED
+//                             above (M1, ECO-01 #370): VendorBuy/Sell/Buyback Request+Result — the 0x51xx sub-band,
+//                             disjoint from loot's 0x50xx. Bank/trade (ECO-05/SOC-03) + inventory-move ops append later.
 // 0x6xxx  chat / social     — DEFINED above (M1, SOC-01 #367): ChatMessage / ChatDeliver / ChatRejected
 //                             (say/yell via AoI #87, whisper cross-session, zone broadcast; server SAD §2.5/§3.8).
 //                             Social lists + cross-shard routing via servicesd are M3.
