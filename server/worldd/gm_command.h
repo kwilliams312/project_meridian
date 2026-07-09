@@ -38,6 +38,7 @@
 #include <vector>
 
 #include "meridian/core/audit.hpp"
+#include "movement_validation.h"  // Position — the .tele/.summon destination (pure POD)
 
 namespace meridian::worldd::gm {
 
@@ -94,12 +95,98 @@ class Registry;  // fwd — a Command handler reads the registry (e.g. `.help`).
 // A server→sender reply sink: invoked once per reply line the command produces.
 using ReplyFn = std::function<void(const std::string& line)>;
 
-// A command handler: a PURE function of the parsed args + the caller's level that
-// emits its reply through `reply`. It runs ONLY when the framework has already
+// ---------------------------------------------------------------------------
+// GM COMMAND EFFECT SEAMS (OPS-02b, #418).
+// ---------------------------------------------------------------------------
+// The M1 command set (.tele/.summon/.additem/.setlevel/.kick) mutates SERVER
+// state — a session's authoritative position, another player's session, a
+// character's durable inventory / level. The framework stays PURE + testable by
+// keeping the effect out of the handler: each command validates its args and
+// permission here, then invokes a std::function SEAM that the live dispatch wires
+// to the real world/session/DB and a unit test wires to a capturing fake. This
+// mirrors the existing ReplyFn / AuditFn seams — the framework never touches a
+// socket, a WorldState, or a DB directly.
+//
+// Every seam returns a small typed status so the handler renders a System reply
+// the client shows; the SERVER computes the whole effect (bounds, item existence,
+// clamping, target lookup) — nothing beyond the parsed args is trusted (SAD §5.5
+// "server is law"). A seam left unset (the pure framework test wires only what it
+// exercises) is reported to the caller as "unavailable on this server".
+
+// The uniform outcome of an effect the SERVER applies. Renders 1:1 to a System
+// reply line. Not every status is producible by every command (see each seam).
+enum class EffectStatus {
+    kApplied,        // the effect was performed
+    kNotInWorld,     // the caller (or the seam's actor) is not spawned in-world
+    kTargetOffline,  // .summon/.kick — no in-world player holds that name
+    kUnknownItem,    // .additem — no item template with that id
+    kNoSpace,        // .additem — the caller's inventory has no free slot
+    kInternalError,  // the effect faulted server-side (e.g. a DB error) — logged
+    kUnavailable,    // the seam is not wired on this server (defensive)
+};
+
+// .tele <x> <y> <z> — teleport the caller to a validated in-bounds position. The
+// caller (the seam actor) must be in-world; returns kNotInWorld otherwise. On
+// kApplied the server has repositioned the caller authoritatively, armed the
+// forced-move ack barrier (so the client's reconciling move is not flagged as a
+// speed/teleport violation, #420), and relayed the AoI update.
+using TeleportFn = std::function<EffectStatus(const Position& dest)>;
+
+// .summon <name> — bring the named in-world player to the CALLER's position. The
+// caller must be in-world (kNotInWorld); an unknown/offline name is kTargetOffline.
+// On kApplied the server has moved the target (grid + AoI relay) and armed the
+// target's forced-move ack barrier for its next move.
+using SummonFn = std::function<EffectStatus(const std::string& target_name)>;
+
+// The outcome of .additem — on kApplied, the granted item's display name + the
+// stack count actually minted (clamped to the template's max stack).
+struct AddItemResult {
+    EffectStatus status = EffectStatus::kUnavailable;
+    std::string item_name;       // display name (kApplied only)
+    std::uint32_t count = 0;     // stack count minted (kApplied only)
+};
+
+// .additem <template_id> [count] — mint `count` of the item template and place it
+// in the caller's durable inventory. Requires the caller in-world with a character
+// (kNotInWorld); an unknown template is kUnknownItem; a full backpack is kNoSpace.
+using AddItemFn = std::function<AddItemResult(std::uint32_t template_id, std::uint32_t count)>;
+
+// The outcome of .setlevel — on kApplied, the level actually applied (the request
+// clamped to the valid [1, kMaxLevel] range).
+struct SetLevelResult {
+    EffectStatus status = EffectStatus::kUnavailable;
+    std::uint16_t applied_level = 0;  // the clamped level set (kApplied only)
+};
+
+// .setlevel <n> — set the caller's server-authoritative level, clamped to the
+// valid range. Requires the caller in-world (kNotInWorld).
+using SetLevelFn = std::function<SetLevelResult(std::uint32_t requested_level)>;
+
+// .kick <name> — disconnect the named in-world player's session. An unknown/offline
+// name is kTargetOffline; on kApplied the target has been signalled to disconnect
+// (Disconnect{KICKED} + AoI leave). The caller need NOT be in-world (a GM at
+// character-select can kick).
+using KickFn = std::function<EffectStatus(const std::string& target_name)>;
+
+// The per-dispatch bundle of effect seams. Built by the CALLER of dispatch_command
+// (the live chat handler wires them to ctx/world/db; a unit test wires fakes) and
+// handed to the permitted handler. An unset seam ⇒ the handler reports kUnavailable.
+struct GmEffects {
+    TeleportFn teleport;
+    SummonFn   summon;
+    AddItemFn  add_item;
+    SetLevelFn set_level;
+    KickFn     kick;
+};
+
+// A command handler: validates the parsed args + calls the effect seams in `fx`,
+// emitting its reply through `reply`. It runs ONLY when the framework has already
 // permitted the caller — a handler never does its own permission check. `reg` is
-// the owning registry (so `.help` can enumerate visible commands).
+// the owning registry (so `.help` can enumerate visible commands); `fx` carries
+// the server-effect seams (unused by read-only commands like `.help`).
 using Handler = std::function<void(const Registry& reg, const ParsedCommand& cmd,
-                                   std::uint8_t caller_level, const ReplyFn& reply)>;
+                                   std::uint8_t caller_level, const GmEffects& fx,
+                                   const ReplyFn& reply)>;
 
 // A registered GM command: its name, the D-16 threshold the caller must meet, the
 // one-line `.help` description, and the handler that produces its reply.
@@ -152,11 +239,14 @@ using AuditFn = std::function<void(const core::audit::Record& rec)>;
 // `text` is the raw chat line (the caller has already confirmed it starts with the
 // prefix). `level` is the caller's raw gm_level; `account_id` attributes the audit.
 // `reply` emits system lines back to the sender; `audit` records the attempt and
-// is ALWAYS called — for an allowed, denied, AND unknown command. Returns the
-// outcome. No wire or DB dependency.
+// is ALWAYS called — for an allowed, denied, AND unknown command. `fx` carries the
+// server-effect seams a permitted command invokes (teleport/summon/additem/…);
+// pass a default-constructed GmEffects for the read-only path. Returns the outcome.
+// No wire or DB dependency (the effects are the seam onto those).
 CommandOutcome dispatch_command(const Registry& reg, std::string_view text,
                                 std::uint64_t account_id, std::uint8_t level,
-                                const ReplyFn& reply, const AuditFn& audit);
+                                const GmEffects& fx, const ReplyFn& reply,
+                                const AuditFn& audit);
 
 }  // namespace meridian::worldd::gm
 

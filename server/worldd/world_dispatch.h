@@ -280,6 +280,14 @@ struct ConnCtx {
     SessionSlot slot = 0;
     bool entered = false;
 
+    // GM `.summon` target mailbox (OPS-02b, #418). Created at ENTER_WORLD and
+    // registered with WorldState (set_session_control) so a summoning GM on ANOTHER
+    // thread can post this session's forced destination; THIS session's own IO
+    // worker drains it (drain_forced_move — top of MOVEMENT_INTENT + post-frame) and
+    // applies force_correction, keeping ctx.movement single-threaded. Null until
+    // spawned / on the DB-less smoke path (un-summonable).
+    std::shared_ptr<ForcedMoveMailbox> forced_move;
+
     // OPS-05: true once this session bumped the CCU / active-session gauges on a
     // valid WORLD_HELLO, so the serve loop decrements them EXACTLY once on close
     // (distinct from `entered`, which tracks AoI registration — a session can be
