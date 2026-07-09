@@ -1,0 +1,7 @@
+# CC0 / own sample banks cleared for shipped renders. Each entry feeds provenance.
+schema: meridian/strudel-sample-allowlist@1
+banks:
+  meridian_perc:
+    origin_url: https://example.invalid/meridian-perc   # own bank, CC0
+    license: CC0-1.0
+    license_verified_on: "2026-07-08"
