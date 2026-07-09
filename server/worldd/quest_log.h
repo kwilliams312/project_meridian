@@ -92,6 +92,14 @@ struct RewardGrant {
     std::uint32_t                xp = 0;
     items::Copper                money = 0;
     std::vector<QuestRewardItem> items;  // always-granted items + the chosen choice item
+
+    // The quest's OBJECTIVE items handed over on turn-in and REMOVED from the
+    // inventory passed to turn_in() (each collect objective's item x its count, each
+    // deliver objective's item x1) — the "collect N for X" / "deliver to X" verbs.
+    // Reported so the durable layer (the QUEST_TURN_IN handler) can destroy/decrement
+    // the same rows in the characters DB. Best-effort per item: only what was actually
+    // present and removed is listed.
+    std::vector<QuestRewardItem> consumed;
 };
 
 // ---------------------------------------------------------------------------
@@ -165,11 +173,14 @@ public:
     TurnInStatus can_turn_in(QuestId id, std::uint32_t npc_id, int choice_index) const;
 
     // Turn `id` in at NPC `npc_id`. Re-syncs collect objectives from `inv`,
-    // validates (active / complete / correct NPC / legal choice), checks backpack
-    // room, mints the reward items into `inv`, marks the quest completed, and fills
-    // `out` with the reward bundle. On any non-kOk status NOTHING is changed
-    // (all-or-nothing). `choice_index` selects rewards.choice_items[] for a choice
-    // quest (>= 0) or is -1 when the quest has no choice rewards.
+    // validates (active / complete / correct NPC / legal choice), CONSUMES the quest's
+    // objective items from `inv` (collect items x count + deliver items x1 — handed
+    // over), checks backpack room (accounting for the slots that consumption frees),
+    // mints the reward items into `inv`, marks the quest completed, and fills `out`
+    // with the reward bundle (rewards + the consumed set). On any non-kOk status
+    // NOTHING is changed (all-or-nothing — feasibility is checked before any mutation).
+    // `choice_index` selects rewards.choice_items[] for a choice quest (>= 0) or is -1
+    // when the quest has no choice rewards.
     TurnInStatus turn_in(QuestId id, std::uint32_t npc_id, items::Inventory& inv,
                          int choice_index, RewardGrant& out);
 

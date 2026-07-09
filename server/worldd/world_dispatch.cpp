@@ -2145,8 +2145,35 @@ void Dispatcher::register_m0_stubs() {
                 return;
             }
 
+            // Persist the CONSUMED objective items durably FIRST (collect items handed
+            // over + the deliver item): destroy or decrement the matching backpack rows
+            // so the reward mint below sees the freed slots. turn_in's in-memory `inv`
+            // already reflects the removal; mirror it in the characters DB. Best-effort
+            // per item (turn_in reported only what was actually held).
+            {
+                itm::Inventory held =
+                    itm::load_inventory(*ctx.char_db, ctx.char_id, item_templates());
+                for (const QuestRewardItem& cx : grant.consumed) {
+                    std::uint32_t remaining = cx.count;
+                    for (std::uint16_t i = 0;
+                         i < held.backpack_capacity() && remaining > 0; ++i) {
+                        const itm::ItemInstance* inst = held.backpack_at(i);
+                        if (inst == nullptr || inst->template_id != cx.item_id) continue;
+                        if (inst->stack <= remaining) {
+                            itm::destroy_instance(*ctx.char_db, inst->item_guid);
+                            remaining -= inst->stack;
+                        } else {
+                            itm::set_instance_stack(*ctx.char_db, inst->item_guid,
+                                                    inst->stack - remaining);
+                            remaining = 0;
+                        }
+                    }
+                }
+            }
+
             // Persist the reward bundle durably: mint + place each reward stack at a
-            // free backpack slot (turn_in verified room), then credit reward copper.
+            // free backpack slot (turn_in verified room after consumption), then credit
+            // reward copper. Reload so the free-slot search reflects the consumption.
             itm::Inventory place =
                 itm::load_inventory(*ctx.char_db, ctx.char_id, item_templates());
             for (const QuestRewardItem& ri : grant.items) {

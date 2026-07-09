@@ -482,16 +482,6 @@ std::uint64_t backpack_used(db::Connection& conn, std::uint64_t char_id) {
                                 {sid(char_id)});
     return r.rows.empty() ? 0 : cell_u64(r.rows.at(0)[0]);
 }
-// Free the character's backpack (test housekeeping only — NOT a quest outcome). The
-// server never consumes collect items at turn-in and mints a reward stack each time,
-// so across a 10-quest chain the 16-slot backpack overflows; clearing it between
-// quests keeps that orthogonal capacity limit from masking the quest logic under test
-// (each collect quest re-loots its own corpse, each deliver quest re-mints its item).
-void clear_backpack(db::Connection& conn, std::uint64_t char_id) {
-    conn.execute("DELETE ii FROM item_instance ii "
-                 "JOIN character_inventory ci ON ci.item_guid = ii.item_guid "
-                 "WHERE ci.char_id = ?", {sid(char_id)});
-}
 void seed_grant(db::Connection& conn, std::uint64_t grant_id, std::uint64_t account_id,
                 std::uint32_t realm_id, const Bytes& session_key, std::uint32_t build) {
     conn.execute(
@@ -980,9 +970,9 @@ int main() {
                     backpack_used(conn, char_id) > used_before)
                     reward_items_landed = true;
                 if (turned_in) completed.push_back(nm);
-
-                // Housekeeping: free the backpack for the next quest (see clear_backpack).
-                clear_backpack(conn, char_id);
+                // NOTE: no backpack housekeeping — the server now CONSUMES each quest's
+                // collect/deliver objective items at turn-in (quest_log.cpp), so the
+                // 16-slot backpack no longer overflows across the 10-quest chain.
             }
 
             // === Chain-completion assertions ====================================
