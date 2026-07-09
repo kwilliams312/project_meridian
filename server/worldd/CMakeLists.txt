@@ -392,6 +392,25 @@ target_link_libraries(worldd-quest-loot-npc-db-test
 set_target_properties(worldd-quest-loot-npc-db-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-quest-loot-npc-db COMMAND worldd-quest-loot-npc-db-test)
 
+# --- Trainer-vs-DB-content LIVE-SESSION integration test (issue #392). ---------
+# The live half of #392: a real TLS session drives GOSSIP_HELLO -> TRAINER_LIST +
+# TRAINER_LEARN against a world server whose NPC seam is a DbNpcStore loaded from
+# seeded npc_trainer / npc_trainer_ability rows (install_content_stores) — proving a
+# DB-loaded trainer works end-to-end (learn debits character.money; every rejection
+# axis leaves it untouched). Reads MERIDIAN_DB_* and SKIPS (exit 0) when unset.
+add_executable(worldd-trainer-db-wire-test
+  test/trainer_db_wire_it.cpp
+)
+target_link_libraries(worldd-trainer-db-wire-test
+  PRIVATE
+    meridian::world-dispatch
+    meridian::characters
+    meridian::npc
+    Threads::Threads
+)
+set_target_properties(worldd-trainer-db-wire-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-trainer-db-wire COMMAND worldd-trainer-db-wire-test)
+
 # --- Area triggers + POI discovery UNIT test (WLD-01/03; #368). ---------------
 # PURE (no DB, no socket, no TLS): exercises BOTH layers directly —
 #   (1) the AreaTriggerSet core (point-in-box membership, enter/leave fire ONCE

@@ -9,7 +9,8 @@
 // store returns the authored definitions behind the SAME seam the placeholder store
 // implements:
 //   * DbQuestStore     — a quest's objectives + rewards (granted + choice) + prereqs;
-//   * DbNpcStore       — an NPC's roles (vendor flag) + quest giver/turn-in refs;
+//   * DbNpcStore       — an NPC's roles (vendor flag, trainer role + taught abilities
+//                        with class/level/cost gates) + quest giver/turn-in refs;
 //   * DbLootTableStore — a creature's loot table entries, keyed by creature id, with
 //                        the quest-gated drop + the creature's additive money;
 //   * DbVendorCatalog  — a vendor's catalog + resolved prices (override + template);
@@ -80,6 +81,8 @@ void create_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS loot_table",
         "DROP TABLE IF EXISTS vendor_inventory_item",
         "DROP TABLE IF EXISTS vendor_inventory",
+        "DROP TABLE IF EXISTS npc_trainer_ability",
+        "DROP TABLE IF EXISTS npc_trainer",
         "DROP TABLE IF EXISTS npc_template",
         "DROP TABLE IF EXISTS area",
     };
@@ -162,6 +165,19 @@ void create_tables(db::Connection& c) {
         "  pos_x FLOAT NOT NULL, pos_y FLOAT NOT NULL, pos_z FLOAT NOT NULL,"
         "  discovery_radius_m FLOAT NOT NULL DEFAULT 40, discovery_xp INT UNSIGNED NOT NULL DEFAULT 0,"
         "  PRIMARY KEY (zone_id, poi)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // npc_trainer / npc_trainer_ability — the #392 trainer role tables the NPC store
+    // reads. Columns mirror schema/sql/world/10_npc.sql (required_class is the class-
+    // name ENUM, NULL = any class). No FKs (the store only SELECTs, like the others).
+    c.execute(
+        "CREATE TABLE npc_trainer (npc_id INT UNSIGNED NOT NULL, PRIMARY KEY (npc_id))"
+        " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    c.execute(
+        "CREATE TABLE npc_trainer_ability ("
+        "  npc_id INT UNSIGNED NOT NULL, ability_id INT UNSIGNED NOT NULL,"
+        "  cost_copper BIGINT UNSIGNED NOT NULL DEFAULT 0,"
+        "  required_class ENUM('vanguard','runcaller','warden','mender') NULL,"
+        "  required_level SMALLINT UNSIGNED NOT NULL DEFAULT 1,"
+        "  PRIMARY KEY (npc_id, ability_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 }
 
 void drop_tables(db::Connection& c) {
@@ -171,7 +187,8 @@ void drop_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS quest_reward",    "DROP TABLE IF EXISTS quest_template",
         "DROP TABLE IF EXISTS loot_entry",      "DROP TABLE IF EXISTS loot_group",
         "DROP TABLE IF EXISTS loot_table",      "DROP TABLE IF EXISTS vendor_inventory_item",
-        "DROP TABLE IF EXISTS vendor_inventory", "DROP TABLE IF EXISTS npc_template",
+        "DROP TABLE IF EXISTS vendor_inventory", "DROP TABLE IF EXISTS npc_trainer_ability",
+        "DROP TABLE IF EXISTS npc_trainer",      "DROP TABLE IF EXISTS npc_template",
         "DROP TABLE IF EXISTS area",
     };
     for (const char* d : drops) c.execute(d);
@@ -203,6 +220,21 @@ void seed_fixture(db::Connection& c) {
         "INSERT INTO npc_template (id, name, vendor_ref_id, loot_table_ref_id, loot_money_min, "
         "loot_money_max) VALUES (7, ?, 10, NULL, NULL, NULL)",
         {s("Marshal Bren")});
+
+    // Trainer role (#392): Marshal Bren (7) also teaches two abilities. These
+    // npc_trainer / npc_trainer_ability rows exercise the DbNpcStore trainer loader
+    // and follow the EXACT shape mcc emit-sql produces (see content/core's warden_sela
+    // in tools/mcc/golden/world.sql). The fixture pack predates the abilities module,
+    // so the taught ability ids (101/102) are representative — the loader does not read
+    // an ability table. ability 101: any class (NULL), level 2, 50c; ability 102:
+    // Vanguard-only (roster class 1), level 5, 120c.
+    c.execute("INSERT INTO npc_trainer (npc_id) VALUES (7)");
+    c.execute(
+        "INSERT INTO npc_trainer_ability (npc_id, ability_id, cost_copper, required_class, "
+        "required_level) VALUES (7, 101, 50, NULL, 2)");
+    c.execute(
+        "INSERT INTO npc_trainer_ability (npc_id, ability_id, cost_copper, required_class, "
+        "required_level) VALUES (7, 102, 120, 'vanguard', 5)");
 
     // Quests 8 (pelts, prereq 9) + 9 (thin the pack).
     c.execute(
@@ -370,8 +402,17 @@ int main() {
             if (bren) {
                 check("npc 7 name", bren->name == "Marshal Bren");
                 check("npc 7 is a vendor (vendor_ref set)", bren->is_vendor);
-                check("npc 7 is NOT a trainer (no schema home)", !bren->is_trainer);
-                check("npc 7 has no trainer abilities", bren->trainer_abilities.empty());
+                // Trainer role loaded from npc_trainer_ability (#392).
+                check("npc 7 is a trainer (npc_trainer_ability rows)", bren->is_trainer);
+                check("npc 7 teaches 2 abilities", bren->trainer_abilities.size() == 2);
+                const npc::TrainerAbility* a101 = bren->trainer_ability(101);
+                const npc::TrainerAbility* a102 = bren->trainer_ability(102);
+                check("npc 7 teaches ability 101: any class (0), level 2, cost 50",
+                      a101 && a101->required_class == 0 && a101->required_level == 2 &&
+                          a101->cost == 50);
+                check("npc 7 teaches ability 102: Vanguard (class 1), level 5, cost 120",
+                      a102 && a102->required_class == 1 && a102->required_level == 5 &&
+                          a102->cost == 120);
                 // Bren gives + turns in BOTH quests (8, 9). turn_in defaults to giver,
                 // so each quest ref is gives+turn_in.
                 bool q8 = false, q9 = false, all_gt = true;
@@ -384,8 +425,9 @@ int main() {
                 check("npc 7 gives + turns in each quest", all_gt);
             }
             const npc::NpcDef* wolf = content.npcs->find(6);
-            check("npc 6 (gray wolf) loaded, not a vendor",
-                  wolf && !wolf->is_vendor && wolf->quests.empty());
+            check("npc 6 (gray wolf) loaded, not a vendor/trainer",
+                  wolf && !wolf->is_vendor && !wolf->is_trainer &&
+                      wolf->trainer_abilities.empty() && wolf->quests.empty());
         }
 
         // ---- DbLootTableStore (keyed by creature id) ---------------------------

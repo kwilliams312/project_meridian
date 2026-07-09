@@ -158,6 +158,20 @@ ObjectiveType objective_type_from_db(const std::string& s) {
 // A truthy BOOLEAN/TINYINT cell ("1"/"0" from MariaDB).
 bool as_bool(const db::Cell& c) { return as_i64(c) != 0; }
 
+// npc_trainer_ability.required_class ENUM class-name -> roster Class id (roster.h:
+// kVanguard=1, kRuncaller=2, kWarden=3, kMender=4). NULL/unknown => 0 (any class),
+// matching npc::TrainerAbility::required_class (0 = any). Kept as plain constants
+// (not a meridian::characters dependency) exactly like npc_def.h's kClassVanguard.
+std::uint8_t trainer_class_from_db(const db::Cell& c) {
+    if (!c.has_value()) return 0;  // NULL => any class may learn
+    const std::string& s = *c;
+    if (s == "vanguard") return 1;
+    if (s == "runcaller") return 2;
+    if (s == "warden") return 3;
+    if (s == "mender") return 4;
+    return 0;
+}
+
 }  // namespace
 
 // =============================================================================
@@ -307,9 +321,10 @@ std::vector<QuestId> DbQuestStore::ids() const {
 // DbNpcStore
 // =============================================================================
 DbNpcStore::DbNpcStore(db::Connection& world_db) {
-    // npc_template: id, name, and the vendor role FLAG (vendor_ref_id present).
-    // Trainer abilities have no world-DDL home yet (deferred mcc #28); is_trainer
-    // stays false and trainer_abilities empty for every DB-loaded NPC.
+    // npc_template: id, name, and the vendor role FLAG (vendor_ref_id present). The
+    // trainer role (is_trainer + trainer_abilities) is filled from npc_trainer_ability
+    // in a later pass below (#392); is_trainer starts false and flips true iff a
+    // taught-ability row names this NPC.
     db::Result npcs = world_db.execute(
         "SELECT id, name, vendor_ref_id FROM npc_template ORDER BY id");
     for (const db::Row& r : npcs.rows) {
@@ -353,6 +368,29 @@ DbNpcStore::DbNpcStore(db::Connection& world_db) {
         };
         add_ref(giver, /*gives=*/true, /*turns_in=*/giver == turn_in);
         if (turn_in != giver) add_ref(turn_in, /*gives=*/false, /*turns_in=*/true);
+    }
+
+    // Trainer role (npc_trainer_ability, #392): each row is one ability this NPC
+    // teaches, with its copper cost + class/level gate (the taught set the live #388
+    // TRAINER_LIST/TRAINER_LEARN path reads). Any row naming an NPC makes that NPC a
+    // trainer (is_trainer=true). cost_copper + required_level are INTEGER columns (read
+    // directly, no FLOAT round-trip); required_class is the ENUM class-name column
+    // mapped to the roster Class id (NULL => any class). The npc_trainer parent table
+    // is the FK anchor + the "is a trainer with no abilities yet" marker; the ability
+    // rows are what populate the def, so the query is over npc_trainer_ability.
+    db::Result trainer = world_db.execute(
+        "SELECT npc_id, ability_id, cost_copper, required_class, required_level "
+        "FROM npc_trainer_ability ORDER BY npc_id, ability_id");
+    for (const db::Row& r : trainer.rows) {
+        auto it = by_id_.find(as_u32(r[0]));
+        if (it == by_id_.end()) continue;  // taught ability for an unknown npc — skip
+        npc::TrainerAbility ta;
+        ta.ability_id = as_u32(r[1]);
+        ta.cost = static_cast<items::Copper>(as_i64(r[2]));
+        ta.required_class = trainer_class_from_db(r[3]);
+        ta.required_level = as_u16(r[4], 1);
+        it->second.is_trainer = true;
+        it->second.trainer_abilities.push_back(ta);
     }
 }
 

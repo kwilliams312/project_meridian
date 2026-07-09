@@ -202,6 +202,14 @@ public enum NpcFaction
     Hostile,
 }
 
+public enum NpcInteractionTrainerRequiredClass
+{
+    Vanguard,
+    Runcaller,
+    Warden,
+    Mender,
+}
+
 public enum NpcRank
 {
     Normal,
@@ -310,11 +318,24 @@ public sealed record NpcMovement
     public double? RunSpeedMps { get; init; }
 }
 
+public sealed record NpcInteractionTrainer
+{
+    public required AbilityRef Ability { get; init; }
+    /// <summary>Copper cost to learn this ability.</summary>
+    public required long Cost { get; init; }
+    /// <summary>Class gate — only this class may learn the ability. Omit = any class.</summary>
+    public NpcInteractionTrainerRequiredClass? RequiredClass { get; init; }
+    /// <summary>Minimum character level to learn.</summary>
+    public long? RequiredLevel { get; init; }
+}
+
 public sealed record NpcInteraction
 {
     /// <summary>Single-page gossip for v1; gossip graphs are an M2 schema.</summary>
     public string? GossipText { get; init; }
     public VendorRef? Vendor { get; init; }
+    /// <summary>Abilities this NPC teaches (NPC-02). A non-empty list makes the NPC a trainer and surfaces the "train" gossip option. Every gate is server-authoritative content — the client never supplies cost/level/class (Principle 1).</summary>
+    public IReadOnlyList<NpcInteractionTrainer>? Trainer { get; init; }
 }
 
 public sealed record NpcLoot
