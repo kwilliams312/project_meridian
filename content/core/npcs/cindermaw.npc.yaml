@@ -1,0 +1,25 @@
+schema: meridian/npc@1
+id: core:npc.cindermaw
+name: The Cindermaw
+subtitle: Terror of the Sunken Gallery
+level: { min: 8, max: 8 }
+creature_type: elemental
+rank: elite
+faction: hostile
+stats:
+  health: 1400
+  armor: 160
+  damage: { min: 24, max: 33 }
+  attack_speed_ms: 2400
+ai:
+  behavior: aggressive
+  aggro_radius_m: 26
+  leash_radius_m: 90
+  flee_at_health_pct: 0
+loot:
+  table: loot.cindermaw
+  money: { min: 220, max: 480 }
+visual:
+  model: core:art.char.cindermaw
+  scale: 1.6
+  sound_set: core:sfx.char.cindermaw

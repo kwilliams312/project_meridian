@@ -1,0 +1,41 @@
+# Capstone: kill + collect. The Cindermaw is the chain's boss; the cinder heart is
+# quest-gated in loot.cindermaw (drops at 100% while this quest is active).
+schema: meridian/quest@1
+id: core:quest.heart_of_the_cindermaw
+name: Heart of the Cindermaw
+summary: Slay the Cindermaw in the Sunken Gallery and cut out its Cinder Heart.
+offer_text: >-
+  The firecallers weren't worshipping the deep. They were feeding it — and it
+  grew into the Cindermaw. It nests in the sunken gallery now, and it will not
+  stay there. End it, and bring me its heart, so Emberfall knows the deep is
+  answered.
+completion_text: >-
+  Still warm, still beating. You carried the whole Hollow down into that dark
+  and carried it back out. Emberfall breathes easier tonight because you didn't.
+  Take a warden's crest — you've more than earned the name.
+level: 8
+required_level: 6
+zone: zone.zone01
+giver: npc.warden_sela
+prerequisites:
+  quests:
+    - quest.emberblight
+    - quest.trail_of_the_digmasters
+    - quest.charter_of_the_hollow
+objectives:
+  - type: kill
+    target: npc.cindermaw
+    count: 1
+  - type: collect
+    item: item.cinder_heart
+    count: 1
+rewards:
+  xp: 1200
+  money: 1500
+  items:
+    - item: item.warden_crest
+      count: 1
+  choice_items:
+    - item: item.emberforged_pick
+    - item: item.hollow_charm
+script: null

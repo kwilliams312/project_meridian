@@ -1,0 +1,10 @@
+schema: meridian/item@1
+id: core:item.spare_lamp
+name: Spare Miner's Lamp
+flavor_text: Trimmed, filled, and lit. Someone in the dark will bless you for it.
+item_class: quest
+rarity: common
+binding: on_pickup
+stack_size: 5
+visual:
+  icon: core:art.icon.item.lamp_charm

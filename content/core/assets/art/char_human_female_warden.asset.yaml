@@ -1,0 +1,12 @@
+# IF-8 sidecar (meridian/asset@1). Example-pack placeholder: the LFS source file
+# lands with the first art/audio drop (M0 pipeline proof); provenance is complete now.
+schema: meridian/asset@1
+id: core:art.char.human.female.warden
+class: character_model
+source: assets/art/char/human/female/warden.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: original
+  authors: [meridian-contributors]
+import_hints:
+  lod_policy: authored

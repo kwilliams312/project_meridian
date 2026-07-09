@@ -1,0 +1,30 @@
+# Kill quest, sibling of The Deep Tally (both gated behind Sparks in the Dark).
+schema: meridian/quest@1
+id: core:quest.silence_the_firecallers
+name: Silence the Firecallers
+summary: Kill 6 Kobold Firecallers before they finish their chant.
+offer_text: >-
+  Counting totems is one thing. Stopping the hands that plant them is another.
+  The firecallers keep up a chant down there day and night — put six of them to
+  silence and maybe the deep stops listening back.
+completion_text: >-
+  The chant's broken for now. You can hear the drip of the galleries again
+  instead of that awful droning. Six fewer voices calling the dark up.
+level: 7
+required_level: 5
+zone: zone.zone01
+giver: npc.foreman_dain
+prerequisites:
+  quests:
+    - quest.sparks_in_the_dark
+objectives:
+  - type: kill
+    target: npc.kobold_firecaller
+    count: 6
+rewards:
+  xp: 640
+  money: 600
+  choice_items:
+    - item: item.hollow_charm
+    - item: item.brens_signet
+script: null

@@ -1,0 +1,18 @@
+# Ember Wisp drops. The ember mote is quest-gated to Emberblight (Q5) — it only
+# drops for players on that quest, mirroring the kobold_ear pattern (ITM-02).
+schema: meridian/loot@1
+id: core:loot.ember_wisp
+money: { min: 2, max: 9 }
+entries:
+  - item: item.ember_mote
+    chance_pct: 75
+    quest: quest.emberblight
+groups:
+  - name: wisp_residue
+    pick: 1
+    chance_pct: 25
+    entries:
+      - item: item.minor_healing_potion
+        weight: 20
+      - item: item.ember_mote
+        weight: 3

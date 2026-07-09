@@ -1,0 +1,34 @@
+# Kill + collect quest. Ember motes are quest-gated in loot.ember_wisp (ITM-02),
+# so they only drop while this quest is active.
+schema: meridian/quest@1
+id: core:quest.emberblight
+name: Emberblight
+summary: Scatter 6 Ember Wisps on the ashvents and gather 8 Ember Motes.
+offer_text: >-
+  The vents breed wisps when the mountain runs hot, and a hot mountain is a
+  mountain about to speak. Scatter the drift up there and bring me their motes —
+  I read the deep by how fierce they burn.
+completion_text: >-
+  Eight, and every one still warm. The mountain isn't just hot, warden's
+  honor — it's building to something. Keep that blade loose.
+level: 6
+required_level: 4
+zone: zone.zone01
+giver: npc.warden_sela
+prerequisites:
+  quests:
+    - quest.wardens_watch
+objectives:
+  - type: kill
+    target: npc.ember_wisp
+    count: 6
+  - type: collect
+    item: item.ember_mote
+    count: 8
+rewards:
+  xp: 520
+  money: 450
+  choice_items:
+    - item: item.hollow_charm
+    - item: item.miners_lamp_charm
+script: null

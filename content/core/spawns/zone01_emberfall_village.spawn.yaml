@@ -8,3 +8,7 @@ spawns:
     position: { x: 126.0, y: 8.5, z: -244.0 }
     orientation_deg: 200
     respawn_seconds: { min: 60, max: 60 }
+  - npc: npc.warden_sela
+    position: { x: 110.0, y: 8.5, z: -230.0 }
+    orientation_deg: 315
+    respawn_seconds: { min: 60, max: 60 }

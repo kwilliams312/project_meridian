@@ -1,0 +1,37 @@
+# Deliver + explore quest. Dain's survey goes up to Sela (turn-in), and you plant
+# the Hollow's charter at the old Charter Stone. Convergence of both branches.
+schema: meridian/quest@1
+id: core:quest.charter_of_the_hollow
+name: Charter of the Hollow
+summary: Carry Dain's survey to Warden Sela and read it at the Charter Stone.
+offer_text: >-
+  I've torn my survey down to what matters and marked the deep beast's den on
+  it. Get it to Warden Sela — and read it aloud at the old Charter Stone, where
+  Emberfall swears its watches. Make this the Hollow's business, not just mine.
+completion_text: >-
+  Dain's hand, and his warning, both. A den in the sunken gallery — a beast the
+  firecallers have been feeding. The charter's spoken now; the Hollow acts.
+  Meet me at the vent shelf. We end this.
+level: 7
+required_level: 5
+zone: zone.zone01
+giver: npc.foreman_dain
+turn_in: npc.warden_sela
+prerequisites:
+  quests:
+    - quest.the_deep_tally
+    - quest.silence_the_firecallers
+objectives:
+  - type: deliver
+    item: item.deep_survey_scrap
+    to: npc.warden_sela
+  - type: explore
+    zone: zone.zone01
+    poi: charter_stone
+rewards:
+  xp: 700
+  money: 650
+  items:
+    - item: item.hollow_charm
+      count: 1
+script: null
