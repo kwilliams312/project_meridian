@@ -10,6 +10,7 @@
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -58,6 +59,47 @@ bool parse_finite_float(const std::string& s, float& out) {
     if (!std::isfinite(v)) return false;
     out = static_cast<float>(v);
     return true;
+}
+
+// Parse a `.ban`/`.mute` [duration] token: a bare count of seconds ("3600") or a
+// suffixed value ("30s"/"15m"/"2h"/"7d"). Returns the seconds, or nullopt when the
+// token is not a valid duration form (so the command parser treats it as the first
+// word of the reason instead). Zero and overflow are rejected. Kept LOCAL (the
+// framework stays free of the meridian::bans dependency — the live seam maps to
+// bans::parse_duration_seconds, which shares this grammar).
+std::optional<std::uint64_t> parse_duration(const std::string& s) {
+    if (s.empty()) return std::nullopt;
+    std::uint64_t mult = 1;
+    std::size_t len = s.size();
+    switch (s.back()) {
+        case 's': mult = 1;     --len; break;
+        case 'm': mult = 60;    --len; break;
+        case 'h': mult = 3600;  --len; break;
+        case 'd': mult = 86400; --len; break;
+        default: break;  // no suffix => bare seconds
+    }
+    if (len == 0) return std::nullopt;
+    std::uint64_t value = 0;
+    for (std::size_t i = 0; i < len; ++i) {
+        const char c = s[i];
+        if (c < '0' || c > '9') return std::nullopt;
+        const std::uint64_t next = value * 10 + static_cast<std::uint64_t>(c - '0');
+        if (next < value) return std::nullopt;  // overflow
+        value = next;
+    }
+    if (value == 0) return std::nullopt;
+    if (value > (0xFFFF'FFFF'FFFF'FFFFULL / mult)) return std::nullopt;
+    return value * mult;
+}
+
+// Join tokens[from..] with single spaces (the free-text reason tail of .ban/.mute).
+std::string join_from(const std::vector<std::string>& toks, std::size_t from) {
+    std::string out;
+    for (std::size_t i = from; i < toks.size(); ++i) {
+        if (!out.empty()) out.push_back(' ');
+        out += toks[i];
+    }
+    return out;
 }
 
 // Parse `s` as a base-10 unsigned 32-bit value. Returns false on empty, non-digit,
@@ -368,6 +410,106 @@ Registry::Registry() {
                     break;
                 default:
                     reply(generic_effect_failure(st));
+                    break;
+            }
+        },
+    });
+
+    // ── MODERATION (OPS-02c, #419) ─────────────────────────────────────────
+    // .ban is the most destructive moderation action (it locks a player out), so
+    // it is ADMIN, mirroring .kick. .mute (silences chat, reversible on expiry) is
+    // GM. Both PARSE their args here, then invoke a seam that resolves the subject
+    // + writes the durable record; the server trusts nothing beyond the parsed args.
+
+    // .ban <account|char|ip> <subject> [duration] [reason] — ADMIN.
+    add(Command{
+        "ban",
+        Level::kAdmin,
+        "ban a subject: .ban <account|char|ip> <subject> [duration] [reason]",
+        [](const Registry& /*reg*/, const ParsedCommand& cmd, std::uint8_t /*level*/,
+           const GmEffects& fx, const ReplyFn& reply) {
+            const std::vector<std::string> toks = split_args(cmd.args);
+            if (toks.size() < 2) {
+                reply("Usage: .ban <account|char|ip> <subject> [duration] [reason]");
+                return;
+            }
+            BanSubject subject;
+            if (toks[0] == "account") {
+                subject = BanSubject::kAccount;
+            } else if (toks[0] == "char" || toks[0] == "character") {
+                subject = BanSubject::kCharacter;
+            } else if (toks[0] == "ip") {
+                subject = BanSubject::kIp;
+            } else {
+                reply("Unknown ban kind '" + toks[0] +
+                      "' (expected account, char, or ip).");
+                return;
+            }
+            const std::string& target = toks[1];
+            // Optional [duration] then [reason]: token[2] is a duration IFF it parses
+            // as one, else it is the first word of the reason (permanent ban).
+            std::optional<std::uint64_t> duration;
+            std::size_t reason_from = 2;
+            if (toks.size() >= 3) {
+                if (std::optional<std::uint64_t> d = parse_duration(toks[2])) {
+                    duration = d;
+                    reason_from = 3;
+                }
+            }
+            std::string reason = join_from(toks, reason_from);
+            if (reason.empty()) reason = "banned by GM";
+            if (!fx.ban) { reply(generic_effect_failure(EffectStatus::kUnavailable)); return; }
+            const BanResult r = fx.ban(subject, target, duration, reason);
+            switch (r.status) {
+                case EffectStatus::kApplied:
+                    reply("Banned " + r.subject_desc +
+                          (duration ? " (temporary)." : " (permanent)."));
+                    break;
+                case EffectStatus::kTargetOffline:
+                    reply("No such " + std::string(toks[0]) + ": '" + target + "'.");
+                    break;
+                default:
+                    reply(generic_effect_failure(r.status));
+                    break;
+            }
+        },
+    });
+
+    // .mute <char> [duration] [reason] — GM.
+    add(Command{
+        "mute",
+        Level::kGm,
+        "silence a character's chat: .mute <char> [duration] [reason]",
+        [](const Registry& /*reg*/, const ParsedCommand& cmd, std::uint8_t /*level*/,
+           const GmEffects& fx, const ReplyFn& reply) {
+            const std::vector<std::string> toks = split_args(cmd.args);
+            if (toks.empty()) {
+                reply("Usage: .mute <char> [duration] [reason]");
+                return;
+            }
+            const std::string& name = toks[0];
+            std::optional<std::uint64_t> duration;
+            std::size_t reason_from = 1;
+            if (toks.size() >= 2) {
+                if (std::optional<std::uint64_t> d = parse_duration(toks[1])) {
+                    duration = d;
+                    reason_from = 2;
+                }
+            }
+            std::string reason = join_from(toks, reason_from);
+            if (reason.empty()) reason = "muted by GM";
+            if (!fx.mute) { reply(generic_effect_failure(EffectStatus::kUnavailable)); return; }
+            const MuteResult r = fx.mute(name, duration, reason);
+            switch (r.status) {
+                case EffectStatus::kApplied:
+                    reply("Muted " + r.subject_desc +
+                          (duration ? " (temporary)." : " (permanent)."));
+                    break;
+                case EffectStatus::kTargetOffline:
+                    reply("No such character: '" + name + "'.");
+                    break;
+                default:
+                    reply(generic_effect_failure(r.status));
                     break;
             }
         },

@@ -77,6 +77,7 @@ enum class LoginOutcome {
     kRejectedHello,     // ClientHello failed the build/proto gate (Error sent)
     kRejectedAuth,      // SRP proof failed (AuthResult error sent); NO grant
     kRejectedRealm,     // RealmSelect named an unknown/unavailable realm (Error)
+    kRejectedBanned,    // a banned account / source IP was refused (OPS-02c, #419)
     kProtocolError,     // peer sent an unexpected/undecodable message
     kTransportClosed,   // peer closed the connection at a frame boundary
 };

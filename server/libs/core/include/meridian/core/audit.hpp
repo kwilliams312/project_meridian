@@ -112,6 +112,21 @@ enum class Action {
                        //         (vendor_buy/vendor_sell/quest_reward/loot_money), the
                        //         `reason` the classification. The economy audit stream
                        //         (PRD §6), complementing the per-feature validation.
+    kBanRejected,      // authd/worldd: a login or in-world session was refused because
+                       //         the account / source IP / character is BANNED (OPS-02c,
+                       //         #419). `reason` is the subject kind (account_banned/
+                       //         ip_banned/character_banned), `target` the subject
+                       //         (account:<id>/ip:<addr>/character:<id>), `peer` the
+                       //         source address. The moderation audit stream (PRD §6).
+    kBanIssued,        // worldd: a GM `.ban` wrote a ban record (OPS-02c, #419).
+                       //         `target` is the banned subject, `reason` records the
+                       //         subject kind + whether it is permanent/time-boxed; the
+                       //         actor is the issuing GM's account_id.
+    kMuteIssued,       // worldd: a GM `.mute` wrote a character mute (OPS-02c, #419).
+                       //         `target` is character:<id>; `reason` records perm/temp.
+    kChatMuted,        // worldd: a muted character's CHAT_MESSAGE was dropped at the
+                       //         chat router (OPS-02c, #419). `target` is character:<id>,
+                       //         `reason` = "muted". Moderation enforcement signal.
 };
 
 // The stable JSON `action` string for an Action (e.g. "login_failure"). This is

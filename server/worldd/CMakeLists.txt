@@ -57,6 +57,7 @@ target_link_libraries(world-dispatch
     meridian::net
     meridian::proto
     meridian::db
+    meridian::bans     # OPS-02c ban/mute enforcement + .ban/.mute issuance (#419)
     meridian::characters  # char-management handlers: list/create/delete CRUD (#286 / D-35)
     meridian::items    # ITM-01 item model + inventory/currency — quest rewards/collect (#371) + loot transfer (#369)
     meridian::loot     # ITM-02 loot tables + rolls + corpse loot sessions (#369)
@@ -172,6 +173,25 @@ target_link_libraries(worldd-single-session-it
 )
 set_target_properties(worldd-single-session-it PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-single-session COMMAND worldd-single-session-it)
+
+# --- Ban + mute enforcement END-TO-END test (OPS-02c, #419). ------------------
+# Drives real TLS clients against the real serve loop: a BANNED account's WorldHello
+# is refused (Disconnect{KICKED}); a spawned character's chat routes normally until
+# it is MUTED (dropped with a "you are muted" System reply) and again once the mute
+# has EXPIRED. Needs a live MariaDB with the auth schema; reads MERIDIAN_DB_* and
+# SKIPS (exit 0) when none are set (inert in the plain server ctest, runs in the
+# worldd-session CI job).
+add_executable(worldd-ban-mute-it
+  test/ban_mute_it.cpp
+)
+target_link_libraries(worldd-ban-mute-it
+  PRIVATE
+    meridian::world-dispatch
+    meridian::bans
+    Threads::Threads
+)
+set_target_properties(worldd-ban-mute-it PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-ban-mute COMMAND worldd-ban-mute-it)
 
 # --- Movement intake + validation v0 UNIT test (IT-M0 movement; #86). ---------
 # PURE (no DB, no socket, no session): exercises the movement validator, the

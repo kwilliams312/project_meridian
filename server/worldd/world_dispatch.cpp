@@ -27,6 +27,7 @@
 #include "item_store.h"  // ITM-01 durable item persistence: mint/place (loot + quest reward)
 #include "map_tick.h"    // per-map tick orchestrator (SAD §2.5 phase order; #349)
 #include "movement_audit.h"  // OPS-03a anti-cheat audit record builder (#420)
+#include "meridian/bans/bans.h"  // OPS-02c ban/mute enforcement + issuance (#419)
 #include "meridian/core/audit.hpp"
 #include "meridian/core/log.hpp"
 #include "meridian/metrics/catalog.h"
@@ -54,6 +55,7 @@ namespace audit = meridian::core::audit;
 namespace metrics = meridian::metrics::catalog;
 namespace tr = meridian::trace;
 namespace chr = meridian::characters;
+namespace bans = meridian::bans;
 
 constexpr const char* kCat = "worldd";
 
@@ -1211,6 +1213,54 @@ void Dispatcher::register_m0_stubs() {
                .correlation_id = grant_id,
            });
 
+           // OPS-02c (#419): DROP a banned account's session at the handshake, even
+           // though authd already refuses a banned login — a ban can land AFTER the
+           // grant was issued but before this WorldHello, and worldd is the authority
+           // that owns the live session (SAD §5.3 "gatewayd/worldd refuses a banned
+           // grant"). Also re-check the source IP (defense in depth). The grant is
+           // already spent (single-use); a banned actor simply gets no session. A
+           // moderation-lookup DB fault fails OPEN (a transient hiccup must not drop a
+           // legitimate session — the account/IP were already vetted at authd login).
+           {
+               std::optional<bans::Active> ban;
+               const char* ban_reason = nullptr;
+               std::string ban_target;
+               try {
+                   if ((ban = bans::account_ban(*ctx.db, consumed->account_id))) {
+                       ban_reason = "account_banned";
+                       ban_target = "account:" + std::to_string(consumed->account_id);
+                   } else {
+                       const std::string ip = bans::ip_of_peer(sess.peer());
+                       if (!ip.empty() && (ban = bans::ip_ban(*ctx.db, ip))) {
+                           ban_reason = "ip_banned";
+                           ban_target = "ip:" + ip;
+                       }
+                   }
+               } catch (const db::DbError& e) {
+                   log::warn(kCat, "WORLD_HELLO ban lookup failed (fail-open)",
+                             {log::field("error", e.what())});
+               }
+               if (ban_reason != nullptr) {
+                   audit::emit(audit::Record{
+                       .action = audit::Action::kBanRejected,
+                       .outcome = audit::Outcome::kFailure,
+                       .account_id = consumed->account_id,
+                       .target = ban_target,
+                       .reason = ban_reason,
+                       .correlation_id = grant_id,
+                       .peer = sess.peer(),
+                   });
+                   log::warn(kCat, "WORLD_HELLO refused — banned",
+                             {log::field("account_id",
+                                         static_cast<std::int64_t>(consumed->account_id)),
+                              log::field("reason", ban_reason)});
+                   ctx.disconnect = true;
+                   ctx.disconnect_reason = net::DisconnectReason::KICKED;
+                   ctx.disconnect_message = "you are banned";
+                   return;
+               }
+           }
+
            // 2. Establish the AEAD session keyed by the grant's session_key.
            try {
                ctx.session.emplace(consumed->session_key);
@@ -1635,6 +1685,41 @@ void Dispatcher::register_m0_stubs() {
                           log::field("error", e.what())});
                reply(mn::EnterWorldStatus::INTERNAL);
                return;
+           }
+
+           // OPS-02c (#419): refuse ENTER_WORLD for a BANNED character. The account
+           // owns it (proven above) but this specific character is barred — the
+           // account may still play its others, so this is a per-character gate, not
+           // an account drop. Checked against the auth DB (bans live there, §4.1). A
+           // moderation-lookup fault fails OPEN (do not block a legitimate spawn on a
+           // transient DB hiccup). On a ban: audit + disconnect KICKED (a ban is a
+           // kick; there is no BANNED enter-world status and world.fbs is unchanged).
+           if (ctx.db != nullptr) {
+               try {
+                   if (std::optional<bans::Active> cb =
+                           bans::character_ban(*ctx.db, character_id)) {
+                       audit::emit(audit::Record{
+                           .action = audit::Action::kBanRejected,
+                           .outcome = audit::Outcome::kFailure,
+                           .account_id = ctx.account_id,
+                           .target = "character:" + std::to_string(character_id),
+                           .reason = "character_banned",
+                           .correlation_id = ctx.grant_id,
+                       });
+                       log::warn(kCat, "ENTER_WORLD refused — character banned",
+                                 {log::field("account_id",
+                                             static_cast<std::int64_t>(ctx.account_id)),
+                                  log::field("character_id",
+                                             static_cast<std::int64_t>(character_id))});
+                       ctx.disconnect = true;
+                       ctx.disconnect_reason = net::DisconnectReason::KICKED;
+                       ctx.disconnect_message = "this character is banned";
+                       return;
+                   }
+               } catch (const db::DbError& e) {
+                   log::warn(kCat, "ENTER_WORLD character-ban lookup failed (fail-open)",
+                             {log::field("error", e.what())});
+               }
            }
 
            // --- OK: spawn the REAL owned character in-world ----------------------
@@ -2103,6 +2188,92 @@ void Dispatcher::register_m0_stubs() {
                            : gm::EffectStatus::kTargetOffline;
             };
 
+            // .ban (OPS-02c, #419) — resolve the subject + write the durable ban
+            // (bans lib, auth DB) attributed to the issuing GM, then audit the
+            // issuance. account/char names are resolved to ids server-side (the auth
+            // DB for accounts, the char DB for characters); an unknown name is
+            // kTargetOffline. Bans live in the auth DB, so ctx.db is required.
+            fx.ban = [&](gm::BanSubject subject, const std::string& target,
+                         std::optional<std::uint64_t> dur,
+                         const std::string& reason) -> gm::BanResult {
+                gm::BanResult r;
+                if (ctx.db == nullptr) { r.status = gm::EffectStatus::kUnavailable; return r; }
+                std::string audit_target;
+                try {
+                    switch (subject) {
+                        case gm::BanSubject::kAccount: {
+                            const std::optional<std::uint64_t> id =
+                                bans::account_id_for(*ctx.db, target);
+                            if (!id) { r.status = gm::EffectStatus::kTargetOffline; return r; }
+                            bans::ban_account(*ctx.db, *id, reason, ctx.account_id, dur);
+                            audit_target = "account:" + std::to_string(*id);
+                            r.subject_desc = "account '" + target + "'";
+                            break;
+                        }
+                        case gm::BanSubject::kCharacter: {
+                            if (ctx.char_db == nullptr) {
+                                r.status = gm::EffectStatus::kUnavailable;
+                                return r;
+                            }
+                            const std::optional<std::uint64_t> id =
+                                bans::character_id_for(*ctx.char_db, target);
+                            if (!id) { r.status = gm::EffectStatus::kTargetOffline; return r; }
+                            bans::ban_character(*ctx.db, *id, reason, ctx.account_id, dur);
+                            audit_target = "character:" + std::to_string(*id);
+                            r.subject_desc = "character '" + target + "'";
+                            break;
+                        }
+                        case gm::BanSubject::kIp: {
+                            bans::ban_ip(*ctx.db, target, reason, ctx.account_id, dur);
+                            audit_target = "ip:" + target;
+                            r.subject_desc = "IP " + target;
+                            break;
+                        }
+                    }
+                } catch (const std::exception& e) {
+                    log::warn(kCat, "GM .ban persist failed", {log::field("error", e.what())});
+                    r.status = gm::EffectStatus::kInternalError;
+                    return r;
+                }
+                audit::emit(audit::Record{
+                    .action = audit::Action::kBanIssued,
+                    .outcome = audit::Outcome::kSuccess,
+                    .account_id = ctx.account_id,
+                    .target = audit_target,
+                    .reason = dur ? "temporary" : "permanent",
+                });
+                r.status = gm::EffectStatus::kApplied;
+                return r;
+            };
+
+            // .mute (OPS-02c, #419) — resolve the character name → id (char DB) +
+            // write the durable mute (char DB) attributed to the issuing GM, then
+            // audit. An unknown name is kTargetOffline. Requires the characters DB.
+            fx.mute = [&](const std::string& name, std::optional<std::uint64_t> dur,
+                          const std::string& reason) -> gm::MuteResult {
+                gm::MuteResult r;
+                if (ctx.char_db == nullptr) { r.status = gm::EffectStatus::kUnavailable; return r; }
+                try {
+                    const std::optional<std::uint64_t> id =
+                        bans::character_id_for(*ctx.char_db, name);
+                    if (!id) { r.status = gm::EffectStatus::kTargetOffline; return r; }
+                    bans::mute_character(*ctx.char_db, *id, reason, ctx.account_id, dur);
+                    audit::emit(audit::Record{
+                        .action = audit::Action::kMuteIssued,
+                        .outcome = audit::Outcome::kSuccess,
+                        .account_id = ctx.account_id,
+                        .target = "character:" + std::to_string(*id),
+                        .reason = dur ? "temporary" : "permanent",
+                    });
+                    r.status = gm::EffectStatus::kApplied;
+                    r.subject_desc = name;
+                } catch (const std::exception& e) {
+                    log::warn(kCat, "GM .mute persist failed", {log::field("error", e.what())});
+                    r.status = gm::EffectStatus::kInternalError;
+                }
+                return r;
+            };
+
             gm::dispatch_command(
                 gm::Registry::builtin(), text, ctx.account_id, ctx.gm_level, fx,
                 // Reply sink: a server SYSTEM line back to the SENDER only. Rides
@@ -2126,6 +2297,46 @@ void Dispatcher::register_m0_stubs() {
         if (ctx.phase != SessionPhase::kInWorld || ctx.world == nullptr || !ctx.entered) {
             reject(mn::ChatRejectReason::NOT_IN_WORLD);
             return;
+        }
+
+        // OPS-02c (#419): DROP a MUTED character's chat before it routes anywhere.
+        // The mute is character-scoped + durable (characters DB), so it is queried
+        // fresh here — a mute issued by any GM applies to the next line immediately,
+        // and an elapsed mute (expires_at past) stops matching (the query evaluates
+        // expiry in SQL). world.fbs is unchanged: the "you are muted" notice rides
+        // the existing CHAT_DELIVER opcode as a System line (like a GM-command reply),
+        // not a new reject reason. A mute-lookup DB fault fails OPEN (a transient
+        // hiccup must not silence a legitimate player; the table is also absent on the
+        // DB-less dispatch smoke path, where char_db is null and this is skipped).
+        if (ctx.char_db != nullptr && ctx.char_id != 0) {
+            std::optional<bans::Active> mute;
+            try {
+                mute = bans::character_mute(*ctx.char_db, ctx.char_id);
+            } catch (const db::DbError& e) {
+                log::warn(kCat, "chat mute lookup failed (fail-open)",
+                          {log::field("error", e.what())});
+            }
+            if (mute) {
+                audit::emit(audit::Record{
+                    .action = audit::Action::kChatMuted,
+                    .outcome = audit::Outcome::kFailure,
+                    .account_id = ctx.account_id,
+                    .target = "character:" + std::to_string(ctx.char_id),
+                    .reason = "muted",
+                    .correlation_id = ctx.grant_id,
+                });
+                const std::string notice =
+                    mute->permanent
+                        ? std::string("You are muted and cannot chat.")
+                        : std::string("You are muted until ") + mute->expires_at +
+                              " UTC and cannot chat.";
+                send_s2c(sess, ctx,
+                         encode_frame(net::Opcode::CHAT_DELIVER, f.seq,
+                                      encode_chat_deliver_payload(
+                                          mn::ChatChannel::WHISPER,
+                                          /*sender_guid=*/0, "System", notice)));
+                return;
+            }
         }
 
         // Rate class (OPS-03): drop an over-rate send with a typed reject + the

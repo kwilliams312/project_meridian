@@ -22,10 +22,12 @@ target_include_directories(authd-login
 )
 target_link_libraries(authd-login
   PUBLIC
+    meridian::core     # OPS-05 structured audit stream: ban-rejection records (#92/#419)
     meridian::net
     meridian::proto
     meridian::srp
     meridian::db
+    meridian::bans     # OPS-02c account/IP ban lookup at login (#419)
     meridian::metrics  # OPS-05 auth-outcome + SRP-timing metrics (#164)
     meridian::trace    # OPS-05 session-flow trace: the authd.login span (#166)
 )
@@ -63,3 +65,23 @@ target_link_libraries(authd-login-test
 )
 set_target_properties(authd-login-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME authd-login COMMAND authd-login-test)
+
+# --- Ban enforcement at login (OPS-02c, #419). --------------------------------
+# Stands up the real TLS listener + run_login against a live MariaDB and asserts:
+# a non-banned account authenticates; a banned account is refused (ACCOUNT_BANNED)
+# with no grant; an EXPIRED ban does not block; a banned source IP is refused at
+# ServerHello. Reads MERIDIAN_DB_* + SKIPs (exit 0) when unset (inert in the
+# DB-free ctest; runs for real in the DB-backed job).
+add_executable(authd-ban-login-test
+  test/ban_login_test.cpp
+)
+target_link_libraries(authd-ban-login-test
+  PRIVATE
+    meridian::authd-login
+    meridian::account
+    meridian::bans
+    meridian::srp
+    Threads::Threads
+)
+set_target_properties(authd-ban-login-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME authd-ban-login COMMAND authd-ban-login-test)

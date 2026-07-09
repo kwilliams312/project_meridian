@@ -13,3 +13,4 @@ CREATE DATABASE IF NOT EXISTS meridian_auth
 USE meridian_auth;
 SOURCE /schemas/auth/0001_init_auth.up.sql;
 SOURCE /schemas/auth/0002_realm_control.up.sql;
+SOURCE /schemas/auth/0003_character_ban.up.sql;

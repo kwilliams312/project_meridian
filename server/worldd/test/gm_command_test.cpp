@@ -127,28 +127,30 @@ void test_registry() {
     // are all GM/admin.
     check("visibility: a helper sees only .help",
           reg.visible_to(static_cast<std::uint8_t>(gm::Level::kHelper)).size() == 1);
-    // A GM (level 2) sees `.help` + the four GM commands (additem/setlevel/tele/
-    // summon) — but NOT `.kick` (admin).
+    // A GM (level 2) sees `.help` + the GM commands (additem/setlevel/tele/summon/
+    // mute) — but NOT `.kick`/`.ban` (admin).
     {
         const auto gm_cmds = reg.visible_to(static_cast<std::uint8_t>(gm::Level::kGm));
-        check("visibility: a GM sees help+additem+setlevel+tele+summon (5)",
-              gm_cmds.size() == 5);
-        bool sees_kick = false;
+        check("visibility: a GM sees help+additem+setlevel+tele+summon+mute (6)",
+              gm_cmds.size() == 6);
+        bool sees_admin_only = false;
         for (const gm::Command* c : gm_cmds)
-            if (c->name == "kick") sees_kick = true;
-        check("visibility: a GM does NOT see .kick (admin-only)", !sees_kick);
+            if (c->name == "kick" || c->name == "ban") sees_admin_only = true;
+        check("visibility: a GM does NOT see .kick/.ban (admin-only)", !sees_admin_only);
     }
-    // An ADMIN (level 3) sees everything, including `.kick`.
+    // An ADMIN (level 3) sees everything, including `.kick` + `.ban`.
     {
         const auto admin_cmds = reg.visible_to(static_cast<std::uint8_t>(gm::Level::kAdmin));
-        check("visibility: an admin sees all six commands", admin_cmds.size() == 6);
-        bool sees_kick = false;
-        for (const gm::Command* c : admin_cmds)
+        check("visibility: an admin sees all eight commands", admin_cmds.size() == 8);
+        bool sees_kick = false, sees_ban = false;
+        for (const gm::Command* c : admin_cmds) {
             if (c->name == "kick") sees_kick = true;
-        check("visibility: an admin sees .kick", sees_kick);
+            if (c->name == "ban") sees_ban = true;
+        }
+        check("visibility: an admin sees .kick + .ban", sees_kick && sees_ban);
     }
 
-    // Per-command min levels (OPS-02b, #418).
+    // Per-command min levels (OPS-02b #418 / OPS-02c #419).
     check("registry: .tele min level is GM",
           reg.find("tele") && reg.find("tele")->min_level == gm::Level::kGm);
     check("registry: .summon min level is GM",
@@ -159,6 +161,10 @@ void test_registry() {
           reg.find("setlevel") && reg.find("setlevel")->min_level == gm::Level::kGm);
     check("registry: .kick min level is ADMIN",
           reg.find("kick") && reg.find("kick")->min_level == gm::Level::kAdmin);
+    check("registry: .mute min level is GM",
+          reg.find("mute") && reg.find("mute")->min_level == gm::Level::kGm);
+    check("registry: .ban min level is ADMIN",
+          reg.find("ban") && reg.find("ban")->min_level == gm::Level::kAdmin);
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +313,19 @@ struct FakeEffects {
     int kick_calls = 0;
     std::string last_kick_name;
     gm::EffectStatus kick_status = gm::EffectStatus::kApplied;
+    // .ban
+    int ban_calls = 0;
+    gm::BanSubject last_ban_subject = gm::BanSubject::kAccount;
+    std::string last_ban_target;
+    std::optional<std::uint64_t> last_ban_dur;
+    std::string last_ban_reason;
+    gm::EffectStatus ban_status = gm::EffectStatus::kApplied;
+    // .mute
+    int mute_calls = 0;
+    std::string last_mute_name;
+    std::optional<std::uint64_t> last_mute_dur;
+    std::string last_mute_reason;
+    gm::EffectStatus mute_status = gm::EffectStatus::kApplied;
 
     gm::GmEffects make() {
         gm::GmEffects fx;
@@ -342,6 +361,29 @@ struct FakeEffects {
             ++kick_calls;
             last_kick_name = n;
             return kick_status;
+        };
+        fx.ban = [this](gm::BanSubject s, const std::string& t,
+                        std::optional<std::uint64_t> d, const std::string& reason) {
+            ++ban_calls;
+            last_ban_subject = s;
+            last_ban_target = t;
+            last_ban_dur = d;
+            last_ban_reason = reason;
+            gm::BanResult r;
+            r.status = ban_status;
+            r.subject_desc = t;
+            return r;
+        };
+        fx.mute = [this](const std::string& n, std::optional<std::uint64_t> d,
+                         const std::string& reason) {
+            ++mute_calls;
+            last_mute_name = n;
+            last_mute_dur = d;
+            last_mute_reason = reason;
+            gm::MuteResult r;
+            r.status = mute_status;
+            r.subject_desc = n;
+            return r;
         };
         return fx;
     }
@@ -512,6 +554,120 @@ void test_command_set() {
         run(".kick Ghost", kAdmin, fake, cap);
         check(".kick offline: reply says no online player",
               cap.any_reply_has("No online player"));
+    }
+
+    // --- .ban: ADMIN-gated; kind + subject + duration + reason parsed (OPS-02c) --
+    {
+        FakeEffects fake;
+        Capture cap;
+        gm::CommandOutcome oc = run(".ban account Griefer 1h being a jerk", kGm, fake, cap);
+        check(".ban as GM: DENIED (admin-only)", oc == gm::CommandOutcome::kDenied);
+        check(".ban as GM: seam NOT invoked", fake.ban_calls == 0);
+    }
+    {
+        FakeEffects fake;
+        Capture cap;
+        gm::CommandOutcome oc = run(".ban account Griefer 2h spamming trade", kAdmin, fake, cap);
+        check(".ban account: OK", oc == gm::CommandOutcome::kOk);
+        check(".ban account: seam gets account subject + name",
+              fake.ban_calls == 1 && fake.last_ban_subject == gm::BanSubject::kAccount &&
+                  fake.last_ban_target == "Griefer");
+        check(".ban account: duration parsed (2h = 7200s)",
+              fake.last_ban_dur.has_value() && *fake.last_ban_dur == 7200u);
+        check(".ban account: reason is the tail after the duration",
+              fake.last_ban_reason == "spamming trade");
+        check(".ban account: reply confirms + says temporary", cap.any_reply_has("temporary"));
+        check(".ban account: audited as executed",
+              cap.audits.size() == 1 && cap.audits[0].outcome == audit::Outcome::kSuccess);
+    }
+    // No duration -> permanent; the whole tail is the reason.
+    {
+        FakeEffects fake;
+        Capture cap;
+        run(".ban ip 203.0.113.5 open proxy", kAdmin, fake, cap);
+        check(".ban ip: seam gets ip subject + address",
+              fake.last_ban_subject == gm::BanSubject::kIp &&
+                  fake.last_ban_target == "203.0.113.5");
+        check(".ban ip: no duration -> permanent", !fake.last_ban_dur.has_value());
+        check(".ban ip: reason is the whole tail", fake.last_ban_reason == "open proxy");
+        check(".ban ip: reply says permanent", cap.any_reply_has("permanent"));
+    }
+    // 'char' alias maps to the character subject.
+    {
+        FakeEffects fake;
+        Capture cap;
+        run(".ban char Loki 7d exploiting", kAdmin, fake, cap);
+        check(".ban char: alias maps to character subject",
+              fake.last_ban_subject == gm::BanSubject::kCharacter &&
+                  fake.last_ban_target == "Loki" && *fake.last_ban_dur == 604800u);
+    }
+    // Unknown subject / usage errors -> seam not invoked.
+    {
+        FakeEffects fake;
+        Capture cap;
+        run(".ban wat Loki", kAdmin, fake, cap);
+        check(".ban bad kind: seam NOT invoked", fake.ban_calls == 0);
+        check(".ban bad kind: reply names the valid kinds", cap.any_reply_has("account"));
+    }
+    {
+        FakeEffects fake;
+        Capture cap;
+        run(".ban account", kAdmin, fake, cap);
+        check(".ban missing subject: seam NOT invoked + usage", fake.ban_calls == 0);
+    }
+    // Unknown account name surfaced as "no such".
+    {
+        FakeEffects fake;
+        fake.ban_status = gm::EffectStatus::kTargetOffline;
+        Capture cap;
+        run(".ban account Ghost", kAdmin, fake, cap);
+        check(".ban unknown subject: reply says no such", cap.any_reply_has("No such"));
+    }
+
+    // --- .mute: GM-gated; char + duration + reason parsed (OPS-02c) -------------
+    {
+        FakeEffects fake;
+        Capture cap;
+        gm::CommandOutcome oc = run(".mute Chatterbox 30m flooding", kGm, fake, cap);
+        check(".mute as GM: OK", oc == gm::CommandOutcome::kOk);
+        check(".mute: seam gets the name + duration + reason",
+              fake.mute_calls == 1 && fake.last_mute_name == "Chatterbox" &&
+                  fake.last_mute_dur.has_value() && *fake.last_mute_dur == 1800u &&
+                  fake.last_mute_reason == "flooding");
+        check(".mute: reply confirms", cap.any_reply_has("Muted"));
+        check(".mute: audited as executed",
+              cap.audits.size() == 1 && cap.audits[0].outcome == audit::Outcome::kSuccess);
+    }
+    // A PLAYER is denied.
+    {
+        FakeEffects fake;
+        Capture cap;
+        gm::CommandOutcome oc =
+            run(".mute Chatterbox", static_cast<std::uint8_t>(gm::Level::kPlayer), fake, cap);
+        check(".mute as player: DENIED", oc == gm::CommandOutcome::kDenied);
+        check(".mute as player: seam NOT invoked", fake.mute_calls == 0);
+    }
+    // No duration -> permanent mute; default reason path (no reason tail).
+    {
+        FakeEffects fake;
+        Capture cap;
+        run(".mute Chatterbox", kGm, fake, cap);
+        check(".mute no duration: permanent", !fake.last_mute_dur.has_value());
+        check(".mute no reason: a default reason is supplied", !fake.last_mute_reason.empty());
+    }
+    // Unknown character -> "no such character".
+    {
+        FakeEffects fake;
+        fake.mute_status = gm::EffectStatus::kTargetOffline;
+        Capture cap;
+        run(".mute Ghost", kGm, fake, cap);
+        check(".mute unknown: reply says no such character", cap.any_reply_has("No such character"));
+    }
+    {
+        FakeEffects fake;
+        Capture cap;
+        run(".mute", kGm, fake, cap);
+        check(".mute no arg: seam NOT invoked", fake.mute_calls == 0);
     }
 }
 
