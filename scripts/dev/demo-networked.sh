@@ -85,6 +85,10 @@ TEST_PASS="devpassword"
 BOT_PREFIX="demobot"            # account/username prefix (add-users.sh --prefix)
 BOT_WIDTH=4                     # zero-pad width for the numeric suffix (add-users.sh default)
 BOT_PASS="the bot walks all day long"
+# Bots persist for the whole demo session so they never time out before you finish
+# the client build + login (a 10 min duration used to expire mid-build, #305). Default
+# ~24h; override with MERIDIAN_DEMO_BOT_DURATION=<seconds>.
+BOT_DURATION="${MERIDIAN_DEMO_BOT_DURATION:-86400}"
 REALM_NAME="Meridian Dev Realm"
 # map_id is NOT NULL with no default in the characters schema; the M0 placeholder
 # spawn is chosen by worldd (it does not read character.map_id), so any valid
@@ -198,7 +202,7 @@ done
 # Reuse the single-bot launch in a loop; stagger launches slightly and verify each
 # bot is still alive before moving on. Every bot is a distinct account, so the
 # single-active-session-per-account rule (#326) is satisfied.
-log "launching ${BOTS} demo bot(s) (each walks a square at the spawn for ~10 min)"
+log "launching ${BOTS} demo bot(s) (each walks a square at the spawn; persist ~${BOT_DURATION}s)"
 for i in $(seq 1 "${BOTS}"); do
   user="$(bot_user "$i")"
   cls="$(bot_class "$i")"
@@ -208,7 +212,7 @@ for i in $(seq 1 "${BOTS}"); do
     --worldd "127.0.0.1:${WORLDD_PORT}" \
     --user "${user}" --password "${BOT_PASS}" \
     --realm "${REALM_ID}" --build "${CLIENT_BUILD}" \
-    --path square --duration 600 >"${bot_log}" 2>&1 &
+    --path square --duration "${BOT_DURATION}" >"${bot_log}" 2>&1 &
   pid=$!
   BOT_PIDS+=("$pid")
   sleep 2
