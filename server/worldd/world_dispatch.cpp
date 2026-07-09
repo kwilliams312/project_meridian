@@ -21,6 +21,7 @@
 
 #include "characters.h"  // meridian-characters CRUD: list/create/delete (#286 / D-35)
 #include "currency.h"    // ECO-01 int64 copper: add_money / get_money (quest + trainer)
+#include "economy_sanity.h"  // OPS-03b defense-in-depth economy delta checks (#421)
 #include "gm_command.h"  // OPS-02a GM command framework: registry + parse + gate + audit (#417)
 #include "gossip.h"      // NPC-01 gossip menu planner (#372)
 #include "item_store.h"  // ITM-01 durable item persistence: mint/place (loot + quest reward)
@@ -1053,6 +1054,34 @@ DispatchOutcome Dispatcher::dispatch(net::Session& sess, const Bytes& frame,
 
     // A known opcode was received (count it — meridian_opcode_total{...,opcode}).
     metrics::opcode_total().with(ctx.labels.rzs_opcode(op)).inc();
+
+    // OPS-03b (#421): per-opcode RATE CLASS. Every client opcode belongs to a rate
+    // class (session/move/chat/action) with a per-session sliding-window ceiling;
+    // a frame over its class ceiling is a FLOOD — DROP it (do NOT disconnect;
+    // throttling is not a protocol error) and flag it on the anti-cheat audit
+    // stream (kRateLimited) + the Errors-dashboard drop counter (reason="rate_class",
+    // distinct from the finer per-feature "rate_limit" ChatIntake/MovementIntake
+    // emit). A dropped frame keeps the connection open (return kHandled: nothing to
+    // close over), so the serve loop simply reads the next frame.
+    //
+    // The MOVE class DEFERS to MovementIntake (#86/#420) — that gate is the
+    // authoritative movement rate limiter, and it is keyed on the intent's CLIENT
+    // time + state-change semantics (≤ kMovementIntentMaxHz per client clock, mode
+    // toggles always admitted). Enforcing a SECOND, wall-clock ceiling on
+    // MOVEMENT_INTENT here would double-reject a legitimately-paced burst (a client
+    // paces intents by its own clock, which need not match the server's wall time),
+    // so the dispatcher leaves movement throttling entirely to MovementIntake and
+    // this backstop covers the session/chat/action opcodes (see rate_class.h).
+    const RateClass rc = rate_class_for(f.opcode);
+    if (rc != RateClass::kMove && !ctx.rate.admit(rc, steady_now_ms())) {
+        metrics::opcode_dropped_total()
+            .with(ctx.labels.rzs_opcode_reason(op, "rate_class"))
+            .inc();
+        audit::emit(build_rate_limited_audit(ctx.account_id, ctx.grant_id, f.opcode, rc));
+        log::warn(kCat, "opcode " + op + " dropped (rate class " +
+                            std::string(rate_class_name(rc)) + " flood)");
+        return DispatchOutcome::kHandled;
+    }
 
     // Verify its FlatBuffer payload table before the handler sees it (never hand
     // an unverified buffer to a handler). A verify failure is a per-opcode error.
@@ -2186,6 +2215,19 @@ void Dispatcher::register_m0_stubs() {
         if (ctx.phase != SessionPhase::kInWorld) { reply(mn::VendorBuyStatus::NOT_IN_WORLD, 0, 0, 0); return; }
         if (ctx.char_db == nullptr || ctx.char_id == 0) { reply(mn::VendorBuyStatus::INTERNAL, 0, 0, 0); return; }
 
+        // OPS-03b (#421): defense-in-depth economy sanity — reject an impossible
+        // client-supplied quantity (zero or absurdly large) at the wire boundary,
+        // BEFORE any catalog lookup / price arithmetic (which could overflow on a
+        // 32-bit quantity). Audited on the economy stream; the wire reply is the
+        // feature's existing BAD_QUANTITY (no new client oracle). The per-template
+        // max_stack check inside buy_db remains the finer, authoritative gate.
+        if (const EconomyReject er = check_quantity(quantity); er != EconomyReject::kNone) {
+            audit::emit(build_economy_reject_audit(ctx.account_id, ctx.grant_id, ctx.char_id,
+                                                   "vendor_buy", er));
+            reply(mn::VendorBuyStatus::BAD_QUANTITY, 0, 0, safe_balance(ctx));
+            return;
+        }
+
         try {
             vend::BuyDbResult r = vend::buy_db(*ctx.char_db, ctx.char_id, vendor_catalog(),
                                                item_templates(), vendor_id, template_id, quantity);
@@ -2228,6 +2270,17 @@ void Dispatcher::register_m0_stubs() {
 
         if (ctx.phase != SessionPhase::kInWorld) { reply(mn::VendorSellStatus::NOT_IN_WORLD, 0, 0, 0, 0, 0); return; }
         if (ctx.char_db == nullptr || ctx.char_id == 0) { reply(mn::VendorSellStatus::INTERNAL, 0, 0, 0, 0, 0); return; }
+
+        // OPS-03b (#421): defense-in-depth economy sanity — reject an impossible
+        // client-supplied sell quantity before touching durable state. Audited;
+        // wire reply is the existing BAD_QUANTITY. sell_db's stack-clamp + credit
+        // overflow guard remain the finer authoritative checks.
+        if (const EconomyReject er = check_quantity(quantity); er != EconomyReject::kNone) {
+            audit::emit(build_economy_reject_audit(ctx.account_id, ctx.grant_id, ctx.char_id,
+                                                   "vendor_sell", er));
+            reply(mn::VendorSellStatus::BAD_QUANTITY, 0, 0, 0, safe_balance(ctx), 0);
+            return;
+        }
 
         try {
             vend::SellDbResult r = vend::sell_db(*ctx.char_db, ctx.char_id, ctx.buyback,
@@ -2430,8 +2483,18 @@ void Dispatcher::register_m0_stubs() {
                                 itm::backpack_placement_slot(*slot), minted.item_guid);
                 place.add(minted);
             }
-            if (grant.money > 0)
+            // OPS-03b (#421): defense-in-depth — a reward-money credit is server-
+            // derived (quest content), but guard it anyway: a negative reward from a
+            // corrupt content row is an impossible delta — audit + skip the credit
+            // rather than silently dropping it. A non-negative amount credits through
+            // add_money, whose checked_add is the authoritative overflow guard.
+            if (const EconomyReject er = check_amount_nonnegative(grant.money);
+                er != EconomyReject::kNone) {
+                audit::emit(build_economy_reject_audit(ctx.account_id, ctx.grant_id,
+                                                       ctx.char_id, "quest_reward", er));
+            } else if (grant.money > 0) {
                 itm::add_money(*ctx.char_db, ctx.char_id, grant.money);
+            }
 
             // new_level is reported as the current level: reward XP is not persisted at
             // M1 (durable XP/level is CHR-03/mcc #28) — the amount is still surfaced.
@@ -2538,12 +2601,23 @@ void Dispatcher::register_m0_stubs() {
                 reply(to_wire(mo.status), 0, 0, 0);
                 return;
             }
-            try {
-                itm::add_money(*ctx.char_db, ctx.char_id, mo.copper);
-            } catch (const std::exception& e) {
-                // No INTERNAL status on the loot wire; the copper left the corpse. Log
-                // loudly and still report the take (best-effort, degraded — M1).
-                log::warn(kCat, "LOOT_TAKE money credit failed", {log::field("error", e.what())});
+            // OPS-03b (#421): defense-in-depth — the loot copper pile is server-
+            // derived (the corpse's rolled loot), but guard the credit: a negative
+            // copper amount is an impossible delta — audit + skip. add_money's
+            // checked_add remains the authoritative overflow guard for the balance.
+            if (const EconomyReject er = check_amount_nonnegative(mo.copper);
+                er != EconomyReject::kNone) {
+                audit::emit(build_economy_reject_audit(ctx.account_id, ctx.grant_id,
+                                                       ctx.char_id, "loot_money", er));
+            } else {
+                try {
+                    itm::add_money(*ctx.char_db, ctx.char_id, mo.copper);
+                } catch (const std::exception& e) {
+                    // No INTERNAL status on the loot wire; the copper left the corpse.
+                    // Log loudly and still report the take (best-effort, degraded — M1).
+                    log::warn(kCat, "LOOT_TAKE money credit failed",
+                              {log::field("error", e.what())});
+                }
             }
             reply(mn::LootTakeStatus::OK, 0, 0, static_cast<std::int64_t>(mo.copper));
             close_if_looted(mo.fully_looted);

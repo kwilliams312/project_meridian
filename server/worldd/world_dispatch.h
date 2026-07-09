@@ -61,6 +61,7 @@
 #include "npc_def.h"         // npc::NpcStore (content-store install seam, #390)
 #include "quest_credit.h"  // MapTick→session quest-kill credit registry (QST-01 event-bus, #396)
 #include "quest_log.h"  // QuestLog — per-session quest state machine (QST-01 #371)
+#include "rate_class.h"  // OPS-03b per-opcode rate classes + per-session gate (#421)
 #include "trainer.h"    // npc::LearnedAbilitySet — per-session learned abilities (NPC-02 #372)
 #include "vendor_catalog.h"  // vendor::VendorCatalog (content-store install seam, #390)
 #include "world_generated.h"
@@ -204,6 +205,16 @@ struct ConnCtx {
     std::optional<SessionMovementState> movement;  // authoritative movement (#86), post-auth
     MovementIntake intake;                          // ≤ 10/s intent-rate gate (#86)
     ChatIntake chat_intake;                         // chat rate class (OPS-03; #367)
+
+    // OPS-03b per-opcode RATE CLASSES (#421). The connection-wide anti-flood gate
+    // the dispatcher runs at the dispatch entry: every client opcode is assigned a
+    // rate class (rate_class_for) with a per-session sliding-window ceiling. A frame
+    // over its class ceiling is DROPPED (not disconnected) + flagged on the anti-
+    // cheat audit stream (kRateLimited). Single-threaded on this connection's IO
+    // worker (like `intake`/`chat_intake`), so it needs no locking. This is the
+    // COARSE flood backstop above the finer per-feature caps (MovementIntake/
+    // ChatIntake), which remain the authority for their own opcode (see rate_class.h).
+    RateLimiter rate;
 
     // Vendors (ECO-01, #370). `char_id` is this session's spawned character
     // (== character.id, the currency/inventory key), captured at ENTER_WORLD; the

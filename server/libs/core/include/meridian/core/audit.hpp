@@ -99,6 +99,19 @@ enum class Action {
                        //         and `extra` carries the actor's gm_level + args. Both
                        //         outcomes are recorded on the append-only GM audit
                        //         stream (PRD §6).
+    kRateLimited,      // worldd: a per-opcode RATE-CLASS flood was dropped (OPS-03b,
+                       //         #421) — the dispatcher's per-session rate gate refused
+                       //         a frame that exceeded its opcode class ceiling.
+                       //         `target` is the offending opcode, `reason` the rate
+                       //         class (chat/move/action/session). Anti-cheat throughput
+                       //         signal on the append-only audit stream (PRD §6).
+    kEconomyRejected,  // worldd: a defense-in-depth ECONOMY sanity check rejected a
+                       //         transaction with an impossible delta (OPS-03b, #421) —
+                       //         a bad quantity, a negative price/credit, or a copper
+                       //         over/underflow. `target` is the transaction path
+                       //         (vendor_buy/vendor_sell/quest_reward/loot_money), the
+                       //         `reason` the classification. The economy audit stream
+                       //         (PRD §6), complementing the per-feature validation.
 };
 
 // The stable JSON `action` string for an Action (e.g. "login_failure"). This is
