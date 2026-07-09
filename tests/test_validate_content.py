@@ -556,6 +556,69 @@ class TestBudgetLint:
         assert res.errors == []
 
 
+@pytest.mark.unit
+class TestStemManifestLint:
+    """L023 — a strudel-backed music_stem must ship a sibling render manifest."""
+
+    # A schema-valid music_stem sidecar whose WAV `source` is rendered from a
+    # Strudel pattern (declared in extra_sources). Individual tests decide whether
+    # the sibling `<name>.render.yaml` manifest is present.
+    STRUDEL_STEM = """\
+    schema: meridian/asset@1
+    id: tp:mus.z1.explore
+    class: music_stem
+    source: assets/audio/mus/explore.wav
+    extra_sources:
+      - assets/audio/mus/explore.strudel
+    license: CC-BY-4.0
+    provenance:
+      source_tier: original
+      authors: [tester]
+    music:
+      stem_set: mus.z1.explore_set
+      layer: L1
+      bpm: 120
+      time_signature: "4/4"
+      length_bars: 8
+    loudness:
+      lufs_integrated: -18
+      true_peak_dbtp: -1.5
+    """
+
+    def test_l023_strudel_stem_without_manifest_errors(self, tmp_path):
+        res = run(tmp_path, {"tp/assets/mus/z1_explore.asset.yaml": self.STRUDEL_STEM})
+        assert "L023" in codes(res.errors)
+
+    def test_l023_strudel_stem_with_manifest_passes(self, tmp_path):
+        res = run(
+            tmp_path,
+            {
+                "tp/assets/mus/z1_explore.asset.yaml": self.STRUDEL_STEM,
+                "tp/assets/mus/z1_explore.render.yaml": "# strudel render manifest\n",
+            },
+        )
+        assert "L023" not in codes(res.errors)
+
+    def test_render_manifest_not_flagged_as_bad_filename(self, tmp_path):
+        # A *.render.yaml manifest is an auxiliary strudel-render artifact, not a
+        # content entity — discovery must skip it, so it never trips L001.
+        manifest = (
+            "schema: meridian/strudel-render@1\n"
+            "pattern: assets/audio/mus/explore.strudel\n"
+            "variant: 0\n"
+            "tail_seconds: 4.0\n"
+            "sample_banks: []\n"
+        )
+        res = run(
+            tmp_path,
+            {
+                "tp/assets/mus/z1_explore.asset.yaml": self.STRUDEL_STEM,
+                "tp/assets/mus/z1_explore.render.yaml": manifest,
+            },
+        )
+        assert "L001" not in codes(res.errors)
+
+
 @pytest.mark.integration
 class TestRepoContent:
     def test_repo_content_validates_clean(self):

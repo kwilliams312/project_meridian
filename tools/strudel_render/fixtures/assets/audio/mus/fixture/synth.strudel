@@ -1,0 +1,1 @@
+note("c4 e4 g4 c5").s("sine").slow(4)

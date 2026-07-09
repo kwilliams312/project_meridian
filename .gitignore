@@ -70,3 +70,17 @@ client/forge/project/.godot/
 deploy/docker/certs/*.crt
 deploy/docker/certs/*.key
 deploy/docker/certs/*.pem
+
+# --- Strudel render cache (generated; #410) ---
+# tools/strudel_render writes its content-addressed render cache to `.render-cache/`
+# relative to CWD. scripts/content-build.sh and the content-ci strudel-render job run
+# the renderer from the repo root (its `--all` glob is CWD-relative), so the cache
+# lands here. Transient build state — never committed.
+/.render-cache/
+
+# --- Strudel-rendered music stems (generated artifacts; #410) ---
+# The zone-01 adaptive stem WAVs are RENDERED from their committed .strudel
+# sources by tools/strudel_render (in CI via scripts/content-build.sh and the
+# content-ci strudel-render job) — sources-only policy: the .strudel patterns and
+# .render.yaml manifests ARE committed, the derived WAVs are not.
+content/core/assets/audio/mus/zone01/*.wav

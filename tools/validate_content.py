@@ -19,6 +19,9 @@ Validates every YAML file under /content against the JSON Schemas in
   L022   asset sidecar license is on the CI allowlist and its origin is not an
          engine-locked marketplace (TD-09; Art PRD §3, "fails CI outright") —
          always a hard error
+  L023   a music_stem sidecar with a *.strudel extra_source has a sibling
+         <name>.render.yaml manifest so its WAV source is reproducible (Strudel
+         stem-render pipeline, issue #410) — always a hard error
   L070   declared LOD0 tri count is within the Art PRD §2.1 class ceiling — error
   L071   declared texture dimension is within the Art PRD §2.3 class cap — error
   L072   declared material-set count is within the Art PRD §2.3/§2.4 cap — error
@@ -326,6 +329,34 @@ def check_budget(doc: dict, rel_path: Path) -> list[str]:
     return errors
 
 
+def check_stem_manifest(doc: dict, path: Path, rel_path: Path) -> list[str]:
+    """L023 — a strudel-backed music_stem must ship a sibling render manifest.
+
+    When a `music_stem` sidecar names a `*.strudel` file in `extra_sources`, its
+    WAV `source` is generated from that Strudel pattern, so a sibling
+    `<name>.render.yaml` manifest must sit next to the sidecar to keep the render
+    reproducible (Strudel stem-render pipeline, issue #410). Hard error like
+    L021/L022. Inert for any other class or when no `.strudel` source is declared.
+
+    `path` is the real on-disk sidecar path (the sibling existence check); `rel_path`
+    is the tree-relative path used in the message.
+    """
+    errors: list[str] = []
+    if doc.get("class") != "music_stem":
+        return errors
+    extra = doc.get("extra_sources") or []
+    if not any(str(src).endswith(".strudel") for src in extra):
+        return errors
+    manifest = path.with_name(path.name.replace(".asset.yaml", ".render.yaml"))
+    if not manifest.exists():
+        errors.append(
+            f"L023 {rel_path}: music_stem declares a .strudel extra_source but has no "
+            f"render manifest at {manifest.name} — the WAV source is not reproducible "
+            f"(Strudel stem-render pipeline, issue #410)"
+        )
+    return errors
+
+
 def validate(
     content_dir: Path,
     schema_dir: Path,
@@ -347,7 +378,14 @@ def validate(
     ] = []  # (file, location, normalized asset ref)
     pack_namespaces: dict[Path, str] = {}
     spawn_namespaces: set[str] = set()
-    files = sorted(content_dir.rglob("*.yaml"))
+    # `*.render.yaml` files are auxiliary strudel-render manifests (issue #410), not
+    # content entities: they sit beside a music_stem sidecar so the L023 lint can find
+    # them, and the strudel_render tool consumes them. They carry no `meridian/<type>@1`
+    # envelope, so skip them from discovery entirely — otherwise file_type() returns
+    # None and they'd trip a spurious L001 "bad filename".
+    files = sorted(
+        p for p in content_dir.rglob("*.yaml") if not p.name.endswith(".render.yaml")
+    )
 
     def rel(path: Path) -> Path:
         try:
@@ -432,6 +470,7 @@ def validate(
             # L021/L022 provenance + license/origin policy, L070-072 budget caps.
             res.errors.extend(check_provenance(doc, rel(path)))
             res.errors.extend(check_budget(doc, rel(path)))
+            res.errors.extend(check_stem_manifest(doc, path, rel(path)))
             continue  # sidecar-internal refs (stem_set, variation_group) are metadata, not L011/L020 refs
 
         content_ids.add(doc_id)

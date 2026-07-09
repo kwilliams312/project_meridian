@@ -102,6 +102,25 @@ fi
 [ -x "$MCC" ] || die "mcc binary not found at $MCC after build"
 ok "mcc: $("$MCC" --version)"
 
+# --- 1b. Render Strudel-authored stems to their WAV sources (generated artifacts). ---
+# The zone-01 adaptive music stems (content/**/*.strudel + *.render.yaml) are
+# rendered to their sidecar `source` WAVs HERE, before mcc packs them, so the pack
+# sees real audio (#410). tools/strudel_render is a dev-only Node package; its
+# `--all` mode globs content/**/*.asset.yaml relative to CWD, so the render runs
+# from the repo root (we cd'd there at the top) via the tool's own pinned tsx — not
+# from inside the package dir, where the glob would match nothing. The WAVs are
+# generated artifacts (gitignored): the .strudel sources + .render.yaml manifests
+# are committed, the derived WAVs are not.
+STRUDEL_TSX="tools/strudel_render/node_modules/.bin/tsx"
+if [ -d tools/strudel_render ] && command -v node >/dev/null 2>&1; then
+  log "Rendering Strudel stems (tools/strudel_render)"
+  ( cd tools/strudel_render && npm ci --silent )
+  "$STRUDEL_TSX" tools/strudel_render/src/cli.ts --all
+  ok "Strudel stems rendered"
+else
+  warn "tools/strudel_render or node unavailable — skipping stem render (assumes WAVs present)"
+fi
+
 # --- 2. Run the full content build. ------------------------------------------
 # `mcc build content` writes CWD-relative: build/world.sql and
 # build/pck/meridian/<ns>/. We run it in a scratch dir so it never collides with
