@@ -161,6 +161,14 @@ struct GrantConsumed {
     std::uint64_t account_id = 0;
     std::uint32_t realm_id = 0;
     Bytes session_key;  // 32 bytes (SAD §4.1 BINARY(32))
+
+    // The account's GM permission level (auth DB account.gm_level, D-16 ladder:
+    // 0 player < helper < GM < admin), fetched by the same post-consume SELECT
+    // that reads the grant's bound {account, realm, key} via a JOIN to account.
+    // This is HOW a worldd session learns its GM level at the WORLD_HELLO
+    // handshake — the GM command framework (OPS-02a, #417) gates every
+    // `.`-command on it. 0 (player) for a normal account.
+    std::uint8_t gm_level = 0;
 };
 
 // Look up `grant_id` in `session_grant`, validate it, and ATOMICALLY consume it

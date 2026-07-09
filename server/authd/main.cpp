@@ -159,13 +159,18 @@ void emit_login_audit(const std::string& peer,
 
     switch (r.outcome) {
         case LoginOutcome::kGranted:
-            // SRP proof verified: the account authenticated.
+            // SRP proof verified: the account authenticated. Record the actor's GM
+            // tier (D-16; #417) so the audit trail shows WHO logged in AND at what
+            // privilege level — a GM/admin login is a security-relevant event worth
+            // isolating on the dashboard. Not a secret; just the account's role.
             audit::emit(audit::Record{
                 .action = audit::Action::kLoginSuccess,
                 .outcome = audit::Outcome::kSuccess,
                 .account_id = r.account_id,
                 .correlation_id = r.grant_id,
                 .peer = peer,
+                .extra = {meridian::core::log::field(
+                    "gm_level", static_cast<std::int64_t>(r.gm_level))},
             });
             // ...and a single-use session grant was issued for it.
             audit::emit(audit::Record{
