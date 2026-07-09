@@ -21,9 +21,10 @@
 #      is in-world and moving at the shared bootstrap spawn (64,64, within the 40 m
 #      AoI enter radius, #87) — launch the CLIENT PROBE, which enters the world on
 #      the GUI net path and DRAINS the relay,
-#   7. assert the CLIENT_PROBE_RESULT line: entered=1, saw_peer_enter=1 AND
-#      saw_peer_move=1 (the client got the bot's EntityEnter + EntityUpdate stream),
-#      and that the client's grant was CONSUMED,
+#   7. assert the CLIENT_PROBE_RESULT line: entered=1 (reached character-select),
+#      spawned=1 (ENTER_WORLD OK — #293 select-before-enter, HandshakeOk no longer
+#      spawns), saw_peer_enter=1 AND saw_peer_move=1 (the client got the bot's
+#      EntityEnter + EntityUpdate stream), and that the client's grant was CONSUMED,
 #   8. tear everything down.
 #
 # Requires MariaDB (mariadbd, mariadb-install-db, mariadb) + cmake + flatc +
@@ -252,6 +253,7 @@ RESULT_LINE="$(printf '%s\n' "${PROBE_OUT}" | grep '^CLIENT_PROBE_RESULT ' | hea
 _field() { printf '%s\n' "${RESULT_LINE}" | sed -n "s/.* $1=\([^ ]*\).*/\1/p"; }
 LOGIN_OK="$(_field login_ok)"
 ENTERED="$(_field entered)"
+SPAWNED="$(_field spawned)"
 SAW_ENTER="$(_field saw_peer_enter)"
 SAW_MOVE="$(_field saw_peer_move)"
 UPDATES="$(_field updates)"
@@ -263,8 +265,14 @@ it_fail=0
 [ "${LOGIN_OK}" = "1" ] && ok "CLIENT LOGGED IN (SRP over TLS to real authd)" \
   || { err "client did not log in (login_ok=${LOGIN_OK})"; it_fail=1; }
 
-[ "${ENTERED}" = "1" ] && ok "CLIENT ENTERED THE WORLD (HandshakeOk from real worldd, GUI net path)" \
-  || { err "client did not enter the world (entered=${ENTERED})"; it_fail=1; }
+[ "${ENTERED}" = "1" ] && ok "CLIENT REACHED CHARACTER-SELECT (HandshakeOk from real worldd, GUI net path)" \
+  || { err "client did not reach character-select (entered=${ENTERED})"; it_fail=1; }
+
+# THE #293 REGRESSION GUARD — HandshakeOk alone no longer spawns (D-35/#341). The
+# client must send ENTER_WORLD(character_id) and only spawns on a typed OK. entered=1
+# but spawned=0 is exactly the live regression this test now catches.
+[ "${SPAWNED}" = "1" ] && ok "CLIENT SPAWNED (ENTER_WORLD OK — true select-before-enter, GUI net path)" \
+  || { err "client reached character-select but did NOT spawn (spawned=${SPAWNED}) — ENTER_WORLD not accepted"; it_fail=1; }
 
 [ "${SAW_ENTER}" = "1" ] && ok "CLIENT SAW THE BOT ENTER (EntityEnter over the #87 relay)" \
   || { err "client did NOT see the bot enter (saw_peer_enter=${SAW_ENTER})"; it_fail=1; }
