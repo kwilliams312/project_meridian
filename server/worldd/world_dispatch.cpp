@@ -795,6 +795,42 @@ void poll_quest_credits(net::Session& sess, ConnCtx& ctx) {
     });
 }
 
+// Apply a pending GM `.summon` forced move on THIS session's own IO worker (OPS-02b,
+// #418). A summoning GM (on another thread) has already moved this session in the
+// grid + relayed the AoI deltas, and POSTed the destination to ctx.forced_move; here
+// — on the target's own worker, so ctx.movement stays single-threaded — we reset the
+// authoritative position + ARM the forced-move ack barrier (#420, so the client's
+// reconciling move is not flagged as a teleport), and snap the client with an
+// authoritative MOVEMENT_STATE. Drained at the TOP of MOVEMENT_INTENT (barrier armed
+// BEFORE that intent is validated) and after each handled frame (so an idle summoned
+// player still snaps on its next action). Cheap no-op when nothing is queued.
+void drain_forced_move(net::Session& sess, ConnCtx& ctx) {
+    if (!ctx.forced_move || !ctx.movement) return;
+    std::optional<Position> dest = ctx.forced_move->take();
+    if (!dest) return;
+
+    // The ack the client must echo before its intents resume validating. Must exceed
+    // the last processed seq (force_correction's contract) — the client reconciles to
+    // this MovementState and its next intent carries a seq >= it.
+    const std::uint32_t ack = ctx.movement->last_seq() + 1;
+    ctx.movement->force_correction(*dest, ack);
+
+    const std::uint64_t server_time_ms =
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+                                       .count());
+    MoveDecision snap;
+    snap.accepted = true;
+    snap.ack_seq = ack;
+    snap.state_flags = ctx.movement->last_flags();
+    snap.pos = *dest;
+    send_s2c(sess, ctx,
+             encode_frame(net::Opcode::MOVEMENT_STATE, 0,
+                          encode_movement_state(ctx.movement->entity_guid(), snap,
+                                                server_time_ms)));
+    log::debug(kCat, "applied GM summon forced-move -> authoritative reset + ack barrier");
+}
+
 // Credit any explore quest objective satisfied by these area-trigger crossings
 // (QST-01 explore source, #396). Fired on the session path where the mover's
 // crossings are known (ENTER_WORLD spawn eval + MOVEMENT_INTENT). Only an ENTER
@@ -1235,6 +1271,13 @@ void Dispatcher::register_m0_stubs() {
             return;
         }
 
+        // GM `.summon` (OPS-02b, #418): apply any pending forced move BEFORE this
+        // intent is validated, so the ack barrier is armed and the authoritative
+        // position is the summoned point — this incoming intent (likely a stale
+        // pre-summon packet) is then correctly rejected/reconciled against the new
+        // position instead of tripping the anti-cheat teleport check.
+        drain_forced_move(sess, ctx);
+
         const auto* mi = fb::GetRoot<mn::MovementIntent>(f.payload);
         if (mi == nullptr) return;  // verified upstream; defensive
 
@@ -1668,6 +1711,38 @@ void Dispatcher::register_m0_stubs() {
                // a discovery volume fires it on enter — credit any explore objective
                // it satisfies (QUEST_PROGRESS follows if it advanced).
                credit_explore_triggers(sess, ctx, er.triggers);
+
+               // GM COMMAND CONTROLS (OPS-02b, #418): register this session so a
+               // `.summon`/`.kick` from ANOTHER session can reach it by name. The
+               // summon mailbox lives in this ConnCtx (drained on this worker); the
+               // .kick teardown closure mirrors the #326 kick-old KickFn — it signals
+               // this session's serve loop (the shared `kicked` flag), drops it from
+               // the AoI world, and writes Disconnect{KICKED} through its serialized
+               // egress (the same cross-thread-safe path the relay uses).
+               ctx.forced_move = std::make_shared<ForcedMoveMailbox>();
+               {
+                   std::shared_ptr<SessionEgress> kick_egress = ctx.egress;
+                   std::shared_ptr<std::atomic<bool>> kick_flag = ctx.kicked;
+                   WorldState* kick_world = ctx.world;
+                   const SessionSlot kick_slot = ctx.slot;
+                   const std::string realm = ctx.labels.realm;
+                   ctx.world->set_session_control(
+                       ctx.slot, ctx.forced_move.get(),
+                       [kick_egress, kick_flag, kick_world, kick_slot, realm]() {
+                           if (kick_flag) kick_flag->store(true);
+                           if (kick_world != nullptr) kick_world->leave(kick_slot);
+                           if (kick_egress) {
+                               kick_egress->emit_frame(
+                                   make_disconnect(net::DisconnectReason::KICKED,
+                                                   "kicked by a game master", 0));
+                               kick_egress->mark_closed();
+                           }
+                           metrics::disconnects_total()
+                               .with({realm,
+                                      disconnect_reason_label(net::DisconnectReason::KICKED)})
+                               .inc();
+                       });
+               }
            }
 
            // QUEST-KILL credit bus (QST-01 event-bus, #396): register this session's
@@ -1888,8 +1963,119 @@ void Dispatcher::register_m0_stubs() {
                 reject(mn::ChatRejectReason::RATE_LIMITED);
                 return;
             }
+            // EFFECT SEAMS (OPS-02b, #418). Wire each GM command's server-side effect
+            // to THIS session's authoritative state / the shared world / the char DB.
+            // The framework validates args + permission-gates + audits; these lambdas
+            // perform the (server-authoritative) mutation. Each captures sess/f/ctx.
+            gm::GmEffects fx;
+
+            // .tele — reposition the CALLER (own thread; ctx.movement is this
+            // session's, single-threaded here). force_correction arms the ack barrier
+            // so the client's reconciling move is not flagged (#420); then relay AoI.
+            fx.teleport = [&](const Position& dest) -> gm::EffectStatus {
+                if (!ctx.movement || !ctx.entered || ctx.world == nullptr)
+                    return gm::EffectStatus::kNotInWorld;
+                const std::uint32_t ack = ctx.movement->last_seq() + 1;
+                ctx.movement->force_correction(dest, ack);
+                const std::uint64_t now = steady_now_ms();
+                MoveDecision d;
+                d.accepted = true;
+                d.ack_seq = ack;
+                d.state_flags = ctx.movement->last_flags();
+                d.pos = dest;
+                send_s2c(sess, ctx,
+                         encode_frame(net::Opcode::MOVEMENT_STATE, f.seq,
+                                      encode_movement_state(ctx.movement->entity_guid(),
+                                                            d, now)));
+                ctx.world->on_movement(ctx.slot, dest, ack, d.state_flags, now);
+                return gm::EffectStatus::kApplied;
+            };
+
+            // .summon — bring a named player to the CALLER's position. WorldState
+            // moves the target (grid + AoI) under its lock and posts the destination
+            // to the target's mailbox; the target arms its ack barrier + snaps its own
+            // client on its worker (drain_forced_move). The caller must be in-world.
+            fx.summon = [&](const std::string& name) -> gm::EffectStatus {
+                if (!ctx.movement || !ctx.entered || ctx.world == nullptr)
+                    return gm::EffectStatus::kNotInWorld;
+                const Position dest = ctx.movement->authoritative();
+                const WorldState::TargetOutcome oc = ctx.world->summon_to(
+                    name, dest, /*ack_seq=*/0, ctx.movement->last_flags(), steady_now_ms());
+                return oc == WorldState::TargetOutcome::kApplied
+                           ? gm::EffectStatus::kApplied
+                           : gm::EffectStatus::kTargetOffline;
+            };
+
+            // .additem — mint + DB-persist an item into the caller's inventory (reuses
+            // the loot/quest mint+place path). Server checks the template exists +
+            // there is room; nothing beyond the args is trusted.
+            fx.add_item = [&](std::uint32_t template_id,
+                              std::uint32_t count) -> gm::AddItemResult {
+                gm::AddItemResult r;
+                if (ctx.char_db == nullptr || ctx.char_id == 0) {
+                    r.status = gm::EffectStatus::kNotInWorld;
+                    return r;
+                }
+                const itm::ItemTemplate* tmpl = item_templates().find(template_id);
+                if (tmpl == nullptr) {
+                    r.status = gm::EffectStatus::kUnknownItem;
+                    return r;
+                }
+                std::uint32_t stack = count;
+                if (tmpl->max_stack > 0 && stack > tmpl->max_stack) stack = tmpl->max_stack;
+                try {
+                    itm::Inventory place =
+                        itm::load_inventory(*ctx.char_db, ctx.char_id, item_templates());
+                    const std::optional<std::uint16_t> slot = first_free_slot(place);
+                    if (!slot) {
+                        r.status = gm::EffectStatus::kNoSpace;
+                        return r;
+                    }
+                    const itm::ItemInstance minted =
+                        itm::mint_instance(*ctx.char_db, template_id, stack);
+                    itm::place_item(*ctx.char_db, ctx.char_id, /*bag=*/0,
+                                    itm::backpack_placement_slot(*slot), minted.item_guid);
+                    r.status = gm::EffectStatus::kApplied;
+                    r.item_name = tmpl->name;
+                    r.count = stack;
+                } catch (const std::exception& e) {
+                    log::warn(kCat, "GM .additem persist failed",
+                              {log::field("error", e.what())});
+                    r.status = gm::EffectStatus::kInternalError;
+                }
+                return r;
+            };
+
+            // .setlevel — set the caller's server-authoritative gate level (+ the
+            // world-owned Unit level for combat scaling). Already clamped by the
+            // handler; requires a spawned character.
+            fx.set_level = [&](std::uint32_t level) -> gm::SetLevelResult {
+                gm::SetLevelResult r;
+                if (ctx.phase != SessionPhase::kInWorld) {
+                    r.status = gm::EffectStatus::kNotInWorld;
+                    return r;
+                }
+                const std::uint16_t lvl = static_cast<std::uint16_t>(level);
+                ctx.char_level = lvl;
+                if (ctx.entered && ctx.world != nullptr)
+                    ctx.world->set_unit_level(ctx.slot, lvl);
+                r.status = gm::EffectStatus::kApplied;
+                r.applied_level = lvl;
+                return r;
+            };
+
+            // .kick — disconnect a named player's session (cross-thread teardown via
+            // the target's registered closure). No caller in-world requirement.
+            fx.kick = [&](const std::string& name) -> gm::EffectStatus {
+                if (ctx.world == nullptr) return gm::EffectStatus::kTargetOffline;
+                const WorldState::TargetOutcome oc = ctx.world->disconnect_by_name(name);
+                return oc == WorldState::TargetOutcome::kApplied
+                           ? gm::EffectStatus::kApplied
+                           : gm::EffectStatus::kTargetOffline;
+            };
+
             gm::dispatch_command(
-                gm::Registry::builtin(), text, ctx.account_id, ctx.gm_level,
+                gm::Registry::builtin(), text, ctx.account_id, ctx.gm_level, fx,
                 // Reply sink: a server SYSTEM line back to the SENDER only. Rides
                 // the existing CHAT_DELIVER opcode (no new wire opcode) with a 0
                 // sender_guid + "System" sender_name so the client renders it as a
@@ -2797,6 +2983,9 @@ void WorldServer::serve_connection(net::Session sess) {
                 // push QUEST_PROGRESS for any kill objective that advanced (QST-01
                 // event-bus). Cheap no-op unless a kill is pending for this guid.
                 poll_quest_credits(sess, ctx);
+                // #418: apply a pending GM `.summon` forced move so an idle summoned
+                // player snaps on its next action (any frame), not only on a move.
+                drain_forced_move(sess, ctx);
                 continue;
             }
 

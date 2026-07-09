@@ -240,6 +240,26 @@ target_link_libraries(worldd-gm-command-test
 set_target_properties(worldd-gm-command-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-gm-command COMMAND worldd-gm-command-test)
 
+# --- GM COMMAND SET effect INTEGRATION test (OPS-02b; #418). ------------------
+# PURE (no DB, no socket, no session): drives the REAL server-side effect surfaces
+# the M1 GM command set acts on — WorldState (summon / kick / setlevel) +
+# SessionMovementState (the .tele/.summon force-correction + ack barrier) — with
+# capturing egress sinks, so it proves each command's SERVER STATE CHANGE actually
+# happens (position / world Unit level / session teardown / forced-move mailbox)
+# and that a GM teleport does NOT trip the #420 anti-cheat teleport check. The
+# parse/gate/audit half is proven by worldd-gm-command-test; the DB-backed
+# .additem mint/persist rides the same itm path the loot/quest DB tests exercise.
+# Always runs in the plain server ctest (no MERIDIAN_DB_* needed).
+add_executable(worldd-gm-effect-test
+  test/gm_effect_test.cpp
+)
+target_link_libraries(worldd-gm-effect-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-gm-effect-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-gm-effect COMMAND worldd-gm-effect-test)
+
 # --- Combat ability/effect data model + store UNIT test (CMB-01 foundation; #343).
 # PURE (no DB, no socket, no session): drives the AbilityStore load + O(1) lookup
 # and the placeholder ability set's shape directly. It always runs in the plain

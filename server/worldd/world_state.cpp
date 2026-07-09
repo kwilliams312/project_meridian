@@ -324,7 +324,14 @@ std::vector<TriggerEvent> WorldState::on_movement(SessionSlot slot, const Positi
                                                   std::uint32_t state_flags,
                                                   std::uint64_t server_time_ms) {
     std::lock_guard<std::mutex> lk(mtx_);
+    return move_session_locked(slot, pos, ack_seq, state_flags, server_time_ms);
+}
 
+std::vector<TriggerEvent> WorldState::move_session_locked(SessionSlot slot,
+                                                          const Position& pos,
+                                                          std::uint32_t ack_seq,
+                                                          std::uint32_t state_flags,
+                                                          std::uint64_t server_time_ms) {
     auto sit = sessions_.find(slot);
     if (sit == sessions_.end()) return {};  // not entered
     SessionRec& self = sit->second;
@@ -450,6 +457,71 @@ void WorldState::leave(SessionSlot slot) {
     log::info(kCat, "session left slot=" + std::to_string(slot) + " guid=" +
                         std::to_string(self.identity.entity_guid));
     sessions_.erase(sit);
+}
+
+void WorldState::set_session_control(SessionSlot slot, ForcedMoveMailbox* forced_move,
+                                     DisconnectFn disconnect) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    auto sit = sessions_.find(slot);
+    if (sit == sessions_.end()) return;  // not entered
+    sit->second.forced_move = forced_move;
+    sit->second.disconnect = std::move(disconnect);
+}
+
+WorldState::TargetOutcome WorldState::summon_to(const std::string& target_name,
+                                                const Position& dest,
+                                                std::uint32_t ack_seq,
+                                                std::uint32_t state_flags,
+                                                std::uint64_t server_time_ms) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    auto nit = slot_by_name_ci_.find(to_lower_ascii(target_name));
+    if (nit == slot_by_name_ci_.end()) return TargetOutcome::kTargetOffline;
+    const SessionSlot target_slot = nit->second;
+    auto sit = sessions_.find(target_slot);
+    if (sit == sessions_.end()) return TargetOutcome::kTargetOffline;  // stale index (defensive)
+
+    // Move the target in the grid + relay the AoI deltas so every observer (and the
+    // summoner, if in range) sees the target appear at the caller's position at once.
+    move_session_locked(target_slot, dest, ack_seq, state_flags, server_time_ms);
+
+    // Hand the destination to the target's own IO worker: it applies force_correction
+    // (authoritative reset + ack-barrier arm + speed-window clear) + snaps its own
+    // client on its next turn — keeping SessionMovementState single-threaded (#418).
+    if (sit->second.forced_move != nullptr) sit->second.forced_move->post(dest);
+
+    log::info(kCat, "GM summon: moved '" + target_name + "' (slot " +
+                        std::to_string(target_slot) + ") to summoner position");
+    return TargetOutcome::kApplied;
+}
+
+WorldState::TargetOutcome WorldState::disconnect_by_name(const std::string& target_name) {
+    // Look the target up + COPY its disconnect closure OUT under the lock, then clear
+    // it so a concurrent/second kick is a no-op. Invoke the closure AFTER releasing
+    // the lock: it calls leave() (which re-takes mtx_) + writes the victim's socket,
+    // so running it under the lock would deadlock / serialize a socket write (the same
+    // "kick outside the registry lock" discipline as #326).
+    DisconnectFn teardown;
+    {
+        std::lock_guard<std::mutex> lk(mtx_);
+        auto nit = slot_by_name_ci_.find(to_lower_ascii(target_name));
+        if (nit == slot_by_name_ci_.end()) return TargetOutcome::kTargetOffline;
+        auto sit = sessions_.find(nit->second);
+        if (sit == sessions_.end() || !sit->second.disconnect)
+            return TargetOutcome::kTargetOffline;
+        teardown = std::move(sit->second.disconnect);  // consume (one-shot)
+        sit->second.disconnect = nullptr;
+    }
+    teardown();  // Disconnect{KICKED} + AoI leave, outside the world lock
+    log::info(kCat, "GM kick: disconnected '" + target_name + "'");
+    return TargetOutcome::kApplied;
+}
+
+bool WorldState::set_unit_level(SessionSlot slot, std::uint16_t level) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    auto sit = sessions_.find(slot);
+    if (sit == sessions_.end()) return false;  // not entered
+    sit->second.unit.set_level(level);
+    return true;
 }
 
 std::size_t WorldState::session_count() const {

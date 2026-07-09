@@ -27,6 +27,7 @@
 
 #include "gm_command.h"
 
+#include "leveling.h"  // kMaxLevel — the .setlevel clamp assertion
 #include "meridian/core/audit.hpp"
 
 #include <cstdio>
@@ -122,13 +123,42 @@ void test_registry() {
     // A PLAYER (level 0) sees NO commands — the whole '.'-surface is staff-only.
     check("visibility: a player sees no commands",
           reg.visible_to(static_cast<std::uint8_t>(gm::Level::kPlayer)).empty());
-    // A helper/GM/admin sees `.help`.
-    check("visibility: a helper sees .help",
+    // A HELPER (level 1) sees only the read-only `.help` — the M1 effect commands
+    // are all GM/admin.
+    check("visibility: a helper sees only .help",
           reg.visible_to(static_cast<std::uint8_t>(gm::Level::kHelper)).size() == 1);
-    check("visibility: a GM sees .help",
-          reg.visible_to(static_cast<std::uint8_t>(gm::Level::kGm)).size() == 1);
-    check("visibility: an admin sees .help",
-          reg.visible_to(static_cast<std::uint8_t>(gm::Level::kAdmin)).size() == 1);
+    // A GM (level 2) sees `.help` + the four GM commands (additem/setlevel/tele/
+    // summon) — but NOT `.kick` (admin).
+    {
+        const auto gm_cmds = reg.visible_to(static_cast<std::uint8_t>(gm::Level::kGm));
+        check("visibility: a GM sees help+additem+setlevel+tele+summon (5)",
+              gm_cmds.size() == 5);
+        bool sees_kick = false;
+        for (const gm::Command* c : gm_cmds)
+            if (c->name == "kick") sees_kick = true;
+        check("visibility: a GM does NOT see .kick (admin-only)", !sees_kick);
+    }
+    // An ADMIN (level 3) sees everything, including `.kick`.
+    {
+        const auto admin_cmds = reg.visible_to(static_cast<std::uint8_t>(gm::Level::kAdmin));
+        check("visibility: an admin sees all six commands", admin_cmds.size() == 6);
+        bool sees_kick = false;
+        for (const gm::Command* c : admin_cmds)
+            if (c->name == "kick") sees_kick = true;
+        check("visibility: an admin sees .kick", sees_kick);
+    }
+
+    // Per-command min levels (OPS-02b, #418).
+    check("registry: .tele min level is GM",
+          reg.find("tele") && reg.find("tele")->min_level == gm::Level::kGm);
+    check("registry: .summon min level is GM",
+          reg.find("summon") && reg.find("summon")->min_level == gm::Level::kGm);
+    check("registry: .additem min level is GM",
+          reg.find("additem") && reg.find("additem")->min_level == gm::Level::kGm);
+    check("registry: .setlevel min level is GM",
+          reg.find("setlevel") && reg.find("setlevel")->min_level == gm::Level::kGm);
+    check("registry: .kick min level is ADMIN",
+          reg.find("kick") && reg.find("kick")->min_level == gm::Level::kAdmin);
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +226,8 @@ void test_dispatch() {
         Capture cap;
         gm::CommandOutcome oc = gm::dispatch_command(
             reg, ".help", /*account_id=*/42,
-            static_cast<std::uint8_t>(gm::Level::kGm), cap.reply_sink(), cap.audit_sink());
+            static_cast<std::uint8_t>(gm::Level::kGm), gm::GmEffects{}, cap.reply_sink(),
+            cap.audit_sink());
         check("dispatch GM .help: outcome OK", oc == gm::CommandOutcome::kOk);
         check("dispatch GM .help: reply lists .help", cap.any_reply_has(".help"));
         check("dispatch GM .help: reply has the availability header",
@@ -216,7 +247,7 @@ void test_dispatch() {
         Capture cap;
         gm::CommandOutcome oc = gm::dispatch_command(
             reg, ".help", /*account_id=*/7,
-            static_cast<std::uint8_t>(gm::Level::kPlayer), cap.reply_sink(),
+            static_cast<std::uint8_t>(gm::Level::kPlayer), gm::GmEffects{}, cap.reply_sink(),
             cap.audit_sink());
         check("dispatch player .help: outcome DENIED", oc == gm::CommandOutcome::kDenied);
         check("dispatch player .help: reply is a permission refusal",
@@ -239,7 +270,8 @@ void test_dispatch() {
         Capture cap;
         gm::CommandOutcome oc = gm::dispatch_command(
             reg, ".frobnicate now", /*account_id=*/42,
-            static_cast<std::uint8_t>(gm::Level::kGm), cap.reply_sink(), cap.audit_sink());
+            static_cast<std::uint8_t>(gm::Level::kGm), gm::GmEffects{}, cap.reply_sink(),
+            cap.audit_sink());
         check("dispatch GM .frobnicate: outcome UNKNOWN", oc == gm::CommandOutcome::kUnknown);
         check("dispatch GM .frobnicate: reply says unknown",
               cap.any_reply_has("Unknown command"));
@@ -250,14 +282,248 @@ void test_dispatch() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// E. Command set effect wiring + arg validation (OPS-02b, #418)
+// ---------------------------------------------------------------------------
+// Records every effect seam invocation so a test can assert the SERVER computes
+// each command from validated args + reports the outcome — without a live world
+// (the world_dispatch integration test proves the seams over a real WorldState).
+struct FakeEffects {
+    // .tele
+    int teleport_calls = 0;
+    meridian::worldd::Position last_dest;
+    // .summon
+    int summon_calls = 0;
+    std::string last_summon_name;
+    gm::EffectStatus summon_status = gm::EffectStatus::kApplied;
+    // .additem
+    int additem_calls = 0;
+    std::uint32_t last_template = 0, last_count = 0;
+    gm::EffectStatus additem_status = gm::EffectStatus::kApplied;
+    // .setlevel
+    int setlevel_calls = 0;
+    std::uint32_t last_level = 0;
+    // .kick
+    int kick_calls = 0;
+    std::string last_kick_name;
+    gm::EffectStatus kick_status = gm::EffectStatus::kApplied;
+
+    gm::GmEffects make() {
+        gm::GmEffects fx;
+        fx.teleport = [this](const meridian::worldd::Position& d) {
+            ++teleport_calls;
+            last_dest = d;
+            return gm::EffectStatus::kApplied;
+        };
+        fx.summon = [this](const std::string& n) {
+            ++summon_calls;
+            last_summon_name = n;
+            return summon_status;
+        };
+        fx.add_item = [this](std::uint32_t id, std::uint32_t c) {
+            ++additem_calls;
+            last_template = id;
+            last_count = c;
+            gm::AddItemResult r;
+            r.status = additem_status;
+            r.item_name = "Test Sword";
+            r.count = c;
+            return r;
+        };
+        fx.set_level = [this](std::uint32_t lvl) {
+            ++setlevel_calls;
+            last_level = lvl;
+            gm::SetLevelResult r;
+            r.status = gm::EffectStatus::kApplied;
+            r.applied_level = static_cast<std::uint16_t>(lvl);
+            return r;
+        };
+        fx.kick = [this](const std::string& n) {
+            ++kick_calls;
+            last_kick_name = n;
+            return kick_status;
+        };
+        return fx;
+    }
+};
+
+const std::uint8_t kGm = static_cast<std::uint8_t>(gm::Level::kGm);
+const std::uint8_t kAdmin = static_cast<std::uint8_t>(gm::Level::kAdmin);
+
+// Dispatch `line` at `level` over a fresh capture + the given effects, returning
+// the outcome. `fake` is inspected by the caller for the seam it exercises.
+gm::CommandOutcome run(const std::string& line, std::uint8_t level, FakeEffects& fake,
+                       Capture& cap) {
+    return gm::dispatch_command(gm::Registry::builtin(), line, /*account_id=*/100, level,
+                                fake.make(), cap.reply_sink(), cap.audit_sink());
+}
+
+void test_command_set() {
+    std::printf("[gm] command set: effect wiring + arg validation\n");
+    const gm::Registry& reg = gm::Registry::builtin();
+    (void)reg;
+
+    // --- .tele: valid coords call the seam; the server confirms ---------------
+    {
+        FakeEffects fake;
+        Capture cap;
+        gm::CommandOutcome oc = run(".tele 10 20 0", kGm, fake, cap);
+        check(".tele valid: outcome OK", oc == gm::CommandOutcome::kOk);
+        check(".tele valid: seam invoked once", fake.teleport_calls == 1);
+        check(".tele valid: dest forwarded",
+              fake.last_dest.x == 10.0f && fake.last_dest.y == 20.0f &&
+                  fake.last_dest.z == 0.0f);
+        check(".tele valid: reply confirms", cap.any_reply_has("Teleported"));
+        check(".tele valid: audited as success (executed)",
+              cap.audits.size() == 1 && cap.audits[0].outcome == audit::Outcome::kSuccess);
+    }
+    // --- .tele: out-of-bounds is refused by the server, seam NOT called -------
+    {
+        FakeEffects fake;
+        Capture cap;
+        run(".tele 9999 1 0", kGm, fake, cap);
+        check(".tele OOB: seam NOT invoked", fake.teleport_calls == 0);
+        check(".tele OOB: reply says out of bounds", cap.any_reply_has("out of bounds"));
+    }
+    // --- .tele: non-numeric coords rejected -----------------------------------
+    {
+        FakeEffects fake;
+        Capture cap;
+        run(".tele here now please", kGm, fake, cap);
+        check(".tele bad args: seam NOT invoked", fake.teleport_calls == 0);
+        check(".tele bad args: reply is a usage/validation error",
+              cap.any_reply_has("Invalid") || cap.any_reply_has("Usage"));
+    }
+    // --- .tele: a GM is permitted; a PLAYER is denied (no effect) --------------
+    {
+        FakeEffects fake;
+        Capture cap;
+        gm::CommandOutcome oc =
+            run(".tele 1 1 0", static_cast<std::uint8_t>(gm::Level::kPlayer), fake, cap);
+        check(".tele as player: DENIED", oc == gm::CommandOutcome::kDenied);
+        check(".tele as player: seam NOT invoked", fake.teleport_calls == 0);
+    }
+
+    // --- .additem: id + count parsed + forwarded ------------------------------
+    {
+        FakeEffects fake;
+        Capture cap;
+        run(".additem 900001 5", kGm, fake, cap);
+        check(".additem: seam invoked with id+count",
+              fake.additem_calls == 1 && fake.last_template == 900001 && fake.last_count == 5);
+        check(".additem: reply confirms grant", cap.any_reply_has("Added"));
+    }
+    // --- .additem: default count is 1 -----------------------------------------
+    {
+        FakeEffects fake;
+        Capture cap;
+        run(".additem 900001", kGm, fake, cap);
+        check(".additem default count: seam gets count 1", fake.last_count == 1);
+    }
+    // --- .additem: non-numeric id rejected before the seam --------------------
+    {
+        FakeEffects fake;
+        Capture cap;
+        run(".additem sword", kGm, fake, cap);
+        check(".additem bad id: seam NOT invoked", fake.additem_calls == 0);
+        check(".additem bad id: reply is a validation error", cap.any_reply_has("Invalid"));
+    }
+    // --- .additem: unknown item status rendered -------------------------------
+    {
+        FakeEffects fake;
+        fake.additem_status = gm::EffectStatus::kUnknownItem;
+        Capture cap;
+        run(".additem 424242", kGm, fake, cap);
+        check(".additem unknown: reply says no such item", cap.any_reply_has("No such item"));
+    }
+
+    // --- .setlevel: clamps an over-cap request to kMaxLevel (server is law) ----
+    {
+        FakeEffects fake;
+        Capture cap;
+        run(".setlevel 999", kGm, fake, cap);
+        check(".setlevel over cap: seam gets the clamped level",
+              fake.setlevel_calls == 1 && fake.last_level == meridian::worldd::kMaxLevel);
+        check(".setlevel over cap: reply reports the applied level",
+              cap.any_reply_has(std::to_string(meridian::worldd::kMaxLevel)));
+    }
+    // --- .setlevel: in-range value passes through ------------------------------
+    {
+        FakeEffects fake;
+        Capture cap;
+        run(".setlevel 5", kGm, fake, cap);
+        check(".setlevel in range: seam gets 5", fake.last_level == 5);
+    }
+    // --- .setlevel: zero / non-numeric rejected -------------------------------
+    {
+        FakeEffects fake;
+        Capture cap;
+        run(".setlevel 0", kGm, fake, cap);
+        check(".setlevel 0: seam NOT invoked", fake.setlevel_calls == 0);
+    }
+
+    // --- .summon: name forwarded; offline status rendered ---------------------
+    {
+        FakeEffects fake;
+        Capture cap;
+        run(".summon Aragorn", kGm, fake, cap);
+        check(".summon: seam gets the name",
+              fake.summon_calls == 1 && fake.last_summon_name == "Aragorn");
+        check(".summon: reply confirms", cap.any_reply_has("Summoned"));
+    }
+    {
+        FakeEffects fake;
+        fake.summon_status = gm::EffectStatus::kTargetOffline;
+        Capture cap;
+        run(".summon Nobody", kGm, fake, cap);
+        check(".summon offline: reply says no online player",
+              cap.any_reply_has("No online player"));
+    }
+    {
+        FakeEffects fake;
+        Capture cap;
+        run(".summon", kGm, fake, cap);
+        check(".summon no arg: seam NOT invoked", fake.summon_calls == 0);
+    }
+
+    // --- .kick: ADMIN-gated ---------------------------------------------------
+    {
+        FakeEffects fake;
+        Capture cap;
+        gm::CommandOutcome oc = run(".kick Loki", kGm, fake, cap);  // GM < admin
+        check(".kick as GM: DENIED", oc == gm::CommandOutcome::kDenied);
+        check(".kick as GM: seam NOT invoked", fake.kick_calls == 0);
+    }
+    {
+        FakeEffects fake;
+        Capture cap;
+        gm::CommandOutcome oc = run(".kick Loki", kAdmin, fake, cap);
+        check(".kick as admin: OK", oc == gm::CommandOutcome::kOk);
+        check(".kick as admin: seam gets the name",
+              fake.kick_calls == 1 && fake.last_kick_name == "Loki");
+        check(".kick as admin: reply confirms", cap.any_reply_has("Kicked"));
+        check(".kick as admin: audited as executed",
+              cap.audits.size() == 1 && cap.audits[0].outcome == audit::Outcome::kSuccess);
+    }
+    {
+        FakeEffects fake;
+        fake.kick_status = gm::EffectStatus::kTargetOffline;
+        Capture cap;
+        run(".kick Ghost", kAdmin, fake, cap);
+        check(".kick offline: reply says no online player",
+              cap.any_reply_has("No online player"));
+    }
+}
+
 }  // namespace
 
 int main() {
-    std::printf("worldd GM command framework unit test (OPS-02a #417)\n\n");
+    std::printf("worldd GM command framework unit test (OPS-02a #417 / OPS-02b #418)\n\n");
     test_parse();
     test_registry();
     test_audit_builder();
     test_dispatch();
+    test_command_set();
     std::printf("\n%s\n", g_fail == 0 ? "PASS" : "FAIL");
     return g_fail == 0 ? 0 : 1;
 }

@@ -204,6 +204,52 @@ private:
     bool alive_ = true;
 };
 
+// ---------------------------------------------------------------------------
+// ForcedMoveMailbox — a thread-safe one-slot hand-off for a GM `.summon` (#418).
+// ---------------------------------------------------------------------------
+// A `.summon` runs on the SUMMONER's IO worker but must reposition the TARGET,
+// whose authoritative SessionMovementState (the #420 validator + forced-move ack
+// barrier) is single-threaded on the TARGET's own IO worker. Rather than race that
+// state cross-thread, the summoner POSTs the destination here (the target's grid
+// position + AoI relay it updates directly under WorldState's lock, which observers
+// see at once); the TARGET then DRAINs it on its own worker — at the top of its
+// next MOVEMENT_INTENT and after each handled frame — and applies force_correction
+// there, arming the ack barrier + sending itself the authoritative snap. This keeps
+// SessionMovementState strictly single-threaded (the same discipline QuestCredit
+// uses for the kill bus). Held by shared_ptr so a mid-teardown summoner keeps it
+// alive; a null pending slot is the common (no-summon-queued) case.
+struct ForcedMoveMailbox {
+    // Post a pending forced destination (last write wins — a fresh summon overrides
+    // a not-yet-drained one). Thread-safe.
+    void post(const Position& dest) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        pending_ = dest;
+    }
+    // Take + clear the pending destination, if any. Thread-safe.
+    std::optional<Position> take() {
+        std::lock_guard<std::mutex> lk(mtx_);
+        std::optional<Position> out = pending_;
+        pending_.reset();
+        return out;
+    }
+    // Non-consuming test/diagnostic peek.
+    bool has_pending() const {
+        std::lock_guard<std::mutex> lk(mtx_);
+        return pending_.has_value();
+    }
+
+private:
+    mutable std::mutex mtx_;
+    std::optional<Position> pending_;
+};
+
+// A per-session control signal the world holds so a GM command targeting ANOTHER
+// session by name can reach it: `disconnect` tears the session down (`.kick`), and
+// `forced_move` is the summon mailbox above. Registered via set_session_control
+// after enter(); both default-empty (an un-controlled session is un-summonable /
+// un-kickable — the DB-less smoke path never wires them).
+using DisconnectFn = std::function<void()>;
+
 // The result of entering a session: its slot + the EFFECTIVE entity guid the
 // relay assigned it (see WorldState::enter — a 0 stub guid is replaced by a
 // unique synthetic one so two D-11 placeholder sessions are distinguishable on
@@ -266,6 +312,49 @@ public:
     // everyone who currently sees it and drop it from the grid + registry.
     // Thread-safe. No-op if `slot` is not entered.
     void leave(SessionSlot slot);
+
+    // ── GM commands targeting a session (OPS-02b, #418) ──────────────────────
+    // These let a GM command reach a session by name (`.summon`, `.kick`) or set a
+    // session's level (`.setlevel`), all thread-safely under the world lock (the
+    // cross-session s2c writes / teardown run through the same serialized egress
+    // the AoI relay uses). Registered per-session by set_session_control after
+    // enter(); a session that never registered controls is un-summonable/-kickable.
+
+    // Register the control signals for `slot` (the summon mailbox + the disconnect
+    // teardown closure). Call once, right after enter(). Thread-safe; no-op if
+    // `slot` is not entered.
+    void set_session_control(SessionSlot slot, ForcedMoveMailbox* forced_move,
+                             DisconnectFn disconnect);
+
+    // Outcome of a summon/kick by target name.
+    enum class TargetOutcome {
+        kApplied,        // the target was found + the effect performed
+        kTargetOffline,  // no in-world session holds that name
+    };
+
+    // `.summon` — move the in-world player named `target_name` (case-insensitive) to
+    // `dest`: update its grid position + relay the AoI deltas (observers see it move
+    // at once), and POST `dest` to its ForcedMoveMailbox so the target arms its
+    // forced-move ack barrier + snaps its own client on its next worker turn.
+    // `ack_seq`/`state_flags`/`server_time_ms` are echoed into the relayed
+    // EntityUpdate. Returns kTargetOffline for an unknown name. Thread-safe.
+    TargetOutcome summon_to(const std::string& target_name, const Position& dest,
+                            std::uint32_t ack_seq, std::uint32_t state_flags,
+                            std::uint64_t server_time_ms);
+
+    // `.kick` — signal the in-world player named `target_name` (case-insensitive) to
+    // disconnect by invoking its registered DisconnectFn (Disconnect{KICKED} + AoI
+    // leave, run OUTSIDE the world lock like the #326 kick-old teardown). The closure
+    // is consumed (a second kick of the same session is a no-op). Returns
+    // kTargetOffline for an unknown name or a session with no disconnect control.
+    // Thread-safe.
+    TargetOutcome disconnect_by_name(const std::string& target_name);
+
+    // `.setlevel` — set the authoritative Unit level of the session in `slot` (the
+    // combat/simulation level; #342). The caller also sets its own gate-level in its
+    // ConnCtx — this keeps the world-owned Unit in step. Thread-safe. No-op (returns
+    // false) if `slot` is not entered.
+    bool set_unit_level(SessionSlot slot, std::uint16_t level);
 
     // Test/diagnostic: how many sessions are currently entered.
     std::size_t session_count() const;
@@ -365,7 +454,22 @@ private:
         // by slot id. Diffed each movement to drive enter/update/leave + resolve
         // the hysteresis band.
         std::unordered_set<SessionSlot> visible;
+        // GM-command control signals (OPS-02b, #418). `forced_move` is the summon
+        // mailbox (borrowed — owned by the target's ConnCtx); `disconnect` is the
+        // .kick teardown closure. Both null until set_session_control (unset on the
+        // DB-less smoke path). See ForcedMoveMailbox / DisconnectFn.
+        ForcedMoveMailbox* forced_move = nullptr;
+        DisconnectFn disconnect;
     };
+
+    // Move an entered `slot` to `pos` and relay the AoI enter/update/leave deltas
+    // (the body of on_movement, assuming mtx_ is already held). Shared by the public
+    // on_movement (mover path) and summon_to (a GM moves another session). Returns
+    // the mover's area-trigger crossings. Caller holds mtx_.
+    std::vector<TriggerEvent> move_session_locked(SessionSlot slot, const Position& pos,
+                                                  std::uint32_t ack_seq,
+                                                  std::uint32_t state_flags,
+                                                  std::uint64_t server_time_ms);
 
     // Emit an EntityEnter for `subject` to the session at `to`. Caller holds mtx_.
     void send_enter(SessionRec& to, const SessionRec& subject);
