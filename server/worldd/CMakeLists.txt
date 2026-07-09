@@ -25,6 +25,8 @@ add_library(world-dispatch STATIC
   world_boot.cpp
   movement_validation.cpp
   movement_audit.cpp
+  rate_class.cpp
+  economy_sanity.cpp
   gm_command.cpp
   aoi_grid.cpp
   area_triggers.cpp
@@ -187,6 +189,35 @@ target_link_libraries(worldd-movement-test
 )
 set_target_properties(worldd-movement-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-movement COMMAND worldd-movement-test)
+
+# --- Per-opcode RATE CLASS UNIT test (OPS-03b; #421). -------------------------
+# PURE (no DB, no socket, no session): drives the RateLimiter + rate_class table
+# directly with an injected clock, covering ≥2 classes (a chat flood vs a normal
+# chat rate; a move flood; the window slide) + the anti-cheat audit record the
+# dispatch emits on a flood drop. Always runs in the plain server ctest.
+add_executable(worldd-rate-class-test
+  test/rate_class_test.cpp
+)
+target_link_libraries(worldd-rate-class-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-rate-class-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-rate-class COMMAND worldd-rate-class-test)
+
+# --- Economy sanity UNIT test (OPS-03b; #421). -------------------------------
+# PURE (no DB): drives the defense-in-depth economy delta checks directly — a bad
+# quantity / negative price / copper over/underflow is rejected while a normal
+# transaction passes — plus the economy audit record. Always runs in plain ctest.
+add_executable(worldd-economy-sanity-test
+  test/economy_sanity_test.cpp
+)
+target_link_libraries(worldd-economy-sanity-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-economy-sanity-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-economy-sanity COMMAND worldd-economy-sanity-test)
 
 # --- Grid / AoI engine v0 UNIT test (IT-M0 AoI core; #87). --------------------
 # PURE (no DB, no socket, no session): exercises the AoiGrid spatial index + the

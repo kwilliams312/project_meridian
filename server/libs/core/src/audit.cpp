@@ -30,6 +30,8 @@ const char* action_name(Action action) {
         case Action::kSessionLeave:  return "session_leave";
         case Action::kMovementRejected: return "movement_rejected";
         case Action::kGmCommand:        return "gm_command";
+        case Action::kRateLimited:      return "rate_limited";
+        case Action::kEconomyRejected:  return "economy_rejected";
     }
     return "unknown";
 }
