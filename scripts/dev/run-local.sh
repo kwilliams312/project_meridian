@@ -98,6 +98,22 @@ if [ "$MODE" = "stop" ]; then
   exit 0
 fi
 
+# --- Idempotent start: cull any leftover realm before bringing up a fresh one. -
+# A crashed or SIGKILL'd prior run (or a demo whose EXIT trap didn't fire) can leave
+# orphaned authd/worldd daemons + a throwaway MariaDB still holding the realm ports.
+# Starting again on top of that STACKS a second realm: clients and bots then connect
+# to whichever worldd won the port, landing in different instances — a split-brain
+# where a client sees zero of the bots. So every start first tears down the tracked
+# realm (pidfiles + its DB) AND belt-and-suspenders kills any of OUR orphaned daemons
+# still running, guaranteeing exactly one realm.
+cull_stale_realm() {
+  stop_realm >/dev/null 2>&1 || true            # tracked realm (pidfiles) + its DB
+  pkill -f "$WORLDD" 2>/dev/null || true         # our orphaned daemons (exact binary path)
+  pkill -f "$AUTHD"  2>/dev/null || true
+}
+log "culling any leftover local realm (idempotent start)"
+cull_stale_realm
+
 [ -x "$AUTHD" ]   || die "authd not built. Run: scripts/dev/build.sh"
 [ -x "$WORLDD" ]  || die "worldd not built. Run: scripts/dev/build.sh"
 [ -x "$ACCOUNT" ] || die "meridian-account not built. Run: scripts/dev/build.sh"
