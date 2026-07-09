@@ -48,6 +48,7 @@
 
 #include "meridian/db/connection.h"
 
+#include "area_triggers.h"    // meridian::worldd::TriggerVolume — DB-loaded POI volumes (#398)
 #include "item_template.h"    // meridian::items::TemplateStore / ItemTemplate
 #include "loot_table.h"       // meridian::loot::LootTableStore / LootTable
 #include "npc_def.h"          // meridian::npc::NpcStore / NpcDef
@@ -134,6 +135,23 @@ private:
     std::unordered_map<std::uint32_t, std::vector<vendor::VendorListing>> by_vendor_;
 };
 
+// --- DB-backed area-trigger / POI volumes (#398, WLD-03) ---------------------
+// Build one discovery TriggerVolume per authored `area` (POI) row: the pos_x/y/z +
+// discovery_radius_m FLOAT columns (readable since the #393 FLOAT-read fix) become
+// an axis-aligned box centred on the POI, and area.zone_id + area.poi become the
+// volume's area_id + poi — the SAME join key a kExplore quest objective matches on
+// (QST-01 #396: a discovery crossing credits the explore objective whose
+// (zone_id, poi) == (this area_id, this poi)). So a player crossing a DB-loaded POI
+// volume fires an ENTER carrying the authored poi, and on_explore(zone_id, poi)
+// credits the matching objective against real content — no synthetic volume needed.
+//
+// Membership is a point-in-box test on (x, y) with the z axis spanning full range
+// (the M1 flat map is a single plane; z is ignored, mirroring the placeholder set).
+// Ids are assigned 1..N in (zone_id, poi) load order (the `area` PK has no numeric
+// id) — stable for the per-character occupancy bookkeeping, since the whole set is
+// loaded once at boot.
+std::vector<TriggerVolume> load_area_trigger_volumes(db::Connection& world_db);
+
 // --- The loaded world content bundle -----------------------------------------
 // Owns one of each DB-backed store, loaded from the world DB at boot. Held for the
 // process lifetime (main() owns it) so the pointers install_content_stores() /
@@ -145,6 +163,10 @@ struct WorldContent {
     std::unique_ptr<DbQuestStore>     quests;
     std::unique_ptr<DbNpcStore>       npcs;
     std::unique_ptr<DbLootTableStore> loot;
+    // The authored POI discovery volumes (area rows) the map tick evaluates against
+    // player positions — carries the real `poi` so explore objectives credit against
+    // authored content (#398). Empty when the world DB has no `area` rows.
+    std::vector<TriggerVolume>        area_triggers;
 };
 
 // Load every content store from the (already-boot-verified) world DB connection.
