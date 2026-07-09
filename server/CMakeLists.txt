@@ -102,6 +102,12 @@ add_subdirectory(items)
 # creature's loot table into a session on its corpse at kill time; ships a DB-free
 # unit test (seeded determinism, statistical drop rates, session validation).
 add_subdirectory(loot)
+# vendor: server-authoritative vendor transactions (ECO-01; #370). buy / sell /
+# buyback over meridian::items — the vendor catalog seam (placeholder set now, mcc
+# #28 later), the per-session buyback queue, and pure + DB-backed transaction logic
+# (int64 copper, no client-trusted prices). Ships a DB-free unit test (the economy
+# rules) and a DB-backed integration test that self-SKIPs without MERIDIAN_DB_*.
+add_subdirectory(vendor)
 
 # --- Daemons (server/README.md process table; SAD §2.1 / §2.5). --------------
 add_subdirectory(authd)

@@ -1549,6 +1549,164 @@ std::vector<Message> build_corpus() {
                         "if2_loot_closed.corpse_guid");
                }});
 
+  // ==== IF-2 inventory / economy: vendors (world.fbs; ECO-01 #370) ==========
+  // Server-authoritative buy/sell/buyback. All prices + balances are int64
+  // copper the SERVER owns — the requests carry no client price. Each canonical
+  // instance is the OK/happy-path shape; the goldens pin the wire layout of the
+  // vendor id / template / quantity / int64-copper fields the client reads.
+
+  // VendorBuyRequest — C->S buy 3 of a template from a vendor (no price field).
+  c.push_back({"if2_vendor_buy_request", "IF-2", "VENDOR_BUY_REQUEST (0x5101)",
+               "C->S buy 3 units of a template from a vendor",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateVendorBuyRequest(b, /*vendor_id=*/990001u,
+                                                     /*item_template_id=*/900001u,
+                                                     /*quantity=*/3u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::VendorBuyRequest>(nullptr),
+                             "if2_vendor_buy_request verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::VendorBuyRequest>(buf.data());
+                 expect(m->vendor_id() == 990001u, "if2_vendor_buy_request.vendor_id");
+                 expect(m->item_template_id() == 900001u,
+                        "if2_vendor_buy_request.item_template_id");
+                 expect(m->quantity() == 3u, "if2_vendor_buy_request.quantity");
+               }});
+
+  // VendorBuyResult — S->C OK: minted item + 300 copper debited, balance 700.
+  c.push_back({"if2_vendor_buy_result", "IF-2", "VENDOR_BUY_RESULT (0x5102)",
+               "S->C buy OK: minted guid, total_price 300, balance 700",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateVendorBuyResult(
+                     b, mn::VendorBuyStatus::OK, /*vendor_id=*/990001u,
+                     /*item_template_id=*/900001u, /*quantity=*/3u,
+                     /*item_guid=*/0x00A1000000000001ULL, /*total_price=*/300,
+                     /*balance=*/700));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::VendorBuyResult>(nullptr),
+                             "if2_vendor_buy_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::VendorBuyResult>(buf.data());
+                 expect(m->status() == mn::VendorBuyStatus::OK,
+                        "if2_vendor_buy_result.status");
+                 expect(m->vendor_id() == 990001u, "if2_vendor_buy_result.vendor_id");
+                 expect(m->item_template_id() == 900001u,
+                        "if2_vendor_buy_result.item_template_id");
+                 expect(m->quantity() == 3u, "if2_vendor_buy_result.quantity");
+                 expect(m->item_guid() == 0x00A1000000000001ULL,
+                        "if2_vendor_buy_result.item_guid");
+                 expect(m->total_price() == 300, "if2_vendor_buy_result.total_price");
+                 expect(m->balance() == 700, "if2_vendor_buy_result.balance");
+               }});
+
+  // VendorSellRequest — C->S sell 2 units from a backpack slot to a vendor.
+  c.push_back({"if2_vendor_sell_request", "IF-2", "VENDOR_SELL_REQUEST (0x5103)",
+               "C->S sell 2 units from backpack slot 4",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateVendorSellRequest(b, /*vendor_id=*/990001u,
+                                                      /*backpack_slot=*/4u,
+                                                      /*quantity=*/2u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::VendorSellRequest>(nullptr),
+                             "if2_vendor_sell_request verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::VendorSellRequest>(buf.data());
+                 expect(m->vendor_id() == 990001u, "if2_vendor_sell_request.vendor_id");
+                 expect(m->backpack_slot() == 4u,
+                        "if2_vendor_sell_request.backpack_slot");
+                 expect(m->quantity() == 2u, "if2_vendor_sell_request.quantity");
+               }});
+
+  // VendorSellResult — S->C OK: 2 credited, balance 702, buyback slot 0.
+  c.push_back({"if2_vendor_sell_result", "IF-2", "VENDOR_SELL_RESULT (0x5104)",
+               "S->C sell OK: total_credit 2, balance 702, buyback slot 0",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateVendorSellResult(
+                     b, mn::VendorSellStatus::OK, /*backpack_slot=*/4u,
+                     /*item_template_id=*/900007u, /*quantity=*/2u,
+                     /*total_credit=*/2, /*balance=*/702, /*buyback_slot=*/0u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::VendorSellResult>(nullptr),
+                             "if2_vendor_sell_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::VendorSellResult>(buf.data());
+                 expect(m->status() == mn::VendorSellStatus::OK,
+                        "if2_vendor_sell_result.status");
+                 expect(m->backpack_slot() == 4u,
+                        "if2_vendor_sell_result.backpack_slot");
+                 expect(m->item_template_id() == 900007u,
+                        "if2_vendor_sell_result.item_template_id");
+                 expect(m->quantity() == 2u, "if2_vendor_sell_result.quantity");
+                 expect(m->total_credit() == 2, "if2_vendor_sell_result.total_credit");
+                 expect(m->balance() == 702, "if2_vendor_sell_result.balance");
+                 expect(m->buyback_slot() == 0u,
+                        "if2_vendor_sell_result.buyback_slot");
+               }});
+
+  // VendorBuybackRequest — C->S repurchase the buyback entry at slot 0.
+  c.push_back({"if2_vendor_buyback_request", "IF-2",
+               "VENDOR_BUYBACK_REQUEST (0x5105)",
+               "C->S repurchase buyback slot 0",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateVendorBuybackRequest(b, /*buyback_slot=*/0u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::VendorBuybackRequest>(nullptr),
+                             "if2_vendor_buyback_request verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::VendorBuybackRequest>(buf.data());
+                 expect(m->buyback_slot() == 0u,
+                        "if2_vendor_buyback_request.buyback_slot");
+               }});
+
+  // VendorBuybackResult — S->C OK: re-minted item, 2 re-debited, balance 700.
+  c.push_back({"if2_vendor_buyback_result", "IF-2",
+               "VENDOR_BUYBACK_RESULT (0x5106)",
+               "S->C buyback OK: re-minted guid, price 2, balance 700",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateVendorBuybackResult(
+                     b, mn::VendorBuybackStatus::OK, /*item_template_id=*/900007u,
+                     /*quantity=*/2u, /*item_guid=*/0x00A1000000000002ULL,
+                     /*price=*/2, /*balance=*/700));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::VendorBuybackResult>(nullptr),
+                             "if2_vendor_buyback_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::VendorBuybackResult>(buf.data());
+                 expect(m->status() == mn::VendorBuybackStatus::OK,
+                        "if2_vendor_buyback_result.status");
+                 expect(m->item_template_id() == 900007u,
+                        "if2_vendor_buyback_result.item_template_id");
+                 expect(m->quantity() == 2u, "if2_vendor_buyback_result.quantity");
+                 expect(m->item_guid() == 0x00A1000000000002ULL,
+                        "if2_vendor_buyback_result.item_guid");
+                 expect(m->price() == 2, "if2_vendor_buyback_result.price");
+                 expect(m->balance() == 700, "if2_vendor_buyback_result.balance");
+               }});
+
   return c;
 }
 

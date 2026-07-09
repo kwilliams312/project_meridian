@@ -53,6 +53,8 @@ target_link_libraries(world-dispatch
     meridian::characters  # char-management handlers: list/create/delete CRUD (#286 / D-35)
     meridian::items    # ITM-01 item model + inventory/currency — quest rewards/collect (#371) + loot transfer (#369)
     meridian::loot     # ITM-02 loot tables + rolls + corpse loot sessions (#369)
+    meridian::vendor   # ECO-01 vendor buy/sell/buyback handlers (#370) — pulls meridian::items
+
     meridian::metrics  # OPS-05 session/opcode/movement/tick/disconnect metrics (#164)
     meridian::trace    # OPS-05 session-flow trace: the worldd.enter_world span (#166)
     Threads::Threads
