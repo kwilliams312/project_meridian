@@ -84,6 +84,11 @@ bool discover(const std::string& content_dir, model::ContentModel& model) {
         const fs::path& p = it->path();
         if (!it->is_regular_file(ec)) continue;
         if (p.extension() != ".yaml") continue;
+        // *.render.yaml are auxiliary strudel-render manifests (epic #400 / issue
+        // #410), not content entities — skip them, mirroring validate_content.py's
+        // discovery (which excludes `*.render.yaml` from its rglob). Keeps the
+        // mcc-parity file_count identical to the reference validator.
+        if (p.filename().string().ends_with(".render.yaml")) continue;
 
         model::DiscoveredFile df;
         df.abs_path = p.generic_string();
