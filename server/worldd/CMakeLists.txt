@@ -51,7 +51,8 @@ target_link_libraries(world-dispatch
     meridian::proto
     meridian::db
     meridian::characters  # char-management handlers: list/create/delete CRUD (#286 / D-35)
-    meridian::items    # quest rewards + collect objectives: inventory/currency/item templates (ITM-01 #366)
+    meridian::items    # ITM-01 item model + inventory/currency — quest rewards/collect (#371) + loot transfer (#369)
+    meridian::loot     # ITM-02 loot tables + rolls + corpse loot sessions (#369)
     meridian::metrics  # OPS-05 session/opcode/movement/tick/disconnect metrics (#164)
     meridian::trace    # OPS-05 session-flow trace: the worldd.enter_world span (#166)
     Threads::Threads
@@ -514,6 +515,26 @@ target_link_libraries(worldd-death-xp-test
 )
 set_target_properties(worldd-death-xp-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-death-xp COMMAND worldd-death-xp-test)
+
+# --- Loot on creature death END-TO-END through the MapTick hook (ITM-02 #369). --
+# PURE (no DB, no socket): drives the MapTick orchestrator — a player kills a
+# creature that carries a loot table → the map rolls the table into a loot session
+# on the corpse (SEEDED, so the roll is reproducible for a map seed and does NOT
+# perturb the combat rng_), and a client loots slots into a real items::Inventory
+# through the session's server-side validation (ownership / in-range / not-already-
+# looted / quest gate). Proves the story's acceptance list at the integration seam:
+# deterministic roll for a seed, loot-to-inventory transfers ownership, quest-gated
+# drop only for eligible players, and no double-loot. Always runs in the plain
+# server ctest (no MERIDIAN_* env needed).
+add_executable(worldd-loot-test
+  test/loot_session_it.cpp
+)
+target_link_libraries(worldd-loot-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-loot-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-loot COMMAND worldd-loot-test)
 
 # --- Movement-derived (fall + swim/breath) damage unit test (issue #362, CHR-02
 # full). Exercises the PURE MovementDamageState evaluator directly (fall above the
