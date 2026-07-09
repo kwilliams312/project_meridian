@@ -7,6 +7,7 @@
 
 #include "meridian/db/connection.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -90,6 +91,40 @@ int main() {
         check("count = 2", cnt.rows.size() == 1 && *cnt.rows[0][0] == "2");
 
         db.execute("DROP TEMPORARY TABLE meridian_db_selftest");
+
+        // FLOAT / DOUBLE / DECIMAL result columns must read back non-empty and
+        // round-trip (#393). Before the fix the result layer bound every column
+        // as a zero-length string buffer; FLOAT/DOUBLE reported length 0 and came
+        // back as an empty cell, silently yielding 0 for any FLOAT SELECT.
+        db.execute("DROP TEMPORARY TABLE IF EXISTS meridian_db_numtest");
+        db.execute(
+            "CREATE TEMPORARY TABLE meridian_db_numtest ("
+            "id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, "
+            "f FLOAT, d DOUBLE, dec_col DECIMAL(12,4)) "
+            "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        // 2.5 is exactly representable as FLOAT; the DOUBLE and DECIMAL carry
+        // more digits so the round-trip is a real conversion, not a lucky zero.
+        const double kFloat = 2.5;
+        const double kDouble = 123.4567890123;
+        db.execute(
+            "INSERT INTO meridian_db_numtest (f, d, dec_col) VALUES (?, ?, ?)",
+            {Param{kFloat}, Param{kDouble}, Param{std::string{"1234.5678"}}});
+
+        Result fr = db.execute("SELECT f, d, dec_col FROM meridian_db_numtest");
+        check("float select returned 1 row", fr.rows.size() == 1);
+        if (fr.rows.size() == 1) {
+            const Row& row = fr.rows[0];
+            check("FLOAT column non-empty", row[0].has_value() && !row[0]->empty());
+            check("DOUBLE column non-empty", row[1].has_value() && !row[1]->empty());
+            check("DECIMAL column non-empty", row[2].has_value() && !row[2]->empty());
+            double f = (row[0].has_value() && !row[0]->empty()) ? std::stod(*row[0]) : 0.0;
+            double d = (row[1].has_value() && !row[1]->empty()) ? std::stod(*row[1]) : 0.0;
+            check("FLOAT round-trips (2.5)", std::fabs(f - kFloat) < 1e-4);
+            check("DOUBLE round-trips (123.4567890123)", std::fabs(d - kDouble) < 1e-9);
+            check("DECIMAL round-trips (1234.5678)",
+                  row[2].has_value() && *row[2] == "1234.5678");
+        }
+        db.execute("DROP TEMPORARY TABLE meridian_db_numtest");
     } catch (const DbError& e) {
         std::printf("  FAIL  DbError %u: %s\n", e.code(), e.what());
         ++g_fail;
