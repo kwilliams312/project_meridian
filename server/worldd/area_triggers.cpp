@@ -43,6 +43,7 @@ std::vector<TriggerEvent> AreaTriggerSet::evaluate(AoiId guid, const Position& p
             e.kind = v.kind;
             e.area_id = v.area_id;
             e.name_id = v.name_id;
+            e.poi = v.poi;
             e.entered = true;
             if (v.kind == TriggerKind::kDiscovery &&
                 discovered.find(v.id) == discovered.end()) {
@@ -59,6 +60,7 @@ std::vector<TriggerEvent> AreaTriggerSet::evaluate(AoiId guid, const Position& p
             e.kind = v.kind;
             e.area_id = v.area_id;
             e.name_id = v.name_id;
+            e.poi = v.poi;
             e.entered = false;
             events.push_back(e);
         }

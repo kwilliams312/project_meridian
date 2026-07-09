@@ -12,6 +12,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -713,23 +714,26 @@ void send_s2c(net::Session& sess, ConnCtx& ctx, const Bytes& frame) {
     }
 }
 
-// Re-sync every active COLLECT objective against the character's current inventory
-// and push a QUEST_PROGRESS for each objective whose progress advanced (the QST-01
-// collect source, driven by an inventory change — e.g. a loot pull). No-op without a
-// quest log or when nothing changed. Called with the session's post-change inventory.
-void sync_collect_and_emit(net::Session& sess, ConnCtx& ctx, const itm::Inventory& inv) {
-    if (!ctx.quests) return;
-    // Snapshot each active quest's per-objective `have` before the sync.
+// Snapshot every active quest's per-objective `have` (the pre-mutation baseline the
+// QUEST_PROGRESS delta is computed against). Deterministic (std::map).
+std::map<QuestId, std::vector<std::uint16_t>> snapshot_quest_haves(const QuestLog& log) {
     std::map<QuestId, std::vector<std::uint16_t>> before;
-    for (QuestId id : ctx.quests->active_quests()) {
-        const std::vector<ObjectiveState>* objs = ctx.quests->objectives(id);
+    for (QuestId id : log.active_quests()) {
+        const std::vector<ObjectiveState>* objs = log.objectives(id);
         if (objs == nullptr) continue;
         std::vector<std::uint16_t> hv;
         hv.reserve(objs->size());
         for (const auto& o : *objs) hv.push_back(o.have);
         before.emplace(id, std::move(hv));
     }
-    if (!ctx.quests->sync_collect(inv)) return;  // nothing advanced
+    return before;
+}
+
+// Push a QUEST_PROGRESS (S→C) for every active objective whose `have` moved off its
+// `before` baseline. Shared by every objective source (collect / kill / deliver /
+// explore) so each emits the identical per-objective progress frame.
+void emit_quest_progress_deltas(net::Session& sess, ConnCtx& ctx,
+                                const std::map<QuestId, std::vector<std::uint16_t>>& before) {
     for (QuestId id : ctx.quests->active_quests()) {
         const QuestDef* def = quest_store().find(id);
         const std::vector<ObjectiveState>* objs = ctx.quests->objectives(id);
@@ -747,6 +751,85 @@ void sync_collect_and_emit(net::Session& sess, ConnCtx& ctx, const itm::Inventor
                                                         os.need, os.complete())));
         }
     }
+}
+
+// Apply-then-emit: snapshot the quest log, run `mutate` (an objective source —
+// sync_collect / on_kill / on_deliver / on_explore), and if it advanced anything,
+// push a QUEST_PROGRESS for each changed objective (the QST-01 apply-then-emit
+// pattern all four sources share). No-op without a quest log. Returns whether
+// anything advanced.
+bool apply_and_emit_progress(net::Session& sess, ConnCtx& ctx,
+                             const std::function<bool()>& mutate) {
+    if (!ctx.quests) return false;
+    const std::map<QuestId, std::vector<std::uint16_t>> before =
+        snapshot_quest_haves(*ctx.quests);
+    if (!mutate()) return false;  // nothing advanced
+    emit_quest_progress_deltas(sess, ctx, before);
+    return true;
+}
+
+// Re-sync every active COLLECT objective against the character's current inventory
+// and push a QUEST_PROGRESS for each objective whose progress advanced (the QST-01
+// collect source, driven by an inventory change — e.g. a loot pull). No-op without a
+// quest log or when nothing changed. Called with the session's post-change inventory.
+void sync_collect_and_emit(net::Session& sess, ConnCtx& ctx, const itm::Inventory& inv) {
+    apply_and_emit_progress(sess, ctx, [&]() { return ctx.quests->sync_collect(inv); });
+}
+
+// Drain + apply this session's pending MapTick kill credits (QST-01 event-bus, #396)
+// and push a QUEST_PROGRESS for each kill objective that advanced. Runs on the
+// session's OWN IO worker (polled after each handled frame, next to
+// poll_completed_cast) so ctx.quests stays single-threaded — the world thread only
+// ever enqueues into the shared registry. Cheap no-op when nothing is pending.
+void poll_quest_credits(net::Session& sess, ConnCtx& ctx) {
+    if (ctx.quest_credit == nullptr || ctx.credit_guid == 0 || !ctx.quests) return;
+    const std::vector<std::uint32_t> kills = ctx.quest_credit->drain_kills(ctx.credit_guid);
+    if (kills.empty()) return;
+    apply_and_emit_progress(sess, ctx, [&]() {
+        bool changed = false;
+        for (std::uint32_t npc_template_id : kills)
+            changed |= ctx.quests->on_kill(npc_template_id);
+        return changed;
+    });
+}
+
+// Credit any explore quest objective satisfied by these area-trigger crossings
+// (QST-01 explore source, #396). Fired on the session path where the mover's
+// crossings are known (ENTER_WORLD spawn eval + MOVEMENT_INTENT). Only an ENTER
+// crossing carrying a non-empty poi join key advances a matching explore objective
+// (zone_id == area_id, poi == the crossing's poi); pushes QUEST_PROGRESS for each.
+void credit_explore_triggers(net::Session& sess, ConnCtx& ctx,
+                             const std::vector<TriggerEvent>& triggers) {
+    if (!ctx.quests || triggers.empty()) return;
+    apply_and_emit_progress(sess, ctx, [&]() {
+        bool changed = false;
+        for (const TriggerEvent& e : triggers) {
+            if (!e.entered || e.poi.empty()) continue;
+            changed |= ctx.quests->on_explore(e.area_id, e.poi);
+        }
+        return changed;
+    });
+}
+
+// Credit any deliver quest objective satisfied by interacting with NPC `npc_id`
+// (QST-01 deliver source, #396). Fired on the session path at the NPC-interact seam
+// (GOSSIP_HELLO). For each active quest with a deliver objective whose to_npc == the
+// interacted NPC, applies on_deliver(npc, item) — the deliver item was granted on
+// accept, so the interaction completes the objective; pushes QUEST_PROGRESS for each.
+void credit_deliver_at_npc(net::Session& sess, ConnCtx& ctx, std::uint32_t npc_id) {
+    if (!ctx.quests) return;
+    apply_and_emit_progress(sess, ctx, [&]() {
+        bool changed = false;
+        for (QuestId id : ctx.quests->active_quests()) {
+            const QuestDef* def = quest_store().find(id);
+            if (def == nullptr) continue;
+            for (const QuestObjective& obj : def->objectives) {
+                if (obj.type == ObjectiveType::kDeliver && obj.to_npc_id == npc_id)
+                    changed |= ctx.quests->on_deliver(npc_id, obj.item_id);
+            }
+        }
+        return changed;
+    });
 }
 
 // Whether a chat body is empty or all-whitespace (#367). Not a content filter —
@@ -1227,8 +1310,11 @@ void Dispatcher::register_m0_stubs() {
         // uses the authoritative position the validator committed.
         if (ctx.entered && ctx.world != nullptr) {
             const Position& auth = ctx.movement->authoritative();
-            ctx.world->on_movement(ctx.slot, auth, decision.ack_seq, decision.state_flags,
-                                   server_time_ms);
+            const std::vector<TriggerEvent> crossings = ctx.world->on_movement(
+                ctx.slot, auth, decision.ack_seq, decision.state_flags, server_time_ms);
+            // Explore (QST-01, #396): credit any explore objective the mover's
+            // area-trigger crossings satisfy (QUEST_PROGRESS follows if it advanced).
+            credit_explore_triggers(sess, ctx, crossings);
         }
 
         // COMBAT cast interrupt (CMB-01 #344): moving cancels an in-progress cast
@@ -1559,6 +1645,20 @@ void Dispatcher::register_m0_stubs() {
                metrics::aoi_entities()
                    .with(ctx.labels.rzsm())
                    .set(static_cast<double>(ctx.world->session_count()));
+               // Explore (QST-01, #396): a character that spawns already standing in
+               // a discovery volume fires it on enter — credit any explore objective
+               // it satisfies (QUEST_PROGRESS follows if it advanced).
+               credit_explore_triggers(sess, ctx, er.triggers);
+           }
+
+           // QUEST-KILL credit bus (QST-01 event-bus, #396): register this session's
+           // entity guid so creature kills the world thread routes to it are retained
+           // until this session drains them (poll_quest_credits). Uses the effective
+           // guid the AoI relay assigned (== char guid at M1). The serve loop
+           // unregisters on teardown (guarded by credit_guid).
+           if (ctx.quest_credit != nullptr) {
+               ctx.credit_guid = ctx.movement->entity_guid();
+               ctx.credit_token = ctx.quest_credit->register_session(ctx.credit_guid);
            }
 
            // SINGLE ACTIVE IN-WORLD SESSION PER ACCOUNT (#326). Admit this account
@@ -2238,29 +2338,39 @@ void Dispatcher::register_m0_stubs() {
         };
         if (ctx.phase != SessionPhase::kInWorld || !ctx.quests) { empty_menu(); return; }
         const npc::NpcDef* def = npc_store().find(static_cast<npc::NpcId>(npc_guid));
-        if (def == nullptr) { empty_menu(); return; }
+        if (def == nullptr) {
+            // Unknown NPC: no gossip content, but interacting still delivers (below).
+            empty_menu();
+        } else {
+            const QuestLogView view(*ctx.quests, ctx.char_level);
+            const npc::GossipMenu menu = npc::build_gossip_menu(*def, view);
+            send_s2c(sess, ctx, encode_frame(net::Opcode::GOSSIP_MENU, f.seq,
+                                             encode_gossip_menu(npc_guid, menu)));
 
-        const QuestLogView view(*ctx.quests, ctx.char_level);
-        const npc::GossipMenu menu = npc::build_gossip_menu(*def, view);
-        send_s2c(sess, ctx, encode_frame(net::Opcode::GOSSIP_MENU, f.seq,
-                                         encode_gossip_menu(npc_guid, menu)));
-
-        // A trainer NPC also gets its per-player ability list pushed (TrainerList S→C).
-        if (def->is_trainer) {
-            const std::int64_t balance = safe_balance(ctx);
-            std::vector<TrainerRow> rows;
-            rows.reserve(def->trainer_abilities.size());
-            for (const npc::TrainerAbility& ta : def->trainer_abilities) {
-                const bool known = ctx.learned.knows(ta.ability_id);
-                const npc::TrainPlan plan = npc::plan_learn(
-                    *def, ta.ability_id, ctx.char_class, ctx.char_level, balance, known);
-                rows.push_back(TrainerRow{ta.ability_id, static_cast<std::int64_t>(ta.cost),
-                                          ta.required_class, ta.required_level,
-                                          trainable_state(plan.status)});
+            // A trainer NPC also gets its per-player ability list pushed (TrainerList S→C).
+            if (def->is_trainer) {
+                const std::int64_t balance = safe_balance(ctx);
+                std::vector<TrainerRow> rows;
+                rows.reserve(def->trainer_abilities.size());
+                for (const npc::TrainerAbility& ta : def->trainer_abilities) {
+                    const bool known = ctx.learned.knows(ta.ability_id);
+                    const npc::TrainPlan plan = npc::plan_learn(
+                        *def, ta.ability_id, ctx.char_class, ctx.char_level, balance, known);
+                    rows.push_back(TrainerRow{ta.ability_id, static_cast<std::int64_t>(ta.cost),
+                                              ta.required_class, ta.required_level,
+                                              trainable_state(plan.status)});
+                }
+                send_s2c(sess, ctx, encode_frame(net::Opcode::TRAINER_LIST, f.seq,
+                                                 encode_trainer_list(npc_guid, rows)));
             }
-            send_s2c(sess, ctx, encode_frame(net::Opcode::TRAINER_LIST, f.seq,
-                                             encode_trainer_list(npc_guid, rows)));
         }
+
+        // Deliver (QST-01, #396): talking to an NPC is the deliver interaction — hand
+        // any quest item this NPC is the deliver target for, completing the objective
+        // (the item was granted on accept). QUEST_PROGRESS follows for whatever
+        // advanced. Runs AFTER the gossip reply so a non-deliver interaction's reply
+        // ordering (GOSSIP_MENU / TRAINER_LIST) is unchanged.
+        credit_deliver_at_npc(sess, ctx, static_cast<std::uint32_t>(npc_guid));
     });
 
     on(net::Opcode::TRAINER_LEARN, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
@@ -2336,6 +2446,13 @@ struct WorldServer::Impl {
     // Seeded by the world-thread creature-death hook (#369) — or a test.
     LootRegistry loot;
 
+    // Shared MapTick→session quest-kill credit registry (QST-01 event-bus, #396).
+    // The world thread pushes creature-kill credits (route_tick_events, drained from
+    // the map tick); each in-world session registers its guid + drains its own credits
+    // on its IO worker. Thread-safe; the seam that credits a live kill to the killer's
+    // accepted quests without MapTick owning any quest state.
+    QuestCreditRegistry quest_credit;
+
     // The read-only ability template store (#343), loaded once at construction
     // with the M1 placeholder set (epic #28 swaps the source behind the store).
     // Shared read-only across every serve_connection — the CAST_REQUEST handler
@@ -2355,7 +2472,12 @@ struct WorldServer::Impl {
 };
 
 WorldServer::WorldServer(const Dispatcher& dispatcher, WorldServerConfig cfg)
-    : dispatcher_(dispatcher), cfg_(cfg), impl_(std::make_unique<Impl>()) {}
+    : dispatcher_(dispatcher), cfg_(cfg), impl_(std::make_unique<Impl>()) {
+    // QST-01 event-bus (#396): the live map REPORTS creature kills as typed events
+    // the world thread routes to the killer's session (route_tick_events → the
+    // quest_credit bus). MapTick owns no quest state itself.
+    impl_->map.set_report_kills(true);
+}
 
 WorldServer::~WorldServer() { stop(); }
 
@@ -2392,6 +2514,18 @@ WorldState& WorldServer::world_state() { return impl_->world; }
 ActiveSessionRegistry& WorldServer::active_sessions() { return impl_->active_sessions; }
 
 LootRegistry& WorldServer::loot_registry() { return impl_->loot; }
+
+QuestCreditRegistry& WorldServer::quest_credit() { return impl_->quest_credit; }
+
+// The world thread's per-tick kill-credit routing (QST-01 event-bus, #396). Kept a
+// free function (declared in world_dispatch.h) so the integration test drives the
+// EXACT routing the world thread runs, with a real MapTick's deltas.
+void route_tick_events(const std::vector<TickEvent>& deltas, QuestCreditRegistry& reg) {
+    for (const TickEvent& ev : deltas) {
+        if (ev.kind == TickEventKind::kCreatureKill)
+            reg.push_kill(ev.killer_guid, ev.npc_template_id);
+    }
+}
 
 void WorldServer::set_loot_tables(const loot::LootTableStore& store) {
     impl_->map.set_loot_tables(store);
@@ -2454,7 +2588,10 @@ void WorldServer::world_thread_main() {
         // observers (wired to the AoI relay with the #28 content spawns).
         if (impl_->map.has_simulation()) {
             const std::vector<TickEvent> deltas = impl_->map.advance();
-            (void)deltas;
+            // QST-01 event-bus (#396): route creature-kill deltas to the killer's
+            // session via the shared credit registry (the session drains + applies
+            // them on its own IO worker). Other deltas are the AoI/flush stream.
+            route_tick_events(deltas, impl_->quest_credit);
         }
 
         // Record the tick + log a soft-budget overrun (SAD §8.1: 50 ms hard / 40 ms
@@ -2501,6 +2638,7 @@ void WorldServer::serve_connection(net::Session sess) {
     ctx.abilities = &impl_->abilities;  // shared ability template store (#343 / CMB-01)
     ctx.active_sessions = &impl_->active_sessions;  // single-session registry (#326)
     ctx.loot = &impl_->loot;  // shared corpse loot registry (ITM-02 wire; #388)
+    ctx.quest_credit = &impl_->quest_credit;  // MapTick→session kill credit bus (#396)
     ctx.kicked = std::make_shared<std::atomic<bool>>(false);  // set if a later login kicks us
     std::optional<db::Connection> auth_conn;
     std::optional<db::Connection> char_conn;
@@ -2569,6 +2707,10 @@ void WorldServer::serve_connection(net::Session sess) {
                 // #354 cast-completion + resource-spend seam). Cheap no-op unless a
                 // cast is pending and has reached its end time.
                 poll_completed_cast(sess, ctx, steady_now_ms());
+                // #396: drain + apply this session's pending MapTick kill credits and
+                // push QUEST_PROGRESS for any kill objective that advanced (QST-01
+                // event-bus). Cheap no-op unless a kill is pending for this guid.
+                poll_quest_credits(sess, ctx);
                 continue;
             }
 
@@ -2620,6 +2762,12 @@ void WorldServer::serve_connection(net::Session sess) {
         metrics::aoi_entities()
             .with(ctx.labels.rzsm())
             .set(static_cast<double>(ctx.world->session_count()));
+    }
+    // QST-01 event-bus (#396): drop this session from the quest-kill credit bus so no
+    // further kill is retained for its guid (guarded by credit_guid — set only if it
+    // ever registered at ENTER_WORLD).
+    if (ctx.quest_credit != nullptr && ctx.credit_guid != 0) {
+        ctx.quest_credit->unregister_session(ctx.credit_guid, ctx.credit_token);
     }
     if (ctx.egress) ctx.egress->mark_closed();
 

@@ -49,6 +49,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -81,6 +82,12 @@ struct TriggerVolume {
     TriggerKind kind = TriggerKind::kGeneric;
     std::uint32_t area_id = 0;  // owning area/zone id (world DB `area`); 0 = unspecified
     std::uint32_t name_id = 0;  // idmap string id for the display name (§4.6); 0 = unnamed
+    // Zone-local POI string id (quest.schema explore.poi). The join key a kExplore
+    // quest objective matches on (QST-01 #396): a discovery crossing of this volume
+    // credits an explore objective whose (zone_id, poi) == (this area_id, this poi).
+    // Empty on a volume with no quest-explore meaning (the placeholder set / a
+    // discovery POI not referenced by any quest).
+    std::string   poi;
     float min_x = 0.0f;
     float min_y = 0.0f;
     float min_z = std::numeric_limits<float>::lowest();
@@ -102,6 +109,7 @@ struct TriggerEvent {
     TriggerKind kind = TriggerKind::kGeneric;
     std::uint32_t area_id = 0;
     std::uint32_t name_id = 0;
+    std::string   poi;            // explore.poi join key (copied from the volume; #396)
     bool entered = false;         // true = crossed IN (enter); false = crossed OUT (leave)
     bool discovered_now = false;  // kDiscovery + first-ever entry → mark + notify the client
 };

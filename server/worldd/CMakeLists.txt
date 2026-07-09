@@ -34,6 +34,7 @@ add_library(world-dispatch STATIC
   leveling.cpp
   quest_def.cpp
   quest_log.cpp
+  quest_credit.cpp
   db_content_store.cpp
   loot_registry.cpp
   world_state.cpp
@@ -348,6 +349,26 @@ target_link_libraries(worldd-quest-loot-npc-wire-test
 )
 set_target_properties(worldd-quest-loot-npc-wire-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-quest-loot-npc-wire COMMAND worldd-quest-loot-npc-wire-test)
+
+# --- LIVE quest objective crediting integration test (QST-01 event-bus; #396). -
+# Proves a player's world actions advance the quests THEY accepted and emit
+# QUEST_PROGRESS, per objective SOURCE, over the REAL serve/dispatch loop: a KILL
+# routed through a real MapTick + the quest-credit bus (and NOT a different guid's
+# quest), a DELIVER at the target NPC, and an EXPLORE via an area-trigger crossing.
+# DB-free (synthetic quest content + a stub WORLD_HELLO), so it always runs in the
+# plain server ctest; the COLLECT live path is the DB-backed worldd-quest-loot-npc
+# test's regression guard.
+add_executable(worldd-quest-live-credit-test
+  test/quest_live_credit_it.cpp
+)
+target_link_libraries(worldd-quest-live-credit-test
+  PRIVATE
+    meridian::world-dispatch
+    meridian::npc
+    Threads::Threads
+)
+set_target_properties(worldd-quest-live-credit-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-quest-live-credit COMMAND worldd-quest-live-credit-test)
 
 # --- Quest / loot / gossip / trainer LIVE-SESSION DB integration test (#388). --
 # The acceptance bar: drives the QST-01 / ITM-02 / NPC-01/02 opcodes over a REAL

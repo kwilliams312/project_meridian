@@ -215,7 +215,7 @@ void WorldState::set_area_trigger_hook(AreaTriggerHook hook) {
     area_trigger_hook_ = std::move(hook);
 }
 
-void WorldState::fire_area_triggers(SessionRec& self) {
+std::vector<TriggerEvent> WorldState::fire_area_triggers(SessionRec& self) {
     // Caller holds mtx_. Diff the mover's position against the volume set; dispatch
     // each crossing. Cheap no-op when no volumes are loaded (the DB-less dispatch
     // and relay tests never load a set, so their behaviour is unchanged).
@@ -250,6 +250,7 @@ void WorldState::fire_area_triggers(SessionRec& self) {
                                  std::to_string(static_cast<int>(e.kind)));
         }
     }
+    return events;
 }
 
 EnterResult WorldState::enter(const EntityIdentity& identity, const Position& spawn,
@@ -309,21 +310,23 @@ EnterResult WorldState::enter(const EntityIdentity& identity, const Position& sp
     // Area triggers (#368): evaluate the spawn position so a character that logs
     // in already standing inside a volume fires its enter/discovery immediately
     // (a POI at the spawn point, a graveyard you resurrect into, etc.).
-    fire_area_triggers(self);
+    std::vector<TriggerEvent> triggers = fire_area_triggers(self);
 
     log::info(kCat, "session entered slot=" + std::to_string(slot) + " guid=" +
                         std::to_string(id.entity_guid) + " at (" +
                         std::to_string(spawn.x) + "," + std::to_string(spawn.y) +
                         ") sees " + std::to_string(self.visible.size()) + " other(s)");
-    return EnterResult{slot, id.entity_guid};
+    return EnterResult{slot, id.entity_guid, std::move(triggers)};
 }
 
-void WorldState::on_movement(SessionSlot slot, const Position& pos, std::uint32_t ack_seq,
-                             std::uint32_t state_flags, std::uint64_t server_time_ms) {
+std::vector<TriggerEvent> WorldState::on_movement(SessionSlot slot, const Position& pos,
+                                                  std::uint32_t ack_seq,
+                                                  std::uint32_t state_flags,
+                                                  std::uint64_t server_time_ms) {
     std::lock_guard<std::mutex> lk(mtx_);
 
     auto sit = sessions_.find(slot);
-    if (sit == sessions_.end()) return;  // not entered
+    if (sit == sessions_.end()) return {};  // not entered
     SessionRec& self = sit->second;
     self.unit.set_position(pos);  // the Unit owns the authoritative position (#342)
     self.state_flags = state_flags;
@@ -332,7 +335,7 @@ void WorldState::on_movement(SessionSlot slot, const Position& pos, std::uint32_
     // Area triggers (#368): evaluate the mover's new authoritative position for
     // enter/leave crossings + POI discovery before the AoI relay. This is the map
     // tick's post-movement trigger phase (SAD §2.5) realized at the M0 movement seam.
-    fire_area_triggers(self);
+    std::vector<TriggerEvent> triggers = fire_area_triggers(self);
 
     // Translate self's PREVIOUS visible-slot set into guids for the hysteresis
     // resolution against the grid (which is keyed by guid).
@@ -411,6 +414,7 @@ void WorldState::on_movement(SessionSlot slot, const Position& pos, std::uint32_
     log::debug(kCat, "movement slot=" + std::to_string(slot) + " ack=" +
                          std::to_string(ack_seq) + " now sees " +
                          std::to_string(self.visible.size()) + " other(s)");
+    return triggers;
 }
 
 void WorldState::leave(SessionSlot slot) {
