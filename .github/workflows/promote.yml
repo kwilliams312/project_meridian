@@ -1,0 +1,134 @@
+# SPDX-License-Identifier: Apache-2.0
+# Realm promotion (issue #382). Advances the dev→ptr→main promotion model AND
+# carries the immutable image pin: the <short-sha> validated on the prior tier is
+# copied into the next tier's machine-managed realms/<realm>/image.yaml overlay so
+# ArgoCD reconciles that exact, already-validated image — never a freshly-built,
+# unvalidated one. Dev is pinned by cd.yml's `pin` job; this workflow extends the
+# same pattern across the promotion boundary.
+#
+#   tier=ptr :  merge dev → ptr ,  copy realms/dev/image.yaml  SHA → realms/ptr/image.yaml
+#   tier=prod:  merge ptr → main,  copy realms/ptr/image.yaml  SHA → realms/prod/image.yaml
+#
+# Run manually (Actions ▸ promote ▸ Run workflow). Prod stays manual-sync in
+# ArgoCD (design §3): this only advances `main` + the pin; an operator still syncs
+# meridian-prod. Rollback at any tier = `git revert` on that branch.
+name: promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: "Promote INTO this tier"
+        required: true
+        type: choice
+        options: [ptr, prod]
+      dry_run:
+        description: "Preview only — merge + repin locally and print the diff, do not push"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write        # advance the ptr/main branch + write-back the pin
+
+jobs:
+  promote:
+    runs-on: meridian-amd64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                 # full history — this job merges branches
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote and carry the immutable pin
+        env:
+          TIER: ${{ inputs.tier }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          case "$TIER" in
+            ptr)  SRC_BRANCH=dev; DST_BRANCH=ptr;  SRC_REALM=dev; DST_REALM=ptr  ;;
+            prod) SRC_BRANCH=ptr; DST_BRANCH=main; SRC_REALM=ptr; DST_REALM=prod ;;
+            *) echo "::error::unknown tier '$TIER' (want ptr|prod)"; exit 1 ;;
+          esac
+
+          # --- gen_image_yaml: byte-identical to scripts used to seed the initial
+          # realms/{ptr,prod}/image.yaml, so a no-op promotion produces no diff. ---
+          gen_image_yaml() {
+            realm="$1"; tag="$2"
+            f="deploy/gitops/realms/${realm}/image.yaml"
+            case "$realm" in
+              ptr)  RN="PTR";  PRIOR="Dev"; ADV="dev→ptr" ;;
+              prod) RN="Prod"; PRIOR="PTR"; ADV="ptr→main" ;;
+            esac
+            {
+              printf '%s\n' \
+                '# SPDX-License-Identifier: Apache-2.0' \
+                '# MACHINE-MANAGED by .github/workflows/promote.yml — do NOT edit by hand.' \
+                '#' \
+                "# Immutable image pin for the ${RN} realm (issue #382). Promotion carries the" \
+                "# pin: on ${ADV} the promote workflow copies the <short-sha> validated on" \
+                "# ${PRIOR} into the tags below and commits it, so ArgoCD sees a manifest diff" \
+                '# and reconciles to that exact, already-validated image.' \
+                '#' \
+                "# Listed AFTER realms/${realm}/values.yaml in apps/meridian-${realm}.yaml, so" \
+                "# these tags override the moving :${realm} tag there. The \"${realm}\" placeholders" \
+                '# below are only the pre-first-promotion fallback and are overwritten by the' \
+                "# first ${ADV} promotion."
+              if [ "$realm" = prod ]; then
+                printf '%s\n' \
+                  '# Prod is MANUAL-sync (design §3): ArgoCD shows the diff, an operator syncs.' \
+                  '# Prod runs no seed Job (seed.enabled=false), so no seed.accountImage.tag here.'
+              fi
+              printf '%s\n' \
+                'image:' \
+                "  tag: \"${tag}\"" \
+                'mariadb:' \
+                '  image:' \
+                "    tag: \"${tag}\""
+              if [ "$realm" != prod ]; then
+                printf '%s\n' \
+                  'seed:' \
+                  '  accountImage:' \
+                  "    tag: \"${tag}\""
+              fi
+            } > "$f"
+          }
+
+          git config user.name  "meridian-cd[bot]"
+          git config user.email "meridian-cd[bot]@users.noreply.github.com"
+          git fetch --quiet origin "$SRC_BRANCH" "$DST_BRANCH"
+
+          # The validated pin lives in the SOURCE branch's realm overlay. Read it
+          # straight from the source tip (image.tag is the only column-0 `tag:`).
+          src_file="deploy/gitops/realms/${SRC_REALM}/image.yaml"
+          SHA="$(git show "origin/${SRC_BRANCH}:${src_file}" \
+                 | awk '/^image:/{f=1;next} f&&/^  tag:/{gsub(/[" ]/,"",$2);print $2;exit}')"
+          if ! printf '%s' "$SHA" | grep -qE '^[0-9a-f]{7,40}$'; then
+            echo "::error::${SRC_BRANCH} is not pinned to an immutable <short-sha> yet" \
+                 "(image.tag='${SHA}'). Push to ${SRC_BRANCH} so cd.yml/promote pins it first."
+            exit 1
+          fi
+          echo "Promoting ${SRC_BRANCH} → ${DST_BRANCH}, carrying pin ${SHA} into ${DST_REALM}"
+
+          git checkout "$DST_BRANCH"
+          git merge --no-ff --no-edit "origin/${SRC_BRANCH}" \
+            || { echo "::error::merge ${SRC_BRANCH}→${DST_BRANCH} conflicted — resolve by hand"; exit 1; }
+
+          gen_image_yaml "$DST_REALM" "$SHA"
+          git add "deploy/gitops/realms/${DST_REALM}/image.yaml"
+          if git diff --cached --quiet; then
+            echo "meridian-${DST_REALM} pin already ${SHA}; only the branch merge advances"
+          else
+            git commit -m "ci(promote): pin meridian-${DST_REALM} to ${SHA} (${SRC_BRANCH}→${DST_BRANCH})"
+          fi
+
+          echo "----- promotion diff (${DST_BRANCH}) -----"
+          git --no-pager show --stat HEAD
+          git --no-pager diff "origin/${DST_BRANCH}...HEAD" -- "deploy/gitops/realms/${DST_REALM}/image.yaml"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "dry_run=true — not pushing. Above is the exact change a real run would land on ${DST_BRANCH}."
+            exit 0
+          fi
+          git push origin "HEAD:${DST_BRANCH}"

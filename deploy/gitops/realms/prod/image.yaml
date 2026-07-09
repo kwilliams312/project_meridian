@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# MACHINE-MANAGED by .github/workflows/promote.yml — do NOT edit by hand.
+#
+# Immutable image pin for the Prod realm (issue #382). Promotion carries the
+# pin: on ptr→main the promote workflow copies the <short-sha> validated on
+# PTR into the tags below and commits it, so ArgoCD sees a manifest diff
+# and reconciles to that exact, already-validated image.
+#
+# Listed AFTER realms/prod/values.yaml in apps/meridian-prod.yaml, so
+# these tags override the moving :prod tag there. The "prod" placeholders
+# below are only the pre-first-promotion fallback and are overwritten by the
+# first ptr→main promotion.
+# Prod is MANUAL-sync (design §3): ArgoCD shows the diff, an operator syncs.
+# Prod runs no seed Job (seed.enabled=false), so no seed.accountImage.tag here.
+image:
+  tag: "prod"
+mariadb:
+  image:
+    tag: "prod"

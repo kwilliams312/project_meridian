@@ -2,8 +2,14 @@
 # Prod realm (meridian-prod) — persistent Longhorn MariaDB, :prod multi-arch,
 # self-signed TLS. authd+worldd share MetalLB IP 192.168.89.33. Manual-sync.
 image:
+  # tag is pinned to the immutable <short-sha> carried by promotion — see the
+  # machine-managed realms/prod/image.yaml overlay (issue #382). The "prod" here
+  # is just the pre-first-promotion fallback; image.yaml (loaded after this file)
+  # overrides it. IfNotPresent is correct for an immutable tag: a unique SHA tag
+  # is pulled exactly once per node, with no needless registry round-trip on
+  # every pod start (and no moving-tag cache-staleness).
   tag: "prod"
-  pullPolicy: Always
+  pullPolicy: IfNotPresent
 authd:
   replicaCount: 3
   service:

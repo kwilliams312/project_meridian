@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# MACHINE-MANAGED by .github/workflows/promote.yml — do NOT edit by hand.
+#
+# Immutable image pin for the PTR realm (issue #382). Promotion carries the
+# pin: on dev→ptr the promote workflow copies the <short-sha> validated on
+# Dev into the tags below and commits it, so ArgoCD sees a manifest diff
+# and reconciles to that exact, already-validated image.
+#
+# Listed AFTER realms/ptr/values.yaml in apps/meridian-ptr.yaml, so
+# these tags override the moving :ptr tag there. The "ptr" placeholders
+# below are only the pre-first-promotion fallback and are overwritten by the
+# first dev→ptr promotion.
+image:
+  tag: "ptr"
+mariadb:
+  image:
+    tag: "ptr"
+seed:
+  accountImage:
+    tag: "ptr"
