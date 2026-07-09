@@ -1,3 +1,5 @@
 node_modules/
 dist/
 .render-cache/
+# Rendered fixture WAVs are generated build artifacts, never committed (sources-only).
+fixtures/**/*.wav

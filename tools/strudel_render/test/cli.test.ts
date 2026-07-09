@@ -5,10 +5,9 @@ import { existsSync, rmSync } from 'node:fs';
 
 const run = promisify(execFile);
 
-// loadStem resolves the WAV output as resolve(sidecarDir, basename(source)),
-// so the fixture sidecar's `source: assets/audio/mus/fixture/synth.wav`
-// renders to fixtures/synth.wav (directory component stripped by basename).
-const OUT = 'fixtures/synth.wav';
+// loadStem resolves `source` pack-root-relative (the fixtures/ mini-pack has a
+// pack.yaml), so `source: assets/audio/mus/fixture/synth.wav` renders under it.
+const OUT = 'fixtures/assets/audio/mus/fixture/synth.wav';
 
 test('cli renders a music_stem sidecar to its wav source path', async () => {
   rmSync(OUT, { force: true });

@@ -1,0 +1,9 @@
+schema: meridian/pack@1
+namespace: core
+name: Strudel Render Test Fixtures
+description: Minimal pack root so loadStem can resolve pack-root-relative source/pattern paths in tests.
+version: 0.0.0
+content_schema_version: 1
+authors:
+  - meridian-contributors
+license: CC0-1.0
