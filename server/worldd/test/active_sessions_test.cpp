@@ -22,12 +22,18 @@
 //   E. CLEAN RELEASE: the current holder's release() frees the slot; re-admitting
 //      the same account afterwards does NOT kick (the slot was empty).
 //   F. CONCURRENCY: many threads hammering admit/release for one account leave the
-//      registry consistent (never more than one holder; kicks == admits-minus-one
-//      per contiguous run) and never crash.
+//      registry consistent (never more than one holder) and never crash.
+//   G. DETERMINISTIC KICK UNDER CONCURRENCY: N threads that each admit and then
+//      hold (barrier) before releasing overlap every admission, so EXACTLY N-1
+//      kicks fire on every run — proving the kick path under real concurrency
+//      without depending on incidental scheduling (issue #351: the old F asserted
+//      "at least one kick happened", which CPU starvation could suppress by
+//      serializing the admit/release loop so no admissions ever overlapped).
 
 #include "active_sessions.h"
 
 #include <atomic>
+#include <barrier>
 #include <cstdint>
 #include <cstdio>
 #include <thread>
@@ -148,10 +154,42 @@ int main() {
         for (auto& th : ts) th.join();
         // Invariant: the registry never exposes more than one holder, and after
         // the storm it holds at most one account. No assertion on exact kick count
-        // (interleavings vary) — only that it stayed consistent and did not crash.
+        // here (interleavings vary, and CPU starvation can serialize the loop so
+        // no admissions overlap and zero kicks fire — the flake in issue #351) —
+        // only that it stayed consistent and did not crash. The kick path under
+        // concurrency is proven DETERMINISTICALLY in section G below.
         check("F: registry holds at most one account after the storm",
               reg.active_count() <= 1);
-        check("F: at least one kick happened under contention", kicks.load() >= 1);
+    }
+
+    // ===== G. DETERMINISTIC KICK UNDER CONCURRENCY ==========================
+    // Prove concurrent admits for one account kick the displaced holders WITHOUT
+    // relying on incidental interleaving. A barrier holds every thread AFTER its
+    // admit() and BEFORE its release(), so all kThreads admissions are live at
+    // once: exactly one admit finds the slot empty, the other kThreads-1 each kick
+    // the current holder. The kick count is therefore EXACTLY kThreads-1 on every
+    // run, whatever the scheduler does — the deterministic replacement for the old
+    // scheduling-dependent "at least one kick" assertion (issue #351).
+    {
+        ActiveSessionRegistry reg;
+        std::atomic<int> kicks{0};
+        constexpr int kThreads = 8;
+        std::barrier all_admitted(kThreads);  // no release() runs until every admit() has
+        std::vector<std::thread> ts;
+        for (int t = 0; t < kThreads; ++t) {
+            ts.emplace_back([&reg, &kicks, &all_admitted]() {
+                AdmitResult r = reg.admit(kAcctA, [&kicks]() {
+                    kicks.fetch_add(1, std::memory_order_relaxed);
+                });
+                all_admitted.arrive_and_wait();  // hold the slot until all threads admitted
+                reg.release(kAcctA, r.token);
+            });
+        }
+        for (auto& th : ts) th.join();
+        check("G: N overlapping admits kick exactly N-1 displaced sessions",
+              kicks.load() == kThreads - 1);
+        check("G: every holder released -> registry empty",
+              reg.active_count() == 0);
     }
 
     std::printf(g_fail == 0 ? "\nALL WORLDD SINGLE-SESSION TESTS PASSED\n"
