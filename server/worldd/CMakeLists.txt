@@ -545,6 +545,39 @@ target_compile_definitions(worldd-itm1-chain-load-test PRIVATE
 set_target_properties(worldd-itm1-chain-load-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-itm1-chain-load COMMAND worldd-itm1-chain-load-test)
 
+# --- IT-M1 10-quest CHAIN server-side HARNESS (#399; epic #20 EXIT CRITERION). --
+# The capstone. Boots the DB-loaded IT-M1 content (mcc emit-sql content/core -> a
+# throwaway MariaDB it owns, carrying world DDL + auth + characters schemas), stands
+# up a REAL worldd session (WORLD_HELLO -> ENTER_WORLD over TLS), and drives the full
+# 10-quest 'Emberfall Hollow' DAG to completion over the LIVE dispatch path — kill via
+# MapTick + the quest-credit bus, collect via LOOT_TAKE, deliver via GOSSIP_HELLO,
+# explore via a synthetic content-keyed TriggerVolume crossing. Asserts ZERO client-
+# trusted outcomes (only intents in, server QUEST_PROGRESS/turn-in results out),
+# server-side PREREQ GATING (convergence quest rejected before its prereqs), a valid
+# topological completion (convergence quest last), and durable reward money. Same
+# TOOL-/ENV-guards as worldd-itm1-chain-load (MERIDIAN_WORLDDB_*/MERIDIAN_DB_* + a
+# mariadb/mysql client + an mcc binary); SKIPS (exit 0) otherwise — inert in the plain
+# server ctest, real under test.sh --db / the DB CI job. Paths (content root, world
+# DDL, auth + characters migrations, default mcc) are compile definitions.
+add_executable(worldd-itm1-chain-run-test
+  test/itm1_chain_run_it.cpp
+)
+target_link_libraries(worldd-itm1-chain-run-test
+  PRIVATE
+    meridian::world-dispatch
+    meridian::characters
+    meridian::npc
+    Threads::Threads
+)
+target_compile_definitions(worldd-itm1-chain-run-test PRIVATE
+  ITM1_CONTENT_DIR="${CMAKE_SOURCE_DIR}/../content"
+  ITM1_WORLD_DDL_DIR="${CMAKE_SOURCE_DIR}/../schema/sql/world"
+  ITM1_AUTH_MIGRATIONS_DIR="${CMAKE_SOURCE_DIR}/db/auth/migrations"
+  ITM1_CHAR_MIGRATIONS_DIR="${CMAKE_SOURCE_DIR}/db/characters/migrations"
+  ITM1_MCC_BIN="${CMAKE_BINARY_DIR}/../mcc/mcc")
+set_target_properties(worldd-itm1-chain-run-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-itm1-chain-run COMMAND worldd-itm1-chain-run-test)
+
 # --- Combat tick + seeded GOLDEN sim-harness scenarios (CMB-01/02; #349). ------
 # The epic-#18 capstone. PURE (no DB, no socket): drives the MapTick orchestrator
 # (map_tick.{h,cpp}) — the single-threaded per-map tick in SAD §2.5 phase order —
