@@ -26,12 +26,15 @@
 //   H. The GOLDEN CROSS-TRACK FIXTURE (movement_fixture.h) reproduces exactly —
 //      the #101 §4 drift trip-wire shared with the client track.
 
+#include "movement_audit.h"       // move_reject_reason (v1 envelope, #420)
 #include "movement_constants.h"
 #include "movement_fixture.h"
 #include "movement_validation.h"
+#include "world_metrics.h"        // move_reject_kind (v1 envelope, #420)
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 using namespace meridian::worldd;
 namespace mc = meridian::worldd::movement;
@@ -283,6 +286,155 @@ int main() {
             check("I: snap-back keeps last authoritative x",
                   approx(s.authoritative().x, 30.0f));
         }
+    }
+
+    // ========================================================================
+    // ===== v1 FULL ENVELOPE (OPS-03a, #420) =================================
+    // ========================================================================
+
+    // ===== J. TELEPORT: a single-packet warp beyond the hard budget rejected ==
+    {
+        // Spawn at (10,10). A 20 m jump in 100 ms is > kTeleportHardBudget (13.8 m):
+        // classified as a TELEPORT (its own kind), not merely a speed over-cap. The
+        // target (30,10) is IN bounds so only the teleport check can trip it.
+        SessionMovementState s({10.0f, 10.0f, 0.0f, 0.0f}, 1000);
+        MoveDecision d = step(s, intent_at(30.0f, 10.0f, 0.0f, mc::MoveMode::Run, 1, 1100));
+        check("J: teleport (warp) move rejected", !d.accepted);
+        check("J: reject reason is teleport", d.reject == MoveReject::kTeleport);
+        check("J: snap-back to last authoritative position",
+              approx(s.authoritative().x, 10.0f) && approx(s.authoritative().y, 10.0f));
+        check("J: teleport budget is a full run-window (13.8 m)",
+              approx(mc::kTeleportHardBudget, 13.8f, 1e-3f));
+    }
+
+    // ===== K. FLAG LEGALITY: swim-on-dry-land / fly bit / contradictory dir ====
+    {
+        // K.1 Swim mode (selector value 4) while NOT in liquid = swim on dry land.
+        SessionMovementState s({20.0f, 20.0f, 0.0f, 0.0f}, 1000);
+        MovementIntentPod swim = intent_at(20.05f, 20.0f, 0.0f, mc::MoveMode::Run, 1, 1100);
+        swim.state_flags = mc::kModeSwim;  // low-3-bits = Swim
+        MoveDecision d = s.validate_move(swim, swim.client_time_ms, /*in_liquid=*/false);
+        s.apply(d, swim, swim.client_time_ms);
+        check("K.1: swim flag on dry land rejected", !d.accepted);
+        check("K.1: reject reason is illegal flag", d.reject == MoveReject::kIllegalFlag);
+        check("K.1: snap-back keeps last authoritative x", approx(s.authoritative().x, 20.0f));
+
+        // K.2 The SAME swim flag IS legal when the mover is in a liquid volume
+        //     (the M1 water seam): a small step is then accepted (no flag reject).
+        SessionMovementState s2({20.0f, 20.0f, 0.0f, 0.0f}, 1000);
+        MovementIntentPod swim2 = intent_at(20.05f, 20.0f, 0.0f, mc::MoveMode::Run, 1, 1100);
+        swim2.state_flags = mc::kModeSwim;
+        MoveDecision d2 = s2.validate_move(swim2, swim2.client_time_ms, /*in_liquid=*/true);
+        check("K.2: swim flag IN a liquid volume is not an illegal flag", d2.accepted);
+
+        // K.3 A fabricated RESERVED bit (a "fly" hack, bit 9+) is illegal.
+        SessionMovementState s3({30.0f, 30.0f, 0.0f, 0.0f}, 1000);
+        MovementIntentPod fly = intent_at(30.05f, 30.0f, 0.0f, mc::MoveMode::Run, 1, 1100);
+        fly.state_flags = static_cast<std::uint32_t>(mc::MoveMode::Run) | (1u << 9);
+        MoveDecision d3 = step(s3, fly);
+        check("K.3: fabricated reserved/fly bit rejected", !d3.accepted);
+        check("K.3: reject reason is illegal flag", d3.reject == MoveReject::kIllegalFlag);
+
+        // K.4 CONTRADICTORY direction flags (forward AND back at once) are illegal.
+        SessionMovementState s4({40.0f, 40.0f, 0.0f, 0.0f}, 1000);
+        MovementIntentPod contra = intent_at(40.05f, 40.0f, 0.0f, mc::MoveMode::Run, 1, 1100);
+        contra.state_flags =
+            static_cast<std::uint32_t>(mc::MoveMode::Run) | mc::kFlagFwd | mc::kFlagBack;
+        MoveDecision d4 = step(s4, contra);
+        check("K.4: contradictory fwd+back direction flags rejected", !d4.accepted);
+        check("K.4: reject reason is illegal flag", d4.reject == MoveReject::kIllegalFlag);
+
+        // K.5 A legal canonical forward-run (fwd bit set, no contradiction) is NOT
+        //     flagged — the direction bits above the mode are legitimate.
+        SessionMovementState s5({50.0f, 50.0f, 0.0f, 0.0f}, 1000);
+        MovementIntentPod fwd = intent_at(50.05f, 50.0f, 0.0f, mc::MoveMode::Run, 1, 1100);
+        fwd.state_flags = static_cast<std::uint32_t>(mc::MoveMode::Run) | mc::kFlagFwd;
+        MoveDecision d5 = step(s5, fwd);
+        check("K.5: legal forward-run direction flag accepted", d5.accepted);
+    }
+
+    // ===== L. MONOTONIC SEQUENCE: replay + out-of-order rejected ==============
+    {
+        SessionMovementState s({60.0f, 60.0f, 0.0f, 0.0f}, 1000);
+        // First legal step at seq=5.
+        MoveDecision first = step(s, intent_at(60.10f, 60.0f, 0.0f, mc::MoveMode::Run, 5, 1100));
+        check("L: first move (seq=5) accepted", first.accepted);
+        // REPLAY: the SAME seq=5 again is a duplicate ⇒ reject (stale sequence).
+        MoveDecision replay = step(s, intent_at(60.20f, 60.0f, 0.0f, mc::MoveMode::Run, 5, 1200));
+        check("L: replayed seq=5 rejected", !replay.accepted);
+        check("L: replay reject reason is stale sequence",
+              replay.reject == MoveReject::kStaleSequence);
+        // A replay is DISCARDED: the authoritative cursor did NOT move (still 60.10).
+        check("L: replay leaves authoritative position untouched",
+              approx(s.authoritative().x, 60.10f));
+        check("L: replay does not drag last_seq backward", s.last_seq() == 5);
+        // OUT OF ORDER: seq=3 (< last processed 5) ⇒ reject (stale sequence).
+        MoveDecision ooo = step(s, intent_at(60.15f, 60.0f, 0.0f, mc::MoveMode::Run, 3, 1300));
+        check("L: out-of-order seq=3 rejected", !ooo.accepted);
+        check("L: out-of-order reject reason is stale sequence",
+              ooo.reject == MoveReject::kStaleSequence);
+        // A strictly-greater seq=6 resumes normally.
+        MoveDecision next = step(s, intent_at(60.20f, 60.0f, 0.0f, mc::MoveMode::Run, 6, 1400));
+        check("L: strictly-increasing seq=6 accepted", next.accepted);
+    }
+
+    // ===== M. FORCED-MOVE ACK FREEZE (GM teleport / knockback) ================
+    {
+        SessionMovementState s({64.0f, 64.0f, 0.0f, 0.0f}, 1000);
+        MoveDecision m0 = step(s, intent_at(64.10f, 64.0f, 0.0f, mc::MoveMode::Run, 2, 1100));
+        check("M: pre-force legal move accepted", m0.accepted);
+
+        // The server forces the mover to (100,100) and demands the client's counter
+        // reach ack=5 before its intents resume (un-acked counters freeze intake).
+        s.force_correction({100.0f, 100.0f, 0.0f, 0.0f}, /*ack_seq=*/5);
+        check("M: forced move relocated the authoritative position",
+              approx(s.authoritative().x, 100.0f) && approx(s.authoritative().y, 100.0f));
+        check("M: intake is now awaiting the forced-move ack", s.awaiting_forced_ack());
+
+        // A STALE pre-teleport intent (seq=3 < 5) is frozen — rejected, discarded,
+        // and it does NOT advance from the client's stale pre-teleport position.
+        MoveDecision stale =
+            step(s, intent_at(64.20f, 64.0f, 0.0f, mc::MoveMode::Run, 3, 1200));
+        check("M: stale pre-forced-move intent frozen", !stale.accepted);
+        check("M: freeze reject reason is unacked forced move",
+              stale.reject == MoveReject::kUnackedForcedMove);
+        check("M: frozen intent snaps back to the FORCED position (100,100)",
+              approx(stale.pos.x, 100.0f) && approx(stale.pos.y, 100.0f));
+        check("M: still awaiting ack after a stale intent", s.awaiting_forced_ack());
+
+        // The client acknowledges by reaching seq=5 with a legal step from (100,100).
+        MoveDecision ack =
+            step(s, intent_at(100.10f, 100.0f, 0.0f, mc::MoveMode::Run, 5, 1300));
+        check("M: acknowledging intent (seq>=barrier) accepted", ack.accepted);
+        check("M: intake un-frozen after the ack", !s.awaiting_forced_ack());
+        check("M: authoritative advanced from the forced position",
+              approx(s.authoritative().x, 100.10f));
+    }
+
+    // ===== N. AUDIT + METRIC vocabularies for each reject kind ================
+    // The dispatch maps every reject to a fine-grained audit `reason` and a coarse
+    // metric `kind`; pin both so a taxonomy change is caught here.
+    {
+        check("N: reason speed_per_packet",
+              std::strcmp(move_reject_reason(MoveReject::kSpeedPerPacket),
+                          "speed_per_packet") == 0);
+        check("N: reason teleport",
+              std::strcmp(move_reject_reason(MoveReject::kTeleport), "teleport") == 0);
+        check("N: reason illegal_flag",
+              std::strcmp(move_reject_reason(MoveReject::kIllegalFlag),
+                          "illegal_flag") == 0);
+        check("N: reason stale_sequence",
+              std::strcmp(move_reject_reason(MoveReject::kStaleSequence),
+                          "stale_sequence") == 0);
+        check("N: reason unacked_forced_move",
+              std::strcmp(move_reject_reason(MoveReject::kUnackedForcedMove),
+                          "unacked_forced_move") == 0);
+        check("N: metric kind flag for illegal flag",
+              move_reject_kind(MoveReject::kIllegalFlag) == "flag");
+        check("N: metric kind teleport for a warp",
+              move_reject_kind(MoveReject::kTeleport) == "teleport");
+        check("N: metric kind speed for window over-cap",
+              move_reject_kind(MoveReject::kSpeedWindow) == "speed");
     }
 
     std::printf(g_fail == 0 ? "\nALL WORLDD MOVEMENT VALIDATION TESTS PASSED\n"

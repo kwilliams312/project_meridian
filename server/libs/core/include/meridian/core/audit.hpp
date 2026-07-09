@@ -77,18 +77,22 @@ enum class Outcome {
 const char* outcome_name(Outcome outcome);
 
 // A canonical, stable set of audit action names. Passing the enum (rather than a
-// raw string) keeps the vocabulary closed and greppable; the taxonomy is the M0
-// core set scoped by #92 — auth + grant + session lifecycle. GM-command,
-// economy, and anti-cheat actions (PRD §6) are deferred to their milestones and
-// slot in beside these as the features land.
+// raw string) keeps the vocabulary closed and greppable; the taxonomy started as
+// the M0 core set scoped by #92 — auth + grant + session lifecycle — and grows one
+// action at a time as PRD §6 streams land: the ANTI-CHEAT movement flag
+// (kMovementRejected, OPS-03a #420) is the first. GM-command + economy actions slot
+// in beside these as those features land.
 enum class Action {
-    kLoginSuccess,   // authd: SRP proof verified, account authenticated
-    kLoginFailure,   // authd: login rejected (build gate / bad creds / realm)
-    kGrantIssued,    // authd: a single-use session grant was written for a login
-    kGrantConsumed,  // worldd: a grant was validated + atomically consumed
-    kGrantRejected,  // worldd: a WorldHello grant was rejected (replay/expiry/...)
-    kSessionEnter,   // worldd: an authenticated session entered the world
-    kSessionLeave,   // worldd: a session left the world / disconnected
+    kLoginSuccess,     // authd: SRP proof verified, account authenticated
+    kLoginFailure,     // authd: login rejected (build gate / bad creds / realm)
+    kGrantIssued,      // authd: a single-use session grant was written for a login
+    kGrantConsumed,    // worldd: a grant was validated + atomically consumed
+    kGrantRejected,    // worldd: a WorldHello grant was rejected (replay/expiry/...)
+    kSessionEnter,     // worldd: an authenticated session entered the world
+    kSessionLeave,     // worldd: a session left the world / disconnected
+    kMovementRejected, // worldd: an OPS-03 movement-validation violation (anti-cheat,
+                       //         #420) — snap-back correction + audit flag. `reason`
+                       //         is the reject kind (speed/teleport/bounds/flag/...).
 };
 
 // The stable JSON `action` string for an Action (e.g. "login_failure"). This is

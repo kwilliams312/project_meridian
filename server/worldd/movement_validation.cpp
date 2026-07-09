@@ -44,6 +44,27 @@ double elapsed_seconds(std::uint64_t from_ms, std::uint64_t to_ms) {
 // currently a constant.
 float ground_sample(float /*x*/, float /*y*/) { return mc::kFlatGroundZ; }
 
+// FLAG LEGALITY (R7, OPS-03a #420 / SAD §5.5 "flag legality"). Returns true if the
+// state_flags bitfield is an ILLEGAL combination a legit client can never send:
+//   • any RESERVED bit set (bits 9..31) — a fabricated flag, e.g. a "fly" hack;
+//   • a Swim mode selector while the mover is NOT in a liquid volume — "swim on
+//     dry land" (at M0 there is no liquid, so a Swim mode is always illegal);
+//   • an UNDEFINED mode selector (values 5..7) — not a real locomotion mode;
+//   • CONTRADICTORY direction flags — moving forward AND back, or strafing left
+//     AND right, in the same packet (physically impossible).
+// The masks are the #102/#247 canonical layout (movement_constants.h §2b).
+bool flags_illegal(std::uint32_t f, bool in_liquid) {
+    if ((f & mc::kStateFlagsReservedMask) != 0u) return true;  // fabricated / fly bit
+
+    const std::uint32_t mode_sel = f & mc::kStateFlagsModeMask;
+    if (mode_sel == mc::kModeSwim && !in_liquid) return true;  // swim on dry land
+    if (mode_sel > mc::kModeSwim) return true;                 // undefined mode 5..7
+
+    if ((f & mc::kFlagFwd) && (f & mc::kFlagBack)) return true;         // fwd + back
+    if ((f & mc::kFlagStrafeL) && (f & mc::kFlagStrafeR)) return true;  // left + right
+    return false;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -86,7 +107,8 @@ void SessionMovementState::prune_window(std::uint64_t now_ms) {
 }
 
 MoveDecision SessionMovementState::validate_move(const MovementIntentPod& intent,
-                                                 std::uint64_t now_ms) const {
+                                                 std::uint64_t now_ms,
+                                                 bool in_liquid) const {
     const mc::MoveMode mode = mode_from_flags(intent.state_flags);
     const float cap = mc::server_speed(mode);
 
@@ -102,10 +124,41 @@ MoveDecision SessionMovementState::validate_move(const MovementIntentPod& intent
         return d;
     };
 
+    // --- R9. FORCED-MOVE ACK FREEZE (SAD §5.5) ------------------------------
+    // While a forced move (GM teleport / knockback / transfer) awaits the client's
+    // ack, an intent whose seq predates the ack barrier is a stale pre-teleport
+    // packet still in flight — intake is FROZEN until the client's counter catches
+    // up. (An intent AT/above the barrier is the acknowledgment — it falls through.)
+    if (awaiting_forced_ack_ && intent.seq < forced_ack_seq_) {
+        return make_reject(MoveReject::kUnackedForcedMove);
+    }
+
+    // --- R8. MONOTONIC SEQUENCE (SAD §5.5 ack counter) ---------------------
+    // Within a session the per-client seq must strictly increase; a seq at or below
+    // the last processed one is a REPLAY or an OUT-OF-ORDER intent ⇒ reject.
+    if (processed_any_ && intent.seq <= last_seq_) {
+        return make_reject(MoveReject::kStaleSequence);
+    }
+
+    // --- R7. FLAG LEGALITY (SAD §5.5) --------------------------------------
+    // Illegal state-flag combination (swim on dry land, fabricated/fly bit,
+    // contradictory direction flags) ⇒ reject.
+    if (flags_illegal(intent.state_flags, in_liquid)) {
+        return make_reject(MoveReject::kIllegalFlag);
+    }
+
     // The Δt this packet is measured over: time since the last processed intent
     // (or since spawn for the first one), floored to one tick.
     const double dt = elapsed_seconds(last_time_ms_, now_ms);
     const float step = horizontal_distance(authoritative_, intent.pos);
+
+    // --- R6. TELEPORT (SAD §5.5 "displacement > window budget = hard violation") -
+    // A single-packet horizontal jump beyond a full window of running at the cap is
+    // a warp/blink, not a fast move. Checked BEFORE the graduated speed checks so a
+    // teleport is named its own kind (kTeleportHardBudget = run × 2 s × 1.15).
+    if (step > mc::kTeleportHardBudget) {
+        return make_reject(MoveReject::kTeleport);
+    }
 
     // --- R2. PER-PACKET SPEED (SAD §5.5) -----------------------------------
     // displacement ≤ server_speed(mode) × Δt × 1.15.
@@ -178,6 +231,15 @@ MoveDecision SessionMovementState::validate_move(const MovementIntentPod& intent
 void SessionMovementState::apply(const MoveDecision& decision,
                                  const MovementIntentPod& intent,
                                  std::uint64_t now_ms) {
+    // A REPLAYED / OUT-OF-ORDER intent (R8) or a stale pre-forced-move packet (R9)
+    // is DISCARDED as if never seen: the authoritative cursor (seq/time/window) must
+    // NOT move — otherwise a replay could drag last_seq_ backward or reset the Δt
+    // clock and reopen the speed budget. It already produced its snap-back decision.
+    if (decision.reject == MoveReject::kStaleSequence ||
+        decision.reject == MoveReject::kUnackedForcedMove) {
+        return;
+    }
+
     // Prune first so the window reflects "as of now" before we add this sample.
     prune_window(now_ms);
 
@@ -186,15 +248,36 @@ void SessionMovementState::apply(const MoveDecision& decision,
         authoritative_ = decision.pos;
         window_.push_back(WindowSample{now_ms, step});
     }
-    // Rejected: authoritative_ UNCHANGED (snap-back). No window sample (a rejected
-    // move must not contribute to the sustained-speed budget).
+    // Rejected (speed/bounds/z/flag/teleport): authoritative_ UNCHANGED (snap-back).
+    // No window sample (a rejected move must not contribute to the speed budget).
 
-    // Either way, the intent WAS processed: record it so the next Δt / rate check
+    // The intent WAS processed: record it so the next Δt / monotonic / rate check
     // measures from here.
     processed_any_ = true;
     last_seq_ = intent.seq;
     last_flags_ = intent.state_flags;
     last_time_ms_ = now_ms;
+
+    // A forced-move ack barrier is cleared once the client's counter reaches it —
+    // this intent's seq is >= the barrier (else R9 would have discarded it above),
+    // so processing it here is the acknowledgment that un-freezes intake.
+    if (awaiting_forced_ack_ && intent.seq >= forced_ack_seq_) {
+        awaiting_forced_ack_ = false;
+    }
+}
+
+void SessionMovementState::force_correction(const Position& corrected,
+                                            std::uint32_t ack_seq) {
+    // The server authoritatively relocates the mover (GM teleport / knockback /
+    // transfer placement) and ARMS the ack barrier: intents predating `ack_seq` are
+    // frozen until the client's counter reaches it (R9). The sliding speed window is
+    // CLEARED — the discontinuous jump must not count against the sustained-speed
+    // budget of the mover's next legit step (SAD §5.5 "a shard transfer resets the
+    // sliding window").
+    authoritative_ = corrected;
+    awaiting_forced_ack_ = true;
+    forced_ack_seq_ = ack_seq;
+    window_.clear();
 }
 
 float SessionMovementState::window_displacement() const {

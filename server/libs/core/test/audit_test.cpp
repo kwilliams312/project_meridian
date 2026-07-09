@@ -314,6 +314,55 @@ int test_optional_omission() {
 }
 
 // -------------------------------------------------------------------------
+// Test 6: an ANTI-CHEAT movement-rejected record (OPS-03a, #420) carries the
+// reject reason + offending entity + forensic context, renders at warn, and
+// leaks no secret material — the append-only anti-cheat audit stream (PRD §6).
+// -------------------------------------------------------------------------
+int test_movement_rejected() {
+    const std::string kSessionKey = "must-never-appear-session-key";
+
+    audit::Record rec;
+    rec.action = audit::Action::kMovementRejected;
+    rec.outcome = audit::Outcome::kFailure;
+    rec.account_id = 42;                     // the flagged account
+    rec.target = "entity:1001";              // the offending mover
+    rec.reason = "teleport";                 // fine-grained reject cause
+    rec.correlation_id = 99887766;           // grant_id (audit↔trace↔log pivot)
+    rec.extra.push_back(mlog::field("snap_pos", std::string("64.00,64.00,0.00")));
+    rec.extra.push_back(mlog::field("ack_seq", static_cast<std::uint64_t>(7)));
+
+    std::string line = audit::render_json(rec);
+
+    Json j;
+    CHECK(parse_object(line, j));  // still a single flat JSON object (no bare floats)
+
+    const std::string* action = j.get("action");
+    const std::string* outcome = j.get("outcome");
+    const std::string* reason = j.get("reason");
+    const std::string* target = j.get("target");
+    const std::string* corr = j.get("correlation_id");
+    const std::string* snap = j.get("snap_pos");
+    const std::string* ack = j.get("ack_seq");
+    CHECK(action && *action == "movement_rejected");
+    CHECK(outcome && *outcome == "failure");
+    CHECK(reason && *reason == "teleport");
+    CHECK(target && *target == "entity:1001");
+    CHECK(corr && *corr == "99887766" && !j.key_is_string("correlation_id"));
+    CHECK(snap && *snap == "64.00,64.00,0.00" && j.key_is_string("snap_pos"));
+    CHECK(ack && *ack == "7" && !j.key_is_string("ack_seq"));
+    // A violation renders at warn severity (audit-dashboard signal).
+    const std::string* severity = j.get("severity");
+    CHECK(severity && *severity == "warn");
+    // The audit stream tag is still present.
+    const std::string* stream = j.get("stream");
+    CHECK(stream && *stream == "audit");
+    // No secret leaks.
+    CHECK(!has(line, kSessionKey));
+    CHECK(j.get("session_key") == nullptr);
+    return 0;
+}
+
+// -------------------------------------------------------------------------
 // Test 5: action + outcome vocabulary.
 // -------------------------------------------------------------------------
 int test_vocab() {
@@ -324,6 +373,7 @@ int test_vocab() {
     CHECK(std::string(audit::action_name(audit::Action::kGrantRejected)) == "grant_rejected");
     CHECK(std::string(audit::action_name(audit::Action::kSessionEnter)) == "session_enter");
     CHECK(std::string(audit::action_name(audit::Action::kSessionLeave)) == "session_leave");
+    CHECK(std::string(audit::action_name(audit::Action::kMovementRejected)) == "movement_rejected");
     CHECK(std::string(audit::outcome_name(audit::Outcome::kSuccess)) == "success");
     CHECK(std::string(audit::outcome_name(audit::Outcome::kFailure)) == "failure");
     CHECK(audit::level_for(audit::Outcome::kSuccess) == mlog::Level::Info);
@@ -338,6 +388,7 @@ int main() {
     if (test_login_failure_no_secrets() != 0) return 1;
     if (test_grant_reject_reason() != 0) return 1;
     if (test_optional_omission() != 0) return 1;
+    if (test_movement_rejected() != 0) return 1;
     if (test_vocab() != 0) return 1;
     std::printf("OK meridian-core audit: %d checks passed\n", g_checks);
     return 0;
