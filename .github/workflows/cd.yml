@@ -5,13 +5,16 @@
 # lists tagged <short-sha> + the moving per-branch tag (:dev/:ptr/:prod; :latest
 # on main), cosign-signed + SBOM-attested on the merged digest.
 #
-# Rollout (issue #380): `dev` uses GitOps write-back — the `pin` job commits the
-# just-built immutable <short-sha> into deploy/gitops/realms/dev/image.yaml, and
-# ArgoCD drives the rollout off that manifest diff (declarative, deterministic
-# culling, immutable provenance). `ptr` still uses the interim `kubectl rollout
-# restart` to repull its moving :ptr tag (its immutable-pin write-back is a
-# follow-up — see PR / issue #380). `main`/Prod is manual-sync (design §3).
-# Supersedes dev-images.yml.
+# Rollout is GitOps write-back for every realm — no `kubectl rollout restart`:
+#   - `dev` (issue #380): the `pin` job commits the just-built immutable
+#     <short-sha> into deploy/gitops/realms/dev/image.yaml on every dev push, and
+#     ArgoCD drives the rollout off that manifest diff.
+#   - `ptr`/`main` (issue #382): the pin is carried by promotion, not built here.
+#     The `promote` workflow (.github/workflows/promote.yml) copies the SHA
+#     validated on the prior tier into realms/{ptr,prod}/image.yaml on dev→ptr /
+#     ptr→main. ArgoCD auto-syncs ptr; Prod stays manual-sync (design §3).
+# So this workflow only builds/publishes/signs — the interim ptr rollout-restart
+# is gone. Supersedes dev-images.yml.
 name: cd
 
 on:
@@ -193,19 +196,7 @@ jobs:
           git commit -m "ci(cd): pin meridian-dev to ${SHA} [skip ci]"
           git push origin HEAD:dev
 
-  # PTR interim: repull the moving :ptr tag via rollout-restart until PTR gets
-  # the same immutable-pin write-back (follow-up, issue #380). main/Prod is
-  # manual-sync (design §3), so it is intentionally excluded here.
-  restart:
-    needs: [meta, merge]
-    if: github.ref_name == 'ptr'
-    runs-on: meridian-amd64
-    steps:
-      - uses: azure/setup-kubectl@v4
-      - name: Rollout-restart the realm daemons
-        run: |
-          NS="meridian-${{ github.ref_name }}"
-          # Daemons only — never rollout-restart MariaDB (persistent in PTR it is
-          # pure downtime).
-          kubectl -n "$NS" rollout restart deployment -l 'app.kubernetes.io/part-of=meridian,app.kubernetes.io/component in (authd,worldd)'
-          kubectl -n "$NS" rollout status deployment -l app.kubernetes.io/component=authd --timeout=120s
+  # NOTE (issue #382): the `ptr` rollout-restart job was removed. PTR now rolls
+  # out declaratively like dev — the `promote` workflow carries the Dev-validated
+  # <short-sha> into realms/ptr/image.yaml and ArgoCD reconciles the diff. Prod
+  # stays manual-sync. cd.yml no longer touches any cluster (no kubectl / RBAC).

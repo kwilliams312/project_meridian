@@ -2,8 +2,14 @@
 # PTR realm (meridian-ptr) — persistent Longhorn MariaDB, :ptr multi-arch images,
 # self-signed TLS. authd+worldd share MetalLB IP 192.168.89.32. Auto-synced from ptr.
 image:
+  # tag is pinned to the immutable <short-sha> carried by promotion — see the
+  # machine-managed realms/ptr/image.yaml overlay (issue #382). The "ptr" here is
+  # just the pre-first-promotion fallback; image.yaml (loaded after this file)
+  # overrides it. IfNotPresent is correct for an immutable tag: a unique SHA tag
+  # is pulled exactly once per node, with no needless registry round-trip on
+  # every pod start (and no moving-tag cache-staleness).
   tag: "ptr"
-  pullPolicy: Always
+  pullPolicy: IfNotPresent
 authd:
   replicaCount: 2
   service:

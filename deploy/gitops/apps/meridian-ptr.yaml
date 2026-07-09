@@ -15,14 +15,16 @@ spec:
     helm:
       valueFiles:
         - ../../gitops/realms/ptr/values.yaml
+        # Machine-managed immutable image pin (issue #382). The promote workflow
+        # copies the Dev-validated <short-sha> into this file on dev→ptr; being
+        # listed AFTER values.yaml, its tags win. ArgoCD drives the ptr rollout
+        # off the resulting manifest diff (declarative, like dev) — no
+        # rollout-restart hack, so no restartedAt annotation to ignore.
+        - ../../gitops/realms/ptr/image.yaml
   destination:
     server: https://kubernetes.default.svc
     namespace: meridian-ptr
   ignoreDifferences:
-    - group: apps
-      kind: Deployment
-      jqPathExpressions:
-        - '.spec.template.metadata.annotations."kubectl.kubernetes.io/restartedAt"'
     # StatefulSet volumeClaimTemplates are immutable + apiserver-defaulted
     # (apiVersion/kind/status/volumeMode) — ignore so the SS isn't perma-OutOfSync.
     - group: apps
