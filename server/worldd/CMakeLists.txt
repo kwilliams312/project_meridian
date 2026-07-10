@@ -39,6 +39,7 @@ add_library(world-dispatch STATIC
   quest_def.cpp
   quest_log.cpp
   quest_credit.cpp
+  vitals_egress.cpp
   db_content_store.cpp
   loot_registry.cpp
   world_state.cpp
@@ -498,6 +499,26 @@ target_link_libraries(worldd-quest-live-credit-test
 )
 set_target_properties(worldd-quest-live-credit-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-quest-live-credit COMMAND worldd-quest-live-credit-test)
+
+# --- LIVE MapTick level-up → VITALS_UPDATE egress integration test (UI-01; #437). -
+# Proves that a kill routed through a REAL MapTick which LEVELS a live player up emits
+# a VITALS_UPDATE carrying the new level + max_health/max_power to that player's own
+# session (the HUD player frame) over the REAL serve/dispatch loop — routed through
+# the SAME route_vitals_events + vitals-egress bus the world thread runs, and NOT to a
+# different guid's session (per-leveler isolation). DB-free (a stub WORLD_HELLO
+# promotes IN-WORLD with no grant DB), so it always runs in the plain server ctest;
+# the DB-free vitals broadcast LOGIC is proven by worldd-vitals-test, the ENTER_WORLD
+# wiring by worldd-self-vitals.
+add_executable(worldd-vitals-levelup-it
+  test/vitals_levelup_it.cpp
+)
+target_link_libraries(worldd-vitals-levelup-it
+  PRIVATE
+    meridian::world-dispatch
+    Threads::Threads
+)
+set_target_properties(worldd-vitals-levelup-it PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-vitals-levelup COMMAND worldd-vitals-levelup-it)
 
 # --- Quest / loot / gossip / trainer LIVE-SESSION DB integration test (#388). --
 # The acceptance bar: drives the QST-01 / ITM-02 / NPC-01/02 opcodes over a REAL

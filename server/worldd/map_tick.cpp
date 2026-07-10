@@ -552,9 +552,26 @@ void MapTick::award_kill_xp(ObjectGuid victim_guid, Unit& victim, ObjectGuid kil
     killer.set_max_resource(ns.max_resource);
     killer.apply_healing(ns.max_health);          // heal to the new full
     killer.restore_resource(ns.max_resource);     // top off the new resource pool
-    emit(out, phase,
-         "level_up guid=" + u(kg) + " level=" + u(kl) + "->" + u(lp.level) + " hp=" +
-             u(killer.max_health()) + " res=" + u(killer.max_resource()));
+
+    // The level-up event. When VITALS egress is on (the live path, #437) the SAME
+    // event is tagged kVitalsChanged carrying the new authoritative vitals so the
+    // world loop mirrors them onto the leveler's WorldState unit + broadcasts a
+    // VITALS_UPDATE. The byte-stable `text` is identical whether or not egress is on
+    // (to_line() ignores the typed fields), so the no-egress combat/death golden
+    // streams are byte-identical — the gate mirrors report_kills_ (#397).
+    TickEvent lv{tick_no_, now_ms_, phase,
+                 "level_up guid=" + u(kg) + " level=" + u(kl) + "->" + u(lp.level) +
+                     " hp=" + u(killer.max_health()) + " res=" + u(killer.max_resource())};
+    if (report_vitals_) {
+        lv.kind = TickEventKind::kVitalsChanged;
+        lv.vitals.guid = kg;
+        lv.vitals.level = lp.level;
+        lv.vitals.health = killer.health();
+        lv.vitals.max_health = killer.max_health();
+        lv.vitals.power = killer.resource();
+        lv.vitals.max_power = killer.max_resource();
+    }
+    out.push_back(std::move(lv));
 }
 
 // ---------------------------------------------------------------------------

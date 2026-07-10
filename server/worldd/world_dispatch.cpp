@@ -965,6 +965,43 @@ void poll_quest_credits(net::Session& sess, ConnCtx& ctx) {
     });
 }
 
+// Drain + apply this session's pending MapTick VITALS change (UI-01 event-bus, #437)
+// and push a VITALS_UPDATE to the leveler + its AoI observers. Runs on the session's
+// OWN IO worker (next to poll_quest_credits) so the WorldState-unit mutation stays on
+// the single thread that owns this session's unit (the M1 per-connection model — the
+// SAME worker the live combat path mutates + broadcasts on, so no new cross-thread
+// race). The snapshot is the POST-change authoritative state (a level-up tops the
+// player off to the new max health/power): we mirror it onto the world-owned Unit,
+// then broadcast_vitals reads it straight back off that Unit. Cheap no-op when nothing
+// is pending.
+void poll_vitals_egress(net::Session& /*sess*/, ConnCtx& ctx) {
+    if (ctx.vitals_egress == nullptr || ctx.credit_guid == 0 || ctx.world == nullptr ||
+        !ctx.entered)
+        return;
+    std::optional<VitalsSnapshot> snap = ctx.vitals_egress->drain_vitals(ctx.credit_guid);
+    if (!snap) return;
+
+    Unit* unit = ctx.world->unit_for_slot(ctx.slot);
+    if (unit == nullptr) return;
+
+    // Mirror the new authoritative vitals onto the world-owned Unit: raise the caps
+    // (a level-up only grows them, so no down-clamp), then top up current health/power
+    // to the snapshot (for a level-up snap.health == snap.max_health and snap.power ==
+    // snap.max_power — the leveler is healed to full). apply_healing/restore_resource
+    // clamp to the new caps and never overshoot; both are no-ops when already at target.
+    unit->set_level(snap->level);
+    unit->set_max_health(snap->max_health);
+    if (snap->health > unit->health()) unit->apply_healing(snap->health - unit->health());
+    unit->set_max_resource(snap->max_power);
+    if (snap->power > unit->resource()) unit->restore_resource(snap->power - unit->resource());
+    // Keep the session's gate-level in step with the world Unit (mirrors GM `.setlevel`,
+    // which sets both the ConnCtx gate level and the world Unit level).
+    ctx.char_level = snap->level;
+
+    // Push the VITALS_UPDATE to the subject's own client + every observer in AoI.
+    ctx.world->broadcast_vitals(ctx.credit_guid);
+}
+
 // Apply a pending GM `.summon` forced move on THIS session's own IO worker (OPS-02b,
 // #418). A summoning GM (on another thread) has already moved this session in the
 // grid + relayed the AoI deltas, and POSTed the destination to ctx.forced_move; here
@@ -2090,6 +2127,16 @@ void Dispatcher::register_m0_stubs() {
            if (ctx.quest_credit != nullptr) {
                ctx.credit_guid = ctx.movement->entity_guid();
                ctx.credit_token = ctx.quest_credit->register_session(ctx.credit_guid);
+           }
+
+           // VITALS egress bus (UI-01 event-bus, #437): register this session's entity
+           // guid so a level-up the world thread routes to it is retained until this
+           // session drains + broadcasts it (poll_vitals_egress). Same effective guid
+           // as the quest bus (`credit_guid`, the AoI-assigned entity guid). The serve
+           // loop unregisters on teardown (guarded by credit_guid + vitals_token).
+           if (ctx.vitals_egress != nullptr && ctx.movement) {
+               if (ctx.credit_guid == 0) ctx.credit_guid = ctx.movement->entity_guid();
+               ctx.vitals_token = ctx.vitals_egress->register_session(ctx.credit_guid);
            }
 
            // SINGLE ACTIVE IN-WORLD SESSION PER ACCOUNT (#326). Admit this account
@@ -3276,6 +3323,13 @@ struct WorldServer::Impl {
     // accepted quests without MapTick owning any quest state.
     QuestCreditRegistry quest_credit;
 
+    // Shared MapTick→session VITALS egress registry (UI-01 event-bus, #437). The world
+    // thread pushes a level-up's new authoritative vitals (route_vitals_events, drained
+    // from the map tick); each in-world session registers its guid + drains its own
+    // snapshot and broadcasts a VITALS_UPDATE on its IO worker. Thread-safe; the seam
+    // that pushes a MapTick-driven level-up to the HUD without MapTick owning egress.
+    VitalsEgressRegistry vitals_egress;
+
     // The read-only ability template store (#343), loaded once at construction
     // with the M1 placeholder set (epic #28 swaps the source behind the store).
     // Shared read-only across every serve_connection — the CAST_REQUEST handler
@@ -3300,6 +3354,11 @@ WorldServer::WorldServer(const Dispatcher& dispatcher, WorldServerConfig cfg)
     // the world thread routes to the killer's session (route_tick_events → the
     // quest_credit bus). MapTick owns no quest state itself.
     impl_->map.set_report_kills(true);
+    // UI-01 event-bus (#437): the live map tags a level-up as kVitalsChanged carrying
+    // the new authoritative vitals the world thread routes to the leveler's session
+    // (route_vitals_events → the vitals_egress bus), which mirrors them onto its unit
+    // and pushes a VITALS_UPDATE. MapTick owns no egress itself.
+    impl_->map.set_report_vitals(true);
 }
 
 WorldServer::~WorldServer() { stop(); }
@@ -3340,6 +3399,8 @@ LootRegistry& WorldServer::loot_registry() { return impl_->loot; }
 
 QuestCreditRegistry& WorldServer::quest_credit() { return impl_->quest_credit; }
 
+VitalsEgressRegistry& WorldServer::vitals_egress() { return impl_->vitals_egress; }
+
 // The world thread's per-tick kill-credit routing (QST-01 event-bus, #396). Kept a
 // free function (declared in world_dispatch.h) so the integration test drives the
 // EXACT routing the world thread runs, with a real MapTick's deltas.
@@ -3347,6 +3408,16 @@ void route_tick_events(const std::vector<TickEvent>& deltas, QuestCreditRegistry
     for (const TickEvent& ev : deltas) {
         if (ev.kind == TickEventKind::kCreatureKill)
             reg.push_kill(ev.killer_guid, ev.npc_template_id);
+    }
+}
+
+// The world thread's per-tick VITALS-egress routing (UI-01 event-bus, #437). Kept a
+// free function (declared in world_dispatch.h) so the integration test drives the
+// EXACT routing the world thread runs, with a real MapTick's deltas.
+void route_vitals_events(const std::vector<TickEvent>& deltas, VitalsEgressRegistry& reg) {
+    for (const TickEvent& ev : deltas) {
+        if (ev.kind == TickEventKind::kVitalsChanged)
+            reg.push_vitals(ev.vitals);
     }
 }
 
@@ -3415,6 +3486,10 @@ void WorldServer::world_thread_main() {
             // session via the shared credit registry (the session drains + applies
             // them on its own IO worker). Other deltas are the AoI/flush stream.
             route_tick_events(deltas, impl_->quest_credit);
+            // UI-01 event-bus (#437): route level-up vitals deltas to the leveler's
+            // session via the shared vitals-egress registry (the session drains +
+            // mirrors + broadcasts a VITALS_UPDATE on its own IO worker).
+            route_vitals_events(deltas, impl_->vitals_egress);
         }
 
         // Record the tick + log a soft-budget overrun (SAD §8.1: 50 ms hard / 40 ms
@@ -3462,6 +3537,7 @@ void WorldServer::serve_connection(net::Session sess) {
     ctx.active_sessions = &impl_->active_sessions;  // single-session registry (#326)
     ctx.loot = &impl_->loot;  // shared corpse loot registry (ITM-02 wire; #388)
     ctx.quest_credit = &impl_->quest_credit;  // MapTick→session kill credit bus (#396)
+    ctx.vitals_egress = &impl_->vitals_egress;  // MapTick→session vitals egress bus (#437)
     ctx.kicked = std::make_shared<std::atomic<bool>>(false);  // set if a later login kicks us
     std::optional<db::Connection> auth_conn;
     std::optional<db::Connection> char_conn;
@@ -3534,6 +3610,10 @@ void WorldServer::serve_connection(net::Session sess) {
                 // push QUEST_PROGRESS for any kill objective that advanced (QST-01
                 // event-bus). Cheap no-op unless a kill is pending for this guid.
                 poll_quest_credits(sess, ctx);
+                // #437: drain + apply this session's pending MapTick level-up vitals and
+                // push a VITALS_UPDATE (UI-01 HUD). Cheap no-op unless a level-up is
+                // pending for this guid.
+                poll_vitals_egress(sess, ctx);
                 // #418: apply a pending GM `.summon` forced move so an idle summoned
                 // player snaps on its next action (any frame), not only on a move.
                 drain_forced_move(sess, ctx);
@@ -3594,6 +3674,12 @@ void WorldServer::serve_connection(net::Session sess) {
     // ever registered at ENTER_WORLD).
     if (ctx.quest_credit != nullptr && ctx.credit_guid != 0) {
         ctx.quest_credit->unregister_session(ctx.credit_guid, ctx.credit_token);
+    }
+    // UI-01 event-bus (#437): drop this session from the vitals egress bus so no
+    // further level-up snapshot is retained for its guid (guarded by credit_guid +
+    // vitals_token).
+    if (ctx.vitals_egress != nullptr && ctx.credit_guid != 0) {
+        ctx.vitals_egress->unregister_session(ctx.credit_guid, ctx.vitals_token);
     }
     if (ctx.egress) ctx.egress->mark_closed();
 
