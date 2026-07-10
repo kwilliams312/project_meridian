@@ -504,17 +504,16 @@ func _recompute_giver_marker(npc_guid: int, options: Array) -> void:
 # re-emits it as an intent signal, and the world scene turns it into an outbound frame
 # (extends the #431/#433 contract — the net thread stays hidden behind this one seam).
 #
-# ⛔ TWO WIRE-CONTRACT GAPS this story surfaced (world.fbs 0x50xx/0x51xx has NO opcode
-# for either — reported like #439 self-vitals / #443 quest-reward-preview, NOT faked):
-#   1. NO inventory-contents snapshot — worldd never sends the character's item list, so
-#      the bags window shows the server-authoritative COPPER balance (the only inventory-
-#      adjacent state the wire carries — via every transaction result's `balance`) but
-#      cannot show an item grid, and the vendor window cannot list the player's items to
-#      sell (the sell control is backpack-slot-driven pending an INVENTORY_LIST contract).
-#   2. NO vendor-catalog listing — worldd validates a buy against a server-side catalog
-#      but never sends its contents, so the vendor window's BUY control is item-template-
-#      id-driven (greybox, like gossip's "quest #N") pending a VENDOR_LIST contract.
-# The BUYBACK tab, in contrast, IS fully wire-populated (from each VENDOR_SELL_RESULT).
+# WIRE CONTRACTS (both formerly-greybox gaps are now CLOSED by #453/#471):
+#   1. INVENTORY_SNAPSHOT (0x5007) — worldd pushes the character's item list + money to the
+#      owning client at ENTER_WORLD and after every server-authoritative inventory change,
+#      so the bags window renders the REAL items (slot/template/count/quality) + balance and
+#      the money is known from spawn (no longer "unknown until a transaction").
+#   2. VENDOR_LIST (0x5107) — auto-pushed on GOSSIP_HELLO to a vendor NPC (like TRAINER_LIST),
+#      so the vendor BUY tab renders the server-computed catalog (item + price + stock).
+# The BUYBACK tab is likewise fully wire-populated (from each VENDOR_SELL_RESULT), and the
+# VENDOR_BUYBACK_RESULT now ECHOES its buyback_slot so the client drops the repurchased row
+# without self-correlating against its outstanding request.
 
 # world.fbs enum ordinals kept here so views read them by name (mirrors the gossip block).
 # LootStatus (LOOT_RESPONSE) / LootTakeStatus (LOOT_RESULT).
@@ -565,10 +564,20 @@ signal trainer_opened(npc_guid: int)
 ## Already merged (balance + known-ability set).
 signal trainer_learn_result(result: Dictionary)
 
-## The server-authoritative copper balance changed (from a transaction result's balance /
-## new_balance). `known` is false until the FIRST balance-carrying result arrives (there
-## is no spawn-time money snapshot on the wire — see the gap note above).
+## The server-authoritative copper balance changed (from an INVENTORY_SNAPSHOT `money` or a
+## transaction result's balance / new_balance). `known` is false only before the FIRST such
+## message; an INVENTORY_SNAPSHOT rides at ENTER_WORLD, so money is known from spawn.
 signal currency_changed(copper: int, known: bool)
+
+## An INVENTORY_SNAPSHOT arrived (decode_econ_frame kind "inventory_snapshot"): the bags
+## window's real contents. `items` is an Array of {slot,item_template_id,count,quality,
+## binding}; `backpack_slots` is the grid capacity. The bags window re-renders.
+signal inventory_changed(money: int, items: Array, backpack_slots: int)
+
+## A VENDOR_LIST arrived (decode_econ_frame kind "vendor_list"): the vendor's for-sale
+## catalog. `items` is an Array of {item_template_id,price,quality,stock}. The vendor
+## window's BUY tab re-renders with the server-computed prices.
+signal vendor_catalog_changed(vendor_id: int, items: Array)
 
 # --- Intent signals (view -> the world scene, which owns the net thread) ------
 
@@ -585,6 +594,10 @@ var _loot_corpse: int = 0            # the corpse whose loot window is open (0 =
 var _loot_copper: int = 0            # money still on the open corpse
 var _loot_items: Array = []          # remaining lootable slots on the open corpse
 var _vendor_id: int = 0              # the open vendor (0 = none)
+var _vendor_catalog: Array = []      # the open vendor's VENDOR_LIST rows: {item_template_id,price,quality,stock}
+var _inventory: Array = []           # backpack contents (INVENTORY_SNAPSHOT): {slot,item_template_id,count,quality,binding}
+var _backpack_slots: int = 0         # backpack grid capacity (cell count)
+var _inventory_known: bool = false   # an INVENTORY_SNAPSHOT has been seen
 var _buyback: Array = []             # buyback queue: {buyback_slot,item_template_id,quantity,price}
 var _trainer_npc: int = 0            # the trainer whose list we hold (0 = none)
 var _trainer_entries: Array = []     # the held TRAINER_LIST rows
@@ -631,6 +644,27 @@ func publish_loot_closed(corpse_guid: int) -> void:
 	loot_closed.emit(corpse_guid)
 
 
+## Publish an INVENTORY_SNAPSHOT (decode_econ_frame kind "inventory_snapshot"). Replaces the
+## held backpack contents + capacity with the server's, applies the authoritative `money`
+## balance (so currency is known from spawn), and emits inventory_changed. SERVER IS LAW —
+## the client never predicts its bags; it renders exactly what worldd re-sends.
+func publish_inventory_snapshot(money: int, items: Array, backpack_slots: int) -> void:
+	_inventory = items.duplicate(true)
+	_backpack_slots = backpack_slots
+	_inventory_known = true
+	_apply_balance(money)
+	inventory_changed.emit(money, inventory_items(), _backpack_slots)
+
+
+## Publish a VENDOR_LIST (decode_econ_frame kind "vendor_list"). Stores the open vendor's
+## server-computed catalog + emits vendor_catalog_changed. Auto-pushed on GOSSIP_HELLO to a
+## vendor NPC; a pure DISPLAY projection (the buy path re-validates every price server-side).
+func publish_vendor_list(vendor_id: int, items: Array) -> void:
+	_vendor_id = vendor_id
+	_vendor_catalog = items.duplicate(true)
+	vendor_catalog_changed.emit(vendor_id, vendor_catalog())
+
+
 ## Publish a VENDOR_BUY_RESULT. Applies the server balance, emits the typed result.
 func publish_vendor_buy_result(result: Dictionary) -> void:
 	_apply_balance(int(result.get("balance", 0)))
@@ -667,13 +701,17 @@ func publish_vendor_sell_result(result: Dictionary) -> void:
 
 
 ## Publish a VENDOR_BUYBACK_RESULT. On OK, applies the balance and removes the repurchased
-## entry from the buyback queue; emits the typed result + the queue.
-func publish_vendor_buyback_result(result: Dictionary, buyback_slot: int = -1) -> void:
+## entry from the buyback queue; emits the typed result + the queue. The queue slot comes
+## from the result's ECHOED `buyback_slot` (#453/#471) — the server tells us exactly which
+## row it repurchased, so the client no longer self-correlates against its own request. The
+## optional `fallback_slot` covers a pre-#453 server that did not echo (defaults to none).
+func publish_vendor_buyback_result(result: Dictionary, fallback_slot: int = -1) -> void:
 	_apply_balance(int(result.get("balance", 0)))
-	if int(result.get("status", -1)) == RESULT_OK and buyback_slot >= 0:
+	var slot := int(result.get("buyback_slot", fallback_slot))
+	if int(result.get("status", -1)) == RESULT_OK and slot >= 0:
 		var kept: Array = []
 		for e in _buyback:
-			if int((e as Dictionary).get("buyback_slot", -1)) != buyback_slot:
+			if int((e as Dictionary).get("buyback_slot", -1)) != slot:
 				kept.append(e)
 		_buyback = kept
 		vendor_buyback_changed.emit(buyback_entries())
@@ -763,6 +801,27 @@ func loot_items() -> Array:
 ## The open vendor id (0 = none).
 func vendor_id() -> int:
 	return _vendor_id
+
+
+## The open vendor's server-computed catalog (copies): {item_template_id,price,quality,stock}.
+func vendor_catalog() -> Array:
+	return _vendor_catalog.duplicate(true)
+
+
+## The backpack contents from the last INVENTORY_SNAPSHOT (copies), in wire order:
+## {slot,item_template_id,count,quality,binding}.
+func inventory_items() -> Array:
+	return _inventory.duplicate(true)
+
+
+## The backpack grid capacity (cell count) from the last INVENTORY_SNAPSHOT.
+func backpack_slots() -> int:
+	return _backpack_slots
+
+
+## True once an INVENTORY_SNAPSHOT has been seen (bags contents are authoritative).
+func inventory_known() -> bool:
+	return _inventory_known
 
 
 ## The buyback queue (copies), in queue order.

@@ -6,13 +6,14 @@
 # safety. NOT a shipped scene: run it as
 #   godot --headless --script res://hud/econ_verify.gd
 # so CI / a dev box proves — with NO display and NO server — that:
-#   * the bus stores + re-emits the server's loot/vendor/trainer state (LOOT_RESPONSE →
-#     take removes a slot; a money take clears the pile; vendor buy/sell/buyback apply the
-#     server balance + drive the buyback queue; TRAINER_LIST + learn mark abilities known;
-#     currency is server-authoritative-absolute);
-#   * the four windows render that state (loot rows, trainer rows, buyback tab, bags money)
-#     and issue the right INTENTS back through the bus (take / release / buy / sell /
-#     buyback / learn);
+#   * the bus stores + re-emits the server's inventory/loot/vendor/trainer state
+#     (INVENTORY_SNAPSHOT → real item list + money known from spawn; VENDOR_LIST → the buy
+#     catalog; LOOT_RESPONSE → take removes a slot; a money take clears the pile; vendor
+#     buy/sell/buyback apply the server balance + drive the buyback queue via the ECHOED
+#     buyback_slot; TRAINER_LIST + learn mark abilities known; currency is server-absolute);
+#   * the four windows render that state (bags item grid + money, real vendor catalog, loot
+#     rows, trainer rows, buyback tab) and issue the right INTENTS back through the bus
+#     (take / release / buy from a catalog row / sell / buyback / learn);
 #   * the money formatter splits copper into g/s/c correctly;
 #   * MeridianNetThread builds the C→S econ frames non-empty and its decode_econ_frame
 #     rejects a garbage body safely (kind "") — the full wire round-trip is proven by the
@@ -42,11 +43,13 @@ func _wait(frames: int) -> void:
 
 
 func _initialize() -> void:
-	print("meridian LOOT + VENDOR + TRAINER + BAGS UI RUNTIME verify (#441)")
+	print("meridian INVENTORY + LOOT + VENDOR + TRAINER + BAGS UI RUNTIME verify (#441/#471)")
 
 	_verify_money_format()
 	_verify_event_bus_loot()
+	_verify_event_bus_inventory()
 	_verify_event_bus_vendor()
+	_verify_event_bus_vendor_list()
 	_verify_event_bus_trainer()
 	await _verify_loot_window()
 	await _verify_trainer_window()
@@ -124,6 +127,48 @@ func _verify_event_bus_loot() -> void:
 	_check("rejected response has no items", bus.loot_items().is_empty())
 
 
+# --- Event bus: inventory snapshot -------------------------------------------
+
+func _verify_event_bus_inventory() -> void:
+	print("[event_bus/inventory]")
+	var bus = EventBus.new()
+
+	_check("inventory unknown before any snapshot", not bus.inventory_known())
+	_check("currency unknown before any snapshot", not bus.currency_known())
+
+	var inv_events: Array = []
+	bus.inventory_changed.connect(func(m, it, cap): inv_events.append([m, it, cap]))
+	var items := [
+		{"slot": 0, "item_template_id": 900007, "count": 5, "quality": 1, "binding": 0},
+		{"slot": 3, "item_template_id": 900012, "count": 1, "quality": 3, "binding": 1},
+	]
+	bus.publish_inventory_snapshot(4200, items, 16)
+	_check("inventory known after snapshot", bus.inventory_known())
+	_check("inventory items stored (2)", bus.inventory_items().size() == 2)
+	_check("backpack capacity stored (16)", bus.backpack_slots() == 16)
+	_check("inventory_changed emitted", inv_events.size() == 1)
+	# The snapshot's money is server-authoritative → currency known from spawn.
+	_check("currency known from snapshot money", bus.currency_known())
+	_check("snapshot money applied (4200)", bus.copper() == 4200)
+	_check("item[1] carries slot/template/quality/binding",
+		int((bus.inventory_items()[1] as Dictionary)["slot"]) == 3 and
+		int((bus.inventory_items()[1] as Dictionary)["item_template_id"]) == 900012 and
+		int((bus.inventory_items()[1] as Dictionary)["quality"]) == 3 and
+		int((bus.inventory_items()[1] as Dictionary)["binding"]) == 1)
+
+	# A re-pushed snapshot (after loot/vendor/reward) REPLACES the contents + balance.
+	bus.publish_inventory_snapshot(300, [
+		{"slot": 0, "item_template_id": 900007, "count": 4, "quality": 1, "binding": 0},
+	], 16)
+	_check("re-pushed snapshot replaces items (1)", bus.inventory_items().size() == 1)
+	_check("re-pushed snapshot updates money (300)", bus.copper() == 300)
+
+	# An empty backpack snapshot is valid (no items, money still authoritative).
+	bus.publish_inventory_snapshot(0, [], 16)
+	_check("empty snapshot yields no items", bus.inventory_items().is_empty())
+	_check("empty snapshot keeps inventory known", bus.inventory_known())
+
+
 # --- Event bus: vendor + currency --------------------------------------------
 
 func _verify_event_bus_vendor() -> void:
@@ -157,13 +202,14 @@ func _verify_event_bus_vendor() -> void:
 		int((bus.buyback_entries()[0] as Dictionary)["price"]) == 75)
 	_check("vendor_buyback_changed emitted on sell", bb_events.size() == 1)
 
-	# A buyback applies balance AND removes the entry (slot correlated by the caller).
+	# A buyback applies balance AND removes the entry from the ECHOED buyback_slot (#471) —
+	# the server tells us which row it repurchased, so no caller-side correlation.
 	bus.publish_vendor_buyback_result({
 		"status": EventBus.RESULT_OK, "item_template_id": 1201, "quantity": 3,
-		"item_guid": 0xBEEF, "price": 75, "balance": 9750,
-	}, 0)
+		"item_guid": 0xBEEF, "price": 75, "balance": 9750, "buyback_slot": 0,
+	})
 	_check("balance applied from buyback (9750)", bus.copper() == 9750)
-	_check("buyback entry removed", bus.buyback_entries().is_empty())
+	_check("buyback entry removed via echoed slot", bus.buyback_entries().is_empty())
 
 	# A rejected buy still reports its (unchanged) balance + a non-OK result.
 	var vr := {"v": {}}
@@ -175,6 +221,31 @@ func _verify_event_bus_vendor() -> void:
 	_check("rejected buy result kind 'buy' status 3",
 		String((vr["v"] as Dictionary).get("kind", "")) == "buy" and
 		int((vr["v"] as Dictionary).get("status", -1)) == 3)
+
+
+# --- Event bus: vendor catalog (VENDOR_LIST) ---------------------------------
+
+func _verify_event_bus_vendor_list() -> void:
+	print("[event_bus/vendor_list]")
+	var bus = EventBus.new()
+
+	var cat_events: Array = []
+	bus.vendor_catalog_changed.connect(func(v, it): cat_events.append([v, it]))
+	var items := [
+		{"item_template_id": 900007, "price": 12, "quality": 1, "stock": -1},
+		{"item_template_id": 900012, "price": 250, "quality": 3, "stock": 5},
+	]
+	bus.publish_vendor_list(990001, items)
+	_check("vendor catalog stored (2)", bus.vendor_catalog().size() == 2)
+	_check("vendor_catalog_changed emitted", cat_events.size() == 1 and int(cat_events[0][0]) == 990001)
+	_check("catalog row carries template/price/stock",
+		int((bus.vendor_catalog()[0] as Dictionary)["item_template_id"]) == 900007 and
+		int((bus.vendor_catalog()[0] as Dictionary)["price"]) == 12 and
+		int((bus.vendor_catalog()[1] as Dictionary)["stock"]) == 5)
+
+	# An empty / unknown vendor catalog is valid (no items).
+	bus.publish_vendor_list(7, [])
+	_check("empty vendor catalog stored", bus.vendor_catalog().is_empty())
 
 
 # --- Event bus: trainer ------------------------------------------------------
@@ -296,10 +367,26 @@ func _verify_vendor_window() -> void:
 
 	var buyback := {"slot": -1}
 	bus.vendor_buyback_requested.connect(func(s): buyback["slot"] = s)
+	var buy := {"vendor": -1, "tmpl": -1, "qty": -1}
+	bus.vendor_buy_requested.connect(func(v, t, q): buy["vendor"] = v; buy["tmpl"] = t; buy["qty"] = q)
 
+	# The VENDOR_LIST catalog arrives (auto-pushed on gossip) BEFORE the window opens.
+	bus.publish_vendor_list(42, [
+		{"item_template_id": 900007, "price": 12, "quality": 1, "stock": -1},
+		{"item_template_id": 900012, "price": 250, "quality": 3, "stock": 5},
+	])
 	bus.open_vendor(42)
 	await _wait(1)
 	_check("vendor window visible on open", win.visible)
+
+	# The BUY tab renders the real catalog rows (item + server price + stock).
+	var buy_btn := _find_button_containing(win, "Item #900012")
+	_check("vendor catalog row rendered (real price)", buy_btn != null and
+		buy_btn.text.find("2s 50c") != -1 and buy_btn.text.find("stock: 5") != -1)
+	if buy_btn != null:
+		buy_btn.emit_signal("pressed")
+	_check("pressing a catalog row emits buy intent (vendor 42, item 900012)",
+		int(buy["vendor"]) == 42 and int(buy["tmpl"]) == 900012 and int(buy["qty"]) == 1)
 
 	# A sell result populates the buyback tab with a repurchase button.
 	bus.publish_vendor_sell_result({
@@ -329,20 +416,35 @@ func _verify_bags_window() -> void:
 	win.toggle()
 	await _wait(1)
 	_check("bags window visible on toggle", win.visible)
-	_check("bags shows unknown money before any result",
+	_check("bags shows unknown money before any snapshot",
 		_find_label_containing(win, "unknown") != null)
+	_check("bags shows waiting-for-snapshot before any snapshot",
+		_find_label_containing(win, "Waiting for inventory") != null)
 
-	# A transaction result makes the balance known + displayed.
-	bus.publish_vendor_buy_result({
-		"status": EventBus.RESULT_OK, "vendor_id": 42, "item_template_id": 1201,
-		"quantity": 1, "item_guid": 1, "total_price": 250, "balance": 12345,
-	})
+	# An INVENTORY_SNAPSHOT populates the real item list + money (known from spawn).
+	bus.publish_inventory_snapshot(12345, [
+		{"slot": 0, "item_template_id": 900007, "count": 5, "quality": 1, "binding": 0},
+		{"slot": 3, "item_template_id": 900012, "count": 1, "quality": 3, "binding": 1},
+	], 16)
 	await _wait(1)
-	_check("bags shows server money after result",
+	_check("bags shows server money after snapshot",
 		_find_label_containing(win, "1g 23s 45c") != null)
-	# The honest gap notice is present.
-	_check("bags shows inventory-gap notice",
-		_find_label_containing(win, "not sent by the server") != null)
+	_check("bags renders real item row (#900012)",
+		_find_label_containing(win, "Item #900012") != null)
+	_check("bags shows a stacked item (x5)",
+		_find_label_containing(win, "Item #900007 x5") != null)
+	_check("bags shows slot capacity (2 / 16)",
+		_find_label_containing(win, "2 / 16") != null)
+
+	# A re-pushed snapshot (after a purchase) re-renders the grid.
+	bus.publish_inventory_snapshot(95, [
+		{"slot": 0, "item_template_id": 900007, "count": 4, "quality": 1, "binding": 0},
+	], 16)
+	await _wait(1)
+	_check("bags re-renders after re-pushed snapshot (x4)",
+		_find_label_containing(win, "Item #900007 x4") != null)
+	_check("bags drops the removed item after re-push",
+		_find_label_containing(win, "Item #900012") == null)
 	win.queue_free()
 
 
@@ -363,6 +465,10 @@ func _verify_net_bridge() -> void:
 	# kind "" for a non-econ opcode.
 	var bad: Dictionary = net.decode_econ_frame(0x5002, PackedByteArray([0xFF, 0xFF, 0xFF, 0xFF]))
 	_check("garbage LOOT_RESPONSE → kind ''", String(bad.get("kind", "x")) == "")
+	var bad_inv: Dictionary = net.decode_econ_frame(0x5007, PackedByteArray([0xFF, 0xFF, 0xFF, 0xFF]))
+	_check("garbage INVENTORY_SNAPSHOT → kind ''", String(bad_inv.get("kind", "x")) == "")
+	var bad_vl: Dictionary = net.decode_econ_frame(0x5107, PackedByteArray([0xFF, 0xFF, 0xFF, 0xFF]))
+	_check("garbage VENDOR_LIST → kind ''", String(bad_vl.get("kind", "x")) == "")
 	var other: Dictionary = net.decode_econ_frame(0x2001, PackedByteArray())
 	_check("non-econ opcode → kind ''", String(other.get("kind", "x")) == "")
 

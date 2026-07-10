@@ -731,6 +731,38 @@ std::optional<LootClosed> decode_loot_closed(const Bytes& buf) {
     return out;
 }
 
+// ---- IF-2 INVENTORY SNAPSHOT (0x5007 — ITM-01, #453/#471) ------------------
+
+Bytes encode_inventory_snapshot(const InventorySnapshot& in) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::InventoryItem>> items;
+    items.reserve(in.items.size());
+    for (const auto& it : in.items) {
+        items.push_back(mn::CreateInventoryItem(b, it.slot, it.item_template_id, it.count,
+                                                it.quality, it.binding));
+    }
+    b.Finish(mn::CreateInventorySnapshot(b, in.money, b.CreateVector(items),
+                                         in.backpack_slots));
+    return to_bytes(b);
+}
+
+std::optional<InventorySnapshot> decode_inventory_snapshot(const Bytes& buf) {
+    const mn::InventorySnapshot* t = verify_and_get<mn::InventorySnapshot>(buf);
+    if (t == nullptr) return std::nullopt;
+    InventorySnapshot out;
+    out.money = t->money();
+    out.backpack_slots = t->backpack_slots();
+    if (t->items() != nullptr) {
+        out.items.reserve(t->items()->size());
+        for (const auto* it : *t->items()) {
+            if (it == nullptr) continue;
+            out.items.push_back(InventoryItem{it->slot(), it->item_template_id(),
+                                              it->count(), it->quality(), it->binding()});
+        }
+    }
+    return out;
+}
+
 // ---- IF-2 VENDOR (0x5101..0x5106 — ECO-01, #370/#441) ----------------------
 
 Bytes encode_vendor_buy_request(const VendorBuyRequest& in) {
@@ -827,7 +859,7 @@ Bytes encode_vendor_buyback_result(const VendorBuybackResult& in) {
     fb::FlatBufferBuilder b;
     b.Finish(mn::CreateVendorBuybackResult(
         b, static_cast<mn::VendorBuybackStatus>(in.status), in.item_template_id,
-        in.quantity, in.item_guid, in.price, in.balance));
+        in.quantity, in.item_guid, in.price, in.balance, in.buyback_slot));
     return to_bytes(b);
 }
 
@@ -841,6 +873,37 @@ std::optional<VendorBuybackResult> decode_vendor_buyback_result(const Bytes& buf
     out.item_guid = t->item_guid();
     out.price = t->price();
     out.balance = t->balance();
+    out.buyback_slot = t->buyback_slot();
+    return out;
+}
+
+// ---- IF-2 VENDOR CATALOG (0x5107 — ECO-01, #453/#471) ----------------------
+
+Bytes encode_vendor_list(const VendorList& in) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::VendorItem>> items;
+    items.reserve(in.items.size());
+    for (const auto& it : in.items) {
+        items.push_back(mn::CreateVendorItem(b, it.item_template_id, it.price, it.quality,
+                                             it.stock));
+    }
+    b.Finish(mn::CreateVendorList(b, in.vendor_id, b.CreateVector(items)));
+    return to_bytes(b);
+}
+
+std::optional<VendorList> decode_vendor_list(const Bytes& buf) {
+    const mn::VendorList* t = verify_and_get<mn::VendorList>(buf);
+    if (t == nullptr) return std::nullopt;
+    VendorList out;
+    out.vendor_id = t->vendor_id();
+    if (t->items() != nullptr) {
+        out.items.reserve(t->items()->size());
+        for (const auto* it : *t->items()) {
+            if (it == nullptr) continue;
+            out.items.push_back(VendorItem{it->item_template_id(), it->price(),
+                                           it->quality(), it->stock()});
+        }
+    }
     return out;
 }
 

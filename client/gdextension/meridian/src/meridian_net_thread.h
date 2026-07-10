@@ -198,9 +198,10 @@ public:
 	// Decode a raw loot/vendor/trainer S→C frame (opcode + FlatBuffer payload, as delivered
 	// by the `entity_frame` signal) into a scene-ready Dictionary the event bus publishes to
 	// the loot/vendor/trainer/bags view-models. Returns:
-	//   { "kind": "loot_response"|"loot_result"|"loot_closed"|"vendor_buy_result"|
-	//             "vendor_sell_result"|"vendor_buyback_result"|"trainer_list"|
-	//             "trainer_learn_result"|"",   # "" if not a loot/vendor/trainer op
+	//   { "kind": "inventory_snapshot"|"vendor_list"|"loot_response"|"loot_result"|
+	//             "loot_closed"|"vendor_buy_result"|"vendor_sell_result"|
+	//             "vendor_buyback_result"|"trainer_list"|"trainer_learn_result"|"",
+	//             # "" if not an inventory/loot/vendor/trainer op
 	//     ...per-kind fields (see meridian_net_thread.cpp) }
 	// A non-econ opcode or an undecodable payload returns { "kind": "" }, so the scene can
 	// try decode_entity_frame() / decode_quest_frame() first and fall through to this.
