@@ -273,8 +273,11 @@ signal vendor_entry_selected(npc_guid: int)
 signal trainer_entry_selected(npc_guid: int)
 
 # --- Quest/gossip registry state ---------------------------------------------
-# Canonical shape of one quest-log entry the bus stores + emits.
-const _QUEST_ENTRY_KEYS := ["quest_id", "level", "complete", "objectives"]
+# Canonical shape of one quest-log entry the bus stores + emits — including the REWARD
+# PREVIEW (#443): flat XP + copper, the always-granted `reward_items`, and the one-of
+# `choice_items` the turn-in dialog renders its picker from (empty = no picker).
+const _QUEST_ENTRY_KEYS := ["quest_id", "level", "complete", "objectives",
+	"reward_xp", "reward_money", "reward_items", "choice_items"]
 
 var _quests: Dictionary = {}          # quest_id:int -> quest entry Dictionary
 var _quest_order: Array = []          # quest_ids in server order (stable render order)
@@ -423,6 +426,15 @@ func tracked_quest_entry() -> Dictionary:
 	return {}
 
 
+## A specific quest's entry (a copy) including its reward preview, or an empty Dictionary
+## if `quest_id` is not in the active log. The turn-in dialog reads the reward preview +
+## choice_items from here to render the picker (#443/#442).
+func quest_entry(quest_id: int) -> Dictionary:
+	if _quests.has(quest_id):
+		return (_quests[quest_id] as Dictionary).duplicate(true)
+	return {}
+
+
 ## The NPC whose gossip menu is currently open (0 = none).
 func gossip_npc() -> int:
 	return _gossip_npc
@@ -439,7 +451,8 @@ func giver_marker(npc_guid: int) -> String:
 
 # --- Quest/gossip internals --------------------------------------------------
 
-# Normalize a raw decode_quest_frame quest Dictionary into the canonical entry shape.
+# Normalize a raw decode_quest_frame quest Dictionary into the canonical entry shape,
+# including the reward preview (flat XP/copper + always-granted items + one-of choices).
 func _quest_entry_from(q: Dictionary) -> Dictionary:
 	var objectives: Array = []
 	for o in q.get("objectives", []):
@@ -455,7 +468,22 @@ func _quest_entry_from(q: Dictionary) -> Dictionary:
 		"level": int(q.get("level", 0)),
 		"complete": bool(q.get("complete", false)),
 		"objectives": objectives,
+		"reward_xp": int(q.get("reward_xp", 0)),
+		"reward_money": int(q.get("reward_money", 0)),
+		"reward_items": _reward_items_from(q.get("reward_items", [])),
+		"choice_items": _reward_items_from(q.get("choice_items", [])),
 	}
+
+
+# Normalize a raw reward/choice item Array into canonical {item_id, count} entries.
+static func _reward_items_from(items: Array) -> Array:
+	var out: Array = []
+	for it in items:
+		out.append({
+			"item_id": int((it as Dictionary).get("item_id", 0)),
+			"count": int((it as Dictionary).get("count", 1)),
+		})
+	return out
 
 
 static func _all_objectives_complete(objs: Array) -> bool:
@@ -883,14 +911,15 @@ func _apply_balance(balance: int) -> void:
 # cleanly if the server rejects — resyncing its GCD clock from CAST_FAILED.gcd_remaining_ms.
 # It NEVER predicts the cast's OUTCOME (hit/crit/damage/heal) — that arrives as CAST_RESULT.
 #
-# ⛔ WIRE-CONTRACT GAP this story surfaced (reported like #439 self-vitals / #443
-# quest-reward-preview, NOT faked): the client is NEVER SENT the character's KNOWN
-# ABILITY SET. world.fbs teaches abilities server-side (TRAINER_LEARN_RESULT) and the
-# trainer window shows a per-NPC TRAINER_LIST, but there is NO S→C "your abilities" push
-# at enter-world (no spellbook/known-ability opcode). So the action bar is driven by a
-# documented GREYBOX ability set (hud/ability_set.gd), seeded via seed_abilities(); the
-# CAST_REQUEST / GCD / cast-bar wire path below is fully real and needs no change when a
-# KNOWN_ABILITIES contract lands — only the seed source swaps.
+# KNOWN-ABILITY SET (the former greybox gap, now CLOSED by #457/#472): worldd pushes the
+# character's REAL known ability set (KNOWN_ABILITIES 0x3005) to the owning client at
+# ENTER_WORLD, and RE-pushes it after a TRAINER_LEARN that grows the set. The action bar
+# seeds from publish_known_abilities() — each ability carries its server-authoritative
+# `cast_ms` + `triggers_gcd` metadata, so the optimistic GCD/cast prediction no longer
+# OVER-predicts (fixes #456): a `triggers_gcd:false` ability starts NO GCD, and a
+# `cast_ms > 0` ability shows a real cast bar on CAST_START. A freshly-created character
+# enters with an EMPTY set (M1: no durable ability table); it grows as it trains. The
+# greybox set (hud/ability_set.gd) survives only as the headless-verify fixture.
 #
 # TIMING: the bus stores GCD/cast as a start stamp + duration in the caller's monotonic
 # clock domain (Godot Time.get_ticks_msec(), passed in as `now_ms`). The bus itself does
@@ -926,9 +955,11 @@ const OUTCOME_CRIT := 4
 
 # --- View subscription signals (bus -> action bar / cast bar) ----------------
 
-## The known-ability set changed (seeded from the greybox set — see the gap note). The
-## action bar (re)builds its slots. `abilities` is an Array of ability Dictionaries
-## {ability_id:int, name:String, icon_id:int, hotkey:int}.
+## The known-ability set changed (a KNOWN_ABILITIES push, or the greybox verify fixture).
+## The action bar (re)builds its slots. `abilities` is an Array of ability Dictionaries
+## {ability_id:int, name:String, icon_id:int, hotkey:int, cast_ms:int, triggers_gcd:bool,
+## resource_type:int, resource_cost:int, range_m:float} — the server metadata drives the
+## GCD/cast prediction (a triggers_gcd:false ability starts no GCD; cast_ms>0 casts).
 signal ability_set_changed(abilities: Array)
 
 ## The GCD sweep changed. `start_ms`/`duration_ms` are in the Time.get_ticks_msec() domain
@@ -957,7 +988,8 @@ signal cast_result_received(result: Dictionary)
 signal cast_requested(ability_id: int, target_guid: int, client_time_ms: int)
 
 # --- Combat registry state ---------------------------------------------------
-var _abilities: Array = []       # greybox known-ability set (see the gap note)
+var _abilities: Array = []       # known-ability set (KNOWN_ABILITIES; see the set note)
+var _ability_meta: Dictionary = {}  # ability_id -> {cast_ms, triggers_gcd} for O(1) predict lookups
 var _gcd_start_ms: int = 0       # optimistic GCD window start (caller's clock domain)
 var _gcd_duration_ms: int = 0    # GCD window length (0 = no GCD running)
 var _cast_active: bool = false   # a cast-time ability is in progress (cast bar visible)
@@ -966,31 +998,79 @@ var _cast_start_ms: int = 0
 var _cast_duration_ms: int = 0
 var _pending_ability: int = 0    # ability whose CAST_REQUEST is in flight (0 = none)
 
-# --- Seed API (greybox ability set -> bus; no wire contract, see the gap note) -
+# --- Publish / seed API (KNOWN_ABILITIES wire -> bus) -------------------------
 
-## Seed the known-ability set the action bar renders. Replaces the whole set + emits. The
-## world scene calls this once at enter-world from the documented greybox set; when a
-## KNOWN_ABILITIES wire contract lands this is the ONLY call site that changes.
+## Publish a KNOWN_ABILITIES set (decode_cast_frame kind "known_abilities"): the character's
+## REAL learned abilities + server metadata, pushed at ENTER_WORLD and re-pushed after a
+## growing TRAINER_LEARN. Normalizes each wire row {ability_id, cast_ms, triggers_gcd,
+## resource_type, resource_cost, range_m} into the canonical action-bar entry (deriving the
+## display fields the wire omits: hotkey = slot order, name/icon from the id), replaces the
+## whole set, and emits. An EMPTY set (a fresh character knows nothing) clears the bar.
+func publish_known_abilities(abilities: Array) -> void:
+	var out: Array = []
+	for i in range(abilities.size()):
+		var a: Dictionary = abilities[i]
+		var aid := int(a.get("ability_id", 0))
+		out.append({
+			"ability_id": aid,
+			"name": String(a.get("name", "Ability #%d" % aid)),
+			"icon_id": int(a.get("icon_id", aid)),
+			"hotkey": i + 1,  # the wire carries no keybind — slot order IS the hotkey
+			"cast_ms": int(a.get("cast_ms", 0)),
+			"triggers_gcd": bool(a.get("triggers_gcd", true)),
+			"resource_type": int(a.get("resource_type", 0)),
+			"resource_cost": int(a.get("resource_cost", 0)),
+			"range_m": float(a.get("range_m", 0.0)),
+		})
+	_set_abilities(out)
+
+## Seed the known-ability set directly (used by the headless verify fixture, which supplies
+## already-canonical greybox entries). Replaces the whole set + emits. Prefer
+## publish_known_abilities() for the real wire path (it normalizes wire rows).
 func seed_abilities(abilities: Array) -> void:
-	_abilities = abilities.duplicate(true)
+	_set_abilities(abilities.duplicate(true))
+
+# Store the ability set + rebuild the metadata index the GCD/cast prediction reads, then emit.
+func _set_abilities(abilities: Array) -> void:
+	_abilities = abilities
+	_ability_meta.clear()
+	for a in _abilities:
+		var aid := int((a as Dictionary).get("ability_id", 0))
+		_ability_meta[aid] = {
+			"cast_ms": int((a as Dictionary).get("cast_ms", 0)),
+			"triggers_gcd": bool((a as Dictionary).get("triggers_gcd", true)),
+		}
 	ability_set_changed.emit(self.abilities())
 
 # --- Request API (view -> intent signal; the world scene sends the frame) -----
 
-## A slot press. Predicts the GCD optimistically and emits the CAST_REQUEST intent, UNLESS
-## a predicted GCD is still running (the press is dropped, exactly as the server would
-## reject ON_GCD — so we never spam the wire). `now_ms` is Time.get_ticks_msec(). Returns
-## true iff the cast was issued (the caller may flash the slot). Target is the current
-## target (0 = self); the server resolves the real target legality (Principle 1).
+## A slot press. Emits the CAST_REQUEST intent and, for a GCD-triggering ability, predicts
+## the GCD optimistically. An on-GCD press while a predicted GCD is still running is DROPPED
+## (exactly as the server would reject ON_GCD — no wire spam). A `triggers_gcd:false` ability
+## (KNOWN_ABILITIES metadata, #457) starts NO GCD and is NEVER dropped by the GCD guard —
+## fixing the #456 over-prediction where every ability assumed a 1.5 s GCD. `now_ms` is
+## Time.get_ticks_msec(). Returns true iff the cast was issued (the caller may flash the
+## slot). Target is the current target (0 = self); the server resolves target legality.
 func request_cast(ability_id: int, now_ms: int) -> bool:
-	if gcd_remaining_ms(now_ms) > 0:
-		return false  # predicted GCD busy — drop the press (no wire spam)
-	# Optimistic GCD: start the sweep on the press so it feels instant (D-10).
-	_gcd_start_ms = now_ms
-	_gcd_duration_ms = GCD_MS
+	var triggers_gcd := _ability_triggers_gcd(ability_id)
+	if triggers_gcd and gcd_remaining_ms(now_ms) > 0:
+		return false  # predicted GCD busy — drop the on-GCD press (no wire spam)
+	if triggers_gcd:
+		# Optimistic GCD: start the sweep on the press so it feels instant (D-10).
+		_gcd_start_ms = now_ms
+		_gcd_duration_ms = GCD_MS
+		gcd_changed.emit(_gcd_start_ms, _gcd_duration_ms)
 	_pending_ability = ability_id
-	gcd_changed.emit(_gcd_start_ms, _gcd_duration_ms)
 	cast_requested.emit(ability_id, _target_guid, now_ms)
+	return true
+
+
+# Whether `ability_id` triggers the global cooldown, per its KNOWN_ABILITIES metadata.
+# Defaults to TRUE for an unknown id (the greybox fixture / an id not in the set) so the
+# conservative "assume a GCD" behavior holds until real metadata says otherwise.
+func _ability_triggers_gcd(ability_id: int) -> bool:
+	if _ability_meta.has(ability_id):
+		return bool((_ability_meta[ability_id] as Dictionary).get("triggers_gcd", true))
 	return true
 
 # --- Publish API (the net layer -> bus) --------------------------------------

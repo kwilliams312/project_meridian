@@ -54,6 +54,10 @@ inline constexpr std::uint16_t kOpCastRequest    = 0x3001;  // C→S
 inline constexpr std::uint16_t kOpCastStart      = 0x3002;  // S→C  ACCEPT (cast_ms; 0=instant)
 inline constexpr std::uint16_t kOpCastFailed     = 0x3003;  // S→C  REJECT (reason + gcd_remaining_ms)
 inline constexpr std::uint16_t kOpCastResult     = 0x3004;  // S→C  attack-table resolution
+// Known-ability set (M1 — CMB-01, #457/#456). Pushed S→C to the OWNING client at
+// ENTER_WORLD and re-sent after a TRAINER_LEARN that grows the set, so the action bar
+// seeds from the character's REAL learned abilities + their cast/GCD/resource metadata.
+inline constexpr std::uint16_t kOpKnownAbilities = 0x3005;  // S→C  spellbook + metadata
 // Quest state (M1 — QST-01, #371/#433). QUEST_LOG is bidirectional: C→S it REQUESTS
 // the log (an empty QuestLog table body); S→C it CARRIES the log snapshot. The others
 // are one C→S request paired with a typed S→C result; QUEST_PROGRESS is S→C only.

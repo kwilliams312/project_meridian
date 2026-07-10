@@ -42,6 +42,7 @@ func _initialize() -> void:
 	_verify_event_bus_quest()
 	_verify_event_bus_gossip()
 	await _verify_gossip_window()
+	await _verify_turn_in_choice_picker()
 	await _verify_quest_log_window()
 	await _verify_quest_tracker()
 	_verify_net_bridge()
@@ -50,7 +51,8 @@ func _initialize() -> void:
 	quit(1 if _fails > 0 else 0)
 
 
-# A populated two-quest log snapshot (the shape decode_quest_frame produces).
+# A populated two-quest log snapshot (the shape decode_quest_frame produces), including
+# each quest's REWARD PREVIEW (#443): quest 28 offers a 2-option choice; quest 29 is flat.
 func _sample_log() -> Array:
 	return [
 		{
@@ -58,12 +60,18 @@ func _sample_log() -> Array:
 			"objectives": [
 				{"type": 0, "target_id": 26, "have": 3, "need": 8, "complete": false},
 			],
+			"reward_xp": 300, "reward_money": 1200,
+			"reward_items": [{"item_id": 700, "count": 1}],
+			"choice_items": [{"item_id": 801, "count": 1}, {"item_id": 802, "count": 2}],
 		},
 		{
 			"quest_id": 29, "level": 5, "complete": true,
 			"objectives": [
 				{"type": 1, "target_id": 50, "have": 6, "need": 6, "complete": true},
 			],
+			"reward_xp": 420, "reward_money": 500,
+			"reward_items": [{"item_id": 900, "count": 3}],
+			"choice_items": [],
 		},
 	]
 
@@ -83,6 +91,15 @@ func _verify_event_bus_quest() -> void:
 	_check("auto-tracked first quest (28)", bus.tracked_quest() == 28)
 	_check("quest_log_changed emitted", log_events.size() == 1)
 	_check("tracked_quest_changed emitted", track_events.size() >= 1 and int(track_events[-1]) == 28)
+
+	# The reward PREVIEW (#443) round-trips through the bus quest entry: flat XP/copper, the
+	# always-granted item, and the one-of choice options the turn-in picker reads.
+	var q28: Dictionary = bus.quest_entry(28)
+	_check("reward preview stored (xp/money)", int(q28.get("reward_xp", 0)) == 300 and
+		int(q28.get("reward_money", 0)) == 1200)
+	_check("always-granted reward item stored", (q28.get("reward_items", []) as Array).size() == 1)
+	_check("choice options stored (2)", (q28.get("choice_items", []) as Array).size() == 2)
+	_check("flat quest 29 has no choice options", (bus.quest_entry(29).get("choice_items", []) as Array).is_empty())
 
 	# QUEST_PROGRESS merges onto the tracked entry's objective.
 	var prog_events: Array = []
@@ -207,6 +224,57 @@ func _verify_gossip_window() -> void:
 	bus.close_gossip()
 	await _wait(1)
 	_check("gossip window hidden on close", not win.visible)
+	win.queue_free()
+
+
+# The turn-in choice picker (#443/#442): a CHOICE-reward quest opens a picker with the
+# reward preview + one button per option; the picked index rides QUEST_TURN_IN.choice_index
+# (fixing the old choice_index=-1 → BAD_CHOICE). A flat-reward quest still turns in with -1.
+func _verify_turn_in_choice_picker() -> void:
+	print("[gossip_window/choice_picker]")
+	var bus = EventBus.new()
+	var win = GossipWindow.new()
+	root.add_child(win)
+	await _wait(1)
+	win.setup(bus)
+
+	# The quest reward preview lives in the bus quest log; publish it, then open gossip on a
+	# turn-in NPC offering BOTH a choice-reward quest (28) and a flat-reward quest (29).
+	bus.publish_quest_log(_sample_log())
+	bus.publish_gossip_menu(88, [
+		{"kind": EventBus.GOSSIP_QUEST_COMPLETE, "target_id": 28},  # choice quest
+		{"kind": EventBus.GOSSIP_QUEST_COMPLETE, "target_id": 29},  # flat quest
+	])
+	await _wait(1)
+
+	var turn: Array = []
+	bus.quest_turn_in_requested.connect(func(q, n, c): turn.append([q, n, c]))
+
+	# A FLAT-reward quest (29) turns in immediately with choice_index -1 (unchanged path).
+	var flat_btn := _find_button_containing(win, "Turn in quest #29")
+	_check("flat turn-in row rendered", flat_btn != null)
+	if flat_btn != null:
+		flat_btn.emit_signal("pressed")
+	_check("flat quest turns in with choice_index -1",
+		turn.size() == 1 and int(turn[0][0]) == 29 and int(turn[0][2]) == -1)
+
+	# A CHOICE-reward quest (28) opens the picker instead of turning in immediately.
+	var choice_btn := _find_button_containing(win, "Turn in quest #28")
+	_check("choice turn-in row rendered", choice_btn != null)
+	if choice_btn != null:
+		choice_btn.emit_signal("pressed")
+	await _wait(1)
+	_check("choice quest opens the picker (no immediate turn-in)", turn.size() == 1)
+	_check("reward preview shows XP", _find_label_containing(win, "300 XP") != null)
+	var opt0 := _find_button_containing(win, "Item #801")
+	var opt1 := _find_button_containing(win, "Item #802")
+	_check("both choice options rendered", opt0 != null and opt1 != null)
+
+	# Picking the SECOND option sends choice_index 1 (quest 28, npc 88) — the #442 fix.
+	if opt1 != null:
+		opt1.emit_signal("pressed")
+	_check("picking option 1 sends choice_index 1",
+		turn.size() == 2 and int(turn[1][0]) == 28 and int(turn[1][1]) == 88 and int(turn[1][2]) == 1)
 	win.queue_free()
 
 

@@ -53,7 +53,6 @@ const PlayerClassColors := preload("res://scenes/world/player_class_colors.gd")
 # unit event into it; the HUD subscribes to the bus and never touches the net thread.
 const MeridianEventBusScript := preload("res://hud/event_bus.gd")
 const MeridianHudScript := preload("res://hud/hud.gd")
-const MeridianAbilitySetScript := preload("res://hud/ability_set.gd")
 
 var _session: Dictionary = {}
 var _character: Dictionary = {}
@@ -368,12 +367,11 @@ func _on_movement_state(state: Dictionary) -> void:
 			_bus.seed_identity(_my_guid, String(_character.get("name", "")),
 				int(_character.get("level", 0)), int(_character.get("class", 0)))
 			_bus.set_local_player(_my_guid)
-			# CMB-01 (#432): seed the action bar's known-ability set. The wire has NO
-			# KNOWN_ABILITIES push (contract gap — see hud/ability_set.gd), so this comes
-			# from the documented greybox set until that contract lands. Idempotent-safe:
-			# only seed once (the first time we learn our guid).
-			if _bus.abilities().is_empty():
-				_bus.seed_abilities(MeridianAbilitySetScript.greybox_abilities())
+			# CMB-01 (#456/#457/#472): the action bar's known-ability set is NO LONGER
+			# greybox-seeded here — worldd pushes the character's REAL KNOWN_ABILITIES
+			# (0x3005) at ENTER_WORLD (and re-pushes after a growing TRAINER_LEARN), which
+			# _route_cast_frame() routes to bus.publish_known_abilities(). A freshly-created
+			# character enters knowing nothing (empty bar) and it grows as it trains.
 	_last_server_tick = int(state.get("server_time_ms", _last_server_tick))
 	if _mover != null:
 		# Wire (Z-UP) -> Godot (Y-UP): y = height (wire z), z = ground (wire y).
@@ -689,6 +687,12 @@ func _route_cast_frame(opcode: int, payload: PackedByteArray) -> void:
 	var c: Dictionary = _net.decode_cast_frame(opcode, payload)
 	var now := Time.get_ticks_msec()
 	match String(c.get("kind", "")):
+		"known_abilities":
+			# KNOWN_ABILITIES (0x3005, #457): the character's REAL learned set + metadata,
+			# pushed at ENTER_WORLD and re-pushed after a growing TRAINER_LEARN. Seeds the
+			# action bar from the wire (replaces the greybox seed) so the GCD/cast prediction
+			# reads each ability's real cast_ms/triggers_gcd (fixes the #456 over-prediction).
+			_bus.publish_known_abilities(c.get("abilities", []))
 		"cast_start":
 			_bus.publish_cast_start(int(c.get("ability_id", 0)), int(c.get("cast_ms", 0)),
 				int(c.get("server_time_ms", 0)), now)

@@ -226,6 +226,31 @@ struct CastResult {
 Bytes encode_cast_result(const CastResult& in);  // test/mock symmetry (client decodes)
 std::optional<CastResult> decode_cast_result(const Bytes& buf);
 
+// One KNOWN ability as the owning client sees it (a row of the spellbook / action bar,
+// #457). All metadata is server-authoritative (read from the AbilityStore): `cast_ms` = 0
+// is instant; `triggers_gcd` false means using it does NOT start the global cooldown (the
+// action bar must not predict one); `resource_cost` is 0 when `resource_type` is NONE.
+// `resource_type` is world.fbs AbilityResource (0=NONE,1=MANA,2=RAGE,3=ENERGY), carried
+// as a u8 ordinal so this POD API has no generated-enum dependency (like the status fields).
+struct KnownAbility {
+    std::uint32_t ability_id = 0;
+    std::uint32_t cast_ms = 0;
+    bool triggers_gcd = true;
+    std::uint8_t resource_type = 0;  // AbilityResource
+    std::uint32_t resource_cost = 0;
+    float range_m = 0.0f;
+};
+
+// KNOWN_ABILITIES (S→C, 0x3005): the character's known ability set (spellbook), pushed to
+// the OWNING client at ENTER_WORLD and re-sent after a TRAINER_LEARN that grows the set,
+// so the action bar (#456) seeds from the REAL learned abilities + their metadata. A fresh
+// character enters with an EMPTY set (M1: no durable ability table). A DISPLAY projection.
+struct KnownAbilities {
+    std::vector<KnownAbility> abilities;
+};
+Bytes encode_known_abilities(const KnownAbilities& in);  // test/mock symmetry (client decodes)
+std::optional<KnownAbilities> decode_known_abilities(const Bytes& buf);
+
 // ---------------------------------------------------------------------------
 // IF-2 (world.fbs) — character management (D-35 / #286) + server-authoritative
 // enter-world (D-35 / #341), over the AUTHENTICATED world session (post-HandshakeOk).
@@ -406,12 +431,19 @@ struct QuestTurnInResult {
 Bytes encode_quest_turn_in_result(const QuestTurnInResult& in);  // test/mock symmetry
 std::optional<QuestTurnInResult> decode_quest_turn_in_result(const Bytes& buf);
 
-// One active quest in the log snapshot.
+// One active quest in the log snapshot, including its REWARD PREVIEW (#443): the flat
+// XP + copper, the always-granted `reward_items`, and the one-of `choice_items` (empty =
+// no choice picker). This is what the client renders the turn-in offer + choice picker
+// from BEFORE the player commits — the picked option rides QuestTurnIn.choice_index.
 struct QuestLogEntry {
     std::uint32_t quest_id = 0;
     std::uint16_t level = 0;
     bool complete = false;
     std::vector<QuestObjectiveState> objectives;
+    std::uint32_t reward_xp = 0;
+    std::int64_t reward_money = 0;  // copper (ECO-01)
+    std::vector<QuestRewardItem> reward_items;   // always-granted (preview)
+    std::vector<QuestRewardItem> choice_items;   // one-of options (empty = no picker)
 };
 
 // QUEST_LOG (C↔S): C→S an EMPTY QuestLog is the "send me my log" request; S→C the

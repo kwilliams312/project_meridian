@@ -19,6 +19,7 @@ extends PanelContainer
 
 # world.fbs GossipOptionKind ordinals, re-exposed via the bus constants.
 const Bus := preload("res://hud/event_bus.gd")
+const Money := preload("res://hud/money.gd")
 
 const WIN_W := 320.0
 
@@ -140,10 +141,10 @@ func _add_option_row(opt: Dictionary) -> void:
 		Bus.GOSSIP_QUEST_COMPLETE:
 			var b := _make_button("[?]  Turn in quest #%d" % target_id,
 				Color(0.55, 0.9, 0.4))
-			# choice_index -1 = no reward choice. A choice-reward quest returns
-			# BAD_CHOICE and the typed result surfaces it (reward data is not on the
-			# gossip wire — a reward-picker is a follow-up once QUEST_TURN_IN carries it).
-			b.pressed.connect(func(): _bus.request_quest_turn_in(target_id, _npc_guid, -1))
+			# The quest's reward preview lives in the bus quest log (QuestLogEntry, #443).
+			# A choice-reward quest opens the picker; a flat-reward quest turns in directly
+			# with choice_index -1 (fixes the #442 BAD_CHOICE for choice quests).
+			b.pressed.connect(func(): _on_turn_in_pressed(target_id))
 			_body.add_child(b)
 		Bus.GOSSIP_VENDOR:
 			var b := _make_button("Browse goods  (vendor)", Color(0.7, 0.85, 1.0))
@@ -155,6 +156,70 @@ func _add_option_row(opt: Dictionary) -> void:
 			_body.add_child(b)
 		_:
 			pass  # unknown option kind — ignore forward-compatibly
+
+
+# --- Turn-in + reward-choice picker (QST-01, #443/#442) ----------------------
+
+# A turn-in row was pressed. Read the quest's reward preview from the bus quest log: a
+# choice-reward quest (non-empty choice_items) opens the picker; a flat-reward quest turns
+# in immediately with choice_index -1 (unchanged). If the quest is somehow not in the log,
+# fall back to the -1 turn-in so the player is never stuck.
+func _on_turn_in_pressed(quest_id: int) -> void:
+	if _bus == null:
+		return
+	var entry: Dictionary = _bus.quest_entry(quest_id)
+	var choices: Array = entry.get("choice_items", [])
+	if choices.is_empty():
+		_bus.request_quest_turn_in(quest_id, _npc_guid, -1)
+		return
+	_show_turn_in_choices(quest_id, entry)
+
+
+# Render the reward preview + choice picker in place of the menu rows: the flat rewards
+# (XP + copper + always-granted items) plus one button per choice_items option. Picking an
+# option `i` sends QUEST_TURN_IN with choice_index = i (the #442 BAD_CHOICE fix).
+func _show_turn_in_choices(quest_id: int, entry: Dictionary) -> void:
+	_clear_body()
+	_title.text = "Turn in quest #%d" % quest_id
+
+	var reward_xp := int(entry.get("reward_xp", 0))
+	var reward_money := int(entry.get("reward_money", 0))
+	if reward_xp > 0 or reward_money > 0:
+		var flat := Label.new()
+		var parts: Array = []
+		if reward_xp > 0:
+			parts.append("%d XP" % reward_xp)
+		if reward_money > 0:
+			parts.append(Money.format_copper(reward_money))
+		flat.text = "Rewards:  " + ", ".join(PackedStringArray(parts))
+		flat.add_theme_color_override("font_color", Color(0.85, 0.9, 0.7))
+		_body.add_child(flat)
+
+	for it in entry.get("reward_items", []):
+		var g := Label.new()
+		g.text = "  • Item #%d ×%d" % [int((it as Dictionary).get("item_id", 0)),
+			int((it as Dictionary).get("count", 1))]
+		g.add_theme_color_override("font_color", Color(0.8, 0.82, 0.88))
+		_body.add_child(g)
+
+	var prompt := Label.new()
+	prompt.text = "Choose one reward:"
+	prompt.add_theme_color_override("font_color", Color(1.0, 0.9, 0.55))
+	_body.add_child(prompt)
+
+	var choices: Array = entry.get("choice_items", [])
+	for i in range(choices.size()):
+		var c: Dictionary = choices[i]
+		var b := _make_button("Choose:  Item #%d ×%d" % [int(c.get("item_id", 0)),
+			int(c.get("count", 1))], Color(0.6, 0.9, 0.5))
+		var idx := i  # capture by value for the lambda
+		b.pressed.connect(func(): _bus.request_quest_turn_in(quest_id, _npc_guid, idx))
+		_body.add_child(b)
+
+	# Let the player back out of the picker to the menu without turning in.
+	var back := _make_button("← Back", Color(0.75, 0.78, 0.85))
+	back.pressed.connect(func(): show_menu(_npc_guid, _bus.gossip_options()))
+	_body.add_child(back)
 
 
 func _make_button(text: String, color: Color) -> Button:

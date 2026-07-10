@@ -431,6 +431,22 @@ Dictionary MeridianNetThread::decode_cast_frame(int opcode,
 		d["target_health"] = static_cast<int64_t>(r->target_health);
 		d["target_dead"] = r->target_dead;
 		d["server_time_ms"] = static_cast<int64_t>(r->server_time_ms);
+	} else if (opcode == cn::kOpKnownAbilities) {
+		auto r = cn::codec::decode_known_abilities(buf);
+		if (!r) return d;
+		d["kind"] = String("known_abilities");
+		Array abilities;
+		for (const auto &a : r->abilities) {
+			Dictionary row;
+			row["ability_id"] = static_cast<int64_t>(a.ability_id);
+			row["cast_ms"] = static_cast<int64_t>(a.cast_ms);
+			row["triggers_gcd"] = a.triggers_gcd;
+			row["resource_type"] = static_cast<int64_t>(a.resource_type);  // AbilityResource
+			row["resource_cost"] = static_cast<int64_t>(a.resource_cost);
+			row["range_m"] = a.range_m;
+			abilities.push_back(row);
+		}
+		d["abilities"] = abilities;
 	}
 	return d;  // kind stays "" for a non-combat opcode / undecodable payload
 }
@@ -579,6 +595,25 @@ Dictionary MeridianNetThread::decode_quest_frame(int opcode,
 				objs.push_back(od);
 			}
 			qd["objectives"] = objs;
+			// Reward PREVIEW (#443): flat XP + copper, always-granted items, one-of choices.
+			qd["reward_xp"] = static_cast<int64_t>(q.reward_xp);
+			qd["reward_money"] = static_cast<int64_t>(q.reward_money);
+			Array rewards;
+			for (const auto &it : q.reward_items) {
+				Dictionary row;
+				row["item_id"] = static_cast<int64_t>(it.item_id);
+				row["count"] = static_cast<int64_t>(it.count);
+				rewards.push_back(row);
+			}
+			qd["reward_items"] = rewards;
+			Array choices;
+			for (const auto &it : q.choice_items) {
+				Dictionary row;
+				row["item_id"] = static_cast<int64_t>(it.item_id);
+				row["count"] = static_cast<int64_t>(it.count);
+				choices.push_back(row);
+			}
+			qd["choice_items"] = choices;
 			quests.push_back(qd);
 		}
 		d["quests"] = quests;
