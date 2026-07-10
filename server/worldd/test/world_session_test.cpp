@@ -276,9 +276,19 @@ struct MoveResult {
 // Decode a MOVEMENT_STATE reply frame into (x,y,z,ack). Returns false if the next
 // frame is not a MovementState (or none arrived).
 bool recv_movement_state(Client& c, float& x, float& y, float& z, std::uint32_t& ack) {
-    std::optional<Bytes> ms = c.recv_frame();
-    if (!ms) return false;
-    std::optional<mw::Frame> rf = mw::decode_frame(*ms);
+    // Skip the unsolicited self VITALS_UPDATE the server now pushes at ENTER_WORLD
+    // (#439: the HUD player-frame snapshot). It arrives after ENTER_WORLD_RESPONSE
+    // but before this MovementState, so drain it here to reach the awaited state.
+    // `ms` MUST outlive the decode below — rf->payload points INTO it.
+    std::optional<Bytes> ms;
+    std::optional<mw::Frame> rf;
+    for (;;) {
+        ms = c.recv_frame();
+        if (!ms) return false;
+        rf = mw::decode_frame(*ms);
+        if (rf && rf->opcode == mn::Opcode::VITALS_UPDATE) continue;
+        break;
+    }
     if (!rf || rf->opcode != mn::Opcode::MOVEMENT_STATE) return false;
     Bytes pl(rf->payload, rf->payload + rf->payload_len);
     const auto* st = decode<mn::MovementState>(pl);
