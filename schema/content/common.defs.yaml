@@ -5,7 +5,7 @@ $defs:
   contentId:
     description: Fully-qualified ID owned by this file (namespace required).
     type: string
-    pattern: "^[a-z][a-z0-9_]{1,31}:(npc|item|quest|ability|loot|vendor|spawn|zone|pack)\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+    pattern: "^[a-z][a-z0-9_]{1,31}:(npc|item|quest|ability|loot|vendor|spawn|zone|pack|dye|appearance)\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
 
   assetId:
     description: Fully-qualified asset ID owned by an IF-8 sidecar (namespace required).
@@ -33,6 +33,12 @@ $defs:
   zoneRef:
     type: string
     pattern: "^([a-z][a-z0-9_]{1,31}:)?zone\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+  dyeRef:
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?dye\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+  appearanceRef:
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?appearance\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
 
   artRef:
     description: Asset-registry ID for a visual asset (Baseline §5.3).

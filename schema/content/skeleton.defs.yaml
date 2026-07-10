@@ -1,0 +1,27 @@
+# meridian/skeleton@1 — character vocabulary (spec: 2026-07-09 data-contract design §3).
+# Additive evolution ONLY: append entries; never rename/remove. A geoset region may
+# gain `children:` when split; hide-masks naming the parent hide all children.
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/skeleton.defs.yaml"
+$defs:
+  geosetRegion:
+    description: Coarse ×8 hideable body regions (owner decision 2026-07-09).
+    enum: [head, hands, forearms, torso, waist, hips_legs, lower_legs, feet]
+  attachSocket:
+    description: Bone-attachment mount points (weapons/shields/sheaths).
+    enum: [main_hand, off_hand, ranged, back, hip_l, hip_r, shield]
+  dyeChannel:
+    description: Max 3 == RGB dye-mask texture channels (spec §6).
+    enum: [primary, secondary, accent]
+  raceName:
+    description: >-
+      MUST mirror server/characters/src/roster.h Race enum names, lowercased, in
+      roster id order (that file is the single canonical M0-frozen source —
+      append-only, ids never renumber). Do not hardcode independently of it.
+    enum: [ardent, dolmen, sylvane, emberkin]
+  boneName:
+    description: >-
+      Canonical humanoid bone names (≤120 incl. face, art-prd §2.1). POPULATED BY
+      the rig work (spec ④) — empty enum is valid for @1-draft; the import
+      validator treats empty as "no bone-name check yet".
+    type: string

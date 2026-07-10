@@ -418,6 +418,41 @@ class TestSchemaConstraints:
 
 
 @pytest.mark.unit
+class TestSkeletonDefsMerge:
+    """meridian/skeleton@1 vocabulary $defs are merged into every content schema
+    (contract ①/T1) the same way common.defs.yaml is — see load_schemas()."""
+
+    def test_skeleton_defs_merged_into_schemas(self):
+        from validate_content import load_schemas
+
+        validators = load_schemas(SCHEMA_DIR)
+        # any loaded validator's schema resolves the merged defs
+        merged = validators["item"].schema["$defs"]
+        assert set(merged["geosetRegion"]["enum"]) == {
+            "head",
+            "hands",
+            "forearms",
+            "torso",
+            "waist",
+            "hips_legs",
+            "lower_legs",
+            "feet",
+        }
+        assert "main_hand" in merged["attachSocket"]["enum"]
+        assert merged["dyeChannel"]["enum"] == ["primary", "secondary", "accent"]
+
+    def test_contentid_accepts_dye_and_appearance_segments(self):
+        import re
+
+        from validate_content import load_schemas
+
+        defs = load_schemas(SCHEMA_DIR)["item"].schema["$defs"]
+        pat = re.compile(defs["contentId"]["pattern"])
+        assert pat.match("core:dye.russet")
+        assert pat.match("core:appearance.ardent.male")
+
+
+@pytest.mark.unit
 class TestProvenanceLint:
     """L021/L022 — provenance completeness + license/origin policy (TD-09)."""
 

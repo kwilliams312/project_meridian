@@ -174,11 +174,17 @@ def load_schemas(schema_dir: Path) -> dict[str, Draft202012Validator]:
     common = yaml.safe_load(
         (schema_dir / "common.defs.yaml").read_text(encoding="utf-8")
     )
+    skeleton = yaml.safe_load(
+        (schema_dir / "skeleton.defs.yaml").read_text(encoding="utf-8")
+    )
     validators: dict[str, Draft202012Validator] = {}
     for path in sorted(schema_dir.glob("*.schema.yaml")):
         schema = yaml.safe_load(path.read_text(encoding="utf-8"))
         # Contract from schema/content/README.md: merge shared $defs before use.
         schema.setdefault("$defs", {}).update(common["$defs"])
+        # meridian/skeleton@1 — character vocabulary $defs (contract ①/T1), merged
+        # the same way as common.defs.yaml above.
+        schema.setdefault("$defs", {}).update(skeleton["$defs"])
         Draft202012Validator.check_schema(schema)
         type_name = path.name.split(".")[0]
         validators[type_name] = Draft202012Validator(schema)
