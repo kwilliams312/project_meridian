@@ -17,10 +17,17 @@ class_name MeridianHud
 extends CanvasLayer
 
 const UnitFrame := preload("res://hud/unit_frame.gd")
+# Quest/gossip views (QST-01, #433) — same MVVM binding as the unit frames.
+const GossipWindow := preload("res://hud/gossip_window.gd")
+const QuestLogWindow := preload("res://hud/quest_log_window.gd")
+const QuestTracker := preload("res://hud/quest_tracker.gd")
 
 var _bus: MeridianEventBus
 var _player_frame: MeridianUnitFrame
 var _target_frame: MeridianUnitFrame
+var _gossip: MeridianGossipWindow
+var _quest_log: MeridianQuestLogWindow
+var _quest_tracker: MeridianQuestTracker
 
 
 func _ready() -> void:
@@ -36,9 +43,22 @@ func setup(bus: MeridianEventBus) -> void:
 	_bus.local_player_changed.connect(_on_local_player_changed)
 	_bus.target_changed.connect(_on_target_changed)
 	_bus.entity_vitals_changed.connect(_on_entity_vitals_changed)
+	# Quest/gossip windows subscribe to the SAME bus (QST-01, #433).
+	if _gossip != null:
+		_gossip.setup(bus)
+	if _quest_log != null:
+		_quest_log.setup(bus)
+	if _quest_tracker != null:
+		_quest_tracker.setup(bus)
 	# Paint the initial state (the bus may already hold vitals from queued frames).
 	_refresh_player()
 	_refresh_target()
+
+
+# Toggle the quest log window (bound to a HUD key by the world scene, QST-01 #433).
+func toggle_quest_log() -> void:
+	if _quest_log != null:
+		_quest_log.toggle()
 
 
 func _build() -> void:
@@ -57,8 +77,34 @@ func _build() -> void:
 	_target_frame.set_frame_visible(false)
 	add_child(_target_frame)
 
-	# If setup() ran before _build() (node added after bind), paint now.
+	# Quest tracker: top-right, always-on for the watched quest (QST-01, #433).
+	_quest_tracker = QuestTracker.new()
+	_quest_tracker.name = "QuestTracker"
+	_quest_tracker.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_quest_tracker.position = Vector2(-250.0, 12.0)
+	_quest_tracker.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	add_child(_quest_tracker)
+
+	# Quest log window: right side, toggled (default hidden).
+	_quest_log = QuestLogWindow.new()
+	_quest_log.name = "QuestLogWindow"
+	_quest_log.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_quest_log.position = Vector2(-360.0, 160.0)
+	_quest_log.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	add_child(_quest_log)
+
+	# Gossip window: centered-left, opens on a targeted NPC (default hidden).
+	_gossip = GossipWindow.new()
+	_gossip.name = "GossipWindow"
+	_gossip.set_anchors_preset(Control.PRESET_CENTER_LEFT)
+	_gossip.position = Vector2(40.0, -80.0)
+	add_child(_gossip)
+
+	# If setup() ran before _build() (node added after bind), paint + bind now.
 	if _bus != null:
+		_gossip.setup(_bus)
+		_quest_log.setup(_bus)
+		_quest_tracker.setup(_bus)
 		_refresh_player()
 		_refresh_target()
 

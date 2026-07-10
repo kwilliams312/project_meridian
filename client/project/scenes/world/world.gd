@@ -132,6 +132,16 @@ func _ready() -> void:
 	add_child(_hud)
 	_hud.setup(_bus)
 
+	# QST-01 (#433): the world scene owns BOTH the bus and the net thread, so it is the
+	# controller that turns a UI INTENT (a bus request_* signal) into an outbound frame,
+	# and a decoded quest/gossip server frame into a bus publish. The HUD windows only
+	# ever see the bus — the net thread stays behind this one seam (extends #431).
+	_bus.gossip_hello_requested.connect(_on_gossip_hello_requested)
+	_bus.quest_accept_requested.connect(_on_quest_accept_requested)
+	_bus.quest_turn_in_requested.connect(_on_quest_turn_in_requested)
+	_bus.quest_log_requested.connect(_on_quest_log_requested)
+	_bus.giver_indicator_changed.connect(_on_giver_indicator_changed)
+
 	_interp = MeridianRemoteInterpolator.new()
 	_mover = MeridianMovementController.new()
 	_mover.reset(SPAWN, 0.0)
@@ -322,6 +332,10 @@ func _on_handshake_ok() -> void:
 	if _router != null:
 		_router.note_handshake_ok()   # past this point a drop is an in-world disconnect
 	print("[world] HandshakeOk — entered the world")
+	# QST-01 (#433): pull the initial quest-log snapshot now that we are in world (worldd
+	# does NOT push it unsolicited — #388 — so the client asks). Populates the tracker.
+	if _bus != null:
+		_bus.request_quest_log()
 
 
 func _on_movement_state(state: Dictionary) -> void:
@@ -352,7 +366,11 @@ func _on_entity_frame(opcode: int, _seq: int, payload: PackedByteArray) -> void:
 	var d: Dictionary = _net.decode_entity_frame(opcode, payload)
 	var kind := String(d.get("kind", ""))
 	if kind.is_empty():
-		return  # non-entity opcode (e.g. ClockSync) or undecodable
+		# Not an entity-relay opcode — try the QUEST/GOSSIP decode seam (QST-01, #433).
+		# worldd forwards these S→C frames raw through `entity_frame`; we decode + route
+		# them through the SAME event bus the HUD reads (never predicting quest state).
+		_route_quest_gossip_frame(opcode, payload)
+		return  # non-entity opcode (ClockSync / quest / gossip) or undecodable
 	var guid := int(d.get("guid", 0))
 
 	# UI-01 (#431): route ALL server unit state through the event bus first — including
@@ -504,10 +522,132 @@ func _despawn_remote(guid: int) -> void:
 # foe + range/LoS is the combat-presentation epic (#23) — this is only the seam that
 # proves the target frame binds to and renders a server unit's vitals from the bus.
 func _input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo \
-			and (event as InputEventKey).physical_keycode == KEY_TAB:
-		_cycle_target()
-		get_viewport().set_input_as_handled()  # TAB targets, does not move UI focus
+	if not (event is InputEventKey) or not event.pressed or event.echo:
+		return
+	var code := (event as InputEventKey).physical_keycode
+	match code:
+		KEY_TAB:
+			_cycle_target()
+			get_viewport().set_input_as_handled()  # TAB targets, does not move UI focus
+		KEY_G:
+			# QST-01 (#433): open gossip on the current NPC. NPC entities don't spawn at
+			# M1 (npc_guid maps 1:1 to the npc_template id), so the giver is the current
+			# target guid if set, else the dev default (MERIDIAN_GOSSIP_NPC, quartermaster
+			# Bren=27) so the flow is drivable in the greybox client.
+			_open_gossip_on_current_npc()
+			get_viewport().set_input_as_handled()
+		KEY_L:
+			if _hud != null:
+				_hud.toggle_quest_log()  # toggle the quest log window
+			get_viewport().set_input_as_handled()
+		KEY_ESCAPE:
+			if _bus != null:
+				_bus.close_gossip()  # dismiss the gossip window
+			get_viewport().set_input_as_handled()
+
+
+# --- Quest / gossip controller (QST-01, #433) --------------------------------
+# The world scene is the ONLY place both the bus and the net thread meet: it turns bus
+# INTENTS into outbound frames and decoded server frames into bus publishes. The HUD
+# windows stay pure views that know only the bus.
+
+# The dev NPC to open gossip on when nothing is targeted (npc_template id; overridable
+# with MERIDIAN_GOSSIP_NPC). 27 = quartermaster_bren, the IT-M1 kobold-chain giver.
+func _default_gossip_npc() -> int:
+	var env := OS.get_environment("MERIDIAN_GOSSIP_NPC")
+	return int(env) if env.is_valid_int() and int(env) > 0 else 27
+
+
+func _open_gossip_on_current_npc() -> void:
+	if _bus == null:
+		return
+	var npc := _bus.target_guid()
+	if npc == 0:
+		npc = _default_gossip_npc()
+	print("[world] GOSSIP_HELLO -> npc=%d" % npc)
+	_bus.request_gossip_hello(npc)
+
+
+# Decode a raw quest/gossip S→C frame and publish it to the bus (the HUD reads it there).
+func _route_quest_gossip_frame(opcode: int, payload: PackedByteArray) -> void:
+	if _net == null or _bus == null:
+		return
+	var q: Dictionary = _net.decode_quest_frame(opcode, payload)
+	var kind := String(q.get("kind", ""))
+	match kind:
+		"gossip_menu":
+			_bus.publish_gossip_menu(int(q.get("npc_guid", 0)), q.get("options", []))
+		"quest_accept_result":
+			_bus.publish_quest_accept_result(int(q.get("quest_id", 0)), int(q.get("status", 0)))
+		"quest_progress":
+			_bus.publish_quest_progress(q)
+		"quest_turn_in_result":
+			_bus.publish_quest_turn_in_result(q)
+		"quest_log":
+			_bus.publish_quest_log(q.get("quests", []))
+		_:
+			pass  # not a quest/gossip opcode — ignore (ClockSync etc.)
+
+
+# --- Bus intent handlers (send the matching outbound frame) -------------------
+
+func _on_gossip_hello_requested(npc_guid: int) -> void:
+	if _net == null:
+		return
+	var frame: PackedByteArray = _net.build_gossip_hello_frame(npc_guid)
+	if frame.size() > 0:
+		_net.send_bulk(frame)
+
+
+func _on_quest_accept_requested(quest_id: int, giver_guid: int) -> void:
+	if _net == null:
+		return
+	var frame: PackedByteArray = _net.build_quest_accept_frame(quest_id, giver_guid)
+	if frame.size() > 0:
+		_net.send_bulk(frame)
+	print("[world] QUEST_ACCEPT -> quest=%d giver=%d" % [quest_id, giver_guid])
+
+
+func _on_quest_turn_in_requested(quest_id: int, turn_in_guid: int, choice_index: int) -> void:
+	if _net == null:
+		return
+	var frame: PackedByteArray = _net.build_quest_turn_in_frame(quest_id, turn_in_guid, choice_index)
+	if frame.size() > 0:
+		_net.send_bulk(frame)
+	print("[world] QUEST_TURN_IN -> quest=%d npc=%d choice=%d" % [quest_id, turn_in_guid, choice_index])
+
+
+func _on_quest_log_requested() -> void:
+	if _net == null:
+		return
+	var frame: PackedByteArray = _net.build_quest_log_request_frame()
+	if frame.size() > 0:
+		_net.send_bulk(frame)
+
+
+# Float a giver indicator (!/?) over an NPC's remote node when one exists. NPC entities
+# do not spawn at M1 (npc_guid maps to a template id), so this is a no-op until spawns
+# land (mcc #28) — but the seam is wired so the marker appears the moment an NPC does.
+func _on_giver_indicator_changed(npc_guid: int, marker: String) -> void:
+	var node: Node3D = _remote_nodes.get(npc_guid)
+	if node == null:
+		return
+	var existing := node.get_node_or_null("GiverMarker") as Label3D
+	if marker.is_empty():
+		if existing != null:
+			existing.queue_free()
+		return
+	if existing == null:
+		existing = Label3D.new()
+		existing.name = "GiverMarker"
+		existing.position = Vector3(0, 2.6, 0)
+		existing.font_size = 64
+		existing.outline_size = 12
+		existing.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		existing.no_depth_test = true
+		node.add_child(existing)
+	existing.text = marker
+	existing.modulate = Color(1.0, 0.85, 0.2) if marker == "!" else Color(0.55, 0.9, 0.4)
 
 
 func _cycle_target() -> void:
