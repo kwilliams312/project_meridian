@@ -93,6 +93,13 @@ struct NpcDef {
     bool is_vendor = false;
     bool is_trainer = false;
 
+    // The vendor CATALOG id this NPC sells from (meridian::vendor::VendorCatalog
+    // key; the VENDOR_BUY_REQUEST.vendor_id), meaningful only when `is_vendor`.
+    // A plain numeric id — like `trainer_abilities` carries ability ids — so this
+    // library still never depends on meridian::vendor (#453). 0 = unset; worldd
+    // pushes the catalog (VENDOR_LIST) only for a non-zero vendor id.
+    std::uint32_t vendor_id = 0;
+
     std::vector<NpcQuestRef>    quests;             // quest giver / turn-in participation
     std::vector<TrainerAbility> trainer_abilities;  // taught abilities (trainer only)
 

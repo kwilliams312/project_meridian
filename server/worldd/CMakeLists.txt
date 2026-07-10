@@ -540,6 +540,25 @@ target_link_libraries(worldd-trainer-db-wire-test
 set_target_properties(worldd-trainer-db-wire-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-trainer-db-wire COMMAND worldd-trainer-db-wire-test)
 
+# --- HUD read-contracts LIVE-SESSION integration test (issue #453). ------------
+# The two server->client READ contracts the HUD needs, over a real TLS session
+# against a real MariaDB using the M1 PLACEHOLDER stores: ENTER_WORLD pushes an
+# INVENTORY_SNAPSHOT (money + bags), a vendor GOSSIP_HELLO auto-pushes VENDOR_LIST
+# (server-computed prices), and a buy/sell/buyback re-pushes the snapshot +
+# VENDOR_BUYBACK_RESULT echoes buyback_slot. Reads MERIDIAN_DB_* and SKIPS when unset.
+add_executable(worldd-hud-read-contracts-test
+  test/hud_read_contracts_it.cpp
+)
+target_link_libraries(worldd-hud-read-contracts-test
+  PRIVATE
+    meridian::world-dispatch
+    meridian::characters
+    meridian::npc
+    Threads::Threads
+)
+set_target_properties(worldd-hud-read-contracts-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-hud-read-contracts COMMAND worldd-hud-read-contracts-test)
+
 # --- Area triggers + POI discovery UNIT test (WLD-01/03; #368). ---------------
 # PURE (no DB, no socket, no TLS): exercises BOTH layers directly —
 #   (1) the AreaTriggerSet core (point-in-box membership, enter/leave fire ONCE

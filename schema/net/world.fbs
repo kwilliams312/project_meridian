@@ -122,6 +122,17 @@ enum Opcode : uint16 {
   LOOT_RELEASE  = 0x5005,  // C→S  close the loot window
   LOOT_CLOSED   = 0x5006,  // S→C  the loot window closed (released / corpse looted-out)
 
+  // --- 0x5xxx  inventory contents  (M1 — ITM-01: bags snapshot, #453, epic #24) ---
+  // The character's server-authoritative backpack contents + money balance, pushed
+  // to the OWNING client so the bags window (#452) + the slot-driven vendor SELL
+  // control render REAL items instead of a copper-only greybox. Sent at ENTER_WORLD
+  // (the same class of enter-world snapshot as self VITALS_UPDATE, #439) and re-sent
+  // after every server-authoritative inventory change (loot take, vendor buy/sell/
+  // buyback, quest reward, GM .additem). A pure DISPLAY projection — the client never
+  // predicts inventory (Principle 1, "server is law"). Appended after loot in the
+  // inventory/loot low sub-band (0x5001..0x500F); never renumber.
+  INVENTORY_SNAPSHOT = 0x5007,  // S→C  the character's backpack items + money balance
+
   // --- 0x5xxx  inventory / economy : vendors  (M1 — ECO-01: vendors, #370, epic #20) ---
   // Server-authoritative vendor transactions (server PRD §4-M1 ECO-01). buy /
   // sell / buyback each ride ONE C→S request opcode with a paired S→C result.
@@ -136,6 +147,7 @@ enum Opcode : uint16 {
   VENDOR_SELL_RESULT      = 0x5104,  // S→C  typed outcome: credited copper + buyback slot
   VENDOR_BUYBACK_REQUEST  = 0x5105,  // C→S  repurchase a recently-sold item by buyback slot
   VENDOR_BUYBACK_RESULT   = 0x5106,  // S→C  typed outcome: restored item + re-debited copper
+  VENDOR_LIST             = 0x5107,  // S→C  a vendor's catalog: item ids + server-computed prices + stock
 
   // --- 0x52xx  NPC interaction   (M1 — NPC-01/02: gossip + trainers, #372) ---
   // Server-authoritative NPC interaction (server PRD §4-M1 NPC-01/02; epic #20).
@@ -961,6 +973,45 @@ table LootClosed {
 }
 
 // ===========================================================================
+// 0x5xxx — inventory contents  (M1 — ITM-01: bags snapshot, #453, epic #24)
+// ===========================================================================
+// The server-authoritative projection of the character's backpack (bag 0 loose
+// grid) + money balance, sent to the OWNING client only. worldd is the sole
+// authority on inventory (items::Inventory + the characters DB, ITM-01 #366): a
+// client never mutates its bags directly — it asks (loot / vendor / quest) and the
+// server persists, then RE-SENDS this snapshot so the bags window (#452) and the
+// slot-driven vendor SELL control reflect the real, durable state. Sent once at
+// ENTER_WORLD (paralleling the self VITALS_UPDATE snapshot, #439) and after every
+// server-authoritative inventory change. EQUIPMENT (the paperdoll) is NOT here at
+// M1 — the bags window shows loose items; equip slots ride a later additive field.
+
+/// One backpack slot as the owning client sees it (a row of the bags window).
+/// `slot` is the backpack GRID index (0-based within the loose grid), NOT the
+/// persisted bag-0 slot number. `quality` is the item's rarity tier
+/// (item.schema.yaml rarity: 0=poor … 5=legendary) for the client's colour;
+/// `binding` is the bind rule (0=none, 1=on-pickup, 2=on-equip) — inert at M1 but
+/// carried so the bags window can badge bound items without a second lookup.
+table InventoryItem {
+  slot:uint16;              // backpack grid index (0-based)
+  item_template_id:uint32;  // -> world DB item_template (IF-9)
+  count:uint32;             // stack size in this slot (>=1)
+  quality:uint8 = 0;        // rarity tier (Rarity)
+  binding:uint8 = 0;        // bind rule (Binding: 0 none / 1 on-pickup / 2 on-equip)
+}
+
+/// S→C. The character's backpack contents + money. `money` is the copper balance
+/// (server-authoritative, int64 copper — the same balance the vendor/trainer
+/// results carry). `items` lists ONLY occupied backpack slots (empty slots are
+/// omitted; an empty backpack yields an empty vector). `backpack_slots` is the
+/// grid capacity so the client can render the right number of cells. A DISPLAY
+/// projection — the client never predicts inventory (Principle 1).
+table InventorySnapshot {
+  money:int64;                // copper balance (server-authoritative)
+  items:[InventoryItem];      // occupied backpack slots (empty = nothing carried)
+  backpack_slots:uint16 = 0;  // backpack grid capacity (cell count)
+}
+
+// ===========================================================================
 // 0x5xxx — inventory / economy : vendors  (M1 — ECO-01, #370, epic #20)
 // ===========================================================================
 // Server-authoritative vendor transactions (server PRD §4-M1 ECO-01). The server
@@ -1066,6 +1117,8 @@ enum VendorBuybackStatus : uint16 {
 
 /// S→C. Result of a VendorBuybackRequest. On OK the item is minted back into the
 /// backpack and `price` copper is re-debited; the entry leaves the buyback queue.
+/// `buyback_slot` ECHOES the request's slot (the queue index that was repurchased)
+/// so the client can drop that row without correlating against its own request.
 table VendorBuybackResult {
   status:VendorBuybackStatus = OK;
   item_template_id:uint32;
@@ -1073,6 +1126,40 @@ table VendorBuybackResult {
   item_guid:uint64;      // re-minted instance guid on OK (0 otherwise)
   price:int64;           // copper re-debited on OK (0 otherwise)
   balance:int64;         // the character's money AFTER the transaction
+  buyback_slot:uint16 = 0;  // echoed queue slot that was repurchased (#453)
+}
+
+// ===========================================================================
+// 0x5xxx — vendor CATALOG push  (M1 — ECO-01: vendor list, #453, epic #24)
+// ===========================================================================
+// The vendor's for-sale list, pushed to the client when the vendor window opens.
+// worldd validates VENDOR_BUY against a server-side catalog (DbVendorCatalog, #390)
+// it never sent the client — so the buy list was an item-template-id greybox. This
+// closes that: on GOSSIP_HELLO to a vendor NPC the server auto-pushes VENDOR_LIST
+// (mirroring how TRAINER_LIST auto-pushes to a trainer NPC), carrying each listed
+// item id + its SERVER-COMPUTED buy price (override-or-template, int64 copper — the
+// client never trusts a price) + any stock. `vendor_id` is the catalog id the
+// client names in a subsequent VENDOR_BUY_REQUEST. A DISPLAY projection — the buy
+// path re-validates every price server-side (Principle 1).
+
+/// One for-sale listing as the client sees it (a row of the vendor buy window).
+/// `price` is the SERVER-COMPUTED buy price (catalog override, else the item
+/// template's buy_price) — authoritative copper the buy path re-derives. `quality`
+/// is the rarity tier for the client's colour. `stock` is remaining units, or -1
+/// for unlimited (limited stock is carried but unenforced at M1 — DbVendorCatalog).
+table VendorItem {
+  item_template_id:uint32;  // -> world DB item_template (IF-9)
+  price:int64;              // server-computed buy price in copper
+  quality:uint8 = 0;        // rarity tier (Rarity)
+  stock:int32 = -1;         // remaining stock (-1 = unlimited; M1 vendors are unlimited)
+}
+
+/// S→C. A vendor's catalog for the client's buy window: the vendor id + its listed
+/// items with server-computed prices. Pushed on GOSSIP_HELLO to a vendor NPC (auto,
+/// like TrainerList). An unknown/empty vendor yields an empty item vector.
+table VendorList {
+  vendor_id:uint32;       // the catalog vendor id (VENDOR_BUY_REQUEST.vendor_id)
+  items:[VendorItem];     // the vendor's for-sale listings (server-computed prices)
 }
 
 // ===========================================================================
@@ -1197,9 +1284,11 @@ table TrainerLearnResult {
 //                             NPC gossip menus (which surface these quest options) are DEFINED in the 0x52xx
 //                             block (M1, NPC-01 #372); scripted quest events (QST-02) are a later issue.
 // 0x5xxx  inventory/economy — LOOT (0x5001..0x5006) DEFINED above (M1, ITM-02 #369): LootRequest / LootResponse /
-//                             LootTake / LootResult / LootRelease / LootClosed. VENDORS (0x5101..0x5106) DEFINED
-//                             above (M1, ECO-01 #370): VendorBuy/Sell/Buyback Request+Result — the 0x51xx sub-band,
-//                             disjoint from loot's 0x50xx. Bank/trade (ECO-05/SOC-03) + inventory-move ops append later.
+//                             LootTake / LootResult / LootRelease / LootClosed. INVENTORY_SNAPSHOT (0x5007) DEFINED
+//                             above (M1, ITM-01 #453): the character's backpack contents + money (bags window #452).
+//                             VENDORS (0x5101..0x5107) DEFINED above (M1, ECO-01 #370/#453): VendorBuy/Sell/Buyback
+//                             Request+Result + VendorList (the catalog push) — the 0x51xx sub-band, disjoint from
+//                             loot's 0x50xx. Bank/trade (ECO-05/SOC-03) + inventory-move ops append later.
 //                             NPC interaction (0x5201..0x5205) DEFINED above (M1, NPC-01/02 #372): GossipHello /
 //                             GossipMenu / TrainerList / TrainerLearn / TrainerLearnResult (gossip menus gated by
 //                             quest state + vendor/trainer role flags; trainers learn abilities for copper, class/

@@ -317,6 +317,8 @@ std::optional<Bytes> round_trip(Client& c, mn::Opcode opcode, const Bytes& req,
         if (!reply) return std::nullopt;
         rf = mw::decode_frame(*reply);
         if (rf && rf->opcode == mn::Opcode::VITALS_UPDATE) continue;
+
+        if (rf && rf->opcode == mn::Opcode::INVENTORY_SNAPSHOT) continue;  // #453 unsolicited bags snapshot
         break;
     }
     if (!rf || rf->opcode != resp_opcode) return std::nullopt;

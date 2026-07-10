@@ -263,6 +263,8 @@ std::optional<RxFrame> recv_decoded(Client& c) {
         std::optional<mw::Frame> rf = mw::decode_frame(*raw);
         if (!rf) return std::nullopt;
         if (rf->opcode == mn::Opcode::VITALS_UPDATE) continue;
+
+        if (rf->opcode == mn::Opcode::INVENTORY_SNAPSHOT) continue;  // #453 unsolicited bags snapshot
         return RxFrame{rf->opcode, Bytes(rf->payload, rf->payload + rf->payload_len)};
     }
 }

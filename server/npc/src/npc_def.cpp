@@ -55,6 +55,11 @@ PlaceholderNpcStore::PlaceholderNpcStore() {
         n.id = kNpcVendor;
         n.name = "Placeholder Vendor";
         n.is_vendor = true;
+        // Sells from the M1 placeholder general-goods catalog. Literal to avoid a
+        // dependency on meridian::vendor — mirrors vendor_catalog.h
+        // kPlaceholderGeneralVendor (kPlaceholderVendorIdBase 990000 + 1). When mcc
+        // #28 compiles real NPCs this id comes from npc content (#453).
+        n.vendor_id = 990001u;
         by_id_.emplace(n.id, std::move(n));
     }
 }
