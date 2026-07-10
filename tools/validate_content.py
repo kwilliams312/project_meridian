@@ -83,6 +83,7 @@ CONTENT_TYPES = (
     "spawn",
     "zone",
     "appearance",
+    "dye",
 )
 ASSET_PREFIXES = ("art", "mus", "sfx", "amb")
 

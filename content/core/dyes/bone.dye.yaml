@@ -1,0 +1,5 @@
+schema: meridian/dye@1
+id: core:dye.bone
+name: Bone
+color: "#d9cfc0"
+rarity: common

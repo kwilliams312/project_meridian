@@ -187,6 +187,7 @@ def test_real_schema_generates_all_root_types():
         "zone",
         "asset",
         "appearance",
+        "dye",
     }
 
 

@@ -152,6 +152,16 @@ public enum DyeChannel
     Accent,
 }
 
+public enum DyeRarity
+{
+    Poor,
+    Common,
+    Uncommon,
+    Rare,
+    Epic,
+    Legendary,
+}
+
 public enum GeosetRegion
 {
     Head,
@@ -940,5 +950,13 @@ public sealed record Appearance
     public required AppearancePresets Presets { get; init; }
     /// <summary>0 at M1; ships only if the §2.5 crowd budget allows (A-03/D-32). Capped at 2 entries.</summary>
     public IReadOnlyList<AppearanceMorph>? Morphs { get; init; }
+}
+
+public sealed record Dye
+{
+    public required ContentId Id { get; init; }
+    public required string Name { get; init; }
+    public required string Color { get; init; }
+    public required DyeRarity Rarity { get; init; }
 }
 

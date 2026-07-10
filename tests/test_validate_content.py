@@ -882,6 +882,34 @@ class TestAppearanceCatalog:
         assert "SCHEMA" in codes(res.errors)
 
 
+@pytest.mark.unit
+class TestDye:
+    """meridian/dye@1 — curated dye palette (contract ① §6). One valid fixture;
+    each negative case copies it and mutates one field."""
+
+    DYE_OK = """\
+    schema: meridian/dye@1
+    id: tp:dye.russet
+    name: Russet
+    color: "#8a4b2d"
+    rarity: common
+    """
+
+    def test_dye_valid_passes(self, tmp_path):
+        res = run(tmp_path, {"tp/dyes/russet.dye.yaml": self.DYE_OK})
+        assert res.errors == []
+
+    def test_bad_hex_color_fails_schema(self, tmp_path):
+        dye = self.DYE_OK.replace('color: "#8a4b2d"', "color: red")
+        res = run(tmp_path, {"tp/dyes/russet.dye.yaml": dye})
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_missing_rarity_fails_schema(self, tmp_path):
+        dye = self.DYE_OK.replace("rarity: common\n", "")
+        res = run(tmp_path, {"tp/dyes/russet.dye.yaml": dye})
+        assert "SCHEMA" in codes(res.errors)
+
+
 @pytest.mark.integration
 class TestRepoContent:
     def test_repo_content_validates_clean(self):

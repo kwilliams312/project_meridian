@@ -1,0 +1,5 @@
+schema: meridian/dye@1
+id: core:dye.russet
+name: Russet
+color: "#8a4b2d"
+rarity: common
