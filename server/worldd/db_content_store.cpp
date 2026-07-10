@@ -172,6 +172,74 @@ std::uint8_t trainer_class_from_db(const db::Cell& c) {
     return 0;
 }
 
+// --- ability_* ENUM columns -> ability_store.h enums (#481) -------------------
+// The world DDL `ability` / `ability_effect` / `ability_effect_stat_mod` ENUM
+// string columns mapped 1:1 to the compiled model. Unknown/NULL falls back to the
+// safest default (matching the DDL DEFAULTs) so a malformed pack degrades rather
+// than throwing (client SAD §2.4 "never crash").
+
+School ability_school_from_db(const std::string& s) {
+    if (s == "physical") return School::kPhysical;
+    if (s == "fire") return School::kFire;
+    if (s == "frost") return School::kFrost;
+    if (s == "nature") return School::kNature;
+    if (s == "shadow") return School::kShadow;
+    if (s == "holy") return School::kHoly;
+    if (s == "arcane") return School::kArcane;
+    return School::kPhysical;
+}
+
+TargetKind ability_target_from_db(const std::string& s) {
+    if (s == "self") return TargetKind::kSelf;
+    if (s == "enemy") return TargetKind::kEnemy;
+    if (s == "friendly") return TargetKind::kFriendly;
+    return TargetKind::kEnemy;
+}
+
+// resource_type ENUM('mana','rage','energy') NULL — NULL => kNone (a free ability).
+AbilityResourceType ability_resource_from_db(const db::Cell& c) {
+    if (!c.has_value()) return AbilityResourceType::kNone;
+    const std::string& s = *c;
+    if (s == "mana") return AbilityResourceType::kMana;
+    if (s == "rage") return AbilityResourceType::kRage;
+    if (s == "energy") return AbilityResourceType::kEnergy;
+    return AbilityResourceType::kNone;
+}
+
+EffectKind ability_effect_kind_from_db(const std::string& s) {
+    if (s == "damage") return EffectKind::kDamage;
+    if (s == "heal") return EffectKind::kHeal;
+    if (s == "aura") return EffectKind::kAura;
+    if (s == "threat") return EffectKind::kThreat;
+    return EffectKind::kDamage;
+}
+
+// periodic_kind ENUM('damage','heal') NULL — NULL => kNone (aura has no tick).
+PeriodicKind ability_periodic_from_db(const db::Cell& c) {
+    if (!c.has_value()) return PeriodicKind::kNone;
+    const std::string& s = *c;
+    if (s == "damage") return PeriodicKind::kDamage;
+    if (s == "heal") return PeriodicKind::kHeal;
+    return PeriodicKind::kNone;
+}
+
+// ability_effect_stat_mod.stat ENUM -> the aura StatKey (worldd::StatKey; distinct
+// from items::StatKey used by item_stat above, though the value names coincide).
+StatKey ability_stat_from_db(const std::string& s) {
+    if (s == "strength") return StatKey::kStrength;
+    if (s == "agility") return StatKey::kAgility;
+    if (s == "stamina") return StatKey::kStamina;
+    if (s == "intellect") return StatKey::kIntellect;
+    if (s == "spirit") return StatKey::kSpirit;
+    return StatKey::kStrength;
+}
+
+// A composite (ability_id, ordinal) key for locating an already-built effect when
+// its stat-mod children stream in (ordinal is SMALLINT — max 4 per ability).
+std::uint64_t effect_key(AbilityId ability_id, std::uint32_t ordinal) {
+    return (static_cast<std::uint64_t>(ability_id) << 20) | ordinal;
+}
+
 }  // namespace
 
 // =============================================================================
@@ -601,6 +669,98 @@ std::vector<TriggerVolume> load_area_trigger_volumes(db::Connection& world_db) {
 }
 
 // =============================================================================
+// load_db_ability_store  (ability / ability_effect / ability_effect_stat_mod)
+// =============================================================================
+// Reads the authored ability catalog from the world DB into an AbilityStore keyed
+// by the IF-9 numeric id (schema/sql/world/30_ability.sql). This is the read path
+// #390 left open (it covered npc/quest/loot/vendor but NOT abilities), so the live
+// cast path (world_dispatch.cpp CAST_REQUEST handler) resolved authored ids like
+// minor_healing=1 / pickaxe_slam=2 against the placeholder store's synthetic
+// 0xF000_0000 band and answered UNKNOWN_ABILITY (#481). Loading the authored ids
+// here makes ctx.abilities->find(1) resolve, so the cast starts.
+//
+// Three passes mirror the DbLootTableStore assembly: ability scalars, then the
+// effects[] children (ordered by ordinal), then the aura stat_mods[] grandchildren
+// located by (ability_id, ordinal). FLOAT columns (range_m, coefficient) read
+// directly via as_f32 (the #413 FLOAT-as-text round-trip fix is merged).
+AbilityStore load_db_ability_store(db::Connection& world_db) {
+    std::vector<Ability> abilities;
+    std::unordered_map<AbilityId, std::size_t> index;  // ability id -> abilities[] idx
+
+    // 1. ability scalars. One row per ability.
+    db::Result arows = world_db.execute(
+        "SELECT id, name, school, target, range_m, cast_time_ms, cast_channel_ms, "
+        "       cooldown_ms, triggers_gcd, resource_type, resource_amount "
+        "FROM ability ORDER BY id");
+    abilities.reserve(arows.rows.size());
+    for (const db::Row& r : arows.rows) {
+        Ability a;
+        a.id = as_u32(r[0]);
+        a.name = as_str(r[1]);
+        a.school = ability_school_from_db(as_str(r[2]));
+        a.target = ability_target_from_db(as_str(r[3]));
+        a.range_m = as_f32(r[4], 5.0f);  // DDL DEFAULT 5
+        a.cast_time_ms = as_u32(r[5]);   // NULL/0 => instant
+        a.cast_channel_ms = as_u32(r[6]);
+        a.cooldown_ms = as_u32(r[7]);
+        a.triggers_gcd = r[8].has_value() ? as_bool(r[8]) : true;  // DDL DEFAULT TRUE
+        a.resource_type = ability_resource_from_db(r[9]);
+        a.resource_amount = as_u32(r[10]);
+        index.emplace(a.id, abilities.size());
+        abilities.push_back(std::move(a));
+    }
+
+    // 2. effects[] (1..4, in ordinal order). Record each effect's slot so its aura
+    //    stat_mods can find it in pass 3.
+    struct EffectSlot { std::size_t ability_idx; std::size_t effect_idx; };
+    std::unordered_map<std::uint64_t, EffectSlot> effect_slots;
+    db::Result erows = world_db.execute(
+        "SELECT ability_id, ordinal, kind, amount_min, amount_max, coefficient, "
+        "       threat_amount, duration_ms, max_stacks, periodic_kind, "
+        "       periodic_amount_min, periodic_amount_max, periodic_tick_ms "
+        "FROM ability_effect ORDER BY ability_id, ordinal");
+    for (const db::Row& r : erows.rows) {
+        auto it = index.find(as_u32(r[0]));
+        if (it == index.end()) continue;  // effect for an unknown ability — skip
+        Ability& a = abilities[it->second];
+        AbilityEffect e;
+        e.kind = ability_effect_kind_from_db(as_str(r[2]));
+        e.amount_min = as_u32(r[3]);
+        e.amount_max = as_u32(r[4]);
+        e.coefficient = as_f32(r[5]);
+        e.threat_amount = static_cast<std::int32_t>(as_i64(r[6]));
+        e.duration_ms = as_u32(r[7]);
+        e.max_stacks = as_u16(r[8], 1);  // DDL DEFAULT 1
+        e.periodic_kind = ability_periodic_from_db(r[9]);
+        e.periodic_amount_min = as_u32(r[10]);
+        e.periodic_amount_max = as_u32(r[11]);
+        e.periodic_tick_ms = as_u32(r[12]);
+        a.effects.push_back(std::move(e));
+        effect_slots.emplace(effect_key(as_u32(r[0]), as_u32(r[1])),
+                             EffectSlot{it->second, a.effects.size() - 1});
+    }
+
+    // 3. aura stat_mods[] — attach each to its parent effect by (ability_id, ordinal).
+    db::Result srows = world_db.execute(
+        "SELECT ability_id, ordinal, stat, amount "
+        "FROM ability_effect_stat_mod ORDER BY ability_id, ordinal, stat");
+    for (const db::Row& r : srows.rows) {
+        auto it = effect_slots.find(effect_key(as_u32(r[0]), as_u32(r[1])));
+        if (it == effect_slots.end()) continue;  // stat mod for an unknown effect — skip
+        StatMod sm;
+        sm.stat = ability_stat_from_db(as_str(r[2]));
+        sm.amount = static_cast<std::int32_t>(as_i64(r[3]));
+        abilities[it->second.ability_idx]
+            .effects[it->second.effect_idx]
+            .stat_mods.push_back(sm);
+    }
+
+    // A duplicate id is a content fault (mcc/IF-9 assign unique ids) — from_abilities
+    // drops the later row first-wins rather than throwing, so worldd still boots.
+    return AbilityStore::from_abilities(abilities);
+}
+
+// =============================================================================
 // load_world_content
 // =============================================================================
 WorldContent load_world_content(db::Connection& world_db) {
@@ -611,6 +771,7 @@ WorldContent load_world_content(db::Connection& world_db) {
     content.npcs = std::make_unique<DbNpcStore>(world_db);
     content.loot = std::make_unique<DbLootTableStore>(world_db);
     content.area_triggers = load_area_trigger_volumes(world_db);
+    content.abilities = std::make_unique<AbilityStore>(load_db_ability_store(world_db));
     return content;
 }
 

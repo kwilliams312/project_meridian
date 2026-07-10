@@ -724,6 +724,25 @@ target_link_libraries(worldd-content-load-db-test
 set_target_properties(worldd-content-load-db-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-content-load-db COMMAND worldd-content-load-db-test)
 
+# --- Ability-catalog world-DB load + cast-resolution regression test (#481). ----
+# Reproduces the UNKNOWN_ABILITY cast bug (the placeholder store does not know the
+# authored ids the CAST_REQUEST handler resolves against) and proves load_db_ability_store
+# reads the authored `ability`/`ability_effect`/`ability_effect_stat_mod` catalog so
+# find() resolves — with the metadata pinned to mcc's content/core emit (minor_healing=1,
+# pickaxe_slam=2). Self-seeds minimal no-FK tables (mirroring the mcc-emitted rows) so it
+# is deterministic without the full world DDL. Reads MERIDIAN_WORLDDB_* (falls back to
+# MERIDIAN_DB_*) and SKIPS (exit 0) when none are set — inert in the plain server ctest,
+# real only in the DB CI job / test.sh --db.
+add_executable(worldd-cast-ability-db-test
+  test/cast_ability_db_it.cpp
+)
+target_link_libraries(worldd-cast-ability-db-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-cast-ability-db-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-cast-ability-db COMMAND worldd-cast-ability-db-test)
+
 # --- IT-M1 10-quest CHAIN content consistency + load test (#394). ---------------
 # The content half of the epic-#20 exit criterion. Unlike worldd-content-load-db
 # (which self-seeds fixture rows), this test runs the REAL pipeline end to end: it

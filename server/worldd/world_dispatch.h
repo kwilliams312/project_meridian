@@ -562,6 +562,15 @@ public:
     // at boot before start(); not thread-safe.
     void set_loot_tables(const loot::LootTableStore& store);
 
+    // Replace the read-only ability template store on the LIVE cast path with a
+    // world-DB-backed catalog (#481), in place of the M1 placeholder store. Loaded
+    // from the authored `ability` tables at boot, this is what CAST_REQUEST resolves
+    // against — so a client casting an authored id (minor_healing=1) starts the cast
+    // instead of getting UNKNOWN_ABILITY. Move-assigned into the store the running
+    // MapTick already borrows by reference (its address is stable), so the tick keeps
+    // its valid reference. Call at boot BEFORE start(); not thread-safe.
+    void set_abilities(AbilityStore store);
+
 private:
     void world_thread_main();
 

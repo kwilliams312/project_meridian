@@ -85,6 +85,9 @@ void create_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS npc_trainer",
         "DROP TABLE IF EXISTS npc_template",
         "DROP TABLE IF EXISTS area",
+        "DROP TABLE IF EXISTS ability_effect_stat_mod",
+        "DROP TABLE IF EXISTS ability_effect",
+        "DROP TABLE IF EXISTS ability",
     };
     for (const char* d : drops) c.execute(d);
 
@@ -178,6 +181,35 @@ void create_tables(db::Connection& c) {
         "  required_class ENUM('vanguard','runcaller','warden','mender') NULL,"
         "  required_level SMALLINT UNSIGNED NOT NULL DEFAULT 1,"
         "  PRIMARY KEY (npc_id, ability_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // ability / ability_effect / ability_effect_stat_mod — the #481 ability catalog
+    // load_world_content now also reads (load_db_ability_store). This test does not
+    // assert on abilities, so the tables are created EMPTY — the loader returns an
+    // empty AbilityStore. Columns mirror schema/sql/world/30_ability.sql. (Without
+    // these tables load_world_content throws "Table 'ability' doesn't exist".)
+    c.execute(
+        "CREATE TABLE ability ("
+        "  id INT UNSIGNED NOT NULL, name VARCHAR(80) NOT NULL,"
+        "  school ENUM('physical','fire','frost','nature','shadow','holy','arcane') NOT NULL,"
+        "  target ENUM('self','enemy','friendly') NOT NULL, range_m FLOAT NOT NULL DEFAULT 5,"
+        "  cast_time_ms INT UNSIGNED NULL DEFAULT 0, cast_channel_ms INT UNSIGNED NULL,"
+        "  cooldown_ms INT UNSIGNED NOT NULL DEFAULT 0, triggers_gcd BOOLEAN NOT NULL DEFAULT TRUE,"
+        "  resource_type ENUM('mana','rage','energy') NULL, resource_amount INT UNSIGNED NULL,"
+        "  PRIMARY KEY (id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    c.execute(
+        "CREATE TABLE ability_effect ("
+        "  ability_id INT UNSIGNED NOT NULL, ordinal SMALLINT UNSIGNED NOT NULL,"
+        "  kind ENUM('damage','heal','aura','threat') NOT NULL,"
+        "  amount_min INT UNSIGNED NULL, amount_max INT UNSIGNED NULL, coefficient FLOAT NULL,"
+        "  threat_amount INT NULL, duration_ms INT UNSIGNED NULL,"
+        "  max_stacks SMALLINT UNSIGNED NULL DEFAULT 1, periodic_kind ENUM('damage','heal') NULL,"
+        "  periodic_amount_min INT UNSIGNED NULL, periodic_amount_max INT UNSIGNED NULL,"
+        "  periodic_tick_ms INT UNSIGNED NULL,"
+        "  PRIMARY KEY (ability_id, ordinal)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    c.execute(
+        "CREATE TABLE ability_effect_stat_mod ("
+        "  ability_id INT UNSIGNED NOT NULL, ordinal SMALLINT UNSIGNED NOT NULL,"
+        "  stat ENUM('strength','agility','stamina','intellect','spirit') NOT NULL, amount INT NOT NULL,"
+        "  PRIMARY KEY (ability_id, ordinal, stat)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 }
 
 void drop_tables(db::Connection& c) {
@@ -189,7 +221,8 @@ void drop_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS loot_table",      "DROP TABLE IF EXISTS vendor_inventory_item",
         "DROP TABLE IF EXISTS vendor_inventory", "DROP TABLE IF EXISTS npc_trainer_ability",
         "DROP TABLE IF EXISTS npc_trainer",      "DROP TABLE IF EXISTS npc_template",
-        "DROP TABLE IF EXISTS area",
+        "DROP TABLE IF EXISTS area",             "DROP TABLE IF EXISTS ability_effect_stat_mod",
+        "DROP TABLE IF EXISTS ability_effect",   "DROP TABLE IF EXISTS ability",
     };
     for (const char* d : drops) c.execute(d);
 }
