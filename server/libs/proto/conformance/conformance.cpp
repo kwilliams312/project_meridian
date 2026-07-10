@@ -697,18 +697,23 @@ std::vector<Message> build_corpus() {
   // CharListResponse with two rows — exercises the vector-of-tables + string/
   // scalar fields the character-select screen reads.
   c.push_back({"if2_char_list_response", "IF-2", "CHAR_LIST_RESPONSE (0x0011)",
-               "S->C roster: two CharListEntry rows (id, name, race, class, level)",
+               "S->C roster: two CharListEntry rows; row[1] carries a §5.2 "
+               "appearance, row[0] omits it (additive-field coverage)",
                [] {
                  fb::FlatBufferBuilder b;
                  std::vector<fb::Offset<mn::CharListEntry>> rows;
+                 // row[0]: appearance ABSENT (an old writer / never-customised).
                  rows.push_back(mn::CreateCharListEntry(
                      b, /*character_id=*/0x0000000100000001ULL,
                      b.CreateString("Aldric"), /*race=*/1u, /*char_class=*/1u,
                      /*level=*/7u));
+                 // row[1]: appearance PRESENT (built before the entry).
+                 auto brynn = b.CreateString("Brynn");
+                 auto brynn_look = mn::CreateAppearance(
+                     b, /*version=*/1u, /*hair=*/5u, /*face=*/6u, /*skin=*/7u);
                  rows.push_back(mn::CreateCharListEntry(
-                     b, /*character_id=*/0x0000000100000002ULL,
-                     b.CreateString("Brynn"), /*race=*/3u, /*char_class=*/2u,
-                     /*level=*/12u));
+                     b, /*character_id=*/0x0000000100000002ULL, brynn, /*race=*/3u,
+                     /*char_class=*/2u, /*level=*/12u, brynn_look));
                  auto vec = b.CreateVector(rows);
                  b.Finish(mn::CreateCharListResponse(b, vec));
                  return finish_to_bytes(b);
@@ -732,17 +737,34 @@ std::vector<Message> build_corpus() {
                  expect(r0->char_class() == 1u,
                         "if2_char_list_response[0].char_class");
                  expect(r0->level() == 7u, "if2_char_list_response[0].level");
+                 expect(r0->appearance() == nullptr,
+                        "if2_char_list_response[0].appearance absent");
                  const auto* r1 = rows->Get(1);
                  expect(r1->character_id() == 0x0000000100000002ULL,
                         "if2_char_list_response[1].character_id");
                  expect(r1->name() && r1->name()->str() == "Brynn",
                         "if2_char_list_response[1].name");
                  expect(r1->level() == 12u, "if2_char_list_response[1].level");
+                 const auto* a = r1->appearance();
+                 if (!expect(a != nullptr,
+                             "if2_char_list_response[1].appearance present"))
+                   return;
+                 expect(a->version() == 1u,
+                        "if2_char_list_response[1].appearance.version");
+                 expect(a->hair() == 5u,
+                        "if2_char_list_response[1].appearance.hair");
+                 expect(a->face() == 6u,
+                        "if2_char_list_response[1].appearance.face");
+                 expect(a->skin() == 7u,
+                        "if2_char_list_response[1].appearance.skin");
                }});
 
-  // CharCreateRequest — the D-11 create fields (name + race + class).
+  // CharCreateRequest — the D-11 create fields (name + race + class) WITHOUT the
+  // appearance record. Freezes that an appearance-less request (the CHR-01 stub /
+  // an old client) is valid and decodes with appearance ABSENT — the additive
+  // §5.2 field is optional (README additive-evolution rule; server defaults it).
   c.push_back({"if2_char_create_request", "IF-2", "CHAR_CREATE_REQUEST (0x0012)",
-               "C->S create a character: name + race + class (D-11)",
+               "C->S create a character: name + race + class, no appearance (D-11)",
                [] {
                  fb::FlatBufferBuilder b;
                  auto name = b.CreateString("Cerys");
@@ -761,6 +783,48 @@ std::vector<Message> build_corpus() {
                  expect(m->race() == 2u, "if2_char_create_request.race");
                  expect(m->char_class() == 4u,
                         "if2_char_create_request.char_class");
+                 expect(m->appearance() == nullptr,
+                        "if2_char_create_request.appearance absent");
+               }});
+
+  // CharCreateRequest WITH the §5.2 appearance record — the contract ① create
+  // path. Freezes the nested Appearance table on the wire (version + the three
+  // 1-based preset ids; morphs empty at M1). Round-trips alongside the
+  // appearance-less golden above (the additive field decodes both ways).
+  c.push_back({"if2_char_create_request_appearance", "IF-2",
+               "CHAR_CREATE_REQUEST (0x0012)",
+               "C->S create a character WITH a §5.2 appearance record",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 auto name = b.CreateString("Delwyn");
+                 auto appearance = mn::CreateAppearance(
+                     b, /*version=*/1u, /*hair=*/2u, /*face=*/3u, /*skin=*/4u);
+                 b.Finish(mn::CreateCharCreateRequest(
+                     b, name, /*race=*/1u, /*char_class=*/1u, appearance));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::CharCreateRequest>(nullptr),
+                             "if2_char_create_request_appearance verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::CharCreateRequest>(buf.data());
+                 expect(m->name() && m->name()->str() == "Delwyn",
+                        "if2_char_create_request_appearance.name");
+                 const auto* a = m->appearance();
+                 if (!expect(a != nullptr,
+                             "if2_char_create_request_appearance.appearance present"))
+                   return;
+                 expect(a->version() == 1u,
+                        "if2_char_create_request_appearance.version");
+                 expect(a->hair() == 2u,
+                        "if2_char_create_request_appearance.hair");
+                 expect(a->face() == 3u,
+                        "if2_char_create_request_appearance.face");
+                 expect(a->skin() == 4u,
+                        "if2_char_create_request_appearance.skin");
+                 expect(a->morphs() == nullptr || a->morphs()->size() == 0,
+                        "if2_char_create_request_appearance.morphs empty (M1)");
                }});
 
   // CharCreateResponse — canonical is the SUCCESS variant (status=OK + minted id).

@@ -59,6 +59,7 @@ constexpr const char* kCharacterDdl =
     "  name          VARCHAR(32)       NOT NULL,"
     "  race          TINYINT UNSIGNED  NOT NULL,"
     "  class         TINYINT UNSIGNED  NOT NULL,"
+    "  appearance    JSON              NULL,"
     "  level         SMALLINT UNSIGNED NOT NULL DEFAULT 1,"
     "  xp            INT UNSIGNED      NOT NULL DEFAULT 0,"
     "  money         BIGINT UNSIGNED   NOT NULL DEFAULT 0,"
@@ -114,6 +115,11 @@ int main() {
     // account) can still create its first.
     const std::uint64_t account_c = 4'200'000'000ULL + static_cast<unsigned>(salt);
     const std::uint64_t account_d = 4'300'000'000ULL + static_cast<unsigned>(salt);
+    // account_e / account_f exercise the appearance bounds rule (contract ① §9):
+    // account_e creates WITHOUT appearance (server default {1,1,1,1}); account_f
+    // creates with an out-of-bounds record (version!=1, preset id 0) that clamps.
+    const std::uint64_t account_e = 4'400'000'000ULL + static_cast<unsigned>(salt);
+    const std::uint64_t account_f = 4'500'000'000ULL + static_cast<unsigned>(salt);
     const std::uint64_t account_big =
         18'000'000'000'000'000'000ULL + static_cast<unsigned>(salt % 100000);
     const std::string name_a = "Chr_" + std::to_string(salt) + "_a";
@@ -123,10 +129,13 @@ int main() {
     const std::string name_c1 = "Chr_" + std::to_string(salt) + "_c1";
     const std::string name_c2 = "Chr_" + std::to_string(salt) + "_c2";
     const std::string name_d = "Chr_" + std::to_string(salt) + "_d";
+    const std::string name_e = "Chr_" + std::to_string(salt) + "_e";
+    const std::string name_f = "Chr_" + std::to_string(salt) + "_f";
 
     auto cleanup = [&](db::Connection& db) {
         for (std::uint64_t acct :
-             {account_a, account_b, account_c, account_d, account_big}) {
+             {account_a, account_b, account_c, account_d, account_e, account_f,
+              account_big}) {
             db.execute("DELETE FROM `character` WHERE account_id = ?",
                        {db::Param{std::to_string(acct)}});
         }
@@ -144,6 +153,10 @@ int main() {
         req.name = name_a;
         req.race = static_cast<std::uint8_t>(characters::Race::kArdent);
         req.char_class = static_cast<std::uint8_t>(characters::Class::kVanguard);
+        // Explicit, in-bounds appearance record (contract ① §5.2): a non-default
+        // preset per channel so "list returns what create stored" is meaningful.
+        req.appearance = characters::AppearanceRecord{/*version=*/1, /*hair=*/2,
+                                                      /*face=*/3, /*skin=*/4};
         characters::CreateResult created = characters::create_character(db, req);
         check("create returns a server-minted id", created.character_id > 0);
 
@@ -160,6 +173,11 @@ int main() {
             check("listed class matches",
                   c.char_class == static_cast<std::uint8_t>(characters::Class::kVanguard));
             check("new character starts at level 1", c.level == 1);
+            // Explicit appearance round-trips exactly (stored as JSON, parsed back).
+            check("listed appearance version round-trips", c.appearance.version == 1);
+            check("listed appearance hair round-trips", c.appearance.hair == 2);
+            check("listed appearance face round-trips", c.appearance.face == 3);
+            check("listed appearance skin round-trips", c.appearance.skin == 4);
         }
 
         // ---- 2. duplicate name is refused ----------------------------------
@@ -287,6 +305,56 @@ int main() {
             characters::CreateResult rd = characters::create_character(db, other);
             check("cap: a different account can still create its 1st character",
                   rd.character_id > 0);
+        }
+
+        // ---- 9. appearance ABSENT -> server default {1,1,1,1} --------------
+        // A create that supplies no appearance (the CHR-01 stub / old client)
+        // stores the NULL column; list must materialise the versioned default
+        // (contract ① §5.2: absent ⇒ {v:1,hair:1,face:1,skin:1}).
+        {
+            characters::CreateRequest noapp;
+            noapp.account_id = account_e;
+            noapp.name = name_e;
+            noapp.race = static_cast<std::uint8_t>(characters::Race::kDolmen);
+            noapp.char_class = static_cast<std::uint8_t>(characters::Class::kWarden);
+            // noapp.appearance intentionally left unset (std::nullopt).
+            characters::create_character(db, noapp);
+            std::vector<characters::CharacterSummary> got =
+                characters::list_characters(db, account_e);
+            check("absent-appearance create succeeds + lists one", got.size() == 1);
+            if (got.size() == 1) {
+                const auto& a = got[0].appearance;
+                check("absent appearance defaults version=1", a.version == 1);
+                check("absent appearance defaults hair=1", a.hair == 1);
+                check("absent appearance defaults face=1", a.face == 1);
+                check("absent appearance defaults skin=1", a.skin == 1);
+            }
+        }
+
+        // ---- 10. appearance out-of-bounds -> clamped -----------------------
+        // The record is opaque-but-bounded, never gameplay-authoritative
+        // (contract ① §9): version!=1 clamps to 1 (only v1 exists at M1) and a
+        // preset id of 0 clamps to 1 (ids are 1-based). No new failure taxonomy —
+        // the create still SUCCEEDS, the stored record is just normalised.
+        {
+            characters::CreateRequest oob;
+            oob.account_id = account_f;
+            oob.name = name_f;
+            oob.race = static_cast<std::uint8_t>(characters::Race::kEmberkin);
+            oob.char_class = static_cast<std::uint8_t>(characters::Class::kMender);
+            oob.appearance = characters::AppearanceRecord{/*version=*/7, /*hair=*/0,
+                                                          /*face=*/5, /*skin=*/0};
+            characters::create_character(db, oob);
+            std::vector<characters::CharacterSummary> got =
+                characters::list_characters(db, account_f);
+            check("out-of-bounds-appearance create still succeeds", got.size() == 1);
+            if (got.size() == 1) {
+                const auto& a = got[0].appearance;
+                check("version!=1 clamped to 1", a.version == 1);
+                check("preset id 0 (hair) clamped to 1", a.hair == 1);
+                check("in-bounds preset id (face=5) preserved", a.face == 5);
+                check("preset id 0 (skin) clamped to 1", a.skin == 1);
+            }
         }
 
         cleanup(db);  // remove this run's rows

@@ -37,6 +37,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -46,6 +47,47 @@
 
 namespace meridian::characters {
 
+// Versioned per-character appearance record (contract ① §5.2 / A-03, D-32).
+//
+// OPAQUE to gameplay and never gameplay-authoritative (spec §9): the server
+// stores it as bounded data and NEVER rejects a create over it. It is persisted
+// as the `character.appearance` JSON column ({"v":1,"hair":1,"face":1,"skin":1,
+// "morphs":[]}) — the same JSON-column mechanism as character_quest.objective_
+// counts — so new keys need no migration (additive; D-32).
+//
+// BOUNDS RULE (spec §9, enforced by normalise() on both write and read):
+//   * an ABSENT record (NULL column / no request field) ⇒ the default below;
+//   * version != 1 clamps to 1 (only v1 exists at M1);
+//   * a preset id of 0 clamps to 1 (ids are 1-based; 0 is "unset").
+// morphs are budget-gated and empty at M1, so the M1 record carries only the
+// four scalars — that is all this struct persists.
+struct AppearanceRecord {
+    std::uint8_t version = 1;  // record version (only v1 at M1)
+    std::uint8_t hair = 1;     // hair preset id (1-based; race/sex catalog)
+    std::uint8_t face = 1;     // face preset id (1-based)
+    std::uint8_t skin = 1;     // skin preset id (1-based)
+
+    // Clamp every field to its bounded range in place (version!=1 -> 1; a 0
+    // preset id -> 1). Idempotent; applied when a record is stored and when one
+    // is read back, so the durable and surfaced record is always in bounds.
+    void normalise() {
+        if (version != 1) version = 1;
+        if (hair == 0) hair = 1;
+        if (face == 0) face = 1;
+        if (skin == 0) skin = 1;
+    }
+
+    // Serialise to the canonical compact JSON stored in `character.appearance`.
+    // Always emits a normalised record. `morphs` is always `[]` at M1.
+    std::string to_json() const;
+
+    // Parse the `character.appearance` JSON cell. A NULL/empty/unparseable cell
+    // yields the default record; every parsed record is normalise()d. Never
+    // throws — a malformed durable value degrades to the bounded default rather
+    // than failing the character-select screen.
+    static AppearanceRecord from_json(const db::Cell& cell);
+};
+
 // One character as shown on the character-select screen (list result row).
 struct CharacterSummary {
     std::uint64_t id = 0;          // character.id (server-minted, BIGINT UNSIGNED)
@@ -54,14 +96,19 @@ struct CharacterSummary {
     std::uint8_t race = 0;         // M0-frozen race id (roster.h)
     std::uint8_t char_class = 0;   // M0-frozen class id (roster.h)
     std::uint16_t level = 0;       // character.level
+    AppearanceRecord appearance;   // §5.2 record (default when the column is NULL)
 };
 
-// Parameters for one character-create request (CHR-01 stub / D-11 fields).
+// Parameters for one character-create request (D-11 fields + §5.2 appearance).
 struct CreateRequest {
     std::uint64_t account_id = 0;  // owner (soft ref -> auth DB account.id, §4.4)
     std::string name;              // desired character name
     std::uint8_t race = 0;         // M0-frozen race id (validated against roster)
     std::uint8_t char_class = 0;   // M0-frozen class id (validated against roster)
+    // Chosen appearance (contract ① §5.2). std::nullopt ⇒ the client sent none
+    // (CHR-01 stub / an old client) and the server stores the versioned default.
+    // A supplied record is normalise()d (bounded, never rejected) before storage.
+    std::optional<AppearanceRecord> appearance;
 };
 
 // Result of a successful create: the server-minted character id.
@@ -143,6 +190,10 @@ std::vector<CharacterSummary> list_characters(db::Connection& conn,
 // concurrent creates. On success INSERTs the row (stamping account_id + the M0
 // start location) and returns the server-minted character id. Throws
 // meridian::db::DbError on any other DB failure.
+//
+// The §5.2 appearance record is NOT a validation step — it is opaque-but-bounded
+// (spec §9), so it is never rejected: req.appearance (or the default when it is
+// absent) is normalise()d and stored as the `character.appearance` JSON column.
 CreateResult create_character(db::Connection& conn, const CreateRequest& req);
 
 // Delete character `character_id`, but ONLY if it is owned by `account_id`.

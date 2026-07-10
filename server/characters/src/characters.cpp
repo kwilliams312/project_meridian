@@ -5,12 +5,40 @@
 
 #include "characters.h"
 
+#include <cctype>
+#include <cstdlib>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
 namespace meridian::characters {
 
 namespace {
+
+// Extract the integer value of a top-level `"key": <digits>` pair from a compact
+// JSON object, tolerant of surrounding whitespace and key order (MariaDB stores a
+// JSON column as text, but a normaliser/reformatter may reorder or re-space it).
+// Returns nullopt when the key is absent or not followed by a number. Clamps to
+// the u8 range. This is a PURPOSE-BUILT reader for the fixed appearance record —
+// not a general JSON parser (the repo links no JSON library; clean-room).
+std::optional<std::uint8_t> json_find_u8(const std::string& s, const char* key) {
+    const std::string needle = std::string("\"") + key + "\"";
+    std::size_t pos = s.find(needle);
+    if (pos == std::string::npos) return std::nullopt;
+    pos += needle.size();
+    while (pos < s.size() &&
+           (s[pos] == ' ' || s[pos] == '\t' || s[pos] == '\n' || s[pos] == '\r' ||
+            s[pos] == ':')) {
+        ++pos;
+    }
+    if (pos >= s.size() ||
+        std::isdigit(static_cast<unsigned char>(s[pos])) == 0) {
+        return std::nullopt;
+    }
+    unsigned long val = std::strtoul(s.c_str() + pos, nullptr, 10);
+    if (val > 255UL) val = 255UL;
+    return static_cast<std::uint8_t>(val);
+}
 
 // MariaDB / MySQL error number for a duplicate entry on a UNIQUE key
 // (ER_DUP_ENTRY — MariaDB error reference, not GPL source). Same constant the
@@ -49,12 +77,36 @@ unsigned parse_uint(const db::Cell& c) {
 
 }  // namespace
 
+std::string AppearanceRecord::to_json() const {
+    // Emit the canonical, bounded record. morphs is empty at M1 (budget-gated).
+    AppearanceRecord a = *this;
+    a.normalise();
+    return "{\"v\":" + std::to_string(a.version) +
+           ",\"hair\":" + std::to_string(a.hair) +
+           ",\"face\":" + std::to_string(a.face) +
+           ",\"skin\":" + std::to_string(a.skin) + ",\"morphs\":[]}";
+}
+
+AppearanceRecord AppearanceRecord::from_json(const db::Cell& cell) {
+    AppearanceRecord a;  // default {v:1, hair:1, face:1, skin:1}
+    if (!cell.has_value() || cell->empty()) {
+        return a;  // NULL / empty column ⇒ the versioned default (spec §5.2).
+    }
+    const std::string& s = *cell;
+    if (auto v = json_find_u8(s, "v")) a.version = *v;
+    if (auto v = json_find_u8(s, "hair")) a.hair = *v;
+    if (auto v = json_find_u8(s, "face")) a.face = *v;
+    if (auto v = json_find_u8(s, "skin")) a.skin = *v;
+    a.normalise();  // clamp a malformed/out-of-bounds durable value (spec §9).
+    return a;
+}
+
 std::vector<CharacterSummary> list_characters(db::Connection& conn,
                                               std::uint64_t account_id) {
     // Soft-ref rule (§4.4): filter by the numeric account_id only — no JOIN to
     // the auth DB. account_id binds as a decimal string (BIGINT UNSIGNED).
     db::Result r = conn.execute(
-        "SELECT id, account_id, name, race, class, level "
+        "SELECT id, account_id, name, race, class, appearance, level "
         "FROM `character` WHERE account_id = ? ORDER BY id",
         {bind_u64(account_id)});
 
@@ -67,7 +119,9 @@ std::vector<CharacterSummary> list_characters(db::Connection& conn,
         c.name = row[2].value_or("");
         c.race = static_cast<std::uint8_t>(parse_uint(row[3]));
         c.char_class = static_cast<std::uint8_t>(parse_uint(row[4]));
-        c.level = static_cast<std::uint16_t>(parse_uint(row[5]));
+        // appearance JSON column (NULL ⇒ default; parsed value is clamped).
+        c.appearance = AppearanceRecord::from_json(row[5]);
+        c.level = static_cast<std::uint16_t>(parse_uint(row[6]));
         out.push_back(std::move(c));
     }
     return out;
@@ -101,11 +155,20 @@ CreateResult create_character(db::Connection& conn, const CreateRequest& req) {
     // binds through a placeholder (never concatenated); ids bind as decimal
     // strings (unsigned-id rule). Only NOT-NULL-without-default columns are set;
     // level/xp/money/pos_o/save_epoch/timestamps take their schema defaults.
+    // §5.2 appearance: opaque-but-bounded (spec §9), never a validation step. An
+    // absent request record ⇒ the versioned default; a supplied one is clamped.
+    // Stored as the `character.appearance` JSON column (char_quest.objective_counts
+    // precedent). Bound as a string param — a value, never concatenated into SQL.
+    AppearanceRecord appearance = req.appearance.value_or(AppearanceRecord{});
+    appearance.normalise();
+    const std::string appearance_json = appearance.to_json();
+
     std::vector<db::Param> bind{
         bind_u64(req.account_id),                      // account_id (soft ref)
         db::Param{req.name},                           // name
         db::Param{static_cast<std::int64_t>(req.race)},        // race
         db::Param{static_cast<std::int64_t>(req.char_class)},  // class
+        db::Param{appearance_json},                    // appearance (JSON, §5.2)
         db::Param{static_cast<std::int64_t>(kM0StartMapId)},   // map_id
         db::Param{static_cast<double>(kM0StartX)},     // pos_x
         db::Param{static_cast<double>(kM0StartY)},     // pos_y
@@ -132,8 +195,8 @@ CreateResult create_character(db::Connection& conn, const CreateRequest& req) {
     try {
         db::Result r = conn.execute(
             "INSERT INTO `character` "
-            "(account_id, name, race, class, map_id, pos_x, pos_y, pos_z) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(account_id, name, race, class, appearance, map_id, pos_x, pos_y, pos_z) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             bind);
         conn.execute("COMMIT");
         return CreateResult{r.last_insert_id};
