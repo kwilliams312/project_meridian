@@ -795,9 +795,24 @@ std::vector<SpawnPlacement> load_spawn_points(db::Connection& world_db) {
     for (const db::Row& r : rows.rows) {
         SpawnPlacement sp;
         sp.npc_id = as_u32(r[1]);
-        sp.pos.x = as_f32(r[2]);
-        sp.pos.y = as_f32(r[3]);
-        sp.pos.z = as_f32(r[4]);
+        // COORDINATE-SYSTEM CONVERSION (Godot Y-up content -> worldd Z-up runtime), #498.
+        // Authored content — and its verbatim DB mirror (spawn_point.pos_{x,y,z} =
+        // position.{x,y,z}, schema/sql/world/70_spawn.sql) — is Godot right-handed
+        // Y-UP: the horizontal plane is (x, z) and y is the vertical/height axis
+        // (schema/content/common.defs.yaml: "Y-up, X east, -Z north"). The worldd
+        // runtime is Z-UP: the AoI planar grid (aoi_grid.cpp horizontal_distance) and
+        // the movement validator treat (x, y) as the horizontal plane and z as height
+        // (movement_validation.h Position: "z is the vertical (height) axis; the
+        // horizontal plane is (x, y)"). The DB is a faithful Y-up mirror; the SERVER
+        // is the single place content becomes live simulation state, so it converts
+        // here, at that boundary. Map Godot (x, y=height, z=planar) onto server
+        // (x, y=planar, z=height): planar x stays x, Godot planar z -> server planar
+        // y, Godot height y -> server height z. Without this the authored HEIGHT
+        // leaked into planar Y, throwing every spawn off the play plane so none ever
+        // entered a player's AoI enter radius (#498 — spawns unreachable / invisible).
+        sp.pos.x = as_f32(r[2]);  // pos_x = content.x  (east planar)   -> server planar x
+        sp.pos.y = as_f32(r[4]);  // pos_z = content.z  (north planar)  -> server planar y
+        sp.pos.z = as_f32(r[3]);  // pos_y = content.y  (Godot height)  -> server height z
         sp.orientation_deg = as_f32(r[5]);
         sp.respawn_min = as_u32(r[6]);
         sp.respawn_max = as_u32(r[7]);

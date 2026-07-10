@@ -1,30 +1,38 @@
 # Cinderdeep Mine kobold camp — normally exported by Forge's spawn gizmos (TLS-02).
 # Exercises: point spawns with wander, an elite patrol with waypoints.
+#
+# M1 GREYBOX PLACEMENT (#498): relocated as a coherent cluster ~25-35 m north-east of
+# the Emberfall hub / player spawn (server-planar (64,64)) so the "Culling the
+# Kobolds" loop is PLAYABLE — the player gets the quest from Bren and the kobolds are
+# right there, inside the 40 m AoI enter radius. Coordinates are Godot Y-up (the
+# horizontal plane is (x, z); y is height) and worldd converts to its Z-up planar grid
+# on load (server-planar = (x, z)). The camp's real Cinderdeep coordinates return with
+# the Zone-01 terrain; this is the greybox threat.
 schema: meridian/spawn@1
 id: core:spawn.zone01_kobold_camp
 zone: zone.zone01
 spawns:
   - npc: npc.kobold_miner
-    position: { x: -295.0, y: 21.0, z: 88.0 }
+    position: { x: 88.0, y: 0.0, z: 72.0 }
     respawn_seconds: { min: 120, max: 180 }
     wander_radius_m: 8
   - npc: npc.kobold_miner
-    position: { x: -318.0, y: 22.5, z: 104.0 }
+    position: { x: 95.0, y: 0.0, z: 66.0 }
     respawn_seconds: { min: 120, max: 180 }
     wander_radius_m: 8
   - npc: npc.kobold_miner
-    position: { x: -332.0, y: 23.0, z: 79.0 }
+    position: { x: 92.0, y: 0.0, z: 80.0 }
     orientation_deg: 45
     respawn_seconds: { min: 120, max: 180 }
   - npc: npc.kobold_digmaster
-    position: { x: -320.0, y: 22.0, z: 92.0 }
+    position: { x: 98.0, y: 0.0, z: 74.0 }
     respawn_seconds: { min: 300, max: 420 }
     patrol:
       loop: true
       waypoints:
-        - position: { x: -320.0, y: 22.0, z: 92.0 }
+        - position: { x: 98.0, y: 0.0, z: 74.0 }
           wait_seconds: 5
-        - position: { x: -300.0, y: 21.2, z: 85.0 }
-        - position: { x: -308.0, y: 21.8, z: 110.0 }
+        - position: { x: 88.0, y: 0.0, z: 70.0 }
+        - position: { x: 100.0, y: 0.0, z: 88.0 }
           wait_seconds: 8
-        - position: { x: -330.0, y: 23.0, z: 100.0 }
+        - position: { x: 105.0, y: 0.0, z: 80.0 }

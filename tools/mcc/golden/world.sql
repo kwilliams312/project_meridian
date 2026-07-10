@@ -8,7 +8,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 INSERT INTO world_manifest
   (pack_namespace, pack_version, id_band, content_hash, schema_version, mcc_version, built_at)
 VALUES
-  ('core', '0.1.0', 0, '105d6c886add565e0b6cc857fc3c8afcbbd1cf84e654ca88c6b0494d7c3c3400', 1, '0.0.0', '1970-01-01 00:00:00');
+  ('core', '0.1.0', 0, 'da9de236fb6cbaf7266c853d859202ad3080b3bd828a2ab3a835348ec6fe78d6', 1, '0.0.0', '1970-01-01 00:00:00');
 
 -- npc_template (8 rows)
 INSERT INTO npc_template (id, name, subtitle, level_min, level_max, creature_type, `rank`, faction, stat_health, stat_mana, stat_armor, stat_damage_min, stat_damage_max, stat_attack_speed_ms, ai_behavior, ai_aggro_radius_m, ai_leash_radius_m, ai_call_for_help_radius_m, ai_flee_at_health_pct, move_walk_speed_mps, move_run_speed_mps, vendor_ref_id, loot_table_ref_id, loot_money_min, loot_money_max, visual_model_id, visual_scale, visual_sound_set_id) VALUES
@@ -196,12 +196,12 @@ INSERT INTO spawn_point (id, zone_ref_id, npc_id, pos_x, pos_y, pos_z, orientati
   (1048580, 37, 63, -372, -17, 158, 210, 150, 240, 6),
   (1048581, 37, 63, -366, -18.5, 132, 0, 150, 240, 6),
   (1048582, 37, 60, -360, -18, 168, 180, 600, 900, NULL),
-  (1048583, 37, 27, 126, 8.5, -244, 200, 60, 60, NULL),
-  (1048584, 37, 64, 110, 8.5, -230, 315, 60, 60, NULL),
-  (1048585, 37, 26, -295, 21, 88, 0, 120, 180, 8),
-  (1048586, 37, 26, -318, 22.5, 104, 0, 120, 180, 8),
-  (1048587, 37, 26, -332, 23, 79, 45, 120, 180, NULL),
-  (1048588, 37, 25, -320, 22, 92, 0, 300, 420, NULL);
+  (1048583, 37, 27, 66, 0, 62, 200, 60, 60, NULL),
+  (1048584, 37, 64, 60, 0, 68, 315, 60, 60, NULL),
+  (1048585, 37, 26, 88, 0, 72, 0, 120, 180, 8),
+  (1048586, 37, 26, 95, 0, 66, 0, 120, 180, 8),
+  (1048587, 37, 26, 92, 0, 80, 45, 120, 180, NULL),
+  (1048588, 37, 25, 98, 0, 74, 0, 300, 420, NULL);
 
 -- patrol_path (2 rows)
 INSERT INTO patrol_path (spawn_point_id, `loop`) VALUES
@@ -213,10 +213,10 @@ INSERT INTO patrol_waypoint (spawn_point_id, ordinal, pos_x, pos_y, pos_z, wait_
   (1048582, 0, -360, -18, 168, 10),
   (1048582, 1, -344, -17, 150, 0),
   (1048582, 2, -376, -18.5, 140, 6),
-  (1048588, 0, -320, 22, 92, 5),
-  (1048588, 1, -300, 21.2, 85, 0),
-  (1048588, 2, -308, 21.8, 110, 8),
-  (1048588, 3, -330, 23, 100, 0);
+  (1048588, 0, 98, 0, 74, 5),
+  (1048588, 1, 88, 0, 70, 0),
+  (1048588, 2, 100, 0, 88, 8),
+  (1048588, 3, 105, 0, 80, 0);
 
 -- zone (1 rows)
 INSERT INTO zone (id, name, level_min, level_max, start_zone, music_explore_id, music_tension_id, music_combat_id, ambience_id) VALUES

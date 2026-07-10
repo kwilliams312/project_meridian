@@ -213,7 +213,15 @@ void drop_tables(db::Connection& c) {
 }
 
 // Seed a friendly quest-giver NPC (100) that gives quest 300, a hostile wolf (200),
-// and one spawn_point for each: the giver at (64,64), the wolf at (70,64).
+// and one spawn_point for each. The spawn_point rows are authored in the DB's Godot
+// Y-UP convention (schema/sql/world/70_spawn.sql: pos_{x,y,z} = position.{x,y,z}
+// verbatim, "Y-up, X east, -Z north"): the horizontal plane is (pos_x, pos_z) and
+// pos_y is the HEIGHT. A DISTINCT non-zero height is seeded so the test proves the
+// #498 axis conversion — load_spawn_points must map the Godot height (pos_y) to the
+// server HEIGHT (Position.z) and the Godot planar-north (pos_z) to the server planar
+// Y (Position.y), NOT leak the height into planar Y. Server-planar targets: the giver
+// at (64,64), the wolf at (70,66) — both well inside the 40 m AoI enter radius of a
+// session entering at (64,64), so both must fire an ENTITY_ENTER.
 void seed_fixture(db::Connection& c) {
     c.execute(
         "INSERT INTO npc_template (id, name, vendor_ref_id, loot_table_ref_id, loot_money_min, "
@@ -231,13 +239,16 @@ void seed_fixture(db::Connection& c) {
     c.execute(
         "INSERT INTO quest_objective (quest_id, ordinal, type, target_npc_id, item_id, to_npc_id, "
         "zone_ref_id, poi, count) VALUES (300, 0, 'kill', 200, NULL, NULL, NULL, NULL, 5)");
-    // spawn_point rows: the giver at (64,64,0); the wolf at (70,64,0). respawn 30-45 s.
+    // spawn_point rows in Godot Y-up (pos_x, pos_y=HEIGHT, pos_z=planar): the giver at
+    // planar (64,64) height 12.5; the wolf at planar (70,66) height 5. After the #498
+    // conversion the server positions are (x=64, y=64, z=12.5) and (x=70, y=66, z=5).
+    // respawn 30-45 s.
     c.execute(
         "INSERT INTO spawn_point (id, zone_ref_id, npc_id, pos_x, pos_y, pos_z, orientation_deg, "
-        "respawn_min, respawn_max, wander_radius_m) VALUES (1, 20, 100, 64, 64, 0, 90, 30, 45, NULL)");
+        "respawn_min, respawn_max, wander_radius_m) VALUES (1, 20, 100, 64, 12.5, 64, 90, 30, 45, NULL)");
     c.execute(
         "INSERT INTO spawn_point (id, zone_ref_id, npc_id, pos_x, pos_y, pos_z, orientation_deg, "
-        "respawn_min, respawn_max, wander_radius_m) VALUES (2, 20, 200, 70, 64, 0, 0, 30, 45, 8)");
+        "respawn_min, respawn_max, wander_radius_m) VALUES (2, 20, 200, 70, 5, 66, 0, 30, 45, 8)");
 }
 
 const mw::SpawnPlacement* find_spawn(const std::vector<mw::SpawnPlacement>& spawns,
@@ -298,8 +309,13 @@ int main() {
             check("gossip NPC has a mana pool (caster)",
                   giver->stats.resource_type == mw::ResourceType::kMana &&
                       giver->stats.max_resource == 150);
-            check("gossip NPC position from spawn_point",
-                  giver->pos.x == 64.0f && giver->pos.y == 64.0f);
+            // AXIS-CORRECT (#498): the authored Godot Y-up row (pos_x=64, pos_y=12.5
+            // height, pos_z=64 planar) must load as server Z-up (x=64 planar, y=64
+            // planar from pos_z, z=12.5 height from pos_y). Critically pos.y == 64 (the
+            // authored planar-north pos_z), NOT 12.5 (the authored HEIGHT pos_y) — the
+            // height must not leak into planar Y.
+            check("gossip NPC position is axis-correct (Godot Y-up -> server Z-up)",
+                  giver->pos.x == 64.0f && giver->pos.y == 64.0f && giver->pos.z == 12.5f);
         }
         if (wolf) {
             check("hostile creature is hostile (a kill objective)",
@@ -310,6 +326,8 @@ int main() {
                   wolf->stats.resource_type == mw::ResourceType::kNone);
             check("hostile creature carries its wander radius",
                   wolf->wander_radius_m.has_value() && *wolf->wander_radius_m == 8.0f);
+            check("hostile creature position is axis-correct (Godot Y-up -> server Z-up)",
+                  wolf->pos.x == 70.0f && wolf->pos.y == 66.0f && wolf->pos.z == 5.0f);
         }
 
         // ---- 2. INSTALL: spawn into the live world ----------------------------
@@ -321,9 +339,12 @@ int main() {
         check("both spawns are AoI entities", world.world_state().world_entity_count() == 2);
 
         // ---- 3. VISIBILITY: a session entering AoI sees the nearby spawns ------
-        // Capture every s2c frame the relay sends the entering session. The two spawns
-        // sit at (64,64)/(70,64), well within the AoI enter radius of a session
-        // spawning at (64,64), so both fire an ENTITY_ENTER on enter.
+        // Capture every s2c frame the relay sends the entering session. After the #498
+        // axis conversion the two spawns sit at server planar (64,64)/(70,66), well
+        // within the AoI enter radius of a session spawning at (64,64), so both fire an
+        // ENTITY_ENTER on enter. (Before the fix the authored height leaked into planar
+        // Y — the giver landed at planar (64,12.5), ~51 m away, outside the 40 m enter
+        // radius — so no ENTITY_ENTER arrived and the greybox was empty.)
         std::vector<std::pair<mn::Opcode, std::vector<std::uint8_t>>> frames;
         mw::EntityIdentity self;
         self.entity_guid = 4242;  // a distinct player guid
