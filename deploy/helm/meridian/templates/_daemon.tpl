@@ -180,6 +180,39 @@ spec:
                   name: {{ include "meridian.dbSecretName" $root }}
                   key: {{ include "meridian.dbSecretKey" $root }}
             {{- end }}
+            {{- /* World / CONTENT DB (IF-4 boot + #390 DB content stores + #483
+                   DbAbilityStore). worldd reads its OWN MERIDIAN_WORLDDB_* block
+                   (main.cpp maps MERIDIAN_WORLDDB_* -> worlddb.*) so the content
+                   DB can live on a different host than the auth/characters DB
+                   (SAD §2.2 3-DB split). It loads the DB-backed content stores
+                   ONLY when MERIDIAN_WORLDDB_USER is non-empty; unset ⇒ worldd
+                   logs "no world DB configured … serving without content" and the
+                   realm serves ZERO content (#482). The shared ConfigMap supplies
+                   host/port/user under MERIDIAN_DB_* only, so ALL FIVE WORLDDB vars
+                   are rendered here (host/port/user mirror the DB connection; NAME
+                   defaults to the world schema; PASS reuses the DB Secret).
+                   MERIDIAN_WORLDDB_EXPECTED_HASH is optional (advisory at M0–M1):
+                   when set, worldd loudly warns on an IF-4 content-hash mismatch
+                   but still boots. Rendered only when worlddb.enabled. */ -}}
+            {{- if and $cfg.worlddb $cfg.worlddb.enabled }}
+            - name: MERIDIAN_WORLDDB_HOST
+              value: {{ include "meridian.db.host" $root | quote }}
+            - name: MERIDIAN_WORLDDB_PORT
+              value: {{ $root.Values.db.port | quote }}
+            - name: MERIDIAN_WORLDDB_USER
+              value: {{ $root.Values.db.user | quote }}
+            - name: MERIDIAN_WORLDDB_NAME
+              value: {{ $cfg.worlddb.name | default $root.Values.db.names.world | quote }}
+            - name: MERIDIAN_WORLDDB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "meridian.dbSecretName" $root }}
+                  key: {{ include "meridian.dbSecretKey" $root }}
+            {{- with $cfg.worlddb.expectedHash }}
+            - name: MERIDIAN_WORLDDB_EXPECTED_HASH
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
             {{- with $cfg.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

@@ -119,6 +119,19 @@ mariadb:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # World CONTENT seed (#482). The meridian-db image first-boot init creates the
+  # world schema as EMPTY template tables; this post-install/post-upgrade Helm
+  # hook Job loads the mcc-emitted content DML (baked into the meridian-db image
+  # at /content/world-content.sql) into meridian_world so worldd's DB content
+  # stores (#390) + DbAbilityStore (#483) have data to load. Idempotent: it
+  # skips when the live world_manifest.content_hash already matches the baked
+  # content, else TRUNCATEs the world tables and reloads — so ephemeral dev
+  # reseeds every deploy and persistent PTR/Prod refresh only on a content change
+  # (promotion). Auto-active whenever the bundled DB + worldd.worlddb are both on;
+  # set enabled=false to manage world content out-of-band (e.g. external DB).
+  contentSeed:
+    enabled: true
+    sqlPath: /content/world-content.sql   # path to the baked DML inside meridian-db
 
 # ── Dev seed (⚠️ SHORT-TERM — remove once the admin web portal exists) ────────
 # A post-sync Job that idempotently seeds the realm row authd advertises + a set
@@ -219,6 +232,22 @@ worldd:
     # ENTER_WORLD returns INTERNAL (no fabrication) — so a live realm MUST enable it.
     enabled: false
     name: ""                        # empty → db.names.characters
+  worlddb:
+    # worldd's WORLD/CONTENT DB connection (MERIDIAN_WORLDDB_*) — the mcc-emitted
+    # world DB worldd loads its content stores from at boot: the #390 DB-backed
+    # npc/quest/loot/vendor/item stores + the #483 DbAbilityStore (authored
+    # abilities on the live cast path). worldd reads a SEPARATE MERIDIAN_WORLDDB_*
+    # env block (it does NOT reuse MERIDIAN_DB_*) and only loads DB content when
+    # MERIDIAN_WORLDDB_USER is non-empty. Off in the base chart; realm overlays
+    # enable it with name=meridian_world. When disabled, worldd serves ZERO
+    # content (no abilities/quests/npcs/loot/vendors, #482) — a live realm MUST
+    # enable it AND seed content into meridian_world (mariadb.contentSeed).
+    enabled: false
+    name: ""                        # empty → db.names.world
+    # Optional IF-4 pinned content hash (#89). When set, worldd loudly warns on a
+    # content-hash mismatch but still boots (advisory at M0–M1). Leave empty to
+    # accept whatever content version the seeded world DB carries.
+    expectedHash: ""
   service:
     type: ClusterIP
     port: 7200
