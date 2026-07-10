@@ -75,7 +75,14 @@ def check_bone_set(data: RigData) -> list[str]:
 
 
 def check_sockets(data: RigData) -> list[str]:
-    """E101 — all 7 socket bones must be present on a skeleton export."""
+    """E101 — all 7 socket bones must be present on a skeleton export.
+
+    character_model only: gear (armor_model) is a skinned piece bound to a
+    SUBSET of canonical bones and never carries the socket mounts itself
+    (spec ④ §4 — sockets are required "when exporting a skeleton asset").
+    """
+    if data.asset_class != "character_model":
+        return []
     missing = sorted(set(SOCKET_NAMES) - set(data.socket_names))
     if missing:
         return [f"E101 missing required socket bone(s): {', '.join(missing)}"]

@@ -381,3 +381,25 @@ def test_armor_mesh_with_geoset_name_flagged_e104():
     )
     errors = rig_checks.check_rig(data)
     assert any(e.startswith("E104") and "geo_torso_lod0" in e for e in errors), errors
+
+
+def test_armor_without_sockets_passes_e101_but_unknown_bone_still_fails_e100():
+    """Gear binds a SUBSET of canonical bones — E101 is character_model-only
+    (spec ④ §4: sockets are required 'when exporting a skeleton asset'), while
+    E100 stays unconditional for both skeletal classes."""
+    data = _rig_data(
+        asset_class="armor_model",
+        bone_names=["Chest", "UpperChest", "LeftShoulder"],
+        socket_names=[],
+        mesh_names=["sk_armor_cuirass_a"],
+    )
+    assert rig_checks.check_rig(data) == []
+    bad = _rig_data(
+        asset_class="armor_model",
+        bone_names=["Chest", "Tail01"],
+        socket_names=[],
+        mesh_names=["sk_armor_cuirass_a"],
+    )
+    errors = rig_checks.check_rig(bad)
+    assert any(e.startswith("E100") and "Tail01" in e for e in errors), errors
+    assert not any(e.startswith("E101") for e in errors), errors

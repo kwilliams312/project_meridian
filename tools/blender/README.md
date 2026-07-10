@@ -38,7 +38,7 @@ naming/scale/pivot checks above, which only warn).
 | Rule | Checks | Applies to |
 |------|--------|------------|
 | E100 | Every exported bone name is in the canonical `skeleton.defs.yaml` bone set (63 names: 56 profile + 7 sockets) | `character_model`, `armor_model` |
-| E101 | All 7 socket bones (`socket_main_hand`, `socket_off_hand`, `socket_shield`, `socket_back`, `socket_ranged`, `socket_hip_l`, `socket_hip_r`) are present | `character_model`, `armor_model` |
+| E101 | All 7 socket bones (`socket_main_hand`, `socket_off_hand`, `socket_shield`, `socket_back`, `socket_ranged`, `socket_hip_l`, `socket_hip_r`) are present | `character_model` only (gear binds a subset of canonical bones, never the socket mounts) |
 | E102 | Body meshes are named `geo_<region>_lod<N>`; all 8 geoset regions are covered at `lod0` | `character_model` bodies only |
 | E103 | ≤4 skin-weight influences per vertex, weights normalized (sum to 1.0) | `character_model`, `armor_model` |
 | E104 | `geo_*`-named meshes must name a known geoset region; `armor_model` meshes must NOT be `geo_*`-named at all (gear binds whole pieces via item@2 `worn.hides`, it doesn't carry geoset names) | `character_model`, `armor_model` |
