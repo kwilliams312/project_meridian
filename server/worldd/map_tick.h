@@ -109,6 +109,24 @@ enum class TickEventKind : std::uint8_t {
     kCreatureKill = 1,  // a creature died to a player — carries killer_guid + npc_template_id
                         // (the QST-01 event-bus seam: the world loop credits the KILLER's
                         // session quest log; MapTick no longer owns quest state).
+    kVitalsChanged = 2, // a player's authoritative vitals changed in the tick (primarily a
+                        // level-up from a kill, CHR-03 #360) — carries `vitals` (the UI-01
+                        // event-bus seam #437: the world loop MIRRORS the new vitals onto
+                        // the owning session's WorldState unit and pushes a VITALS_UPDATE to
+                        // it + its AoI observers; MapTick itself touches no socket).
+};
+
+// The post-change authoritative vitals a kVitalsChanged event carries (#437, UI-01
+// HUD). All-ABSOLUTE values (the state AFTER the change), so the world loop can set
+// exactly these on the WorldState session unit — no delta math. A level-up tops the
+// player off, so health == max_health and power == max_power for that case.
+struct VitalsSnapshot {
+    ObjectGuid    guid = 0;         // the subject player's guid
+    std::uint16_t level = 0;        // level after the change
+    std::uint32_t health = 0;       // current health after the change
+    std::uint32_t max_health = 0;   // health cap after the change
+    std::uint32_t power = 0;        // current secondary resource after the change
+    std::uint32_t max_power = 0;    // secondary-resource cap after the change
 };
 
 // One deterministic tick event. `text` is the byte-stable golden line; the typed
@@ -128,6 +146,11 @@ struct TickEvent {
     TickEventKind kind = TickEventKind::kGeneric;
     ObjectGuid    killer_guid = 0;        // kCreatureKill: the crediting player's guid
     std::uint32_t npc_template_id = 0;    // kCreatureKill: the victim creature's template id
+
+    // kVitalsChanged (#437): the post-change authoritative vitals the world loop
+    // mirrors onto the subject's WorldState unit + broadcasts. Zero for other kinds.
+    // NOT part of to_line() — the golden stream is unchanged by its presence.
+    VitalsSnapshot vitals{};
 
     std::string to_line() const;  // "t=<tick> now=<ms> <phase> <text>"
 };
@@ -173,6 +196,18 @@ public:
     // default), no kill event is emitted, so existing combat/death golden scenarios
     // are byte-identical.
     void set_report_kills(bool on) { report_kills_ = on; }
+
+    // Enable VITALS egress REPORTING (UI-01 HUD, event-bus #437). When on, a
+    // MapTick-side vitals change (primarily a level-up from a kill, CHR-03 #360) tags
+    // the level-up TickEvent as kVitalsChanged carrying the NEW authoritative vitals
+    // — the world loop mirrors them onto the leveler's WorldState session unit and
+    // pushes a VITALS_UPDATE to it + its AoI observers (WorldState::broadcast_vitals),
+    // so the HUD reflects the new level / max-health / max-power at once instead of
+    // lagging until a later live-path delta. Left OFF (the default), the level-up
+    // event stays kGeneric; its byte-stable text is IDENTICAL either way (the typed
+    // `vitals` fields are invisible to to_line()), so the no-egress combat/death
+    // golden scenarios are byte-identical — exactly like set_report_kills (#397).
+    void set_report_vitals(bool on) { report_vitals_ = on; }
 
     // The map's graveyard — where a released ghost is sent (CMB-03 #359). A single
     // per-map point for M1; the "nearest graveyard from world data" lookup is the
@@ -345,6 +380,7 @@ private:
     std::uint64_t       tick_no_ = 0;
 
     bool report_kills_ = false;  // QST-01 event-bus: emit kCreatureKill on a creature death
+    bool report_vitals_ = false; // UI-01 event-bus (#437): tag a level-up as kVitalsChanged
     CreatureAi ai_;  // server creatures (owns Creature + AI state + respawn timers)
     DeathStateMachine deaths_;  // dead players' death flow + corpses (CMB-03 #359)
     Position graveyard_;        // per-map release destination (world-data seam, #359)
