@@ -123,6 +123,33 @@ public:
 	godot::PackedByteArray build_char_delete_request_frame(int64_t character_id) const;
 	godot::PackedByteArray build_enter_world_request_frame(int64_t character_id) const;
 
+	// ── Quest / gossip frame builders (QST-01 / NPC-01/02, #371/#372/#433) ──────
+	// Each returns a ready-to-send IF-2 frame; pass to send_bulk(). The server's typed
+	// reply is drained by pump() as an `entity_frame` (raw opcode+payload) and decoded
+	// by decode_quest_frame() below (mirrors the entity-relay decode seam). The client
+	// only issues intents + renders results — it never predicts quest state (Principle 1).
+	//   gossip_hello   → GOSSIP_MENU (+ TRAINER_LIST for a trainer NPC)
+	//   quest_accept   → QUEST_ACCEPT_RESULT (+ QUEST_LOG resync on OK)
+	//   quest_turn_in  → QUEST_TURN_IN_RESULT (+ QUEST_LOG resync on OK); choice_index
+	//                    is the reward pick (>= 0) or -1 for a no-choice quest
+	//   quest_log_request → QUEST_LOG (the active-quest snapshot; an empty-table request)
+	godot::PackedByteArray build_gossip_hello_frame(int64_t npc_guid) const;
+	godot::PackedByteArray build_quest_accept_frame(int quest_id, int64_t giver_guid) const;
+	godot::PackedByteArray build_quest_turn_in_frame(int quest_id, int64_t turn_in_guid,
+			int choice_index) const;
+	godot::PackedByteArray build_quest_log_request_frame() const;
+
+	// Decode a raw quest/gossip S→C frame (opcode + FlatBuffer payload, as delivered by
+	// the `entity_frame` signal) into a scene-ready Dictionary the event bus publishes
+	// to the quest/gossip view-models. Returns:
+	//   { "kind": "gossip_menu"|"quest_accept_result"|"quest_progress"|
+	//             "quest_turn_in_result"|"quest_log"|"",   # "" if not a quest/gossip op
+	//     ...per-kind fields (see meridian_net_thread.cpp) }
+	// A non-quest/gossip opcode or an undecodable payload returns { "kind": "" }, so the
+	// scene can try decode_entity_frame() first and fall through to this decoder.
+	godot::Dictionary decode_quest_frame(int opcode,
+			const godot::PackedByteArray &payload) const;
+
 	// ── Diagnostics (atomic counters from the core) ────────────────────────────
 	int64_t frames_sent() const;
 	int64_t frames_received() const;

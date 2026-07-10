@@ -234,6 +234,132 @@ Bytes encode_char_create_response(const CharCreateResponse& in);
 Bytes encode_char_delete_response(const CharDeleteResponse& in);
 Bytes encode_enter_world_response(const EnterWorldResponse& in);
 
+// ---------------------------------------------------------------------------
+// IF-2 (world.fbs) — QUEST STATE (M1 QST-01, #371/#433) and NPC GOSSIP (M1
+// NPC-01/02, #372/#433). The client is a pure DISPLAY of server-authoritative
+// quest/gossip state (Principle 1 "server is law"): it ENCODES intents (accept a
+// quest, turn one in, open gossip, request the log) and DECODES the typed results +
+// snapshots the server pushes back. It never predicts quest state.
+//
+// Enum fields ride as u16/u8 ordinals (world.fbs QuestAcceptStatus / QuestTurnInStatus
+// / QuestObjectiveType / GossipOptionKind) so this POD API carries no generated-enum
+// dependency, exactly like the CharCreateStatus/EnterWorldStatus fields above.
+// ---------------------------------------------------------------------------
+
+// --- Gossip (0x52xx) --------------------------------------------------------
+
+// GOSSIP_HELLO (C→S): open gossip on a targeted NPC entity guid. At M1 the guid maps
+// 1:1 to the NPC template id (no NPC entities spawn yet — worldd's npc_store lookup).
+struct GossipHello {
+    std::uint64_t npc_guid = 0;
+};
+Bytes encode_gossip_hello(const GossipHello& in);
+std::optional<GossipHello> decode_gossip_hello(const Bytes& buf);  // test/mock symmetry
+
+// One computed gossip option (a menu row). `kind` is world.fbs GossipOptionKind
+// (0=QUEST_AVAILABLE, 1=QUEST_IN_PROGRESS, 2=QUEST_COMPLETE, 3=VENDOR, 4=TRAINER);
+// `target_id` is the quest id for the quest kinds, 0 for vendor/trainer.
+struct GossipOption {
+    std::uint16_t kind = 0;
+    std::uint32_t target_id = 0;
+};
+
+// GOSSIP_MENU (S→C): the server-computed, state-gated option list for THIS player.
+struct GossipMenu {
+    std::uint64_t npc_guid = 0;
+    std::vector<GossipOption> options;
+};
+Bytes encode_gossip_menu(const GossipMenu& in);  // test/mock symmetry (client decodes)
+std::optional<GossipMenu> decode_gossip_menu(const Bytes& buf);
+
+// --- Quest (0x40xx) ---------------------------------------------------------
+
+// QUEST_ACCEPT (C→S): accept `quest_id` from the targeted `giver_guid` NPC.
+struct QuestAccept {
+    std::uint32_t quest_id = 0;
+    std::uint64_t giver_guid = 0;
+};
+Bytes encode_quest_accept(const QuestAccept& in);
+std::optional<QuestAccept> decode_quest_accept(const Bytes& buf);  // test/mock symmetry
+
+// QUEST_ACCEPT_RESULT (S→C): typed accept outcome. `status` is world.fbs
+// QuestAcceptStatus (0=OK; 1..7 = the typed rejections).
+struct QuestAcceptResult {
+    std::uint32_t quest_id = 0;
+    std::uint16_t status = 0;
+};
+Bytes encode_quest_accept_result(const QuestAcceptResult& in);  // test/mock symmetry
+std::optional<QuestAcceptResult> decode_quest_accept_result(const Bytes& buf);
+
+// One objective's live state within a quest-log entry. `type` is world.fbs
+// QuestObjectiveType (0=KILL,1=COLLECT,2=DELIVER,3=EXPLORE); `target_id` is the
+// subject content id (creature/item/zone) per `type`.
+struct QuestObjectiveState {
+    std::uint16_t type = 0;
+    std::uint32_t target_id = 0;
+    std::uint16_t have = 0;
+    std::uint16_t need = 0;
+    bool complete = false;
+};
+
+// QUEST_PROGRESS (S→C): a single objective advanced (kill/collect/deliver/explore).
+struct QuestProgress {
+    std::uint32_t quest_id = 0;
+    std::uint8_t objective_index = 0;
+    std::uint16_t type = 0;  // QuestObjectiveType
+    std::uint16_t have = 0;
+    std::uint16_t need = 0;
+    bool complete = false;
+};
+Bytes encode_quest_progress(const QuestProgress& in);  // test/mock symmetry
+std::optional<QuestProgress> decode_quest_progress(const Bytes& buf);
+
+// QUEST_TURN_IN (C→S): turn `quest_id` in at `turn_in_guid`. `choice_index` selects a
+// reward for a choice-reward quest (>= 0), or -1 when the quest offers no choice.
+struct QuestTurnIn {
+    std::uint32_t quest_id = 0;
+    std::uint64_t turn_in_guid = 0;
+    std::int32_t choice_index = -1;
+};
+Bytes encode_quest_turn_in(const QuestTurnIn& in);
+std::optional<QuestTurnIn> decode_quest_turn_in(const Bytes& buf);  // test/mock symmetry
+
+// A reward item actually granted at turn-in (item template id + count).
+struct QuestRewardItem {
+    std::uint32_t item_id = 0;
+    std::uint16_t count = 1;
+};
+
+// QUEST_TURN_IN_RESULT (S→C): typed turn-in outcome. On OK the rewards were granted;
+// `status` is world.fbs QuestTurnInStatus (0=OK; 1..6 = the typed rejections).
+struct QuestTurnInResult {
+    std::uint32_t quest_id = 0;
+    std::uint16_t status = 0;
+    std::uint32_t reward_xp = 0;
+    std::int64_t reward_money = 0;  // copper (ECO-01)
+    std::vector<QuestRewardItem> reward_items;
+    std::uint16_t new_level = 0;
+};
+Bytes encode_quest_turn_in_result(const QuestTurnInResult& in);  // test/mock symmetry
+std::optional<QuestTurnInResult> decode_quest_turn_in_result(const Bytes& buf);
+
+// One active quest in the log snapshot.
+struct QuestLogEntry {
+    std::uint32_t quest_id = 0;
+    std::uint16_t level = 0;
+    bool complete = false;
+    std::vector<QuestObjectiveState> objectives;
+};
+
+// QUEST_LOG (C↔S): C→S an EMPTY QuestLog is the "send me my log" request; S→C the
+// populated QuestLog is the authoritative active-quest snapshot the client renders its
+// quest log + tracker from. `encode_quest_log({})` builds the empty request body.
+struct QuestLog {
+    std::vector<QuestLogEntry> quests;
+};
+Bytes encode_quest_log(const QuestLog& in);  // C→S request (empty) + S→C mock symmetry
+std::optional<QuestLog> decode_quest_log(const Bytes& buf);
+
 }  // namespace meridian::clientnet::codec
 
 #endif  // MERIDIAN_CLIENTNET_CODEC_H

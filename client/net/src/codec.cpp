@@ -349,4 +349,196 @@ Bytes encode_enter_world_response(const EnterWorldResponse& in) {
     return to_bytes(b);
 }
 
+// ---- IF-2 GOSSIP (0x52xx — NPC-01/02, #372/#433) ---------------------------
+
+Bytes encode_gossip_hello(const GossipHello& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateGossipHello(b, in.npc_guid));
+    return to_bytes(b);
+}
+
+std::optional<GossipHello> decode_gossip_hello(const Bytes& buf) {
+    const mn::GossipHello* t = verify_and_get<mn::GossipHello>(buf);
+    if (t == nullptr) return std::nullopt;
+    GossipHello out;
+    out.npc_guid = t->npc_guid();
+    return out;
+}
+
+Bytes encode_gossip_menu(const GossipMenu& in) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::GossipOption>> rows;
+    rows.reserve(in.options.size());
+    for (const auto& o : in.options) {
+        rows.push_back(mn::CreateGossipOption(
+            b, static_cast<mn::GossipOptionKind>(o.kind), o.target_id));
+    }
+    b.Finish(mn::CreateGossipMenu(b, in.npc_guid, b.CreateVector(rows)));
+    return to_bytes(b);
+}
+
+std::optional<GossipMenu> decode_gossip_menu(const Bytes& buf) {
+    const mn::GossipMenu* t = verify_and_get<mn::GossipMenu>(buf);
+    if (t == nullptr) return std::nullopt;
+    GossipMenu out;
+    out.npc_guid = t->npc_guid();
+    if (t->options() != nullptr) {
+        out.options.reserve(t->options()->size());
+        for (const auto* o : *t->options()) {
+            if (o == nullptr) continue;
+            out.options.push_back(
+                GossipOption{static_cast<std::uint16_t>(o->kind()), o->target_id()});
+        }
+    }
+    return out;
+}
+
+// ---- IF-2 QUEST (0x40xx — QST-01, #371/#433) -------------------------------
+
+Bytes encode_quest_accept(const QuestAccept& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateQuestAccept(b, in.quest_id, in.giver_guid));
+    return to_bytes(b);
+}
+
+std::optional<QuestAccept> decode_quest_accept(const Bytes& buf) {
+    const mn::QuestAccept* t = verify_and_get<mn::QuestAccept>(buf);
+    if (t == nullptr) return std::nullopt;
+    QuestAccept out;
+    out.quest_id = t->quest_id();
+    out.giver_guid = t->giver_guid();
+    return out;
+}
+
+Bytes encode_quest_accept_result(const QuestAcceptResult& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateQuestAcceptResult(
+        b, in.quest_id, static_cast<mn::QuestAcceptStatus>(in.status)));
+    return to_bytes(b);
+}
+
+std::optional<QuestAcceptResult> decode_quest_accept_result(const Bytes& buf) {
+    const mn::QuestAcceptResult* t = verify_and_get<mn::QuestAcceptResult>(buf);
+    if (t == nullptr) return std::nullopt;
+    QuestAcceptResult out;
+    out.quest_id = t->quest_id();
+    out.status = static_cast<std::uint16_t>(t->status());
+    return out;
+}
+
+Bytes encode_quest_progress(const QuestProgress& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateQuestProgress(
+        b, in.quest_id, in.objective_index,
+        static_cast<mn::QuestObjectiveType>(in.type), in.have, in.need, in.complete));
+    return to_bytes(b);
+}
+
+std::optional<QuestProgress> decode_quest_progress(const Bytes& buf) {
+    const mn::QuestProgress* t = verify_and_get<mn::QuestProgress>(buf);
+    if (t == nullptr) return std::nullopt;
+    QuestProgress out;
+    out.quest_id = t->quest_id();
+    out.objective_index = t->objective_index();
+    out.type = static_cast<std::uint16_t>(t->type());
+    out.have = t->have();
+    out.need = t->need();
+    out.complete = t->complete();
+    return out;
+}
+
+Bytes encode_quest_turn_in(const QuestTurnIn& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateQuestTurnIn(b, in.quest_id, in.turn_in_guid, in.choice_index));
+    return to_bytes(b);
+}
+
+std::optional<QuestTurnIn> decode_quest_turn_in(const Bytes& buf) {
+    const mn::QuestTurnIn* t = verify_and_get<mn::QuestTurnIn>(buf);
+    if (t == nullptr) return std::nullopt;
+    QuestTurnIn out;
+    out.quest_id = t->quest_id();
+    out.turn_in_guid = t->turn_in_guid();
+    out.choice_index = t->choice_index();
+    return out;
+}
+
+Bytes encode_quest_turn_in_result(const QuestTurnInResult& in) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::QuestRewardItem>> items;
+    items.reserve(in.reward_items.size());
+    for (const auto& it : in.reward_items) {
+        items.push_back(mn::CreateQuestRewardItem(b, it.item_id, it.count));
+    }
+    b.Finish(mn::CreateQuestTurnInResult(
+        b, in.quest_id, static_cast<mn::QuestTurnInStatus>(in.status), in.reward_xp,
+        in.reward_money, b.CreateVector(items), in.new_level));
+    return to_bytes(b);
+}
+
+std::optional<QuestTurnInResult> decode_quest_turn_in_result(const Bytes& buf) {
+    const mn::QuestTurnInResult* t = verify_and_get<mn::QuestTurnInResult>(buf);
+    if (t == nullptr) return std::nullopt;
+    QuestTurnInResult out;
+    out.quest_id = t->quest_id();
+    out.status = static_cast<std::uint16_t>(t->status());
+    out.reward_xp = t->reward_xp();
+    out.reward_money = t->reward_money();
+    out.new_level = t->new_level();
+    if (t->reward_items() != nullptr) {
+        out.reward_items.reserve(t->reward_items()->size());
+        for (const auto* it : *t->reward_items()) {
+            if (it == nullptr) continue;
+            out.reward_items.push_back(QuestRewardItem{it->item_id(), it->count()});
+        }
+    }
+    return out;
+}
+
+Bytes encode_quest_log(const QuestLog& in) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::QuestLogEntry>> entries;
+    entries.reserve(in.quests.size());
+    for (const auto& q : in.quests) {
+        std::vector<fb::Offset<mn::QuestObjectiveState>> objs;
+        objs.reserve(q.objectives.size());
+        for (const auto& o : q.objectives) {
+            objs.push_back(mn::CreateQuestObjectiveState(
+                b, static_cast<mn::QuestObjectiveType>(o.type), o.target_id, o.have,
+                o.need, o.complete));
+        }
+        entries.push_back(mn::CreateQuestLogEntry(b, q.quest_id, q.level, q.complete,
+                                                  b.CreateVector(objs)));
+    }
+    b.Finish(mn::CreateQuestLog(b, b.CreateVector(entries)));
+    return to_bytes(b);
+}
+
+std::optional<QuestLog> decode_quest_log(const Bytes& buf) {
+    const mn::QuestLog* t = verify_and_get<mn::QuestLog>(buf);
+    if (t == nullptr) return std::nullopt;
+    QuestLog out;
+    if (t->quests() != nullptr) {
+        out.quests.reserve(t->quests()->size());
+        for (const auto* q : *t->quests()) {
+            if (q == nullptr) continue;
+            QuestLogEntry entry;
+            entry.quest_id = q->quest_id();
+            entry.level = q->level();
+            entry.complete = q->complete();
+            if (q->objectives() != nullptr) {
+                entry.objectives.reserve(q->objectives()->size());
+                for (const auto* o : *q->objectives()) {
+                    if (o == nullptr) continue;
+                    entry.objectives.push_back(QuestObjectiveState{
+                        static_cast<std::uint16_t>(o->type()), o->target_id(), o->have(),
+                        o->need(), o->complete()});
+                }
+            }
+            out.quests.push_back(std::move(entry));
+        }
+    }
+    return out;
+}
+
 }  // namespace meridian::clientnet::codec

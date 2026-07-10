@@ -867,6 +867,167 @@ void test_transport_error_paths() {
     CHECK(mock.last_timeout_ms == 250);
 }
 
+// ---------------------------------------------------------------------------
+// 11. QUEST + GOSSIP codec (QST-01 / NPC-01/02, #371/#372/#433)
+//
+// The client is a pure DISPLAY of server-authoritative quest/gossip state: it ENCODES
+// intents (gossip hello, quest accept/turn-in, quest-log request) and DECODES the
+// typed results + snapshots. These round-trips are the STRONG automated proof that the
+// client agrees byte-for-byte with worldd's world.fbs quest/gossip tables (the same
+// flatc codegen worldd uses), and that every decoder applies the verify-before-GetRoot
+// discipline. Each message wraps + unwraps cleanly under its IF-2 opcode too.
+// ---------------------------------------------------------------------------
+void test_gossip_codec() {
+    std::puts("[gossip] GossipHello/GossipMenu round-trip + opcode wrap + verifier");
+
+    // GossipHello (C→S) — the npc_guid the client opens gossip on.
+    codec::GossipHello hello{/*npc_guid=*/27ull};  // quartermaster_bren (IT-M1 idmap)
+    auto hello_out = codec::decode_gossip_hello(codec::encode_gossip_hello(hello));
+    CHECK(hello_out.has_value() && hello_out->npc_guid == 27ull);
+    // Wraps under GOSSIP_HELLO (0x5201) at the IF-2 frame layer.
+    {
+        Bytes frame = encode_world_frame(kOpGossipHello, /*seq=*/3,
+                                         codec::encode_gossip_hello(hello));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x5201 && f->opcode == kOpGossipHello);
+    }
+
+    // GossipMenu (S→C) — a state-gated menu: an available quest, an in-progress quest,
+    // a turn-in-ready quest, plus vendor + trainer entries (kinds 0..4).
+    codec::GossipMenu menu;
+    menu.npc_guid = 27ull;
+    menu.options.push_back({/*kind=QUEST_AVAILABLE*/ 0, /*target_id=*/28});
+    menu.options.push_back({/*kind=QUEST_IN_PROGRESS*/ 1, /*target_id=*/29});
+    menu.options.push_back({/*kind=QUEST_COMPLETE*/ 2, /*target_id=*/30});
+    menu.options.push_back({/*kind=VENDOR*/ 3, /*target_id=*/0});
+    menu.options.push_back({/*kind=TRAINER*/ 4, /*target_id=*/0});
+    auto menu_out = codec::decode_gossip_menu(codec::encode_gossip_menu(menu));
+    CHECK(menu_out.has_value());
+    CHECK(menu_out->npc_guid == 27ull && menu_out->options.size() == 5);
+    CHECK(menu_out->options[0].kind == 0 && menu_out->options[0].target_id == 28);
+    CHECK(menu_out->options[1].kind == 1 && menu_out->options[1].target_id == 29);
+    CHECK(menu_out->options[2].kind == 2 && menu_out->options[2].target_id == 30);
+    CHECK(menu_out->options[3].kind == 3 && menu_out->options[3].target_id == 0);
+    CHECK(menu_out->options[4].kind == 4 && menu_out->options[4].target_id == 0);
+
+    // An empty menu (an NPC the player cannot usefully interact with) round-trips.
+    codec::GossipMenu none;
+    none.npc_guid = 99ull;
+    auto none_out = codec::decode_gossip_menu(codec::encode_gossip_menu(none));
+    CHECK(none_out.has_value() && none_out->npc_guid == 99ull && none_out->options.empty());
+
+    // Verify-before-GetRoot: garbage + empty are rejected on both decoders.
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_gossip_hello(garbage).has_value());
+    CHECK(!codec::decode_gossip_menu(garbage).has_value());
+    CHECK(!codec::decode_gossip_menu(Bytes{}).has_value());
+}
+
+void test_quest_codec() {
+    std::puts("[quest] Accept/Progress/TurnIn/Log round-trip + opcode wrap + verifier");
+
+    // QuestAccept (C→S) — accept quest 28 from giver 27.
+    codec::QuestAccept acc{/*quest_id=*/28, /*giver_guid=*/27ull};
+    auto acc_out = codec::decode_quest_accept(codec::encode_quest_accept(acc));
+    CHECK(acc_out.has_value() && acc_out->quest_id == 28 && acc_out->giver_guid == 27ull);
+    {
+        Bytes frame = encode_world_frame(kOpQuestAccept, 1, codec::encode_quest_accept(acc));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == kOpQuestAccept && f->opcode == 0x4001);
+    }
+
+    // QuestAcceptResult (S→C) — a typed rejection (LEVEL_TOO_LOW=4) survives the enum.
+    codec::QuestAcceptResult ar{/*quest_id=*/28, /*status=LEVEL_TOO_LOW*/ 4};
+    auto ar_out = codec::decode_quest_accept_result(codec::encode_quest_accept_result(ar));
+    CHECK(ar_out.has_value() && ar_out->quest_id == 28 && ar_out->status == 4);
+
+    // QuestProgress (S→C) — a kill objective advanced 5/8, not yet complete.
+    codec::QuestProgress pr{/*quest_id=*/28, /*objective_index=*/0, /*type=KILL*/ 0,
+                            /*have=*/5, /*need=*/8, /*complete=*/false};
+    auto pr_out = codec::decode_quest_progress(codec::encode_quest_progress(pr));
+    CHECK(pr_out.has_value());
+    CHECK(pr_out->quest_id == 28 && pr_out->objective_index == 0 && pr_out->type == 0);
+    CHECK(pr_out->have == 5 && pr_out->need == 8 && !pr_out->complete);
+    // A completing delta: 8/8, complete=true.
+    codec::QuestProgress done{28, 0, 0, 8, 8, true};
+    auto done_out = codec::decode_quest_progress(codec::encode_quest_progress(done));
+    CHECK(done_out.has_value() && done_out->have == 8 && done_out->complete);
+
+    // QuestTurnIn (C→S) — turn in at NPC 27 with reward choice 1.
+    codec::QuestTurnIn ti{/*quest_id=*/29, /*turn_in_guid=*/27ull, /*choice_index=*/1};
+    auto ti_out = codec::decode_quest_turn_in(codec::encode_quest_turn_in(ti));
+    CHECK(ti_out.has_value());
+    CHECK(ti_out->quest_id == 29 && ti_out->turn_in_guid == 27ull && ti_out->choice_index == 1);
+    // The no-choice default (-1) round-trips as a signed int32.
+    codec::QuestTurnIn ti_nc{28, 27ull, -1};
+    auto ti_nc_out = codec::decode_quest_turn_in(codec::encode_quest_turn_in(ti_nc));
+    CHECK(ti_nc_out.has_value() && ti_nc_out->choice_index == -1);
+
+    // QuestTurnInResult (S→C) — OK with XP, copper, two reward items, and a level-up.
+    codec::QuestTurnInResult tr;
+    tr.quest_id = 29;
+    tr.status = 0;  // OK
+    tr.reward_xp = 420;
+    tr.reward_money = 400;
+    tr.reward_items.push_back({/*item_id=*/101, /*count=*/1});
+    tr.reward_items.push_back({/*item_id=*/102, /*count=*/3});
+    tr.new_level = 6;
+    auto tr_out = codec::decode_quest_turn_in_result(codec::encode_quest_turn_in_result(tr));
+    CHECK(tr_out.has_value());
+    CHECK(tr_out->quest_id == 29 && tr_out->status == 0 && tr_out->reward_xp == 420);
+    CHECK(tr_out->reward_money == 400 && tr_out->new_level == 6);
+    CHECK(tr_out->reward_items.size() == 2);
+    CHECK(tr_out->reward_items[0].item_id == 101 && tr_out->reward_items[0].count == 1);
+    CHECK(tr_out->reward_items[1].item_id == 102 && tr_out->reward_items[1].count == 3);
+
+    // QuestLog: the EMPTY body is the C→S "send me my log" request; it wraps under
+    // QUEST_LOG (0x4006) and decodes to an empty snapshot.
+    Bytes req = codec::encode_quest_log(codec::QuestLog{});
+    {
+        Bytes frame = encode_world_frame(kOpQuestLog, 1, req);
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == kOpQuestLog && f->opcode == 0x4006);
+    }
+    auto empty_log = codec::decode_quest_log(req);
+    CHECK(empty_log.has_value() && empty_log->quests.empty());
+
+    // A populated QuestLog (S→C snapshot): two quests, one with two objectives (a kill
+    // in progress + a collect complete), one turn-in-ready — the tracker's data source.
+    codec::QuestLog log;
+    codec::QuestLogEntry e0;
+    e0.quest_id = 28;
+    e0.level = 4;
+    e0.complete = false;
+    e0.objectives.push_back({/*type=KILL*/ 0, /*target_id=*/26, /*have=*/5, /*need=*/8, false});
+    e0.objectives.push_back({/*type=COLLECT*/ 1, /*target_id=*/50, /*have=*/6, /*need=*/6, true});
+    codec::QuestLogEntry e1;
+    e1.quest_id = 29;
+    e1.level = 5;
+    e1.complete = true;
+    e1.objectives.push_back({/*type=DELIVER*/ 2, /*target_id=*/27, /*have=*/1, /*need=*/1, true});
+    log.quests.push_back(e0);
+    log.quests.push_back(e1);
+    auto log_out = codec::decode_quest_log(codec::encode_quest_log(log));
+    CHECK(log_out.has_value() && log_out->quests.size() == 2);
+    CHECK(log_out->quests[0].quest_id == 28 && log_out->quests[0].level == 4);
+    CHECK(!log_out->quests[0].complete && log_out->quests[0].objectives.size() == 2);
+    CHECK(log_out->quests[0].objectives[0].type == 0 && log_out->quests[0].objectives[0].have == 5 &&
+          log_out->quests[0].objectives[0].need == 8 && !log_out->quests[0].objectives[0].complete);
+    CHECK(log_out->quests[0].objectives[1].type == 1 && log_out->quests[0].objectives[1].complete);
+    CHECK(log_out->quests[1].quest_id == 29 && log_out->quests[1].complete);
+    CHECK(log_out->quests[1].objectives.size() == 1 && log_out->quests[1].objectives[0].type == 2);
+
+    // Verify-before-GetRoot: garbage + empty are rejected on every S→C decoder.
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_quest_accept(garbage).has_value());
+    CHECK(!codec::decode_quest_accept_result(garbage).has_value());
+    CHECK(!codec::decode_quest_progress(garbage).has_value());
+    CHECK(!codec::decode_quest_turn_in(garbage).has_value());
+    CHECK(!codec::decode_quest_turn_in_result(garbage).has_value());
+    CHECK(!codec::decode_quest_log(garbage).has_value());
+    CHECK(!codec::decode_quest_log(Bytes{}).has_value());
+}
+
 }  // namespace
 
 int main() {
@@ -878,6 +1039,8 @@ int main() {
     test_entity_codec();
     test_vitals_codec();
     test_char_enter_codec();
+    test_gossip_codec();
+    test_quest_codec();
     test_full_stack();
     test_transport_links();
 

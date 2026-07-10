@@ -47,6 +47,19 @@ inline constexpr std::uint16_t kOpEntityEnter    = 0x2001;  // S→C
 inline constexpr std::uint16_t kOpEntityUpdate   = 0x2002;  // S→C
 inline constexpr std::uint16_t kOpEntityLeave    = 0x2003;  // S→C
 inline constexpr std::uint16_t kOpVitalsUpdate   = 0x2004;  // S→C  HUD delta (#430/#431)
+// Quest state (M1 — QST-01, #371/#433). QUEST_LOG is bidirectional: C→S it REQUESTS
+// the log (an empty QuestLog table body); S→C it CARRIES the log snapshot. The others
+// are one C→S request paired with a typed S→C result; QUEST_PROGRESS is S→C only.
+inline constexpr std::uint16_t kOpQuestAccept       = 0x4001;  // C→S
+inline constexpr std::uint16_t kOpQuestAcceptResult = 0x4002;  // S→C
+inline constexpr std::uint16_t kOpQuestProgress     = 0x4003;  // S→C
+inline constexpr std::uint16_t kOpQuestTurnIn       = 0x4004;  // C→S
+inline constexpr std::uint16_t kOpQuestTurnInResult = 0x4005;  // S→C
+inline constexpr std::uint16_t kOpQuestLog          = 0x4006;  // C↔S (request / snapshot)
+// NPC gossip (M1 — NPC-01/02, #372/#433). GOSSIP_HELLO opens gossip on an NPC guid;
+// GOSSIP_MENU is the server-computed, state-gated option list.
+inline constexpr std::uint16_t kOpGossipHello    = 0x5201;  // C→S
+inline constexpr std::uint16_t kOpGossipMenu     = 0x5202;  // S→C
 
 // IF-2 in-frame header size: u16 opcode + u64 seq (world_dispatch.h
 // kFrameHeaderBytes). A frame body shorter than this is malformed.
