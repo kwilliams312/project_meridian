@@ -74,6 +74,11 @@ namespace meridian::worldd {
 
 using net::Bytes;
 
+// A resolved authored spawn placement (db_content_store.h) — WorldServer::install_spawns
+// takes a batch of these at boot. Forward-declared so this header need not pull the
+// content-load layer into every dispatch consumer.
+struct SpawnPlacement;
+
 // Install world-DB-backed content stores behind the M1 seams the QUEST/GOSSIP/VENDOR
 // dispatch handlers read (item templates, vendor catalog, quest defs, npc defs),
 // replacing the placeholder set (#390). Call ONCE at boot (main()) AFTER the IF-4
@@ -561,6 +566,22 @@ public:
     // store must outlive the WorldServer (main() owns the WorldContent bundle). Call
     // at boot before start(); not thread-safe.
     void set_loot_tables(const loot::LootTableStore& store);
+
+    // Spawn the authored content placements into the LIVE world at boot (NPC-01 spawn
+    // seam, #486). Each placement is spawned BOTH into the per-map tick (MapTick::
+    // add_creature — existence + AI + the kill-objective creature the world thread
+    // routes) AND into the AoI relay as a static world entity (WorldState::
+    // add_world_entity — so a player entering range gets an ENTITY_ENTER with the
+    // spawn's #430 vitals + name, and a gossip NPC is targetable by guid so
+    // GOSSIP_HELLO resolves). The two representations share nothing but the authored
+    // source; the AoI guid is assigned in the kWorldEntityGuidBase band. Call at boot
+    // BEFORE start() (single-threaded; no session has entered yet); not thread-safe.
+    void install_spawns(const std::vector<SpawnPlacement>& spawns);
+
+    // Test/diagnostic: how many creatures the per-map tick currently holds (the
+    // authored spawns installed via install_spawns; #486). Lets a boot test assert the
+    // world was populated (creature count > 0) after install.
+    std::size_t map_creature_count() const;
 
     // Replace the read-only ability template store on the LIVE cast path with a
     // world-DB-backed catalog (#481), in place of the M1 placeholder store. Loaded

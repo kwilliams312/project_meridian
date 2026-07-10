@@ -724,6 +724,27 @@ target_link_libraries(worldd-content-load-db-test
 set_target_properties(worldd-content-load-db-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-content-load-db COMMAND worldd-content-load-db-test)
 
+# --- Content SPAWN load + spawn-into-world DB-backed integration test (#486). ----
+# The acceptance bar for the spawn story: seed a world DB with authored spawn_point
+# rows (a friendly quest-giver NPC + a hostile creature) resolved against npc_template,
+# then prove load_world_content reads them into WorldContent.spawns, WorldServer::
+# install_spawns spawns each into BOTH the map tick (existence) AND the AoI relay (an
+# entity), a session entering AoI receives an ENTITY_ENTER for the nearby spawns (with
+# the #430 vitals + name), the gossip NPC's wire guid resolves to its npc_template id
+# (the GOSSIP_HELLO seam) + is reachable by guid, and a hostile creature is present for
+# a kill objective. Self-seeds minimal no-FK tables. Reads MERIDIAN_WORLDDB_* (falls
+# back to MERIDIAN_DB_*) and SKIPS (exit 0) when none are set — inert in the plain
+# server ctest, real only in the DB CI job / test.sh --db.
+add_executable(worldd-spawn-load-db-test
+  test/spawn_load_db_it.cpp
+)
+target_link_libraries(worldd-spawn-load-db-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-spawn-load-db-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-spawn-load-db COMMAND worldd-spawn-load-db-test)
+
 # --- Ability-catalog world-DB load + cast-resolution regression test (#481). ----
 # Reproduces the UNKNOWN_ABILITY cast bug (the placeholder store does not know the
 # authored ids the CAST_REQUEST handler resolves against) and proves load_db_ability_store

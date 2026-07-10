@@ -270,6 +270,15 @@ struct EnterResult {
 // session has a real character guid and this path is unused.
 inline constexpr AoiId kSyntheticGuidBase = 0xF000'0000'0000'0000ULL;
 
+// The base for wire guids assigned to STATIC WORLD ENTITIES — the server-controlled
+// creatures / NPCs spawned from authored spawn_point content (#486). A distinct high
+// band keeps them clear of real character guids, the kSyntheticGuidBase placeholder-
+// player band (0xF000…), and the map-tick creature band (creature_ai.h
+// kCreatureGuidBase 0xC000…) so a spawned NPC, a placeholder player, and a MapTick
+// creature never collide in the AoI grid or on the wire. Each installed spawn is
+// assigned kWorldEntityGuidBase + index in install order.
+inline constexpr AoiId kWorldEntityGuidBase = 0xE000'0000'0000'0000ULL;
+
 // ---------------------------------------------------------------------------
 // WorldState — the world-thread-owned session registry + AoI relay.
 // ---------------------------------------------------------------------------
@@ -312,6 +321,31 @@ public:
     // everyone who currently sees it and drop it from the grid + registry.
     // Thread-safe. No-op if `slot` is not entered.
     void leave(SessionSlot slot);
+
+    // ── Static world entities (content spawns; NPC-01 spawn seam, #486) ──────
+    // Register a server-controlled creature / NPC spawned from authored spawn_point
+    // content into the AoI world so a player entering range SEES it (ENTITY_ENTER with
+    // its #430 vitals + name) and can TARGET it (unit_for_guid resolves it; a spawned
+    // gossip NPC's guid maps to `npc_template_id` for GOSSIP_HELLO). Unlike a session,
+    // an entity has NO egress — it is a pure SUBJECT of the relay: observers are told
+    // about it, it is told about nobody. It is inserted into the SAME grid as sessions
+    // so the existing interest-set query finds it; it never moves at M1 (respawn/AI is
+    // #346-#348), so it only ever generates EntityEnter (on an observer coming into
+    // range) and EntityLeave (on leaving range). `identity.entity_guid` must be unique
+    // (see kWorldEntityGuidBase); `npc_template_id` is the content id GOSSIP_HELLO /
+    // kill objectives key on. Call at boot before sessions enter. Thread-safe. Returns
+    // the assigned guid (== identity.entity_guid).
+    AoiId add_world_entity(const EntityIdentity& identity, const UnitStats& stats,
+                           std::uint32_t npc_template_id, const Position& pos);
+
+    // The npc_template id of the spawned world entity with wire guid `guid`, or nullopt
+    // if `guid` names no registered world entity (a session, a placeholder, or unknown).
+    // The GOSSIP_HELLO / interaction path uses this to resolve a clicked entity's guid
+    // to the npc content it should serve gossip/trainer/vendor from (#486). Thread-safe.
+    std::optional<std::uint32_t> npc_template_for_guid(AoiId guid) const;
+
+    // Test/diagnostic: how many static world entities are registered.
+    std::size_t world_entity_count() const;
 
     // ── GM commands targeting a session (OPS-02b, #418) ──────────────────────
     // These let a GM command reach a session by name (`.summon`, `.kick`) or set a
@@ -464,6 +498,11 @@ private:
         // by slot id. Diffed each movement to drive enter/update/leave + resolve
         // the hysteresis band.
         std::unordered_set<SessionSlot> visible;
+        // The set of static WORLD ENTITIES (content spawns, #486) this session
+        // currently sees, by entity guid. Diffed each movement alongside `visible`
+        // to drive their EntityEnter/Leave — kept separate because entities are not
+        // sessions (no slot, no reciprocal visibility, no egress).
+        std::unordered_set<AoiId> visible_entities;
         // GM-command control signals (OPS-02b, #418). `forced_move` is the summon
         // mailbox (borrowed — owned by the target's ConnCtx); `disconnect` is the
         // .kick teardown closure. Both null until set_session_control (unset on the
@@ -481,8 +520,28 @@ private:
                                                   std::uint32_t state_flags,
                                                   std::uint64_t server_time_ms);
 
+    // A STATIC world entity — a server-controlled creature / NPC spawned from authored
+    // content (#486). It is a pure relay SUBJECT: it lives in the grid and is reported
+    // to observers, but has no egress and receives nothing. It never moves at M1.
+    struct WorldEntityRec {
+        EntityIdentity identity;      // wire projection (guid + type_id + name) for EntityEnter
+        Creature unit;                // authoritative Unit (health/level/faction/pos, #342)
+        std::uint32_t npc_template_id = 0;  // content id GOSSIP_HELLO / kill objectives key on
+    };
+
     // Emit an EntityEnter for `subject` to the session at `to`. Caller holds mtx_.
     void send_enter(SessionRec& to, const SessionRec& subject);
+
+    // Emit an EntityEnter / EntityLeave for a static world ENTITY `subject` to the
+    // session at `to` (#486). One-directional (the entity has no egress). Caller holds mtx_.
+    void send_enter_entity(SessionRec& to, const WorldEntityRec& subject);
+    void send_leave_entity(SessionRec& to, const WorldEntityRec& subject, net::LeaveReason reason);
+
+    // Diff `self`'s CURRENT interest set against its previously-seen world entities and
+    // relay each entity's EntityEnter (newly in range) / EntityLeave (out of range).
+    // `now_guids` is self's freshly-computed interest set (a mix of session + entity
+    // guids); only the entity guids in it are considered. Caller holds mtx_.
+    void relay_visible_entities(SessionRec& self, const std::unordered_set<AoiId>& now_guids);
     // Emit an EntityUpdate (position delta) for `subject` to `to`. Caller holds mtx_.
     void send_update(SessionRec& to, const SessionRec& subject, std::uint32_t ack_seq,
                      std::uint64_t server_time_ms);
@@ -509,6 +568,10 @@ private:
     AoiGrid grid_;
     std::unordered_map<SessionSlot, SessionRec> sessions_;
     std::unordered_map<AoiId, SessionSlot> slot_by_guid_;
+    // Static world entities (content spawns, #486), keyed by wire guid. Share grid_
+    // with sessions; never removed at M1 (respawn is #346-#348). A guid is in EITHER
+    // slot_by_guid_ (a session) OR entities_ (a spawn), never both.
+    std::unordered_map<AoiId, WorldEntityRec> entities_;
     // Case-insensitive character-name → slot index, for whisper routing (#367).
     // Keyed by the lower-cased name; a session with an empty name (D-11
     // placeholder) is absent, so it is unaddressable by whisper.

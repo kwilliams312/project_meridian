@@ -88,6 +88,7 @@ void create_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS ability_effect_stat_mod",
         "DROP TABLE IF EXISTS ability_effect",
         "DROP TABLE IF EXISTS ability",
+        "DROP TABLE IF EXISTS spawn_point",
     };
     for (const char* d : drops) c.execute(d);
 
@@ -210,6 +211,18 @@ void create_tables(db::Connection& c) {
         "  ability_id INT UNSIGNED NOT NULL, ordinal SMALLINT UNSIGNED NOT NULL,"
         "  stat ENUM('strength','agility','stamina','intellect','spirit') NOT NULL, amount INT NOT NULL,"
         "  PRIMARY KEY (ability_id, ordinal, stat)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // spawn_point — the #486 spawn loader reads this (PASS 1). Created EMPTY here (this
+    // test seeds no spawns), so load_spawn_points returns zero placements and never
+    // touches the extended npc_template columns (level_min/faction/stat_health) this
+    // minimal npc_template lacks. Columns mirror schema/sql/world/70_spawn.sql.
+    c.execute(
+        "CREATE TABLE spawn_point ("
+        "  id INT UNSIGNED NOT NULL, zone_ref_id INT UNSIGNED NOT NULL DEFAULT 0,"
+        "  npc_id INT UNSIGNED NOT NULL, pos_x FLOAT NOT NULL, pos_y FLOAT NOT NULL,"
+        "  pos_z FLOAT NOT NULL, orientation_deg FLOAT NOT NULL DEFAULT 0,"
+        "  respawn_min INT UNSIGNED NOT NULL DEFAULT 0, respawn_max INT UNSIGNED NOT NULL DEFAULT 0,"
+        "  wander_radius_m FLOAT NULL, PRIMARY KEY (id)"
+        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 }
 
 void drop_tables(db::Connection& c) {
@@ -223,6 +236,7 @@ void drop_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS npc_trainer",      "DROP TABLE IF EXISTS npc_template",
         "DROP TABLE IF EXISTS area",             "DROP TABLE IF EXISTS ability_effect_stat_mod",
         "DROP TABLE IF EXISTS ability_effect",   "DROP TABLE IF EXISTS ability",
+        "DROP TABLE IF EXISTS spawn_point",
     };
     for (const char* d : drops) c.execute(d);
 }

@@ -761,6 +761,95 @@ AbilityStore load_db_ability_store(db::Connection& world_db) {
 }
 
 // =============================================================================
+// load_spawn_points  (spawn_point rows resolved against npc_template)
+// =============================================================================
+namespace {
+
+// npc_template.faction ENUM('friendly','neutral','hostile') -> combat Faction. An
+// unknown / NULL value falls back to neutral (attackable by no one — a safe default
+// for a placement whose faction is missing). 'friendly' is the quest-giver/gossip
+// faction; 'hostile' is a mob (a kill objective).
+Faction npc_faction_from_db(const db::Cell& c) {
+    if (!c.has_value()) return Faction::kNeutral;
+    const std::string& s = *c;
+    if (s == "friendly") return Faction::kFriendly;
+    if (s == "hostile") return Faction::kHostile;
+    return Faction::kNeutral;
+}
+
+}  // namespace
+
+std::vector<SpawnPlacement> load_spawn_points(db::Connection& world_db) {
+    // PASS 1 — the placements themselves (spawn_point only). Read first + alone so an
+    // EMPTY spawn_point table (the DB-content unit tests, which seed no spawns) never
+    // forces the extended npc_template columns pass 2 selects to exist. ORDER BY id
+    // keeps the spawn order deterministic. FLOAT pos/orientation read directly (#413).
+    db::Result rows = world_db.execute(
+        "SELECT id, npc_id, pos_x, pos_y, pos_z, orientation_deg, "
+        "       respawn_min, respawn_max, wander_radius_m "
+        "FROM spawn_point ORDER BY id");
+    if (rows.rows.empty()) return {};
+
+    std::vector<SpawnPlacement> spawns;
+    spawns.reserve(rows.rows.size());
+    for (const db::Row& r : rows.rows) {
+        SpawnPlacement sp;
+        sp.npc_id = as_u32(r[1]);
+        sp.pos.x = as_f32(r[2]);
+        sp.pos.y = as_f32(r[3]);
+        sp.pos.z = as_f32(r[4]);
+        sp.orientation_deg = as_f32(r[5]);
+        sp.respawn_min = as_u32(r[6]);
+        sp.respawn_max = as_u32(r[7]);
+        if (r[8].has_value()) sp.wander_radius_m = as_f32(r[8]);
+        spawns.push_back(std::move(sp));
+    }
+
+    // PASS 2 — resolve each placement's npc_template combat identity (name, level,
+    // faction, health, mana). Only reached when at least one placement exists (so the
+    // extended npc_template columns are never referenced on an empty spawn set). One
+    // query over the whole template table -> a lookup map, so N spawns of one template
+    // read the row once. level uses level_min (the low end of the intRange band —
+    // level_max scaling is a later AI/content concern); max_health = stat_health;
+    // resource is Mana when stat_mana is present (a caster NPC), else none.
+    db::Result tpl = world_db.execute(
+        "SELECT id, name, level_min, faction, stat_health, stat_mana FROM npc_template");
+    struct TemplateCombat {
+        std::string name;
+        std::uint16_t level = 1;
+        Faction faction = Faction::kNeutral;
+        std::uint32_t health = 1;
+        std::optional<std::uint32_t> mana;
+    };
+    std::unordered_map<std::uint32_t, TemplateCombat> by_id;
+    by_id.reserve(tpl.rows.size());
+    for (const db::Row& r : tpl.rows) {
+        TemplateCombat tc;
+        tc.name = as_str(r[1]);
+        tc.level = as_u16(r[2], 1);
+        tc.faction = npc_faction_from_db(r[3]);
+        tc.health = as_u32(r[4], 1);
+        if (r[5].has_value()) tc.mana = as_u32(r[5]);
+        by_id.emplace(as_u32(r[0]), std::move(tc));
+    }
+
+    for (SpawnPlacement& sp : spawns) {
+        auto it = by_id.find(sp.npc_id);
+        if (it == by_id.end()) continue;  // a spawn for an unknown template — leave defaults
+        const TemplateCombat& tc = it->second;
+        sp.name = tc.name;
+        sp.stats.level = tc.level;
+        sp.stats.max_health = tc.health == 0 ? 1 : tc.health;  // a live Unit has >= 1 HP
+        sp.stats.faction = tc.faction;
+        if (tc.mana) {
+            sp.stats.resource_type = ResourceType::kMana;
+            sp.stats.max_resource = *tc.mana;
+        }
+    }
+    return spawns;
+}
+
+// =============================================================================
 // load_world_content
 // =============================================================================
 WorldContent load_world_content(db::Connection& world_db) {
@@ -772,6 +861,7 @@ WorldContent load_world_content(db::Connection& world_db) {
     content.loot = std::make_unique<DbLootTableStore>(world_db);
     content.area_triggers = load_area_trigger_volumes(world_db);
     content.abilities = std::make_unique<AbilityStore>(load_db_ability_store(world_db));
+    content.spawns = load_spawn_points(world_db);
     return content;
 }
 

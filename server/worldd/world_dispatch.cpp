@@ -21,7 +21,9 @@
 #include <vector>
 
 #include "characters.h"  // meridian-characters CRUD: list/create/delete (#286 / D-35)
+#include "creature_ai.h"  // CreatureSpawnDef — content spawns into the map tick (#486)
 #include "currency.h"    // ECO-01 int64 copper: add_money / get_money (quest + trainer)
+#include "db_content_store.h"  // SpawnPlacement — authored spawn placements (#486)
 #include "economy_sanity.h"  // OPS-03b defense-in-depth economy delta checks (#421)
 #include "gm_command.h"  // OPS-02a GM command framework: registry + parse + gate + audit (#417)
 #include "gossip.h"      // NPC-01 gossip menu planner (#372)
@@ -3197,7 +3199,17 @@ void Dispatcher::register_m0_stubs() {
                                              encode_gossip_menu(npc_guid, none)));
         };
         if (ctx.phase != SessionPhase::kInWorld || !ctx.quests) { empty_menu(); return; }
-        const npc::NpcDef* def = npc_store().find(static_cast<npc::NpcId>(npc_guid));
+        // Resolve the clicked target to an npc_template id. When the client targets a
+        // spawned world entity (#486), its wire guid is in the kWorldEntityGuidBase band
+        // (not a template id) — map it back to the npc content it represents. Absent a
+        // spawn (or no world registry), fall back to treating npc_guid AS the template id
+        // (the pre-spawn 1:1 mapping the placeholder path relies on).
+        npc::NpcId npc_id = static_cast<npc::NpcId>(npc_guid);
+        if (ctx.world != nullptr) {
+            if (auto tmpl = ctx.world->npc_template_for_guid(npc_guid))
+                npc_id = static_cast<npc::NpcId>(*tmpl);
+        }
+        const npc::NpcDef* def = npc_store().find(npc_id);
         if (def == nullptr) {
             // Unknown NPC: no gossip content, but interacting still delivers (below).
             empty_menu();
@@ -3245,8 +3257,9 @@ void Dispatcher::register_m0_stubs() {
         // any quest item this NPC is the deliver target for, completing the objective
         // (the item was granted on accept). QUEST_PROGRESS follows for whatever
         // advanced. Runs AFTER the gossip reply so a non-deliver interaction's reply
-        // ordering (GOSSIP_MENU / TRAINER_LIST) is unchanged.
-        credit_deliver_at_npc(sess, ctx, static_cast<std::uint32_t>(npc_guid));
+        // ordering (GOSSIP_MENU / TRAINER_LIST) is unchanged. Uses the resolved template
+        // id so a deliver target clicked as a spawned entity (#486) still credits.
+        credit_deliver_at_npc(sess, ctx, static_cast<std::uint32_t>(npc_id));
     });
 
     on(net::Opcode::TRAINER_LEARN, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
@@ -3435,6 +3448,54 @@ void route_vitals_events(const std::vector<TickEvent>& deltas, VitalsEgressRegis
 
 void WorldServer::set_loot_tables(const loot::LootTableStore& store) {
     impl_->map.set_loot_tables(store);
+}
+
+void WorldServer::install_spawns(const std::vector<SpawnPlacement>& spawns) {
+    // Boot-time, single-threaded (before start()): populate the live world from the
+    // authored spawn_point content (#486). Each placement lands in TWO systems:
+    //   1. the per-map TICK (impl_->map) — MapTick::add_creature makes the creature
+    //      EXIST in the simulation (AI phase / respawn seam / the kill-objective
+    //      creature the world thread routes via route_tick_events). Stats come from a
+    //      CreatureSpawnDef built from the resolved placement.
+    //   2. the AoI RELAY (impl_->world) — add_world_entity makes it VISIBLE: a player
+    //      entering range gets an ENTITY_ENTER carrying its #430 vitals + name, and a
+    //      gossip NPC is targetable by its wire guid (npc_template_for_guid resolves it
+    //      for GOSSIP_HELLO). The wire guid is assigned in the kWorldEntityGuidBase band.
+    // The two representations are independent (the M1 live combat path resolves targets
+    // through the AoI unit; the MapTick creature is the simulation/kill substrate) — the
+    // shared truth is the authored placement.
+    AoiId next_entity_guid = kWorldEntityGuidBase;
+    std::size_t n = 0;
+    for (const SpawnPlacement& sp : spawns) {
+        // (1) MapTick existence. A minimal CreatureSpawnDef — the M1 goal is EXISTENCE
+        // + visibility; leash/aggro/patrol tuning is the AI stories (#346-#348). The
+        // respawn delay is carried from content (seconds -> ms); a wandering spawn uses
+        // its wander radius as the leash, else a generous default so it never evades.
+        CreatureSpawnDef def;
+        def.template_id = sp.npc_id;
+        def.level = sp.stats.level;
+        def.faction = sp.stats.faction;
+        def.home = sp.pos;
+        def.leash_radius = sp.wander_radius_m.value_or(0.0f);
+        def.respawn_ms = sp.respawn_min * 1000u;
+        impl_->map.add_creature(def);
+
+        // (2) AoI visibility + interactability. The wire projection: a unique guid, the
+        // npc id as the type kind, and the display name (#430 nameplate + vitals). The
+        // resolved combat stats give real health/level/faction on EntityEnter.
+        EntityIdentity id;
+        id.entity_guid = next_entity_guid++;
+        id.type_id = sp.npc_id;   // the client maps the npc id to its model/appearance
+        id.char_class = 0;        // not a player — no class coloring
+        id.name = sp.name;
+        impl_->world.add_world_entity(id, sp.stats, sp.npc_id, sp.pos);
+        ++n;
+    }
+    log::info(kCat, "installed " + std::to_string(n) + " content spawn(s) into the live world");
+}
+
+std::size_t WorldServer::map_creature_count() const {
+    return impl_->map.ai().size();
 }
 
 void WorldServer::set_abilities(AbilityStore store) {
