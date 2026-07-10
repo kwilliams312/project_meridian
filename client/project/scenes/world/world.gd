@@ -38,6 +38,18 @@ const SPAWN := Vector3(64.0, 0.0, 64.0)
 # Fixed sim cadence (matches the server 20 Hz / 50 ms tick the controller expects).
 const TICK_MS := 50
 
+# Click-to-target (CMB-01, #496). Every remote entity carries a pickable collider on a
+# DEDICATED physics layer so a mouse raycast can select it WITHOUT disturbing the
+# camera's collision boom (the SpringArm3D probes layer 1). The target-pick ray masks
+# ONLY this layer, and the colliders detect nothing themselves (mask 0) — they are pure
+# ray targets, never a physics obstacle for movement or the camera.
+const TARGET_PHYS_LAYER := 2          # physics layer bit the targetable colliders live on
+const TARGET_PICK_RANGE := 1000.0     # metres — max click-pick ray length
+# A left-press that moves fewer than this many pixels before release is a CLICK (select),
+# not a camera-orbit DRAG — so click-to-target and left-drag orbit coexist on the SAME
+# button (the TPS camera orbits on left-drag). We never mark the LMB event handled.
+const TARGET_CLICK_DRAG_PX := 8.0
+
 # Character Select — where a PRE-HandshakeOk connection failure returns the player
 # (#301 UX: never strand them in an empty world). Kept in sync with the char-select
 # handoff (scenes/charselect/char_select.gd → WORLD_SCENE).
@@ -76,6 +88,15 @@ var _camera: Node3D
 
 var _remotes: Node3D                       # container for remote-player nodes
 var _remote_nodes: Dictionary = {}         # guid:int -> Node3D
+
+# Click-to-target (#496): a single reusable selection ring reparented under / positioned
+# over the current target, plus the LMB click-vs-drag tracker (a drag orbits the camera;
+# a clean click selects). The ring shows only for a REMOTE target that is in AoI.
+var _target_ring: MeshInstance3D
+var _lmb_down := false
+var _lmb_drag_px := 0.0
+var _lmb_press_screen := Vector2.ZERO
+var _lmb_press_on_ui := false
 
 var _hud_state: Label
 var _hud_guid: Label
@@ -133,6 +154,12 @@ func _ready() -> void:
 	_hud.name = "UnitFrameHud"
 	add_child(_hud)
 	_hud.setup(_bus)
+
+	# Click/tab-target (CMB-01, #496): the world scene owns the 3D nodes, so it drives the
+	# on-screen SELECTION VISUAL (the ring) off the bus's target_changed. Selection itself
+	# still flows through the bus (set_target), exactly like the target unit frame's binding.
+	_bus.target_changed.connect(_on_target_changed)
+	_build_target_ring()
 
 	# QST-01 (#433): the world scene owns BOTH the bus and the net thread, so it is the
 	# controller that turns a UI INTENT (a bus request_* signal) into an outbound frame,
@@ -346,6 +373,9 @@ func _update_remotes() -> void:
 				float(sample.get("x", 0.0)),
 				float(sample.get("y", 0.0)),
 				float(sample.get("z", 0.0)))
+	# Keep the selection ring glued to the (moving) target each frame (#496).
+	if _target_ring != null and _target_ring.visible:
+		_position_target_ring()
 
 
 # --- Server-event signal handlers --------------------------------------------
@@ -529,6 +559,25 @@ func _spawn_remote(guid: int, d: Dictionary) -> void:
 	label.no_depth_test = true
 	node.add_child(label)
 
+	# Pickable collider for click-to-target (#496): a capsule matching the body, on the
+	# DEDICATED target layer (mask 0 — it detects nothing; it is only a RAY target). The
+	# entity guid rides as metadata so a click resolves the entity straight from the hit
+	# collider. Being on its own layer (not layer 1) means selecting never yanks the
+	# camera boom and the capsule is never a movement obstacle.
+	var picker := StaticBody3D.new()
+	picker.name = "Picker"
+	picker.collision_layer = TARGET_PHYS_LAYER
+	picker.collision_mask = 0
+	picker.set_meta("target_guid", guid)
+	var pshape := CollisionShape3D.new()
+	var pcap := CapsuleShape3D.new()
+	pcap.height = 1.8
+	pcap.radius = 0.5   # a touch wider than the 0.35 mesh so the capsule is easy to click
+	pshape.shape = pcap
+	pshape.position = Vector3(0, 0.9, 0)
+	picker.add_child(pshape)
+	node.add_child(picker)
+
 	_remotes.add_child(node)
 	_remote_nodes[guid] = node
 	print("[world] remote ENTER guid=%d at %s (%d remotes)" % [guid, pos, _remote_nodes.size()])
@@ -544,13 +593,25 @@ func _despawn_remote(guid: int) -> void:
 	print("[world] remote LEAVE guid=%d (%d remotes)" % [guid, _remote_nodes.size()])
 
 
-# --- Targeting stub (UI-01, #431) --------------------------------------------
-# A MINIMAL tab-target so the target unit frame is demonstrable: TAB cycles through
-# the remote entities nearest-first, and the choice flows through the event bus
-# (set_target) exactly like real targeting will. Full click/tab targeting + friend/
-# foe + range/LoS is the combat-presentation epic (#23) — this is only the seam that
-# proves the target frame binds to and renders a server unit's vitals from the bus.
+# --- Targeting: click + tab (CMB-01, #496; combat-presentation epic #23) ------
+# Real target selection. LEFT-CLICK raycasts the entity under the cursor and selects it
+# (empty space clears); TAB cycles the in-AoI entities nearest-first; ESCAPE clears. Every
+# choice flows through the event bus (set_target), which drives BOTH the target unit frame
+# (name + health/power from target_vitals, live on VITALS_UPDATE) and the on-screen
+# selection ring. Friend/foe filtering + range/LoS gating stay future epic-#23 work — at
+# M1 every relayed entity is targetable.
 func _input(event: InputEvent) -> void:
+	# Click-to-target (#496): mouse events drive selection and MUST be handled before the
+	# key-only guard below. A clean left CLICK selects the entity under the cursor (empty
+	# space clears); a left DRAG is left for the TPS camera to orbit — so we NEVER mark the
+	# LMB event handled and only act on release when there was no drag.
+	if event is InputEventMouseButton:
+		_handle_target_click(event as InputEventMouseButton)
+		return
+	if event is InputEventMouseMotion:
+		if _lmb_down:
+			_lmb_drag_px += (event as InputEventMouseMotion).relative.length()
+		return
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
 	var code := (event as InputEventKey).physical_keycode
@@ -597,8 +658,14 @@ func _input(event: InputEvent) -> void:
 				_hud.press_action_slot(code - KEY_1)
 			get_viewport().set_input_as_handled()
 		KEY_ESCAPE:
+			# Escape dismisses the open gossip window FIRST (it is the modal-ish thing on
+			# screen); with no window open it CLEARS the current target (#496) — the target
+			# frame hides and the selection ring disappears via the bus's target_changed.
 			if _bus != null:
-				_bus.close_gossip()  # dismiss the gossip window
+				if _bus.gossip_npc() != 0:
+					_bus.close_gossip()
+				else:
+					_bus.set_target(0)
 			get_viewport().set_input_as_handled()
 
 
@@ -930,6 +997,112 @@ func _cycle_target() -> void:
 func _dist2_to(guid: int, ppos: Vector3) -> float:
 	var n: Node3D = _remote_nodes.get(guid)
 	return ppos.distance_squared_to(n.position) if n != null else INF
+
+
+# --- Click-to-target (#496) ---------------------------------------------------
+# LMB tracks a click-vs-drag so targeting and camera-orbit share the button: a press
+# starts tracking; motion accumulates drag pixels; a release with little drag (and not
+# started over the HUD) is a CLICK that raycasts + selects. The event is NEVER marked
+# handled, so the TPS camera still orbits on a left-drag.
+func _handle_target_click(mb: InputEventMouseButton) -> void:
+	if mb.button_index != MOUSE_BUTTON_LEFT:
+		return
+	if mb.pressed:
+		_lmb_down = true
+		_lmb_drag_px = 0.0
+		_lmb_press_screen = get_viewport().get_mouse_position()
+		# Remember if the press began over a HUD control (action bar / window / chat) so a
+		# click meant for the UI never also retargets or clears the world target.
+		_lmb_press_on_ui = get_viewport().gui_get_hovered_control() != null
+		return
+	if not _lmb_down:
+		return
+	_lmb_down = false
+	if _lmb_drag_px > TARGET_CLICK_DRAG_PX:
+		return  # a camera-orbit drag, not a select click
+	if _lmb_press_on_ui or _bus == null:
+		return
+	var guid := _pick_target_at_screen(_lmb_press_screen)
+	_bus.set_target(guid)  # 0 (empty space / local player / non-entity) → clear
+	if guid != 0:
+		print("[world] click-target -> guid=%d" % guid)
+
+
+# Raycast the active camera through `screen_pos` and return the guid of the targetable
+# entity under it (0 if the ray hits nothing on the target layer).
+func _pick_target_at_screen(screen_pos: Vector2) -> int:
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return 0
+	var from := cam.project_ray_origin(screen_pos)
+	var to := from + cam.project_ray_normal(screen_pos) * TARGET_PICK_RANGE
+	return _raycast_target_guid(from, to)
+
+
+# Physics-pick along the segment from→to on the TARGET layer; return the hit entity's
+# guid (0 if nothing was hit). Split out from the camera projection so it is unit-testable
+# headlessly with an explicit ray (see scenes/world/target_verify.gd).
+func _raycast_target_guid(from: Vector3, to: Vector3) -> int:
+	var space := get_world_3d().direct_space_state
+	if space == null:
+		return 0
+	var query := PhysicsRayQueryParameters3D.create(from, to, TARGET_PHYS_LAYER)
+	var hit: Dictionary = space.intersect_ray(query)
+	if hit.is_empty():
+		return 0
+	return _guid_for_collider(hit.get("collider"))
+
+
+# Resolve the entity guid carried as metadata on a picked collider (0 if absent).
+func _guid_for_collider(collider: Object) -> int:
+	var node := collider as Node
+	if node != null and node.has_meta("target_guid"):
+		return int(node.get_meta("target_guid"))
+	return 0
+
+
+# --- Selection ring (#496) ----------------------------------------------------
+# One reusable flat ring, a child of the world, moved onto the current target each frame.
+# Shown only for a REMOTE target that is in AoI (its node exists); hidden otherwise.
+func _build_target_ring() -> void:
+	_target_ring = MeshInstance3D.new()
+	_target_ring.name = "TargetRing"
+	var torus := TorusMesh.new()
+	torus.inner_radius = 0.55
+	torus.outer_radius = 0.78
+	_target_ring.mesh = torus
+	var mat := StandardMaterial3D.new()
+	var ring_col := Color(1.0, 0.85, 0.2)
+	mat.albedo_color = ring_col
+	mat.emission_enabled = true
+	mat.emission = ring_col * 0.6
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_target_ring.material_override = mat
+	_target_ring.visible = false
+	add_child(_target_ring)
+
+
+func _on_target_changed(guid: int) -> void:
+	# Show the ring only for an in-AoI remote target; the per-frame _position_target_ring()
+	# keeps it under the (moving) target and hides it if the entity is gone.
+	if _target_ring == null:
+		return
+	if guid != 0 and _remote_nodes.has(guid):
+		_position_target_ring()
+	else:
+		_target_ring.visible = false
+
+
+func _position_target_ring() -> void:
+	if _target_ring == null or _bus == null:
+		return
+	var node: Node3D = _remote_nodes.get(_bus.target_guid())
+	if node == null:
+		_target_ring.visible = false
+		return
+	_target_ring.visible = true
+	# Sit the ring at the target's feet (a hair above the ground plane so it never z-fights).
+	_target_ring.position = node.position + Vector3(0.0, 0.06, 0.0)
 
 
 # --- Scene construction (built in code, like camera_demo.gd) -----------------
