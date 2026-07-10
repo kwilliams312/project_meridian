@@ -191,25 +191,48 @@ std::vector<ManifestRow> read_world_manifest(db::Connection& world_db) {
 // ---------------------------------------------------------------------------
 
 BootReport boot_world_db(db::Connection& world_db,
-                         const std::optional<std::string>& expected_content_hash) {
+                         const std::optional<std::string>& expected_content_hash,
+                         bool require_content) {
+    BootReport rep;
     std::vector<ManifestRow> rows;
     try {
         rows = read_world_manifest(world_db);
+        rep = verify_world_manifest(rows, expected_content_hash);
     } catch (const db::DbError& e) {
         // A read failure — most commonly the world_manifest table does not exist
-        // (an un-loaded / wrong world DB). Treat as a missing manifest hard fail;
-        // never let the boot check throw past this point.
-        BootReport rep;
+        // (an un-loaded / not-yet-seeded world DB). Treat as a missing manifest;
+        // never let the boot check throw past this point. This joins the empty
+        // manifest in the degrade policy below (both are the "no content yet"
+        // shape #485 targets — the seed either has not created the table or has
+        // not written any rows).
         rep.verdict = BootVerdict::kMissingManifest;
         rep.hard_fail = true;
         rep.reason = std::string("could not read world_manifest: ") + e.what();
-        core::log::error(kCat, "world-DB boot: " + rep.reason);
-        return rep;
     }
 
-    BootReport rep = verify_world_manifest(rows, expected_content_hash);
+    // Degrade policy (#485): a configured-but-empty / missing world DB
+    // (kMissingManifest) is NOT fatal by default — worldd serves WITHOUT content
+    // and self-heals once the content-seed lands, rather than exiting into a k8s
+    // CrashLoopBackOff when it restarts before the seed Job finishes. Opt into the
+    // strict fail-fast with MERIDIAN_WORLDDB_REQUIRE_CONTENT=1 (require_content).
+    // INTEGRITY faults (kMalformedManifest / kSchemaMismatch — corrupt or
+    // unserveable content) are unaffected: they always hard-fail.
+    if (rep.verdict == BootVerdict::kMissingManifest && !require_content) {
+        rep.hard_fail = false;
+        rep.degraded = true;
+    }
 
-    if (rep.verdict == BootVerdict::kOk) {
+    if (rep.degraded) {
+        // Loud ERROR so the unseeded state is unmissable in logs — but worldd
+        // boots content-less and recovers automatically once the seed lands.
+        core::log::error(
+            kCat, "world-DB boot DEGRADED [" +
+                      std::string(boot_verdict_name(rep.verdict)) + "] — " +
+                      rep.reason +
+                      "; serving WITHOUT content (realm self-heals once content is "
+                      "seeded). Set MERIDIAN_WORLDDB_REQUIRE_CONTENT=1 to fail fast "
+                      "instead.");
+    } else if (rep.verdict == BootVerdict::kOk) {
         // The prominent success line: which content version + hash worldd serves
         // (SAD §4.3 "logs the content hash"; runbook §Content-visibility / TLS-01
         // "content-hash logged by worldd on boot").

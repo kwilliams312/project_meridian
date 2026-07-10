@@ -20,9 +20,13 @@
 //   2. read_world_manifest returns exactly that row (the IF-4 read shape).
 //   3. boot_world_db -> kOk (bootable), resolves the version + hash.
 //   4. Truncate the manifest (delete the row) -> boot_world_db kMissingManifest,
-//      hard_fail (the truncated-load fail-fast case).
+//      DEGRADES (does NOT hard_fail): an empty/unseeded world DB boots WITHOUT
+//      content and self-heals once the seed lands (#485).
+//   4b. Same empty manifest with require_content=true (MERIDIAN_WORLDDB_
+//      REQUIRE_CONTENT=1) -> still hard_fail (strict opt-in preserved).
 //   5. Re-seed with a bumped schema_version -> boot_world_db kSchemaMismatch,
-//      hard_fail (a world DB this binary cannot serve).
+//      hard_fail (a world DB this binary cannot serve — integrity fault, always
+//      fails regardless of the degrade policy).
 //   6. Re-seed valid but pin a DIFFERENT expected hash -> kSoftWarn, bootable
 //      (the advisory content-hash tie).
 //
@@ -35,7 +39,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
 #include <string>
+#include <vector>
 
 using namespace meridian::worldd;
 namespace db = meridian::db;
@@ -144,13 +150,27 @@ int main() {
             check("valid manifest resolves the hash", r.content_hash == kGoodHash);
         }
 
-        // 4. Truncated manifest (row deleted) -> fail-fast.
+        // 4. Empty manifest (row deleted) -> DEGRADE by default (#485): worldd
+        // boots WITHOUT content and self-heals once the seed lands, rather than
+        // exiting into a k8s CrashLoopBackOff.
         {
             conn.execute("DELETE FROM world_manifest");
             BootReport r = boot_world_db(conn);
             check("empty manifest -> kMissingManifest",
                   r.verdict == BootVerdict::kMissingManifest);
-            check("empty manifest -> hard_fail (fail-fast)", r.hard_fail);
+            check("empty manifest -> NOT hard_fail (degrades, #485)", !r.hard_fail);
+            check("empty manifest -> degraded flag set", r.degraded);
+        }
+
+        // 4b. Empty manifest with MERIDIAN_WORLDDB_REQUIRE_CONTENT=1 semantics
+        // (require_content=true) -> still refuses (strict opt-in preserved).
+        {
+            conn.execute("DELETE FROM world_manifest");
+            BootReport r = boot_world_db(conn, std::nullopt, /*require_content=*/true);
+            check("empty manifest + require_content -> kMissingManifest",
+                  r.verdict == BootVerdict::kMissingManifest);
+            check("empty manifest + require_content -> hard_fail (strict)", r.hard_fail);
+            check("empty manifest + require_content -> NOT degraded", !r.degraded);
         }
 
         // 5. Schema-version bump -> fail-fast (unserveable content).

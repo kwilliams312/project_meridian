@@ -92,6 +92,12 @@ struct WorlddConfig {
     // tie). When set + it disagrees with the loaded hash -> a loud WARNING at
     // M0–M1 (bootable), not a refusal. Empty -> the tie is not checked.
     std::string expected_content_hash;
+    // Boot policy for an EMPTY / not-yet-seeded world DB (issue #485). Default
+    // false = DEGRADE: a configured-but-empty world DB boots WITHOUT content and
+    // self-heals once the seed lands (no k8s CrashLoopBackOff on the seed race).
+    // MERIDIAN_WORLDDB_REQUIRE_CONTENT=1 -> strict fail-fast (empty world DB
+    // refuses to boot, as before). Integrity faults hard-fail regardless.
+    bool world_db_require_content = false;
 
     // OPS-05 metrics endpoint (server SAD §8.5; docs/telemetry-architecture.md).
     // Plain-HTTP /metrics on a port SEPARATE from the game TLS port; default 9464
@@ -267,6 +273,9 @@ int main(int argc, char** argv) {
     if (auto v = c.get_string("worlddb.pass")) cfg.world_db.password = *v;
     if (auto v = c.get_string("worlddb.name")) cfg.world_db.database = *v;
     if (auto v = c.get_string("worlddb.expected.hash")) cfg.expected_content_hash = *v;
+    // MERIDIAN_WORLDDB_REQUIRE_CONTENT -> "worlddb.require.content" (#485). When
+    // truthy, an empty/unseeded world DB hard-fails instead of degrading.
+    if (auto v = c.get_bool("worlddb.require.content")) cfg.world_db_require_content = *v;
 
     // MERIDIAN_WORLDD_REALM_ID -> "worldd.realm.id".
     if (auto v = c.get_int("worldd.realm.id")) {
@@ -294,13 +303,19 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    // --- World-DB boot: manifest check + content hash (IF-4; #89) --------------
+    // --- World-DB boot: manifest check + content hash (IF-4; #89, #485) --------
     // BEFORE accepting connections. Connect to the world content DB, read the
     // manifest mcc recorded, verify it (schema this binary serves + a well-formed
     // content hash), and log the loaded content version. Policy (SAD §4.3 / §5.4.3):
-    //   * missing / malformed manifest OR a schema-version mismatch -> FAIL-FAST:
-    //     the daemon refuses to boot (exit 3). Serving a corrupt / un-serveable
-    //     world DB is worse than not serving.
+    //   * EMPTY / missing manifest (world DB configured but not yet seeded) ->
+    //     DEGRADE by default (#485): serve WITHOUT content (leave the stores as the
+    //     placeholders, exactly like the WORLDDB-unset path) so a client still
+    //     connects and the realm self-heals once the seed lands — rather than
+    //     exiting into a k8s CrashLoopBackOff on the seed race. Opt into strict
+    //     fail-fast with MERIDIAN_WORLDDB_REQUIRE_CONTENT=1.
+    //   * malformed manifest OR a schema-version mismatch -> FAIL-FAST regardless:
+    //     the daemon refuses to boot (exit 3). Serving corrupt / un-serveable
+    //     content is worse than not serving — an integrity fault, not an empty DB.
     //   * a pinned expected-hash disagreement -> loud WARNING, boots anyway
     //     (advisory content-hash tie at M0–M1; becomes a hard fail on the test
     //     realm from M1).
@@ -311,15 +326,16 @@ int main(int argc, char** argv) {
     // manifest check passes. Held at main() scope for the PROCESS LIFETIME so the
     // pointers install_content_stores() / world.set_loot_tables() hand to the seams
     // stay valid for every served connection. Empty (all null) when no world DB is
-    // wired — the seams then keep the M1 placeholder stores.
+    // wired OR when the boot degraded (#485) — the seams then keep the M1
+    // placeholder stores.
     meridian::worldd::WorldContent content;
     if (!cfg.world_db.user.empty()) {
         std::optional<std::string> expected;
         if (!cfg.expected_content_hash.empty()) expected = cfg.expected_content_hash;
         try {
             meridian::db::Connection world_db(cfg.world_db);
-            meridian::worldd::BootReport boot =
-                meridian::worldd::boot_world_db(world_db, expected);
+            meridian::worldd::BootReport boot = meridian::worldd::boot_world_db(
+                world_db, expected, cfg.world_db_require_content);
             if (boot.hard_fail) {
                 std::fprintf(stderr,
                              "%s: world-DB boot refused [%s]: %s\n", kDaemonName,
@@ -327,27 +343,41 @@ int main(int argc, char** argv) {
                              boot.reason.c_str());
                 return 3;
             }
-            // --- World-DB content load (#390) ---------------------------------
-            // The manifest check passed, so the world DB is serveable — load the
-            // authored quest / npc / loot / vendor (+ item template) content and
-            // install the DB-backed stores behind the M1 seams. The QUEST/GOSSIP/
-            // VENDOR dispatch handlers (#388) are UNCHANGED — only the concrete store
-            // swaps. A load fault is a hard boot failure (a half-loaded world is not
-            // served), same policy as the connect fault below.
-            content = meridian::worldd::load_world_content(world_db);
-            meridian::worldd::install_content_stores(content.items.get(),
-                                                     content.vendor.get(),
-                                                     content.quests.get(),
-                                                     content.npcs.get());
-            meridian::core::log::info(
-                kDaemonName,
-                "world content loaded (DB-backed stores installed): " +
-                    std::to_string(content.quests->ids().size()) + " quests, " +
-                    std::to_string(content.npcs->ids().size()) + " npcs, " +
-                    std::to_string(content.loot->ids().size()) + " loot tables, " +
-                    std::to_string(content.vendor->ids().size()) + " vendors, " +
-                    std::to_string(content.items->ids().size()) + " item templates, " +
-                    std::to_string(content.abilities->size()) + " abilities");
+            if (boot.degraded) {
+                // Empty / unseeded world DB (#485). boot_world_db already logged a
+                // loud DEGRADED error; do NOT attempt load_world_content (there is
+                // no content and its tables may not exist yet — a query would throw
+                // and defeat the degrade). Leave `content` all-null so the seams
+                // keep the placeholder stores, exactly like the WORLDDB-unset path.
+                // The realm self-heals on the next boot once the seed lands.
+                meridian::core::log::warn(
+                    kDaemonName,
+                    "world DB configured but unseeded — serving WITHOUT content "
+                    "(degraded); DB-backed stores not installed until content is "
+                    "seeded (set MERIDIAN_WORLDDB_REQUIRE_CONTENT=1 to fail fast)");
+            } else {
+                // --- World-DB content load (#390) -----------------------------
+                // The manifest check passed, so the world DB is serveable — load the
+                // authored quest / npc / loot / vendor (+ item template) content and
+                // install the DB-backed stores behind the M1 seams. The QUEST/GOSSIP/
+                // VENDOR dispatch handlers (#388) are UNCHANGED — only the concrete
+                // store swaps. A load fault is a hard boot failure (a half-loaded
+                // world is not served), same policy as the connect fault below.
+                content = meridian::worldd::load_world_content(world_db);
+                meridian::worldd::install_content_stores(content.items.get(),
+                                                         content.vendor.get(),
+                                                         content.quests.get(),
+                                                         content.npcs.get());
+                meridian::core::log::info(
+                    kDaemonName,
+                    "world content loaded (DB-backed stores installed): " +
+                        std::to_string(content.quests->ids().size()) + " quests, " +
+                        std::to_string(content.npcs->ids().size()) + " npcs, " +
+                        std::to_string(content.loot->ids().size()) + " loot tables, " +
+                        std::to_string(content.vendor->ids().size()) + " vendors, " +
+                        std::to_string(content.items->ids().size()) + " item templates, " +
+                        std::to_string(content.abilities->size()) + " abilities");
+            }
         } catch (const meridian::db::DbError& e) {
             // Could not even connect to the world DB, or a content query failed. A
             // world DB was explicitly configured, so this is a hard boot failure, not

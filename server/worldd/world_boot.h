@@ -89,7 +89,12 @@ enum class BootVerdict {
 // is the single "should worldd refuse to boot?" bit the caller acts on.
 struct BootReport {
     BootVerdict verdict = BootVerdict::kMissingManifest;
-    bool        hard_fail = true;   // true unless verdict is kOk or kSoftWarn
+    bool        hard_fail = true;   // true unless verdict is kOk, kSoftWarn, or a
+                                    // degraded (empty-but-not-required) world DB
+    bool        degraded = false;   // an empty/missing world DB that boot policy
+                                    // let through WITHOUT content (issue #485):
+                                    // kMissingManifest + require_content off ->
+                                    // serve content-less and self-heal on seed.
     std::string reason;             // one-line explanation for logs
 
     // Resolved content identity (from the primary pack — the "core" namespace if
@@ -129,14 +134,27 @@ std::vector<ManifestRow> read_world_manifest(db::Connection& world_db);
 
 // Full boot-time content check: read the manifest from `world_db`, verify it,
 // and LOG the outcome prominently (the loaded content version + hash on success;
-// the reason on warn/fail). Returns the BootReport; the caller decides whether to
-// refuse to boot (report.hard_fail). A DB/read failure is captured as a
-// kMissingManifest hard fail with the DB error in `reason` (never throws).
+// the reason on warn/fail/degrade). Returns the BootReport; the caller decides
+// whether to refuse to boot (report.hard_fail). A DB/read failure is captured as
+// a kMissingManifest report with the DB error in `reason` (never throws).
 //
 // `expected_content_hash` is the optional operator pin (see verify_world_manifest).
+//
+// `require_content` is the boot POLICY for an EMPTY / missing world DB (issue
+// #485). Default false = DEGRADE: a configured-but-empty world DB
+// (kMissingManifest — no manifest rows, or the manifest table not yet created by
+// the seed) is NOT fatal; worldd boots WITHOUT content (report.degraded = true,
+// hard_fail = false) exactly like the WORLDDB-unset path, so a client still
+// connects and the realm self-heals once the content-seed lands. This kills the
+// CrashLoopBackOff when worldd restarts before the seed Job finishes. Set true
+// (env MERIDIAN_WORLDDB_REQUIRE_CONTENT=1) to keep the strict fail-fast: an empty
+// world DB then hard-fails as before. INTEGRITY faults (kMalformedManifest,
+// kSchemaMismatch — corrupt or unserveable content) ALWAYS hard-fail regardless
+// of this flag; only the empty/missing case degrades.
 BootReport boot_world_db(
     db::Connection& world_db,
-    const std::optional<std::string>& expected_content_hash = std::nullopt);
+    const std::optional<std::string>& expected_content_hash = std::nullopt,
+    bool require_content = false);
 
 // Human-readable name for a verdict (logs / test diagnostics).
 const char* boot_verdict_name(BootVerdict v);
