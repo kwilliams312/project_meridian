@@ -22,6 +22,21 @@ $defs:
   boneName:
     description: >-
       Canonical humanoid bone names (≤120 incl. face, art-prd §2.1). POPULATED BY
-      the rig work (spec ④) — empty enum is valid for @1-draft; the import
-      validator treats empty as "no bone-name check yet".
-    type: string
+      the rig work (spec ④); source of truth is tools/blender/meridian_rig/bones.py
+      (56 Godot SkeletonProfileHumanoid bones + 7 Meridian socket bones = 63) —
+      drift-guarded by tests/test_meridian_rig.py. Previously an empty enum was
+      valid for @1-draft ("no bone-name check yet"); populating it activates the
+      import-validator I020+ bone-set checks (spec ④ §5).
+    enum: [Root, Hips, Spine, Chest, UpperChest, Neck, Head, LeftEye, RightEye,
+      Jaw, LeftShoulder, LeftUpperArm, LeftLowerArm, LeftHand, LeftThumbMetacarpal,
+      LeftThumbProximal, LeftThumbDistal, LeftIndexProximal, LeftIndexIntermediate,
+      LeftIndexDistal, LeftMiddleProximal, LeftMiddleIntermediate, LeftMiddleDistal,
+      LeftRingProximal, LeftRingIntermediate, LeftRingDistal, LeftLittleProximal,
+      LeftLittleIntermediate, LeftLittleDistal, RightShoulder, RightUpperArm,
+      RightLowerArm, RightHand, RightThumbMetacarpal, RightThumbProximal,
+      RightThumbDistal, RightIndexProximal, RightIndexIntermediate, RightIndexDistal,
+      RightMiddleProximal, RightMiddleIntermediate, RightMiddleDistal, RightRingProximal,
+      RightRingIntermediate, RightRingDistal, RightLittleProximal, RightLittleIntermediate,
+      RightLittleDistal, LeftUpperLeg, LeftLowerLeg, LeftFoot, LeftToes, RightUpperLeg,
+      RightLowerLeg, RightFoot, RightToes, socket_main_hand, socket_off_hand,
+      socket_shield, socket_back, socket_ranged, socket_hip_l, socket_hip_r]
