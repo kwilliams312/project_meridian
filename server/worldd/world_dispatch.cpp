@@ -230,8 +230,13 @@ Bytes encode_char_list(const std::vector<chr::CharacterSummary>& roster) {
     rows.reserve(roster.size());
     for (const auto& c : roster) {
         auto name = b.CreateString(c.name);
+        // §5.2 appearance record (morphs empty at M1). Built before the entry so
+        // the nested table is a completed offset when CreateCharListEntry runs.
+        auto appearance = mn::CreateAppearance(b, c.appearance.version,
+                                               c.appearance.hair, c.appearance.face,
+                                               c.appearance.skin);
         rows.push_back(mn::CreateCharListEntry(b, c.id, name, c.race, c.char_class,
-                                               c.level));
+                                               c.level, appearance));
     }
     auto vec = b.CreateVector(rows);
     b.Finish(mn::CreateCharListResponse(b, vec));
@@ -1552,6 +1557,18 @@ void Dispatcher::register_m0_stubs() {
                cr.name = req->name() ? req->name()->str() : std::string();
                cr.race = req->race();
                cr.char_class = req->char_class();
+               // §5.2 appearance: pass the client's chosen record through opaquely
+               // (absent ⇒ nullopt ⇒ the CRUD stores the server default). It is
+               // bounded, never gameplay-authoritative — create_character clamps
+               // it and NEVER rejects on it (no new CharCreateStatus).
+               if (const auto* ap = req->appearance()) {
+                   chr::AppearanceRecord rec;
+                   rec.version = ap->version();
+                   rec.hair = ap->hair();
+                   rec.face = ap->face();
+                   rec.skin = ap->skin();
+                   cr.appearance = rec;
+               }
                try {
                    minted = chr::create_character(*ctx.char_db, cr).character_id;
                } catch (const chr::CharacterLimitReached&) {

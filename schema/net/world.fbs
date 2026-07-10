@@ -379,6 +379,23 @@ table PoiDiscovered {
 // The race/class ids are the M0-frozen roster (server/characters/src/roster.h).
 // Additive to the frozen M0 session/movement/entity/clock set (decision D-35).
 
+/// Versioned per-character appearance record (contract ① §5.2 / A-03 D-32).
+/// OPAQUE to gameplay; additive evolution only. Absent ⇒ the server default
+/// {v:1,hair:1,face:1,skin:1}. The server treats this as bounded-but-opaque data
+/// (spec §9): it is never gameplay-authoritative, so an out-of-range value is
+/// clamped, never rejected (version!=1 ⇒ 1; preset id 0 ⇒ 1).
+table MorphValue {
+  id:uint8;              // morph channel id (1-based; catalog-defined)
+  value:uint8;           // normalised morph amount (0..255)
+}
+table Appearance {
+  version:uint8 = 1;     // record version (only v1 exists at M1)
+  hair:uint8 = 1;        // preset ids from the race/sex catalog; 1-based
+  face:uint8 = 1;
+  skin:uint8 = 1;
+  morphs:[MorphValue];   // empty at M1 (A-03: ≤2 morphs, budget-gated)
+}
+
 /// C→S. List the characters owned by this session's account. Intentionally an
 /// EMPTY table (no fields) — the account is the session's, never client-supplied.
 /// The response echoes the request seq.
@@ -391,6 +408,9 @@ table CharListEntry {
   race:uint8;            // M0-frozen race id (roster.h)
   char_class:uint8;      // M0-frozen class id (roster.h) — `class` is a reserved word
   level:uint16;          // character.level
+  appearance:Appearance; // versioned appearance record (contract ① §5.2). APPENDED
+                         // field — additive-field FlatBuffers evolution (README):
+                         // old readers skip it; old writers omit it ⇒ default.
 }
 
 /// S→C. The account's characters, in creation order (may be empty).
@@ -398,12 +418,16 @@ table CharListResponse {
   characters:[CharListEntry];
 }
 
-/// C→S. Create a character for this session's account (CHR-01 stub / D-11 fields:
-/// name + race + class over one placeholder model — no appearance customization).
+/// C→S. Create a character for this session's account (D-11 fields: name + race
+/// + class, plus the contract ① §5.2 appearance record — an optional, opaque,
+/// bounded per-character look; absent ⇒ the server default).
 table CharCreateRequest {
   name:string;           // desired character name
   race:uint8;            // M0-frozen race id (validated against the roster)
   char_class:uint8;      // M0-frozen class id (validated against the roster)
+  appearance:Appearance; // chosen appearance (contract ① §5.2). APPENDED field —
+                         // additive; absent ⇒ the server default {v:1,1,1,1}.
+                         // Opaque-but-bounded: no new CharCreateStatus failure.
 }
 
 /// Typed outcome of a create attempt. Mirrors the meridian-characters create
