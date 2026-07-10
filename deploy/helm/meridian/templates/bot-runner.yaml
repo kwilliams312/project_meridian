@@ -1,0 +1,222 @@
+{{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
+{{- /*
+  bot-runner (#487) — N persistent headless meridian-bot players that populate a
+  hosted realm so a real client (or another bot) entering the world SEES other
+  players via the #87 AoI relay. This is the realm equivalent of the local
+  scripts/dev/demo-networked.sh --bots N capsules, which had no hosted analogue.
+
+  Shape: a StatefulSet (NOT a Deployment) so every replica has a STABLE ordinal
+  identity — pod `<name>-<ordinal>` maps 1:1 to bot account `<prefix><ordinal+1>`.
+  A Deployment's random pod names would collide two pods onto the same account
+  and trip the single-active-session-per-account rule (#326); the StatefulSet
+  ordinal guarantees pod-0 is always the same account across restarts.
+
+  Each pod:
+    1. init `provision-account`   — meridian-account create <prefix000N>   (idempotent)
+    2. init `provision-character` — meridian-character create --class <1..4> (idempotent,
+       class-rotated so the #328 per-class capsule colors differ)
+    3. main `bot`                 — a supervise loop that keeps ONE meridian-bot
+       session alive against the IN-CLUSTER authd/worldd Services (not the
+       external LB), re-entering when a --duration window ends, so the bots
+       PERSIST (~the #305/#376 "bots persist all day" behaviour).
+
+  Provisioning reuses the SAME three images the loadtest Jobs use
+  (deploy/gitops/loadtest/*.job.yaml) — meridian-account / meridian-character /
+  meridian-bot — resolved at the chart's pinned image.tag (the immutable realm
+  SHA), so the bot-runner never runs a staler binary than the daemons it drives.
+
+  Gated + tunable via .Values.botRunner (default DISABLED; dev enables a small N,
+  PTR/Prod leave it off). Points at the in-cluster ClusterIP DNS names regardless
+  of the daemon Service type (LoadBalancer on the realms still has a clusterIP).
+*/ -}}
+{{- if .Values.botRunner.enabled }}
+{{- $full := include "meridian.fullname" . -}}
+{{- $name := printf "%s-bot-runner" $full -}}
+{{- $br := .Values.botRunner -}}
+{{- $authdSvc := printf "%s-authd" $full -}}
+{{- $worlddSvc := printf "%s-worldd" $full -}}
+{{- $authdPort := .Values.authd.service.port | default .Values.authd.port -}}
+{{- $worlddPort := .Values.worldd.service.port | default .Values.worldd.port -}}
+{{- $botImg := include "meridian.image" (dict "root" $ "daemon" "meridian-bot" "cfg" (dict)) -}}
+{{- $acctImg := include "meridian.image" (dict "root" $ "daemon" "meridian-account" "cfg" (dict)) -}}
+{{- $charImg := include "meridian.image" (dict "root" $ "daemon" "meridian-character" "cfg" (dict)) -}}
+# Headless governing Service required by the StatefulSet (stable pod DNS). The
+# bots are outbound-only clients, so it exposes no ports.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "meridian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: bot-runner
+  {{- with (include "meridian.annotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "meridian.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: bot-runner
+  ports:
+    - name: placeholder
+      port: 1
+      targetPort: 1
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "meridian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: bot-runner
+  {{- with (include "meridian.annotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  serviceName: {{ $name }}
+  replicas: {{ $br.count }}
+  # Parallel: bring all N bots up at once (they are independent accounts; no need
+  # to serialise on the previous ordinal being Ready).
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "meridian.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: bot-runner
+  template:
+    metadata:
+      labels:
+        {{- include "meridian.labels" . | nindent 8 }}
+        app.kubernetes.io/component: bot-runner
+      {{- with $br.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # A bot never times out into a hung session; on delete we want it gone fast.
+      terminationGracePeriodSeconds: 5
+      initContainers:
+        # Wait for worldd's game port to accept connections before provisioning /
+        # entering (the daemons and their DB may still be rolling out).
+        - name: wait-for-worldd
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z {{ $worlddSvc }} {{ $worlddPort }}; do
+                echo "waiting for {{ $worlddSvc }}:{{ $worlddPort }}"; sleep 2;
+              done
+        # Provision THIS pod's bot account in meridian_auth. Idempotent:
+        # meridian-account exits 3 on a duplicate username (already provisioned).
+        - name: provision-account
+          image: {{ $acctImg | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "meridian.configMapName" . }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: MERIDIAN_DB_NAME
+              value: {{ .Values.db.names.auth | quote }}
+            - name: MERIDIAN_DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "meridian.dbSecretName" . }}
+                  key: {{ include "meridian.dbSecretKey" . }}
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              ORD="${POD_NAME##*-}"                       # StatefulSet ordinal (0-based)
+              U="$(printf '{{ $br.prefix }}%04d' "$((ORD + 1))")"
+              echo "provision account $U"
+              /usr/local/bin/meridian-account create --username "$U" --password '{{ $br.password }}' || [ $? -eq 3 ]
+        # Provision THIS pod's character with a ROTATING class (1..4) so the #328
+        # per-class capsule colours differ across the bots. meridian-character
+        # resolves the account_id cross-DB from meridian_auth; name defaults to the
+        # username. Idempotent: exits 3 on a duplicate name / one-per-account cap.
+        - name: provision-character
+          image: {{ $charImg | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "meridian.configMapName" . }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: MERIDIAN_DB_NAME
+              value: {{ .Values.db.names.characters | quote }}
+            - name: MERIDIAN_DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "meridian.dbSecretName" . }}
+                  key: {{ include "meridian.dbSecretKey" . }}
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              ORD="${POD_NAME##*-}"
+              U="$(printf '{{ $br.prefix }}%04d' "$((ORD + 1))")"
+              CLS="$(( (ORD % 4) + 1 ))"                  # rotate Vanguard/Runcaller/Warden/Mender
+              echo "provision character $U (class $CLS)"
+              /usr/local/bin/meridian-character create --username "$U" --class "$CLS" || [ $? -eq 3 ]
+      containers:
+        # Supervise loop: keep ONE persistent meridian-bot session alive. Each
+        # --duration window is a login -> enter-world -> move-square episode; when
+        # it ends we re-enter after a short delay so the bot stays in the world
+        # ~all day (the #305/#376 persist behaviour). Targets the in-cluster
+        # authd/worldd ClusterIP DNS names. --realm is omitted so the bot selects
+        # the first realm in the seeded realm list (matches the loadtest Job).
+        - name: bot
+          image: {{ $botImg | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          command:
+            - sh
+            - -c
+            - |
+              ORD="${POD_NAME##*-}"
+              U="$(printf '{{ $br.prefix }}%04d' "$((ORD + 1))")"
+              echo "bot $U -> {{ $authdSvc }}:{{ $authdPort }} / {{ $worlddSvc }}:{{ $worlddPort }} (persist; {{ $br.sessionDuration }}s/session)"
+              while true; do
+                /usr/local/bin/meridian-bot \
+                  --authd {{ $authdSvc }}:{{ $authdPort }} \
+                  --worldd {{ $worlddSvc }}:{{ $worlddPort }} \
+                  --user "$U" --password '{{ $br.password }}' \
+                  --path {{ $br.path }} --build {{ $br.build }} --duration {{ $br.sessionDuration }} \
+                  || echo "bot $U session exited ($?)"
+                echo "bot $U re-entering in {{ $br.restartDelaySeconds }}s"
+                sleep {{ $br.restartDelaySeconds }}
+              done
+          resources:
+            {{- toYaml $br.resources | nindent 12 }}
+      {{- with $br.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $br.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $br.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
