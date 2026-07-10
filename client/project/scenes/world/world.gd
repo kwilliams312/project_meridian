@@ -87,11 +87,6 @@ var _hud: MeridianHud
 
 var _my_guid: int = 0
 var _last_server_tick: int = 0
-
-# ITM/ECO (#441): the buyback slot of the most recent VENDOR_BUYBACK_REQUEST. The typed
-# VENDOR_BUYBACK_RESULT does not echo the slot, so the client correlates its own request
-# with the next result to drop the right entry from the local buyback queue.
-var _pending_buyback_slot: int = -1
 var _conn_text: String = "offline"
 var _client_ms: int = 0                     # monotonic client clock for the sim
 
@@ -364,10 +359,11 @@ func _on_movement_state(state: Dictionary) -> void:
 	var new_guid := int(state.get("entity_guid", _my_guid))
 	if new_guid != 0 and new_guid != _my_guid:
 		_my_guid = new_guid
-		# UI-01 (#431): identify the local player to the event bus so the player frame
-		# binds to it. worldd sends the local session no self EntityEnter at spawn, so
-		# seed name/level/class from character-select; health/power fill in on the
-		# first self VITALS_UPDATE (a combat/heal delta).
+		# UI-01 (#431/#471): identify the local player to the event bus so the player frame
+		# binds to it. worldd sends the local session no self EntityEnter at spawn, so seed
+		# name/level/class from character-select; health/power now arrive IMMEDIATELY at spawn
+		# via the #439 self-vitals VITALS_UPDATE worldd pushes at ENTER_WORLD (the frame no
+		# longer waits on the first combat/heal delta). The bus merges that onto this seed.
 		if _bus != null:
 			_bus.seed_identity(_my_guid, String(_character.get("name", "")),
 				int(_character.get("level", 0)), int(_character.get("class", 0)))
@@ -656,6 +652,11 @@ func _route_econ_frame(opcode: int, payload: PackedByteArray) -> void:
 		return
 	var e: Dictionary = _net.decode_econ_frame(opcode, payload)
 	match String(e.get("kind", "")):
+		"inventory_snapshot":
+			_bus.publish_inventory_snapshot(int(e.get("money", 0)), e.get("items", []),
+				int(e.get("backpack_slots", 0)))
+		"vendor_list":
+			_bus.publish_vendor_list(int(e.get("vendor_id", 0)), e.get("items", []))
 		"loot_response":
 			_bus.publish_loot_response(int(e.get("corpse_guid", 0)), int(e.get("status", 0)),
 				int(e.get("copper", 0)), e.get("items", []))
@@ -668,8 +669,9 @@ func _route_econ_frame(opcode: int, payload: PackedByteArray) -> void:
 		"vendor_sell_result":
 			_bus.publish_vendor_sell_result(e)
 		"vendor_buyback_result":
-			_bus.publish_vendor_buyback_result(e, _pending_buyback_slot)
-			_pending_buyback_slot = -1
+			# The server ECHOES buyback_slot in the result (#453/#471), so the bus drops the
+			# repurchased row from the echoed slot — no client-side request correlation.
+			_bus.publish_vendor_buyback_result(e)
 		"trainer_list":
 			_bus.publish_trainer_list(int(e.get("npc_guid", 0)), e.get("entries", []))
 		"trainer_learn_result":
@@ -818,7 +820,7 @@ func _on_vendor_sell_requested(vendor_id: int, backpack_slot: int, quantity: int
 
 
 func _on_vendor_buyback_requested(buyback_slot: int) -> void:
-	_pending_buyback_slot = buyback_slot  # correlate with the next VENDOR_BUYBACK_RESULT
+	# The VENDOR_BUYBACK_RESULT echoes the slot (#453/#471), so no client-side correlation.
 	_send_econ(_net.build_vendor_buyback_frame(buyback_slot) if _net != null else PackedByteArray())
 
 

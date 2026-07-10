@@ -657,7 +657,39 @@ Dictionary MeridianNetThread::decode_econ_frame(int opcode,
 	d["kind"] = String("");
 	const net::Bytes buf = to_bytes(payload);
 
-	if (opcode == cn::kOpLootResponse) {
+	if (opcode == cn::kOpInventorySnapshot) {
+		auto r = cn::codec::decode_inventory_snapshot(buf);
+		if (!r) return d;
+		d["kind"] = String("inventory_snapshot");
+		d["money"] = static_cast<int64_t>(r->money);
+		d["backpack_slots"] = static_cast<int64_t>(r->backpack_slots);
+		Array items;
+		for (const auto &it : r->items) {
+			Dictionary row;
+			row["slot"] = static_cast<int64_t>(it.slot);
+			row["item_template_id"] = static_cast<int64_t>(it.item_template_id);
+			row["count"] = static_cast<int64_t>(it.count);
+			row["quality"] = static_cast<int64_t>(it.quality);
+			row["binding"] = static_cast<int64_t>(it.binding);
+			items.push_back(row);
+		}
+		d["items"] = items;
+	} else if (opcode == cn::kOpVendorList) {
+		auto r = cn::codec::decode_vendor_list(buf);
+		if (!r) return d;
+		d["kind"] = String("vendor_list");
+		d["vendor_id"] = static_cast<int64_t>(r->vendor_id);
+		Array items;
+		for (const auto &it : r->items) {
+			Dictionary row;
+			row["item_template_id"] = static_cast<int64_t>(it.item_template_id);
+			row["price"] = static_cast<int64_t>(it.price);
+			row["quality"] = static_cast<int64_t>(it.quality);
+			row["stock"] = static_cast<int64_t>(it.stock);
+			items.push_back(row);
+		}
+		d["items"] = items;
+	} else if (opcode == cn::kOpLootResponse) {
 		auto r = cn::codec::decode_loot_response(buf);
 		if (!r) return d;
 		d["kind"] = String("loot_response");
@@ -722,6 +754,7 @@ Dictionary MeridianNetThread::decode_econ_frame(int opcode,
 		d["item_guid"] = static_cast<int64_t>(r->item_guid);
 		d["price"] = static_cast<int64_t>(r->price);
 		d["balance"] = static_cast<int64_t>(r->balance);
+		d["buyback_slot"] = static_cast<int64_t>(r->buyback_slot);  // echoed (#453/#471)
 	} else if (opcode == cn::kOpTrainerList) {
 		auto r = cn::codec::decode_trainer_list(buf);
 		if (!r) return d;

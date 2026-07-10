@@ -48,6 +48,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
+#include <fstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -751,9 +752,10 @@ void test_wire_frame_edge_cases() {
         kOpMovementIntent, kOpMovementState, kOpEntityEnter, kOpEntityUpdate,
         kOpEntityLeave, kOpCastRequest, kOpCastStart, kOpCastFailed, kOpCastResult,
         kOpGossipHello, kOpGossipMenu, kOpLootRequest, kOpLootResponse,
-        kOpLootTake, kOpLootResult, kOpLootRelease, kOpLootClosed, kOpVendorBuyReq,
-        kOpVendorBuyResult, kOpVendorSellReq, kOpVendorSellResult, kOpVendorBuybackReq,
-        kOpVendorBuybackResult, kOpTrainerList, kOpTrainerLearn, kOpTrainerLearnResult};
+        kOpLootTake, kOpLootResult, kOpLootRelease, kOpLootClosed, kOpInventorySnapshot,
+        kOpVendorBuyReq, kOpVendorBuyResult, kOpVendorSellReq, kOpVendorSellResult,
+        kOpVendorBuybackReq, kOpVendorBuybackResult, kOpVendorList, kOpTrainerList,
+        kOpTrainerLearn, kOpTrainerLearnResult};
     for (std::uint16_t op : opcodes) {
         auto f = decode_world_frame(encode_world_frame(op, 1, Bytes{}));
         CHECK(f.has_value() && f->opcode == op);
@@ -1253,13 +1255,17 @@ void test_vendor_codec() {
     auto bb_out = codec::decode_vendor_buyback_request(codec::encode_vendor_buyback_request(bb));
     CHECK(bb_out.has_value() && bb_out->buyback_slot == 0);
 
-    // VENDOR_BUYBACK_RESULT (S→C) — OK: re-minted item + re-debited price + balance.
+    // VENDOR_BUYBACK_RESULT (S→C) — OK: re-minted item + re-debited price + balance +
+    // the ECHOED buyback_slot (#453/#471 — the client drops that queue row without
+    // self-correlating against its outstanding request).
     codec::VendorBuybackResult bbr{/*status=OK*/ 0, /*tmpl=*/1201, /*qty=*/3,
-                                   /*item_guid=*/0xBEEFull, /*price=*/75, /*balance=*/9750};
+                                   /*item_guid=*/0xBEEFull, /*price=*/75, /*balance=*/9750,
+                                   /*buyback_slot=*/2};
     auto bbr_out =
         codec::decode_vendor_buyback_result(codec::encode_vendor_buyback_result(bbr));
     CHECK(bbr_out.has_value() && bbr_out->status == 0 && bbr_out->item_template_id == 1201 &&
-          bbr_out->item_guid == 0xBEEFull && bbr_out->price == 75 && bbr_out->balance == 9750);
+          bbr_out->item_guid == 0xBEEFull && bbr_out->price == 75 && bbr_out->balance == 9750 &&
+          bbr_out->buyback_slot == 2);
 
     // Verify-before-GetRoot: garbage rejected on every S→C decoder.
     Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
@@ -1317,6 +1323,134 @@ void test_trainer_codec() {
     CHECK(!codec::decode_trainer_list(Bytes{}).has_value());
 }
 
+void test_inventory_codec() {
+    std::puts("[inventory] INVENTORY_SNAPSHOT (0x5007) round-trip + wrap + verifier");
+
+    // INVENTORY_SNAPSHOT (S→C) — money + two occupied slots (a common stack + a bound rare).
+    codec::InventorySnapshot snap;
+    snap.money = 4200;
+    snap.backpack_slots = 16;
+    snap.items.push_back({/*slot=*/0, /*tmpl=*/900007, /*count=*/5, /*quality=*/1, /*binding=*/0});
+    snap.items.push_back({/*slot=*/3, /*tmpl=*/900012, /*count=*/1, /*quality=*/3, /*binding=*/1});
+    auto snap_out = codec::decode_inventory_snapshot(codec::encode_inventory_snapshot(snap));
+    CHECK(snap_out.has_value() && snap_out->money == 4200 && snap_out->backpack_slots == 16 &&
+          snap_out->items.size() == 2);
+    CHECK(snap_out->items[0].slot == 0 && snap_out->items[0].item_template_id == 900007 &&
+          snap_out->items[0].count == 5 && snap_out->items[0].quality == 1 &&
+          snap_out->items[0].binding == 0);
+    CHECK(snap_out->items[1].slot == 3 && snap_out->items[1].item_template_id == 900012 &&
+          snap_out->items[1].count == 1 && snap_out->items[1].quality == 3 &&
+          snap_out->items[1].binding == 1);
+    {
+        Bytes frame = encode_world_frame(kOpInventorySnapshot, 1,
+                                         codec::encode_inventory_snapshot(snap));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x5007 && f->opcode == kOpInventorySnapshot);
+    }
+
+    // An empty backpack (no items) round-trips to an empty vector, not a decode failure.
+    codec::InventorySnapshot empty;
+    empty.money = 0;
+    empty.backpack_slots = 16;
+    auto empty_out = codec::decode_inventory_snapshot(codec::encode_inventory_snapshot(empty));
+    CHECK(empty_out.has_value() && empty_out->items.empty() && empty_out->backpack_slots == 16);
+
+    // Verify-before-GetRoot: garbage + empty rejected.
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_inventory_snapshot(garbage).has_value());
+    CHECK(!codec::decode_inventory_snapshot(Bytes{}).has_value());
+}
+
+void test_vendor_list_codec() {
+    std::puts("[vendor_list] VENDOR_LIST (0x5107) round-trip + wrap + verifier");
+
+    // VENDOR_LIST (S→C) — a catalog: an unlimited common + a limited-stock rare.
+    codec::VendorList list;
+    list.vendor_id = 990001;
+    list.items.push_back({/*tmpl=*/900007, /*price=*/12, /*quality=*/1, /*stock=*/-1});
+    list.items.push_back({/*tmpl=*/900012, /*price=*/250, /*quality=*/3, /*stock=*/5});
+    auto list_out = codec::decode_vendor_list(codec::encode_vendor_list(list));
+    CHECK(list_out.has_value() && list_out->vendor_id == 990001 && list_out->items.size() == 2);
+    CHECK(list_out->items[0].item_template_id == 900007 && list_out->items[0].price == 12 &&
+          list_out->items[0].quality == 1 && list_out->items[0].stock == -1);
+    CHECK(list_out->items[1].item_template_id == 900012 && list_out->items[1].price == 250 &&
+          list_out->items[1].quality == 3 && list_out->items[1].stock == 5);
+    {
+        Bytes frame = encode_world_frame(kOpVendorList, 2, codec::encode_vendor_list(list));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x5107 && f->opcode == kOpVendorList);
+    }
+
+    // An empty / unknown vendor yields an empty item vector (not a decode failure).
+    codec::VendorList empty;
+    empty.vendor_id = 7;
+    auto empty_out = codec::decode_vendor_list(codec::encode_vendor_list(empty));
+    CHECK(empty_out.has_value() && empty_out->vendor_id == 7 && empty_out->items.empty());
+
+    // Verify-before-GetRoot: garbage + empty rejected.
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_vendor_list(garbage).has_value());
+    CHECK(!codec::decode_vendor_list(Bytes{}).has_value());
+}
+
+// Read a golden .bin (the FlatBuffer ROOT-TABLE bytes the SERVER's flatc froze, no framing)
+// into Bytes. Returns nullopt when the file is absent so the gate degrades gracefully.
+std::optional<Bytes> read_golden(const char* name) {
+#ifdef MERIDIAN_GOLDEN_DIR
+    std::string path = std::string(MERIDIAN_GOLDEN_DIR) + "/" + name;
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return std::nullopt;
+    return Bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+#else
+    (void)name;
+    return std::nullopt;
+#endif
+}
+
+// Direct WIRE-COMPAT proof: the CLIENT's POD codec decodes the canonical golden .bin the
+// SERVER track froze from meridian-proto's flatc (conformance.cpp build_corpus). If the
+// two tracks ever drift, this fails — the client analogue of the server conformance gate.
+void test_golden_cross_decode() {
+    std::puts("[golden] cross-decode server conformance corpus (INVENTORY_SNAPSHOT + VENDOR_LIST)");
+
+    auto inv_bytes = read_golden("if2_inventory_snapshot.bin");
+    if (!inv_bytes.has_value()) {
+        std::puts("  (skip: golden corpus not reachable from this build)");
+        return;
+    }
+    // if2_inventory_snapshot.bin — money 4200, 16 slots, {0,900007,5,1,0} + {3,900012,1,3,1}.
+    auto inv = codec::decode_inventory_snapshot(*inv_bytes);
+    CHECK(inv.has_value() && inv->money == 4200 && inv->backpack_slots == 16 &&
+          inv->items.size() == 2);
+    if (inv.has_value() && inv->items.size() == 2) {
+        CHECK(inv->items[0].slot == 0 && inv->items[0].item_template_id == 900007 &&
+              inv->items[0].count == 5 && inv->items[0].quality == 1 &&
+              inv->items[0].binding == 0);
+        CHECK(inv->items[1].slot == 3 && inv->items[1].item_template_id == 900012 &&
+              inv->items[1].count == 1 && inv->items[1].quality == 3 &&
+              inv->items[1].binding == 1);
+    }
+
+    // if2_vendor_list.bin — vendor 990001, {900007,12,1,-1} + {900012,250,3,5}.
+    auto vl_bytes = read_golden("if2_vendor_list.bin");
+    auto vl = vl_bytes.has_value() ? codec::decode_vendor_list(*vl_bytes) : std::nullopt;
+    CHECK(vl.has_value() && vl->vendor_id == 990001 && vl->items.size() == 2);
+    if (vl.has_value() && vl->items.size() == 2) {
+        CHECK(vl->items[0].item_template_id == 900007 && vl->items[0].price == 12 &&
+              vl->items[0].quality == 1 && vl->items[0].stock == -1);
+        CHECK(vl->items[1].item_template_id == 900012 && vl->items[1].price == 250 &&
+              vl->items[1].quality == 3 && vl->items[1].stock == 5);
+    }
+
+    // if2_vendor_buyback_result.bin — proves the ECHOED buyback_slot (=1) decodes from the
+    // server's frozen encoding (the #453/#471 additive field, cross-track).
+    auto bb_bytes = read_golden("if2_vendor_buyback_result.bin");
+    auto bb = bb_bytes.has_value() ? codec::decode_vendor_buyback_result(*bb_bytes)
+                                   : std::nullopt;
+    CHECK(bb.has_value() && bb->status == 0 && bb->item_template_id == 900007 &&
+          bb->quantity == 2 && bb->price == 2 && bb->balance == 700 && bb->buyback_slot == 1);
+}
+
 }  // namespace
 
 int main() {
@@ -1332,8 +1466,11 @@ int main() {
     test_gossip_codec();
     test_quest_codec();
     test_loot_codec();
+    test_inventory_codec();
     test_vendor_codec();
+    test_vendor_list_codec();
     test_trainer_codec();
+    test_golden_cross_decode();
     test_full_stack();
     test_transport_links();
 

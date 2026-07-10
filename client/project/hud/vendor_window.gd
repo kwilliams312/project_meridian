@@ -1,25 +1,26 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Project Meridian — the VENDOR WINDOW view (ECO-01, #370/#441). A panel that opens from
-# the gossip "Browse goods" entry and drives the server-authoritative vendor economy:
-# buy, sell, and a buyback tab. Every price + balance is the SERVER's (Principle 1) — a
-# request NEVER carries a client-trusted price:
+# Project Meridian — the VENDOR WINDOW view (ECO-01, #370/#441/#471). A panel that opens from
+# the gossip "Browse goods" entry and drives the server-authoritative vendor economy: buy,
+# sell, and a buyback tab. Every price + balance is the SERVER's (Principle 1) — a request
+# NEVER carries a client-trusted price:
 #   VENDOR_BUY_REQUEST  → VENDOR_BUY_RESULT      (minted item + debited copper + balance)
 #   VENDOR_SELL_REQUEST → VENDOR_SELL_RESULT     (credited copper + a buyback slot + balance)
 #   VENDOR_BUYBACK_REQUEST → VENDOR_BUYBACK_RESULT (re-minted item + re-debited + balance)
 #
-# ⛔ WIRE-CONTRACT GAPS (world.fbs has NO opcode for either — reported, not faked; see the
-# gap note in event_bus.gd):
-#   * NO vendor-catalog listing → the BUY control is item-template-id-driven (greybox,
-#     like gossip's "quest #N"). The server validates the id (NOT_SOLD / UNKNOWN_VENDOR).
-#   * NO inventory-contents snapshot → the SELL control is backpack-slot-driven. The
-#     server validates the slot (SLOT_EMPTY / NOT_SELLABLE).
-# The BUYBACK tab, by contrast, IS fully wire-populated: each VENDOR_SELL_RESULT pushes an
-# entry (item × price × slot) the player can repurchase for exactly what they sold it for.
+# The BUY tab renders the REAL catalog (VENDOR_LIST, 0x5107 — auto-pushed on GOSSIP_HELLO to a
+# vendor NPC, like TRAINER_LIST): each row is a listed item with its SERVER-COMPUTED price +
+# stock. The buy path still re-validates every price server-side (NOT_SOLD / UNKNOWN_VENDOR).
+# The BUYBACK tab is likewise fully wire-populated (each VENDOR_SELL_RESULT pushes an entry the
+# player can repurchase for exactly what they sold it for); a VENDOR_BUYBACK_RESULT echoes its
+# slot so the row drops without client-side correlation.
+#
+# The SELL control is backpack-slot-driven: the real slot numbers now show in the Bags window
+# (INVENTORY_SNAPSHOT, #471); the server validates the slot (SLOT_EMPTY / NOT_SELLABLE).
 #
 # PURE VIEW / MVVM (the #431/#433 contract): owns NO server state, never touches the net
-# thread. Bound by the HUD to vendor_opened / vendor_result / vendor_buyback_changed /
-# currency_changed; a buy/sell/buyback press becomes a bus INTENT.
+# thread. Bound by the HUD to vendor_opened / vendor_catalog_changed / vendor_result /
+# vendor_buyback_changed / currency_changed; a buy/sell/buyback press becomes a bus INTENT.
 #
 # Built in code (like gossip_window.gd) — self-contained, no .tscn to keep in sync.
 class_name MeridianVendorWindow
@@ -30,12 +31,23 @@ const Money := preload("res://hud/money.gd")
 
 const WIN_W := 360.0
 
+# Rarity tier (item.schema.yaml) → colour, mirroring the loot/bags palette so a shopper reads
+# value at a glance. 0=poor … 5=legendary; unknown tiers fall back to common (white).
+const _RARITY_COLORS := {
+	0: Color(0.62, 0.62, 0.62),   # poor (grey)
+	1: Color(1.0, 1.0, 1.0),      # common (white)
+	2: Color(0.12, 1.0, 0.0),     # uncommon (green)
+	3: Color(0.0, 0.44, 0.87),    # rare (blue)
+	4: Color(0.64, 0.21, 0.93),   # epic (purple)
+	5: Color(1.0, 0.5, 0.0),      # legendary (orange)
+}
+
 var _bus: MeridianEventBus
 var _title: Label
 var _balance_label: Label
 var _notice: Label
-var _buy_tmpl: SpinBox
 var _buy_qty: SpinBox
+var _catalog_list: VBoxContainer
 var _sell_slot: SpinBox
 var _sell_qty: SpinBox
 var _buyback_list: VBoxContainer
@@ -53,6 +65,7 @@ func setup(bus: MeridianEventBus) -> void:
 		return
 	_bus = bus
 	_bus.vendor_opened.connect(_on_vendor_opened)
+	_bus.vendor_catalog_changed.connect(_on_catalog_changed)
 	_bus.vendor_result.connect(_on_vendor_result)
 	_bus.vendor_buyback_changed.connect(_on_buyback_changed)
 	_bus.currency_changed.connect(_on_currency_changed)
@@ -85,39 +98,43 @@ func _build() -> void:
 	root.add_child(HSeparator.new())
 
 	var tabs := TabContainer.new()
-	tabs.custom_minimum_size = Vector2(WIN_W - 12.0, 190.0)
+	tabs.custom_minimum_size = Vector2(WIN_W - 12.0, 220.0)
 	root.add_child(tabs)
 
-	# --- Buy / Sell tab ------------------------------------------------------
-	var trade := VBoxContainer.new()
-	trade.name = "Buy / Sell"
-	trade.add_theme_constant_override("separation", 4)
-	tabs.add_child(trade)
+	# --- Buy tab (the real VENDOR_LIST catalog) ------------------------------
+	var buy := VBoxContainer.new()
+	buy.name = "Buy"
+	buy.add_theme_constant_override("separation", 4)
+	tabs.add_child(buy)
 
-	var buy_hint := Label.new()
-	buy_hint.text = "Buy by item id (no catalog on wire — see gap):"
-	buy_hint.add_theme_color_override("font_color", Color(0.75, 0.78, 0.85))
-	buy_hint.add_theme_font_size_override("font_size", 11)
-	trade.add_child(buy_hint)
-	var buy_row := HBoxContainer.new()
-	buy_row.add_theme_constant_override("separation", 4)
-	_buy_tmpl = _make_spin(1, 999999, 1)
+	var qty_row := HBoxContainer.new()
+	qty_row.add_theme_constant_override("separation", 4)
 	_buy_qty = _make_spin(1, 1000, 1)
-	buy_row.add_child(_labeled("item #", _buy_tmpl))
-	buy_row.add_child(_labeled("x", _buy_qty))
-	var buy_btn := Button.new()
-	buy_btn.text = "Buy"
-	buy_btn.pressed.connect(_on_buy_pressed)
-	buy_row.add_child(buy_btn)
-	trade.add_child(buy_row)
+	qty_row.add_child(_labeled("Buy quantity", _buy_qty))
+	buy.add_child(qty_row)
 
-	trade.add_child(HSeparator.new())
+	var catalog_scroll := ScrollContainer.new()
+	catalog_scroll.custom_minimum_size = Vector2(WIN_W - 24.0, 150.0)
+	catalog_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	buy.add_child(catalog_scroll)
+	_catalog_list = VBoxContainer.new()
+	_catalog_list.add_theme_constant_override("separation", 2)
+	_catalog_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	catalog_scroll.add_child(_catalog_list)
+
+	# --- Sell tab ------------------------------------------------------------
+	var sell := VBoxContainer.new()
+	sell.name = "Sell"
+	sell.add_theme_constant_override("separation", 4)
+	tabs.add_child(sell)
 
 	var sell_hint := Label.new()
-	sell_hint.text = "Sell by backpack slot (no inventory on wire — see gap):"
+	sell_hint.text = "Sell by backpack slot (slot numbers show in the Bags window):"
 	sell_hint.add_theme_color_override("font_color", Color(0.75, 0.78, 0.85))
 	sell_hint.add_theme_font_size_override("font_size", 11)
-	trade.add_child(sell_hint)
+	sell_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	sell_hint.custom_minimum_size = Vector2(WIN_W - 24.0, 0.0)
+	sell.add_child(sell_hint)
 	var sell_row := HBoxContainer.new()
 	sell_row.add_theme_constant_override("separation", 4)
 	_sell_slot = _make_spin(0, 255, 0)
@@ -128,7 +145,7 @@ func _build() -> void:
 	sell_btn.text = "Sell"
 	sell_btn.pressed.connect(_on_sell_pressed)
 	sell_row.add_child(sell_btn)
-	trade.add_child(sell_row)
+	sell.add_child(sell_row)
 
 	# --- Buyback tab ---------------------------------------------------------
 	var buyback := VBoxContainer.new()
@@ -153,6 +170,7 @@ func _build() -> void:
 	root.add_child(close_row)
 
 	_built = true
+	_render_catalog([])
 	_render_buyback([])
 	_render_balance()
 
@@ -167,8 +185,14 @@ func _on_vendor_opened(vendor_id: int) -> void:
 	_notice.visible = false
 	_render_balance()
 	if _bus != null:
+		_render_catalog(_bus.vendor_catalog())
 		_render_buyback(_bus.buyback_entries())
 	set_frame_visible(true)
+
+
+func _on_catalog_changed(vendor_id: int, items: Array) -> void:
+	_vendor_id = vendor_id
+	_render_catalog(items)
 
 
 func _on_vendor_result(result: Dictionary) -> void:
@@ -196,7 +220,34 @@ func _render_balance() -> void:
 	if _bus.currency_known():
 		_balance_label.text = "Money: %s" % Money.format_copper(_bus.copper())
 	else:
-		_balance_label.text = "Money: (unknown until a transaction — no wire snapshot)"
+		_balance_label.text = "Money: (unknown until snapshot)"
+
+
+func _render_catalog(items: Array) -> void:
+	if _catalog_list == null:
+		return
+	for c in _catalog_list.get_children():
+		c.queue_free()
+	if items.is_empty():
+		var none := Label.new()
+		none.text = "This vendor has nothing for sale."
+		none.add_theme_color_override("font_color", Color(0.8, 0.8, 0.85))
+		_catalog_list.add_child(none)
+		return
+	for e in items:
+		var d := e as Dictionary
+		var tmpl := int(d.get("item_template_id", 0))
+		var price := int(d.get("price", 0))
+		var quality := int(d.get("quality", 1))
+		var stock := int(d.get("stock", -1))
+		var stock_text := "" if stock < 0 else "  (stock: %d)" % stock
+		var b := Button.new()
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.text = "Item #%d — %s%s" % [tmpl, Money.format_copper(price), stock_text]
+		b.add_theme_color_override("font_color",
+			_RARITY_COLORS.get(quality, _RARITY_COLORS[1]))
+		b.pressed.connect(_buy_item.bind(tmpl))
+		_catalog_list.add_child(b)
 
 
 func _render_buyback(entries: Array) -> void:
@@ -223,10 +274,10 @@ func _render_buyback(entries: Array) -> void:
 		_buyback_list.add_child(b)
 
 
-func _on_buy_pressed() -> void:
+func _buy_item(item_template_id: int) -> void:
 	if _bus == null:
 		return
-	_bus.request_vendor_buy(_vendor_id, int(_buy_tmpl.value), int(_buy_qty.value))
+	_bus.request_vendor_buy(_vendor_id, item_template_id, int(_buy_qty.value))
 
 
 func _on_sell_pressed() -> void:

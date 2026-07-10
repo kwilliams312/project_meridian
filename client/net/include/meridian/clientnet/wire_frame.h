@@ -75,6 +75,10 @@ inline constexpr std::uint16_t kOpLootTake       = 0x5003;  // C→S
 inline constexpr std::uint16_t kOpLootResult     = 0x5004;  // S→C
 inline constexpr std::uint16_t kOpLootRelease    = 0x5005;  // C→S
 inline constexpr std::uint16_t kOpLootClosed     = 0x5006;  // S→C
+// Inventory contents snapshot (M1 — ITM-01, #453/#471). Pushed S→C to the owning client
+// at ENTER_WORLD and after every server-authoritative inventory change (loot/vendor/quest
+// reward/GM .additem). A DISPLAY projection — the client never predicts its bags.
+inline constexpr std::uint16_t kOpInventorySnapshot = 0x5007;  // S→C
 // Vendor transactions (M1 — ECO-01, #370/#441). buy / sell / buyback each ride ONE
 // C→S request paired with a typed S→C result; all prices/balances server-computed.
 inline constexpr std::uint16_t kOpVendorBuyReq      = 0x5101;  // C→S
@@ -83,6 +87,9 @@ inline constexpr std::uint16_t kOpVendorSellReq     = 0x5103;  // C→S
 inline constexpr std::uint16_t kOpVendorSellResult  = 0x5104;  // S→C
 inline constexpr std::uint16_t kOpVendorBuybackReq  = 0x5105;  // C→S
 inline constexpr std::uint16_t kOpVendorBuybackResult = 0x5106;  // S→C
+// Vendor catalog push (M1 — ECO-01, #453/#471). Auto-pushed S→C on GOSSIP_HELLO to a
+// vendor NPC (mirrors TRAINER_LIST): the vendor's for-sale items + server-computed prices.
+inline constexpr std::uint16_t kOpVendorList        = 0x5107;  // S→C
 // Trainer (M1 — NPC-02, #372/#441). TRAINER_LIST is pushed S→C alongside GOSSIP_MENU
 // when the player opens gossip on a trainer NPC; TRAINER_LEARN → TRAINER_LEARN_RESULT.
 inline constexpr std::uint16_t kOpTrainerList        = 0x5203;  // S→C

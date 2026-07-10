@@ -98,6 +98,11 @@ enable_testing()
 add_executable(clientnet-test test/clientnet_test.cpp)
 add_dependencies(clientnet-test meridian-clientnet-codegen)
 target_link_libraries(clientnet-test PRIVATE meridian-clientnet OpenSSL::SSL OpenSSL::Crypto)
+# Point the golden cross-decode test at the shared server conformance corpus so it can
+# prove the client codec decodes the SERVER track's frozen wire bytes (direct wire-compat
+# proof, #471). The test degrades gracefully (skips) if the corpus is unreachable.
+target_compile_definitions(clientnet-test PRIVATE
+  MERIDIAN_GOLDEN_DIR="${MERIDIAN_REPO_ROOT}/server/libs/proto/conformance/golden")
 set_target_properties(clientnet-test PROPERTIES
   CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 if(NOT MSVC)

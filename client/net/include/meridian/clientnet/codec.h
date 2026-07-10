@@ -490,6 +490,31 @@ struct LootResult {
 Bytes encode_loot_result(const LootResult& in);  // test/mock symmetry
 std::optional<LootResult> decode_loot_result(const Bytes& buf);
 
+// --- Inventory contents snapshot (0x5007 — ITM-01, #453/#471) ----------------
+
+// One backpack slot as the owning client sees it (a row of the bags window). `slot` is
+// the backpack GRID index (0-based); `quality` is the rarity tier (0=poor…5=legendary)
+// for the client's colour; `binding` is the bind rule (0=none/1=on-pickup/2=on-equip).
+struct InventoryItem {
+    std::uint16_t slot = 0;
+    std::uint32_t item_template_id = 0;
+    std::uint32_t count = 0;
+    std::uint8_t quality = 0;
+    std::uint8_t binding = 0;
+};
+
+// INVENTORY_SNAPSHOT (S→C): the character's backpack contents + copper balance. Pushed to
+// the OWNING client at ENTER_WORLD and after every server-authoritative inventory change
+// (loot/vendor/quest-reward/GM .additem). `items` lists ONLY occupied slots (empty ones
+// are omitted); `backpack_slots` is the grid capacity. A pure DISPLAY projection.
+struct InventorySnapshot {
+    std::int64_t money = 0;
+    std::vector<InventoryItem> items;
+    std::uint16_t backpack_slots = 0;
+};
+Bytes encode_inventory_snapshot(const InventorySnapshot& in);  // test/mock symmetry
+std::optional<InventorySnapshot> decode_inventory_snapshot(const Bytes& buf);
+
 // LOOT_RELEASE (C→S): close the loot window on a corpse.
 struct LootRelease {
     std::uint64_t corpse_guid = 0;
@@ -563,6 +588,8 @@ std::optional<VendorBuybackRequest> decode_vendor_buyback_request(const Bytes& b
 
 // VENDOR_BUYBACK_RESULT (S→C): typed outcome. `status` is world.fbs VendorBuybackStatus
 // (0=OK; 1..4). On OK the item is re-minted and `price` re-debited; `balance` after.
+// `buyback_slot` ECHOES the request's slot (#453/#471) so the client drops that queue row
+// without correlating against its own outstanding request.
 struct VendorBuybackResult {
     std::uint16_t status = 0;  // VendorBuybackStatus
     std::uint32_t item_template_id = 0;
@@ -570,9 +597,33 @@ struct VendorBuybackResult {
     std::uint64_t item_guid = 0;
     std::int64_t price = 0;
     std::int64_t balance = 0;
+    std::uint16_t buyback_slot = 0;  // echoed queue slot that was repurchased (#453)
 };
 Bytes encode_vendor_buyback_result(const VendorBuybackResult& in);  // test/mock symmetry
 std::optional<VendorBuybackResult> decode_vendor_buyback_result(const Bytes& buf);
+
+// --- Vendor catalog push (0x5107 — ECO-01, #453/#471) -----------------------
+
+// One for-sale listing as the client sees it (a row of the vendor buy window). `price` is
+// the SERVER-COMPUTED buy price (catalog override or the template's buy price) — the buy
+// path re-derives it (Principle 1). `quality` is the rarity tier for the client's colour;
+// `stock` is remaining units, or -1 for unlimited (M1 vendors are unlimited).
+struct VendorItem {
+    std::uint32_t item_template_id = 0;
+    std::int64_t price = 0;
+    std::uint8_t quality = 0;
+    std::int32_t stock = -1;
+};
+
+// VENDOR_LIST (S→C): a vendor's catalog for the client's buy window — the vendor id + its
+// listed items with server-computed prices. Auto-pushed on GOSSIP_HELLO to a vendor NPC
+// (like TRAINER_LIST; there is no C→S request). An unknown/empty vendor yields no items.
+struct VendorList {
+    std::uint32_t vendor_id = 0;
+    std::vector<VendorItem> items;
+};
+Bytes encode_vendor_list(const VendorList& in);  // test/mock symmetry (client decodes)
+std::optional<VendorList> decode_vendor_list(const Bytes& buf);
 
 // --- Trainer (0x5203..0x5205) -----------------------------------------------
 
