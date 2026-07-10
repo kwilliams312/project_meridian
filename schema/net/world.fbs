@@ -900,7 +900,9 @@ enum QuestTurnInStatus : uint16 {
   INVENTORY_FULL = 6,   // no backpack room for the reward items (nothing changed)
 }
 
-/// A reward item actually granted at turn-in (item template id + count).
+/// A reward item — a template id + count. Used both for the items actually
+/// GRANTED at turn-in (QuestTurnInResult.reward_items) and for the reward PREVIEW
+/// the client renders before turn-in (QuestLogEntry.reward_items / .choice_items).
 table QuestRewardItem {
   item_id:uint32;
   count:uint16 = 1;
@@ -920,12 +922,26 @@ table QuestTurnInResult {
 }
 
 /// One active quest in the log snapshot: the quest id, its level (log coloring),
-/// whether every objective is complete (ready to turn in), and the live objectives.
+/// whether every objective is complete (ready to turn in), the live objectives,
+/// and the quest's REWARD PREVIEW.
+///
+/// The reward preview (server-authoritative, sourced from the QuestDef) is what the
+/// client renders in the turn-in dialog BEFORE the player commits — including the
+/// choice picker. `reward_items` are always granted; `choice_items` are the one-of
+/// options (pick exactly one) the player selects via QuestTurnIn.choice_index; a
+/// quest with an empty `choice_items` needs no picker (turn in with choice_index=-1).
+/// `reward_xp` and `reward_money` (copper, ECO-01) are the flat rewards. This lets
+/// the client present the full offer straight from its log, without a separate
+/// quest-detail round-trip.
 table QuestLogEntry {
   quest_id:uint32;
   level:uint16;
   complete:bool = false;
   objectives:[QuestObjectiveState];
+  reward_xp:uint32;                    // flat XP granted at turn-in
+  reward_money:int64;                  // flat copper granted at turn-in (ECO-01)
+  reward_items:[QuestRewardItem];      // always-granted items (preview)
+  choice_items:[QuestRewardItem];      // one-of choice options (empty = no picker)
 }
 
 /// S→C. The character's active quest log (sent on enter-world and on resync). The

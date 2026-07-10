@@ -456,7 +456,11 @@ Bytes encode_quest_turn_in_result(QuestId quest_id, mn::QuestTurnInStatus status
 }
 
 // Build the QuestLog snapshot (S→C) from a session's live QuestLog + the quest defs
-// (for objective type/target + quest level). Active quests only, ascending.
+// (for objective type/target, quest level, and the reward PREVIEW). Active quests
+// only, ascending. The reward preview (always-granted items, one-of choice_items,
+// flat XP + copper) is server-authoritative, sourced from the QuestDef, so the
+// client can render the turn-in offer + choice picker straight from its log
+// (issue #443) without a separate quest-detail round-trip.
 Bytes encode_quest_log(const QuestLog& log) {
     fb::FlatBufferBuilder b;
     std::vector<fb::Offset<mn::QuestLogEntry>> entries;
@@ -474,8 +478,30 @@ Bytes encode_quest_log(const QuestLog& log) {
             }
         }
         auto ovec = b.CreateVector(ostates);
+
+        // Reward preview (server-authoritative, from the QuestDef): the flat XP +
+        // copper, the always-granted items, and the one-of choice options. Lets the
+        // client render the turn-in offer + choice picker from its log alone (#443).
+        std::vector<fb::Offset<mn::QuestRewardItem>> rewards;
+        std::vector<fb::Offset<mn::QuestRewardItem>> choices;
+        std::uint32_t reward_xp = 0;
+        std::int64_t reward_money = 0;
+        if (def != nullptr) {
+            reward_xp = def->reward_xp;
+            reward_money = static_cast<std::int64_t>(def->reward_money);
+            rewards.reserve(def->reward_items.size());
+            for (const auto& it : def->reward_items)
+                rewards.push_back(mn::CreateQuestRewardItem(b, it.item_id, it.count));
+            choices.reserve(def->choice_items.size());
+            for (const auto& it : def->choice_items)
+                choices.push_back(mn::CreateQuestRewardItem(b, it.item_id, it.count));
+        }
+        auto rvec = b.CreateVector(rewards);
+        auto cvec = b.CreateVector(choices);
+
         entries.push_back(mn::CreateQuestLogEntry(
-            b, id, def != nullptr ? def->level : std::uint16_t{1}, log.is_complete(id), ovec));
+            b, id, def != nullptr ? def->level : std::uint16_t{1}, log.is_complete(id), ovec,
+            reward_xp, reward_money, rvec, cvec));
     }
     auto qvec = b.CreateVector(entries);
     b.Finish(mn::CreateQuestLog(b, qvec));
