@@ -69,6 +69,14 @@ enum Opcode : uint16 {
   CAST_FAILED  = 0x3003,     // S→C  REJECT: reason + gcd_remaining_ms (D-10 rollback)
   CAST_RESULT  = 0x3004,     // S→C  resolution outcome (attack table + damage/heal)
 
+  // --- 0x3xxx  spellbook         (M1 — CMB-01: known abilities, #457) ---
+  // The character's server-authoritative KNOWN ability set, pushed to the OWNING
+  // client at enter-world and re-sent on a TRAINER_LEARN that grows the set. Each
+  // entry carries the ability's cast/GCD/resource/range metadata (from AbilityStore,
+  // #343) so the action bar (#456) predicts cast time + GCD correctly instead of
+  // guessing off a greybox set. Appended after the cast opcodes in the combat band.
+  KNOWN_ABILITIES = 0x3005,  // S→C  the character's known ability set (spellbook) + per-ability metadata
+
   // --- 0x3xxx  death / resurrect (M1 — CMB-03: death state machine, #359) ---
   // Server-authoritative death→resurrect flow. On death the server spawns a corpse
   // and starts the graveyard-release countdown; the client requests release +
@@ -593,6 +601,61 @@ table CastResult {
   target_health:uint32;   // target health AFTER application
   target_dead:bool = false;
   server_time_ms:uint64;
+}
+
+// ===========================================================================
+// 0x3xxx — spellbook / known abilities  (M1 — CMB-01: known abilities, #457)
+// ===========================================================================
+// The character's KNOWN ability set — the client contract the action bar (#456)
+// seeds from. worldd already TEACHES abilities (TrainerLearn) and pushes a per-NPC
+// TrainerList, but never told the client which abilities the CHARACTER knows or
+// their cast/GCD/resource metadata; the action bar ran off a documented greybox set
+// and over-predicted a GCD for a triggers_gcd:false ability. This push closes that
+// gap: the OWNING client is sent its known set at ENTER_WORLD (alongside self
+// VITALS_UPDATE #439 + INVENTORY_SNAPSHOT #453) and again whenever the set grows (a
+// TrainerLearn that grants a new ability). Every field is SERVER-authoritative,
+// sourced from the AbilityStore (#343) — a pure DISPLAY projection the client never
+// predicts (Principle 1, "server is law"). At M1 the known set is the in-memory
+// learned set (#372): there is no durable character_ability table yet, so a freshly
+// created character enters knowing nothing and the set grows as it trains.
+
+/// The resource an ability SPENDS — mirrors AbilityStore's AbilityResourceType
+/// (server/worldd/ability_store.h) 1:1 so the server projection is a straight cast.
+/// NONE = a free ability (the DDL NULL resource_type). DISTINCT from PowerType (the
+/// unit's power POOL on 0x2xxx vitals): this is what a SPECIFIC ability costs, not
+/// which pool the unit carries. Append within a major; never renumber.
+enum AbilityResource : uint8 {
+  NONE   = 0,   // free ability — no resource cost
+  MANA   = 1,   // caster pool
+  RAGE   = 2,   // combat-generated pool
+  ENERGY = 3,   // fast-regen pool
+}
+
+/// One KNOWN ability as the owning client sees it (a row of the spellbook / action
+/// bar). All metadata is server-authoritative, read from the AbilityStore (#343):
+/// the client renders the cast bar, predicts the GCD, and shows the resource cost
+/// from these fields instead of a greybox guess. `cast_ms` = 0 is an instant
+/// ability; `triggers_gcd` false means using it does NOT start the global cooldown
+/// (the action bar must not predict one). `resource_cost` is 0 when `resource_type`
+/// is NONE (a free ability). Rank is not modeled at M1 (the DDL has no rank column).
+table KnownAbility {
+  ability_id:uint32;                     // -> AbilityStore id (CastRequest.ability_id)
+  cast_ms:uint32;                        // cast time in ms (0 = instant)
+  triggers_gcd:bool = true;              // does using it start the global cooldown
+  resource_type:AbilityResource = NONE;  // which pool it spends (mirrors AbilityResourceType)
+  resource_cost:uint32;                  // resource units spent (0 when NONE / free)
+  range_m:float;                         // max cast range in metres (melee = 5)
+}
+
+/// S→C. The character's KNOWN ability set (spellbook), pushed to the OWNING client so
+/// the action bar (#456) seeds from the character's REAL learned abilities + their
+/// cast/GCD/resource metadata. Sent at ENTER_WORLD and re-sent after every server-
+/// authoritative change to the set (a TrainerLearn that grants a new ability). A
+/// freshly-created character enters with an EMPTY set (M1: no durable ability table)
+/// and the set grows as it trains. A DISPLAY projection — the client never predicts
+/// which abilities it knows (Principle 1).
+table KnownAbilities {
+  abilities:[KnownAbility];   // the character's known abilities (empty = knows none)
 }
 
 // ===========================================================================
@@ -1277,6 +1340,8 @@ table TrainerLearnResult {
 // ===========================================================================
 //
 // 0x3xxx  combat            — DEFINED above (M1, CMB-01): CastRequest / CastStart / CastFailed / CastResult;
+//                             KnownAbilities (0x3005, #457 — the character's known ability set + metadata,
+//                             pushed at enter-world + on TrainerLearn);
 //                             (M1, CMB-03 #359): DeathState / ReleaseRequest / GhostState / ResurrectRequest / ResurrectResult.
 // 0x4xxx  quest state       — DEFINED above (M1, QST-01 #371): QuestAccept / QuestAcceptResult /
 //                             QuestProgress / QuestTurnIn / QuestTurnInResult / QuestLog (accept from a

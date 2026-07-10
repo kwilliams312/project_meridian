@@ -320,6 +320,7 @@ std::optional<Bytes> round_trip(Client& c, mn::Opcode opcode, const Bytes& req,
         if (rf && rf->opcode == mn::Opcode::VITALS_UPDATE) continue;
 
         if (rf && rf->opcode == mn::Opcode::INVENTORY_SNAPSHOT) continue;  // #453 unsolicited bags snapshot
+        if (rf && rf->opcode == mn::Opcode::KNOWN_ABILITIES) continue;     // #457 unsolicited spellbook
         break;
     }
     if (!rf || rf->opcode != resp_opcode) return std::nullopt;

@@ -6,6 +6,7 @@
 
 #include "world_dispatch.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -568,6 +569,53 @@ Bytes encode_inventory_snapshot(std::int64_t money, const itm::Inventory& inv) {
     return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
 }
 
+// ---- known-abilities encoder (S→C, world.fbs; CMB-01 #457) -------------------
+
+// Project AbilityStore's AbilityResourceType to the wire AbilityResource enum. The
+// two mirror each other 1:1 (world.fbs comment) so this is a straight cast; kNone
+// maps to NONE (a free ability).
+mn::AbilityResource to_wire(AbilityResourceType r) {
+    switch (r) {
+        case AbilityResourceType::kNone:   return mn::AbilityResource::NONE;
+        case AbilityResourceType::kMana:   return mn::AbilityResource::MANA;
+        case AbilityResourceType::kRage:   return mn::AbilityResource::RAGE;
+        case AbilityResourceType::kEnergy: return mn::AbilityResource::ENERGY;
+    }
+    return mn::AbilityResource::NONE;
+}
+
+// The character's KNOWN ability set (KNOWN_ABILITIES S→C, #457): one row per learned
+// ability, each carrying the cast/GCD/resource/range metadata the action bar (#456)
+// needs, read from the AbilityStore (#343). The known set is `learned` (the M1
+// in-memory learned set, #372); metadata comes from `store`. Ids are sorted so the
+// wire order is DETERMINISTIC (the learned set is a hash set — unspecified order). A
+// learned id with no AbilityStore entry (unresolvable — should not happen, since you
+// can only learn what a trainer teaches) is SKIPPED with telemetry rather than
+// emitted with no metadata (client SAD §2.4 "never crash"), keeping every row's
+// metadata authoritative.
+Bytes encode_known_abilities(const AbilityStore& store,
+                             const npc::LearnedAbilitySet& learned) {
+    fb::FlatBufferBuilder b;
+    std::vector<AbilityId> ids = learned.ids();
+    std::sort(ids.begin(), ids.end());
+    std::vector<fb::Offset<mn::KnownAbility>> rows;
+    rows.reserve(ids.size());
+    for (AbilityId id : ids) {
+        const Ability* a = store.find(id);
+        if (a == nullptr) {
+            log::warn(kCat, "KNOWN_ABILITIES: learned ability not in the store — skipping",
+                      {log::field("ability_id", static_cast<std::int64_t>(id))});
+            continue;
+        }
+        rows.push_back(mn::CreateKnownAbility(b, a->id, a->cast_time_ms, a->triggers_gcd,
+                                              to_wire(a->resource_type), a->resource_amount,
+                                              a->range_m));
+    }
+    auto vec = b.CreateVector(rows);
+    b.Finish(mn::CreateKnownAbilities(b, vec));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
 // ---- vendor-catalog encoder (S→C, world.fbs; ECO-01 #453) --------------------
 
 // The vendor's for-sale catalog (VENDOR_LIST S→C, #453): each listing's item id +
@@ -797,6 +845,19 @@ void push_inventory_snapshot(net::Session& sess, ConnCtx& ctx) {
     } catch (const std::exception& e) {
         log::warn(kCat, "INVENTORY_SNAPSHOT push failed", {log::field("error", e.what())});
     }
+}
+
+// Push the session's OWN KNOWN_ABILITIES (S→C, #457): the character's known ability
+// set + per-ability cast/GCD/resource metadata, so the action bar (#456) seeds from
+// the REAL learned set (#372) instead of a greybox one. Sent at ENTER_WORLD (next to
+// the self VITALS_UPDATE #439 + INVENTORY_SNAPSHOT #453) and again on a TrainerLearn
+// that grows the set. No-op without the ability store (the DB-less dispatch smoke
+// path wires no store); a fresh character's set is empty (M1 has no durable ability
+// table) and grows as it trains.
+void push_known_abilities(net::Session& sess, ConnCtx& ctx) {
+    if (ctx.abilities == nullptr) return;
+    send_s2c(sess, ctx, encode_frame(net::Opcode::KNOWN_ABILITIES, 0,
+                                     encode_known_abilities(*ctx.abilities, ctx.learned)));
 }
 
 // Snapshot every active quest's per-objective `have` (the pre-mutation baseline the
@@ -1947,6 +2008,15 @@ void Dispatcher::register_m0_stubs() {
                // transaction; contents were a copper-only greybox). Server-
                // authoritative snapshot, re-sent after every inventory change below.
                push_inventory_snapshot(sess, ctx);
+
+               // SELF KNOWN-ABILITIES SNAPSHOT AT SPAWN (#457, CMB-01; part of #24).
+               // Push the character's KNOWN ability set + per-ability cast/GCD/resource
+               // metadata so the action bar (#456) seeds from the REAL learned set (#372)
+               // instead of a documented greybox one — and knows each ability's cast_ms
+               // + triggers_gcd so it never over-predicts a GCD. At M1 a fresh character
+               // knows nothing (empty set) and the set grows on TrainerLearn (re-pushed
+               // there). Server-authoritative DISPLAY projection (Principle 1).
+               push_known_abilities(sess, ctx);
 
                // Explore (QST-01, #396): a character that spawns already standing in
                // a discovery volume fires it on enter — credit any explore objective
@@ -3126,6 +3196,12 @@ void Dispatcher::register_m0_stubs() {
             const std::int64_t cost =
                 (r.status == npc::TrainStatus::kOk) ? static_cast<std::int64_t>(r.cost) : 0;
             reply(to_wire(r.status), cost, static_cast<std::int64_t>(r.new_balance));
+            // On a SUCCESSFUL learn the character's known set grew — re-push
+            // KNOWN_ABILITIES (#457) so the action bar (#456) picks up the newly
+            // learned ability + its metadata without a re-enter. Sent AFTER the
+            // TrainerLearnResult so the reply stays first in the stream. Rejections
+            // leave the set unchanged (no push).
+            if (r.status == npc::TrainStatus::kOk) push_known_abilities(sess, ctx);
         } catch (const std::exception& e) {
             log::warn(kCat, "TRAINER_LEARN failed", {log::field("error", e.what())});
             reply(mn::TrainerLearnStatus::NOT_TRAINER, 0, safe_balance(ctx));  // defensive

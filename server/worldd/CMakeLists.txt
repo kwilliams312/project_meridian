@@ -559,6 +559,25 @@ target_link_libraries(worldd-hud-read-contracts-test
 set_target_properties(worldd-hud-read-contracts-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-hud-read-contracts COMMAND worldd-hud-read-contracts-test)
 
+# --- KNOWN_ABILITIES enter-world LIVE-SESSION integration test (issue #457). ---
+# The server->client SPELLBOOK read contract the action bar (#456) needs, over a real
+# TLS session against a real MariaDB using the M1 PLACEHOLDER stores: ENTER_WORLD
+# pushes a KNOWN_ABILITIES (empty for a fresh character) and a TRAINER_LEARN that
+# grows the set re-pushes it with the learned ability + its AbilityStore metadata
+# (cast_ms / triggers_gcd / resource / range). Reads MERIDIAN_DB_* and SKIPS when unset.
+add_executable(worldd-known-abilities-test
+  test/known_abilities_enter_it.cpp
+)
+target_link_libraries(worldd-known-abilities-test
+  PRIVATE
+    meridian::world-dispatch
+    meridian::characters
+    meridian::npc
+    Threads::Threads
+)
+set_target_properties(worldd-known-abilities-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-known-abilities COMMAND worldd-known-abilities-test)
+
 # --- Area triggers + POI discovery UNIT test (WLD-01/03; #368). ---------------
 # PURE (no DB, no socket, no TLS): exercises BOTH layers directly —
 #   (1) the AreaTriggerSet core (point-in-box membership, enter/leave fire ONCE
