@@ -130,9 +130,16 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/*azure* /etc/apt/sources.list.d/*microsoft* 2>/dev/null || true
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build g++-13 flatbuffers-compiler libflatbuffers-dev libssl-dev libmariadb-dev mariadb-client
-      - name: Load auth schema (0001_init_auth.up.sql)
+      - name: Load auth schema (all *.up.sql migrations, numeric order)
         run: |
-          mariadb -h 127.0.0.1 -P 3306 -u root -pci meridian_auth < server/db/auth/migrations/0001_init_auth.up.sql
+          # Apply EVERY up-migration in numeric order (the 000N_*.up.sql glob sorts
+          # numerically), mirroring scripts/dev/_db.sh db_load_schemas. A loop (not a
+          # hardcoded 0001) so a new migration is applied automatically and the CI DB
+          # never lags the code by a version (final-review C2).
+          for f in server/db/auth/migrations/*.up.sql; do
+            echo "applying $(basename "$f")"
+            mariadb -h 127.0.0.1 -P 3306 -u root -pci meridian_auth < "$f"
+          done
       - name: Build meridian-account-test
         run: |
           cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
@@ -174,9 +181,17 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/*azure* /etc/apt/sources.list.d/*microsoft* 2>/dev/null || true
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build g++-13 flatbuffers-compiler libflatbuffers-dev libssl-dev libmariadb-dev mariadb-client
-      - name: Load characters schema (0001_init_characters.up.sql)
+      - name: Load characters schema (all *.up.sql migrations, numeric order)
         run: |
-          mariadb -h 127.0.0.1 -P 3306 -u root -pci meridian_characters < server/db/characters/migrations/0001_init_characters.up.sql
+          # Apply EVERY up-migration in numeric order (the 000N_*.up.sql glob sorts
+          # numerically), mirroring scripts/dev/_db.sh db_load_schemas. Loading only
+          # 0001 left the CI `character` table without the 0003 `appearance` column,
+          # so create_character()'s INSERT failed ER1054 — the loop fixes that and
+          # never repeats it for 0004+ (final-review C2).
+          for f in server/db/characters/migrations/*.up.sql; do
+            echo "applying $(basename "$f")"
+            mariadb -h 127.0.0.1 -P 3306 -u root -pci meridian_characters < "$f"
+          done
       - name: Build meridian-characters-test
         run: |
           cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
@@ -219,9 +234,16 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/*azure* /etc/apt/sources.list.d/*microsoft* 2>/dev/null || true
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build g++-13 flatbuffers-compiler libflatbuffers-dev libssl-dev libmariadb-dev mariadb-client
-      - name: Load auth schema (0001_init_auth.up.sql)
+      - name: Load auth schema (all *.up.sql migrations, numeric order)
         run: |
-          mariadb -h 127.0.0.1 -P 3306 -u root -pci meridian_auth < server/db/auth/migrations/0001_init_auth.up.sql
+          # Apply EVERY up-migration in numeric order (the 000N_*.up.sql glob sorts
+          # numerically), mirroring scripts/dev/_db.sh db_load_schemas. A loop (not a
+          # hardcoded 0001) so a new migration is applied automatically and the CI DB
+          # never lags the code by a version (final-review C2).
+          for f in server/db/auth/migrations/*.up.sql; do
+            echo "applying $(basename "$f")"
+            mariadb -h 127.0.0.1 -P 3306 -u root -pci meridian_auth < "$f"
+          done
       - name: Build authd-login-test
         run: |
           cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
@@ -266,9 +288,16 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/*azure* /etc/apt/sources.list.d/*microsoft* 2>/dev/null || true
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build g++-13 flatbuffers-compiler libflatbuffers-dev libssl-dev libmariadb-dev mariadb-client
-      - name: Load auth schema (0001_init_auth.up.sql)
+      - name: Load auth schema (all *.up.sql migrations, numeric order)
         run: |
-          mariadb -h 127.0.0.1 -P 3306 -u root -pci meridian_auth < server/db/auth/migrations/0001_init_auth.up.sql
+          # Apply EVERY up-migration in numeric order (the 000N_*.up.sql glob sorts
+          # numerically), mirroring scripts/dev/_db.sh db_load_schemas. A loop (not a
+          # hardcoded 0001) so a new migration is applied automatically and the CI DB
+          # never lags the code by a version (final-review C2).
+          for f in server/db/auth/migrations/*.up.sql; do
+            echo "applying $(basename "$f")"
+            mariadb -h 127.0.0.1 -P 3306 -u root -pci meridian_auth < "$f"
+          done
       # World content DB for the IF-4 boot test (#89): a separate DB loaded from
       # the mcc-produced world DDL (schema/sql/world/*.sql). worldd reads the
       # world_manifest table from here at boot. FOREIGN_KEY_CHECKS is disabled for

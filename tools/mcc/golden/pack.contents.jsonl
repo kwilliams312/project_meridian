@@ -74,3 +74,6 @@
 {"id":"core:sfx.char.ember_wisp","numeric_id":74,"resource":"res://meridian/core/sfx/char/ember_wisp.oggvorbisstr","hash":"00c828d2e8bb7df324cba312b109ea18d23b7a48399852b68cf3fcf2b6914158"}
 {"id":"core:spawn.zone01_cinderdeep_deep","numeric_id":75,"resource":"res://meridian/core/tables/spawn.bin","hash":"c3ecbe61106163e1b0709f699cd46b4dc48b2253766a31fd80043f1669dd033d"}
 {"id":"core:art.item.weapon.emberforged_pick","numeric_id":76,"resource":"res://meridian/core/art/item/weapon/emberforged_pick.scn","hash":"ce6b41d55659b629f9a3aca32a9a04334d411e286d5a34ae1d5aff53bb0bf326"}
+{"id":"core:dye.bone","numeric_id":77,"resource":"res://meridian/core/tables/dye.bin","hash":"b1eb67a35411201ad24f4a1ca1c3f358861f5a04491e23cb993ffa53d92eadde"}
+{"id":"core:dye.russet","numeric_id":78,"resource":"res://meridian/core/tables/dye.bin","hash":"0720ee8448ff441ca5d442036fe8d3d29f6e677bdf3ff8a0da3c49c554d7f240"}
+{"id":"core:dye.slate","numeric_id":79,"resource":"res://meridian/core/tables/dye.bin","hash":"48a007e8acd84bde93a7c97b25373b0542fd348bbe683e8d4d3f1d4e56516ccf"}

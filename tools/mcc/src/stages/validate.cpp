@@ -67,14 +67,20 @@ bool is_asset_prefix(const std::string& t) {
 }
 
 // The `schema:` envelope a file of this type must declare (L001). Per-type version:
-// `item` is @2 (visual.worn contract ①/T2); every other type is @1. Mirrors
-// validate_content.py's SCHEMA_VERSIONS / expected_envelope() so the two tools agree
-// on the envelope verdict; single source so a future bump is a one-line change, used
-// by BOTH validate() and validate_single_file(). No back-compat: item@1 is rejected
-// (the nightly world DB is rebuilt wholesale — no migration window).
+// `item` is @2 (visual.worn contract ①/T2); every other type is @1. The envelope
+// TYPE WORD equals the file-suffix type for every type EXCEPT `appearance`, whose
+// envelope word is the longer `appearance_catalog` (spec §5.1) — the one
+// irregular-name case, mirroring validate_content.py's ENVELOPE_TYPE_NAMES.
+// Mirrors validate_content.py's SCHEMA_VERSIONS / expected_envelope() so the two
+// tools agree on the envelope verdict; single source so a future bump is a
+// one-line change, used by BOTH validate() and validate_single_file(). No
+// back-compat: item@1 is rejected (the nightly world DB is rebuilt wholesale —
+// no migration window).
 std::string expected_envelope(const std::string& file_type) {
     const int version = (file_type == "item") ? 2 : 1;
-    return "meridian/" + file_type + "@" + std::to_string(version);
+    const std::string envelope_type =
+        (file_type == "appearance") ? "appearance_catalog" : file_type;
+    return "meridian/" + envelope_type + "@" + std::to_string(version);
 }
 
 // True if `descendant` is `ancestor` or lies beneath it (path-prefix test on

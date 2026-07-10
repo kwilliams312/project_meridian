@@ -6,10 +6,10 @@
   "content_schema_version": 1,
   "godot_version": "4.6",
   "id_band": 0,
-  "content_hash": "369d5a6231f3d6cf2825d7b2f76b74851b8b664dfac943b297e4180f4bf4ae26",
+  "content_hash": "105d6c886add565e0b6cc857fc3c8afcbbd1cf84e654ca88c6b0494d7c3c3400",
   "mcc_version": "0.0.0",
   "built_at": "1970-01-01 00:00:00",
-  "entry_count": 76,
+  "entry_count": 79,
   "entries": [
     { "id": "core:ability.minor_healing", "numeric_id": 1, "type": "ability", "resource": "res://meridian/core/tables/ability.bin", "hash": "35ae382345900ffc2bbeb694eecdaa478af6deafa843bbfc6fae1ead291643f6" },
     { "id": "core:ability.pickaxe_slam", "numeric_id": 2, "type": "ability", "resource": "res://meridian/core/tables/ability.bin", "hash": "2ed79132ca10a17e2dfde60f98becb70c420b4c5df387fea531ff2bcb28b0813" },
@@ -86,6 +86,9 @@
     { "id": "core:sfx.char.cindermaw", "numeric_id": 73, "type": "asset", "resource": "res://meridian/core/sfx/char/cindermaw.oggvorbisstr", "hash": "83795017cda3b963636de5b5f88d320feb2831ab2f1721a4814ac411f6bbcc74" },
     { "id": "core:sfx.char.ember_wisp", "numeric_id": 74, "type": "asset", "resource": "res://meridian/core/sfx/char/ember_wisp.oggvorbisstr", "hash": "00c828d2e8bb7df324cba312b109ea18d23b7a48399852b68cf3fcf2b6914158" },
     { "id": "core:spawn.zone01_cinderdeep_deep", "numeric_id": 75, "type": "spawn", "resource": "res://meridian/core/tables/spawn.bin", "hash": "c3ecbe61106163e1b0709f699cd46b4dc48b2253766a31fd80043f1669dd033d" },
-    { "id": "core:art.item.weapon.emberforged_pick", "numeric_id": 76, "type": "asset", "resource": "res://meridian/core/art/item/weapon/emberforged_pick.scn", "hash": "ce6b41d55659b629f9a3aca32a9a04334d411e286d5a34ae1d5aff53bb0bf326" }
+    { "id": "core:art.item.weapon.emberforged_pick", "numeric_id": 76, "type": "asset", "resource": "res://meridian/core/art/item/weapon/emberforged_pick.scn", "hash": "ce6b41d55659b629f9a3aca32a9a04334d411e286d5a34ae1d5aff53bb0bf326" },
+    { "id": "core:dye.bone", "numeric_id": 77, "type": "dye", "resource": "res://meridian/core/tables/dye.bin", "hash": "b1eb67a35411201ad24f4a1ca1c3f358861f5a04491e23cb993ffa53d92eadde" },
+    { "id": "core:dye.russet", "numeric_id": 78, "type": "dye", "resource": "res://meridian/core/tables/dye.bin", "hash": "0720ee8448ff441ca5d442036fe8d3d29f6e677bdf3ff8a0da3c49c554d7f240" },
+    { "id": "core:dye.slate", "numeric_id": 79, "type": "dye", "resource": "res://meridian/core/tables/dye.bin", "hash": "48a007e8acd84bde93a7c97b25373b0542fd348bbe683e8d4d3f1d4e56516ccf" }
   ]
 }
