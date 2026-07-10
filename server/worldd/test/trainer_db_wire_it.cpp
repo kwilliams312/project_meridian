@@ -253,11 +253,18 @@ struct RxFrame {
     Bytes payload;
 };
 std::optional<RxFrame> recv_decoded(Client& c) {
-    std::optional<Bytes> raw = c.recv_frame();
-    if (!raw) return std::nullopt;
-    std::optional<mw::Frame> rf = mw::decode_frame(*raw);
-    if (!rf) return std::nullopt;
-    return RxFrame{rf->opcode, Bytes(rf->payload, rf->payload + rf->payload_len)};
+    // Skip the unsolicited self VITALS_UPDATE the server now pushes at ENTER_WORLD
+    // (#439: the HUD player-frame snapshot) so round_trip reaches the awaited reply.
+    // These trainer/gossip round-trips never await a VITALS_UPDATE, so dropping it
+    // is safe; the vitals broadcast logic is proven by worldd-vitals-test.
+    for (;;) {
+        std::optional<Bytes> raw = c.recv_frame();
+        if (!raw) return std::nullopt;
+        std::optional<mw::Frame> rf = mw::decode_frame(*raw);
+        if (!rf) return std::nullopt;
+        if (rf->opcode == mn::Opcode::VITALS_UPDATE) continue;
+        return RxFrame{rf->opcode, Bytes(rf->payload, rf->payload + rf->payload_len)};
+    }
 }
 std::optional<Bytes> round_trip(Client& c, mn::Opcode opcode, const Bytes& req,
                                 mn::Opcode resp_opcode, std::uint64_t seq) {

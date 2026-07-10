@@ -1844,6 +1844,26 @@ void Dispatcher::register_m0_stubs() {
                metrics::aoi_entities()
                    .with(ctx.labels.rzsm())
                    .set(static_cast<double>(ctx.world->session_count()));
+
+               // SELF VITALS SNAPSHOT AT SPAWN (#439, UI-01 HUD contract; part of
+               // #24). enter() sends the OTHER in-range sessions an EntityEnter for
+               // this character (carrying its vitals), but sends the OWNING session
+               // NO self EntityEnter and NO vitals — so the client HUD player frame
+               // had nothing to show until the first combat/heal delta (#438 worked
+               // around it by seeding name/level from char-select). Fix: push the
+               // owning session an authoritative VITALS_UPDATE for its OWN character
+               // now, at spawn. broadcast_vitals(guid) always sends the subject's own
+               // client the VITALS_UPDATE (recipient #1), reading health/max, power/
+               // max + type, and level straight off the authoritative Unit — so the
+               // HUD populates immediately. We choose a self VITALS_UPDATE over a self
+               // EntityEnter because the client already handles VITALS_UPDATE for its
+               // player frame (#438) and treats EntityEnter as REMOTE entities to
+               // spawn (a self EntityEnter would risk a duplicate-of-self capsule). No
+               // new opcode — VITALS_UPDATE already exists (#430). Any observers that
+               // JUST received this character's EntityEnter get an idempotent repeat
+               // of the same snapshot (a harmless no-op on identical vitals).
+               ctx.world->broadcast_vitals(er.entity_guid);
+
                // Explore (QST-01, #396): a character that spawns already standing in
                // a discovery volume fires it on enter — credit any explore objective
                // it satisfies (QUEST_PROGRESS follows if it advanced).

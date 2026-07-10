@@ -304,9 +304,21 @@ constexpr const char* kCharacterDdl =
 std::optional<Bytes> round_trip(Client& c, mn::Opcode opcode, const Bytes& req,
                                 mn::Opcode resp_opcode, std::uint64_t seq) {
     if (!c.send_frame(mw::encode_frame(opcode, seq, req))) return std::nullopt;
-    std::optional<Bytes> reply = c.recv_frame();
-    if (!reply) return std::nullopt;
-    std::optional<mw::Frame> rf = mw::decode_frame(*reply);
+    // Skip the unsolicited self VITALS_UPDATE the server now pushes at ENTER_WORLD
+    // (#439: the HUD player-frame snapshot). Once this session has entered the world
+    // (step 2c), that push sits in the stream ahead of subsequent char-mgmt replies;
+    // draining it keeps every following round_trip aligned to its own response. These
+    // char-mgmt round-trips never await a VITALS_UPDATE, so dropping it is safe.
+    // `reply` MUST outlive the return below — rf->payload points INTO it.
+    std::optional<Bytes> reply;
+    std::optional<mw::Frame> rf;
+    for (;;) {
+        reply = c.recv_frame();
+        if (!reply) return std::nullopt;
+        rf = mw::decode_frame(*reply);
+        if (rf && rf->opcode == mn::Opcode::VITALS_UPDATE) continue;
+        break;
+    }
     if (!rf || rf->opcode != resp_opcode) return std::nullopt;
     return Bytes(rf->payload, rf->payload + rf->payload_len);
 }

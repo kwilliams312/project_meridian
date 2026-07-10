@@ -174,6 +174,26 @@ target_link_libraries(worldd-single-session-it
 set_target_properties(worldd-single-session-it PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-single-session COMMAND worldd-single-session-it)
 
+# --- Self-vitals-at-ENTER_WORLD live-session test (UI-01 HUD contract; #439). --
+# Drives ONE real TLS client through the real serve loop + WORLD_HELLO + ENTER_WORLD
+# handlers: on spawn the session receives an authoritative VITALS_UPDATE for its OWN
+# character (health/max, power/max + type, level) BEFORE it sends any combat — the
+# #438 gap (blank HUD player frame until the first delta) this closes. Needs a live
+# MariaDB with the auth schema (seeds an account + owned character + grant); reads
+# MERIDIAN_DB_* and SKIPS (exit 0) when none are set, so it is inert in the plain
+# server ctest and runs for real in the worldd-session CI job / test.sh --db. The
+# DB-free vitals broadcast LOGIC is proven by worldd-vitals-test.
+add_executable(worldd-self-vitals-it
+  test/self_vitals_enter_it.cpp
+)
+target_link_libraries(worldd-self-vitals-it
+  PRIVATE
+    meridian::world-dispatch
+    Threads::Threads
+)
+set_target_properties(worldd-self-vitals-it PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-self-vitals COMMAND worldd-self-vitals-it)
+
 # --- Ban + mute enforcement END-TO-END test (OPS-02c, #419). ------------------
 # Drives real TLS clients against the real serve loop: a BANNED account's WorldHello
 # is refused (Disconnect{KICKED}); a spawned character's chat routes normally until
