@@ -1033,4 +1033,68 @@ std::optional<TrainerLearnResult> decode_trainer_learn_result(const Bytes& buf) 
     return out;
 }
 
+// ---- IF-2 CHAT / SOCIAL (SOC-01, #367/#434) --------------------------------
+// Strings are created BEFORE the table (FlatBuffers rule); an empty body/target
+// round-trips as an empty string. The generated field order matches world.fbs:
+// ChatMessage{channel,target,text}, ChatDeliver{channel,sender_guid,sender_name,text},
+// ChatRejected{channel,reason,target}.
+
+Bytes encode_chat_message(const ChatMessage& in) {
+    fb::FlatBufferBuilder b;
+    auto target = b.CreateString(in.target);
+    auto text = b.CreateString(in.text);
+    b.Finish(mn::CreateChatMessage(
+        b, static_cast<mn::ChatChannel>(in.channel), target, text));
+    return to_bytes(b);
+}
+
+std::optional<ChatMessage> decode_chat_message(const Bytes& buf) {
+    const mn::ChatMessage* t = verify_and_get<mn::ChatMessage>(buf);
+    if (t == nullptr) return std::nullopt;
+    ChatMessage out;
+    out.channel = static_cast<std::uint16_t>(t->channel());
+    out.target = t->target() ? t->target()->str() : std::string();
+    out.text = t->text() ? t->text()->str() : std::string();
+    return out;
+}
+
+Bytes encode_chat_deliver(const ChatDeliver& in) {
+    fb::FlatBufferBuilder b;
+    auto name = b.CreateString(in.sender_name);
+    auto text = b.CreateString(in.text);
+    b.Finish(mn::CreateChatDeliver(
+        b, static_cast<mn::ChatChannel>(in.channel), in.sender_guid, name, text));
+    return to_bytes(b);
+}
+
+std::optional<ChatDeliver> decode_chat_deliver(const Bytes& buf) {
+    const mn::ChatDeliver* t = verify_and_get<mn::ChatDeliver>(buf);
+    if (t == nullptr) return std::nullopt;
+    ChatDeliver out;
+    out.channel = static_cast<std::uint16_t>(t->channel());
+    out.sender_guid = t->sender_guid();
+    out.sender_name = t->sender_name() ? t->sender_name()->str() : std::string();
+    out.text = t->text() ? t->text()->str() : std::string();
+    return out;
+}
+
+Bytes encode_chat_rejected(const ChatRejected& in) {
+    fb::FlatBufferBuilder b;
+    auto target = b.CreateString(in.target);
+    b.Finish(mn::CreateChatRejected(
+        b, static_cast<mn::ChatChannel>(in.channel),
+        static_cast<mn::ChatRejectReason>(in.reason), target));
+    return to_bytes(b);
+}
+
+std::optional<ChatRejected> decode_chat_rejected(const Bytes& buf) {
+    const mn::ChatRejected* t = verify_and_get<mn::ChatRejected>(buf);
+    if (t == nullptr) return std::nullopt;
+    ChatRejected out;
+    out.channel = static_cast<std::uint16_t>(t->channel());
+    out.reason = static_cast<std::uint16_t>(t->reason());
+    out.target = t->target() ? t->target()->str() : std::string();
+    return out;
+}
+
 }  // namespace meridian::clientnet::codec

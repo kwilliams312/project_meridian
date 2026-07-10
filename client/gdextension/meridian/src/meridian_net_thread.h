@@ -208,6 +208,23 @@ public:
 	godot::Dictionary decode_econ_frame(int opcode,
 			const godot::PackedByteArray &payload) const;
 
+	// ── Chat frame builder + decode (SOC-01, #367/#434) ──────────────────────────
+	// The chat panel builds a CHAT_MESSAGE on send (send_bulk); the channel selects
+	// say/yell/whisper/zone routing and `target` is the WHISPER recipient name (ignored
+	// otherwise). A '.'-prefixed `text` (e.g. ".help") is a GM command the server
+	// intercepts on the SAME opcode — no separate builder. The server's replies arrive
+	// as raw `entity_frame`s decoded by decode_chat_frame:
+	//   chat_deliver  — a delivered line (SAY/YELL/WHISPER/ZONE), incl. SYSTEM lines
+	//                   (sender_guid 0, sender_name "System" — GM reply / mute notice)
+	//   chat_rejected — a typed refusal (reason is world.fbs ChatRejectReason)
+	// Returns { "kind": "chat_deliver"|"chat_rejected"|"", ...per-kind fields }; a
+	// non-chat opcode or undecodable payload returns { "kind": "" } so the scene can
+	// fall through the other decode seams first.
+	godot::PackedByteArray build_chat_message_frame(int channel, const godot::String &target,
+			const godot::String &text) const;
+	godot::Dictionary decode_chat_frame(int opcode,
+			const godot::PackedByteArray &payload) const;
+
 	// ── Diagnostics (atomic counters from the core) ────────────────────────────
 	int64_t frames_sent() const;
 	int64_t frames_received() const;

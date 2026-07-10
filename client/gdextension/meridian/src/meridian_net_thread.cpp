@@ -134,6 +134,12 @@ void MeridianNetThread::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("decode_econ_frame", "opcode", "payload"),
 	                     &MeridianNetThread::decode_econ_frame);
 
+	ClassDB::bind_method(
+	    D_METHOD("build_chat_message_frame", "channel", "target", "text"),
+	    &MeridianNetThread::build_chat_message_frame);
+	ClassDB::bind_method(D_METHOD("decode_chat_frame", "opcode", "payload"),
+	                     &MeridianNetThread::decode_chat_frame);
+
 	ClassDB::bind_method(D_METHOD("frames_sent"), &MeridianNetThread::frames_sent);
 	ClassDB::bind_method(D_METHOD("frames_received"), &MeridianNetThread::frames_received);
 	ClassDB::bind_method(D_METHOD("inbound_dropped"), &MeridianNetThread::inbound_dropped);
@@ -817,6 +823,47 @@ Dictionary MeridianNetThread::decode_econ_frame(int opcode,
 		d["new_balance"] = static_cast<int64_t>(r->new_balance);
 	}
 	return d;  // kind stays "" for a non-econ opcode / undecodable payload
+}
+
+// ── Chat frame builder + decode (SOC-01, #367/#434) ──────────────────────────
+// The chat panel sends CHAT_MESSAGE on a line (send_bulk); the server's CHAT_DELIVER /
+// CHAT_REJECTED arrive as raw `entity_frame`s decoded by decode_chat_frame. Seq is a
+// per-message counter the server echoes; the client matches by opcode, so a fixed
+// non-zero seq is fine (mirrors the quest/econ builders).
+
+PackedByteArray MeridianNetThread::build_chat_message_frame(
+		int channel, const String &target, const String &text) const {
+	cn::codec::ChatMessage msg;
+	msg.channel = static_cast<std::uint16_t>(channel);
+	msg.target = to_std(target);
+	msg.text = to_std(text);
+	net::Bytes payload = cn::codec::encode_chat_message(msg);
+	return to_pba(cn::encode_world_frame(cn::kOpChatMessage, /*seq=*/1, payload));
+}
+
+Dictionary MeridianNetThread::decode_chat_frame(int opcode,
+		const PackedByteArray &payload) const {
+	Dictionary d;
+	d["kind"] = String("");
+	const net::Bytes buf = to_bytes(payload);
+
+	if (opcode == cn::kOpChatDeliver) {
+		auto r = cn::codec::decode_chat_deliver(buf);
+		if (!r) return d;
+		d["kind"] = String("chat_deliver");
+		d["channel"] = static_cast<int64_t>(r->channel);  // ChatChannel
+		d["sender_guid"] = static_cast<int64_t>(r->sender_guid);
+		d["sender_name"] = String::utf8(r->sender_name.c_str());
+		d["text"] = String::utf8(r->text.c_str());
+	} else if (opcode == cn::kOpChatRejected) {
+		auto r = cn::codec::decode_chat_rejected(buf);
+		if (!r) return d;
+		d["kind"] = String("chat_rejected");
+		d["channel"] = static_cast<int64_t>(r->channel);  // ChatChannel
+		d["reason"] = static_cast<int64_t>(r->reason);    // ChatRejectReason
+		d["target"] = String::utf8(r->target.c_str());
+	}
+	return d;  // kind stays "" for a non-chat opcode / undecodable payload
 }
 
 int64_t MeridianNetThread::frames_sent() const {

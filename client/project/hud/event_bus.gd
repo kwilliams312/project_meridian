@@ -1160,3 +1160,153 @@ func _clear_cast() -> void:
 	_cast_start_ms = 0
 	_cast_duration_ms = 0
 	cast_bar_changed.emit(false, ability, 0, 0)
+
+
+# =============================================================================
+# CHAT / SOCIAL (SOC-01, #367/#434)
+# =============================================================================
+# The SAME MVVM seam as the registries above, applied to chat. The net layer PUBLISHES
+# decoded CHAT_DELIVER / CHAT_REJECTED frames here; the chat panel SUBSCRIBES to the
+# signals and READS the scrollback through the getter — it never touches the net thread.
+# SERVER IS LAW: the bus only stores + re-emits what worldd delivered. It renders lines,
+# it never invents them (the sender even sees their OWN say/yell because worldd echoes it).
+#
+# The reverse direction (the player types a line) is an INTENT: the panel calls
+# request_chat_send(), the bus re-emits chat_send_requested, and the world scene turns it
+# into a CHAT_MESSAGE frame. A '.'-prefixed line is an ordinary send — the SERVER
+# recognizes the GM command and replies with a SYSTEM CHAT_DELIVER (sender_guid 0), which
+# lands back here like any other line (no client-side command parsing — Principle 1).
+#
+# SYSTEM lines (sender_guid 0, e.g. "System"): GM-command replies (#417/#418) and the
+# "you are muted" notice (#419) all ride CHAT_DELIVER with sender_guid 0 — the panel
+# styles them distinctly and they never float a bubble.
+
+# world.fbs ChatChannel ordinals (kept here so views/the world scene read them by name).
+const CHAT_SAY := 0
+const CHAT_YELL := 1
+const CHAT_WHISPER := 2
+const CHAT_ZONE := 3
+
+# world.fbs ChatRejectReason ordinals (the typed CHAT_REJECTED reason).
+const CHAT_REJECT_NOT_IN_WORLD := 0
+const CHAT_REJECT_RATE_LIMITED := 1
+const CHAT_REJECT_EMPTY := 2
+const CHAT_REJECT_TOO_LONG := 3
+const CHAT_REJECT_NO_TARGET := 4
+const CHAT_REJECT_TARGET_OFFLINE := 5
+
+# Scrollback cap — the panel shows a rolling window; the bus keeps the last N lines so a
+# panel bound after some traffic can seed its history (event-driven, no per-frame work).
+const CHAT_HISTORY_MAX := 200
+
+# --- View subscription signals (bus -> chat panel) ---------------------------
+
+## A chat line was added to the scrollback (a CHAT_DELIVER, or a CHAT_REJECTED surfaced as a
+## System line). `entry` is the canonical line record (see _chat_deliver_entry): keys
+## {kind:"deliver"|"reject", channel:int, sender_guid:int, sender_name:String, text:String,
+## is_system:bool, reason:int}. The panel appends + renders it.
+signal chat_line_added(entry: Dictionary)
+
+## A SAY/YELL line was delivered from a real (non-system) sender — float a chat bubble over
+## that sender's entity in the world scene. Only spatial channels bubble; whisper/zone/system
+## do not. The world scene (which owns the entity nodes) subscribes and shows the bubble.
+signal chat_bubble_requested(sender_guid: int, sender_name: String, text: String, channel: int)
+
+# --- Intent signal (view -> the world scene, which owns the net thread) -------
+
+## The player submitted a line: send CHAT_MESSAGE on `channel` (target is the WHISPER
+## recipient name, empty otherwise). A '.'-prefixed `text` is a GM command the server parses.
+signal chat_send_requested(channel: int, target: String, text: String)
+
+# --- Chat registry state -----------------------------------------------------
+var _chat_history: Array = []   # rolling scrollback of line entries (<= CHAT_HISTORY_MAX)
+
+# --- Publish API (the net layer -> bus) --------------------------------------
+
+## Publish a CHAT_DELIVER (decode_chat_frame kind "chat_deliver"). Appends the line to the
+## scrollback + emits chat_line_added; for a spatial SAY/YELL from a real sender, also emits
+## chat_bubble_requested so the world scene floats a bubble. sender_guid 0 = a SYSTEM line
+## (GM reply / mute notice) — rendered distinctly, never bubbled.
+func publish_chat_deliver(channel: int, sender_guid: int, sender_name: String, text: String) -> void:
+	var entry := _chat_deliver_entry(channel, sender_guid, sender_name, text)
+	_append_chat(entry)
+	chat_line_added.emit(entry)
+	if not bool(entry["is_system"]) and (channel == CHAT_SAY or channel == CHAT_YELL):
+		chat_bubble_requested.emit(sender_guid, sender_name, text, channel)
+
+
+## Publish a CHAT_REJECTED (decode_chat_frame kind "chat_rejected"). Surfaces the typed reason
+## as a SYSTEM scrollback line (e.g. "Brynn is not online.") so the player sees why the send
+## failed. Never bubbles.
+func publish_chat_rejected(channel: int, reason: int, target: String) -> void:
+	var entry := {
+		"kind": "reject",
+		"channel": channel,
+		"sender_guid": 0,
+		"sender_name": "System",
+		"text": _chat_reject_text(reason, target),
+		"is_system": true,
+		"reason": reason,
+	}
+	_append_chat(entry)
+	chat_line_added.emit(entry)
+
+# --- Request API (view -> intent signal; the world scene sends the frame) -----
+
+## The panel submitted a line. Emits the CHAT_MESSAGE intent (the world scene builds + sends
+## the frame). `target` matters only for WHISPER. No-op for empty/whitespace text (the server
+## would reject it anyway; the panel also guards).
+func request_chat_send(channel: int, target: String, text: String) -> void:
+	if text.strip_edges().is_empty():
+		return
+	chat_send_requested.emit(channel, target, text)
+
+# --- Read API (bus -> view-models; returns copies) ---------------------------
+
+## The scrollback history (copies), oldest first. A panel bound mid-session seeds from this.
+func chat_history() -> Array:
+	return _chat_history.duplicate(true)
+
+
+## The stable lowercase name for a ChatChannel ordinal ("say"/"yell"/"whisper"/"zone").
+## Unknown ordinals name as "say" (the default channel).
+static func chat_channel_name(channel: int) -> String:
+	match channel:
+		CHAT_YELL: return "yell"
+		CHAT_WHISPER: return "whisper"
+		CHAT_ZONE: return "zone"
+		_: return "say"
+
+# --- Chat internals ----------------------------------------------------------
+
+# Build the canonical scrollback entry for a delivered line. sender_guid 0 = SYSTEM.
+func _chat_deliver_entry(channel: int, sender_guid: int, sender_name: String, text: String) -> Dictionary:
+	return {
+		"kind": "deliver",
+		"channel": channel,
+		"sender_guid": sender_guid,
+		"sender_name": sender_name,
+		"text": text,
+		"is_system": sender_guid == 0,
+		"reason": -1,
+	}
+
+
+# Append an entry to the rolling scrollback, trimming to CHAT_HISTORY_MAX (drop-oldest).
+func _append_chat(entry: Dictionary) -> void:
+	_chat_history.append(entry)
+	if _chat_history.size() > CHAT_HISTORY_MAX:
+		_chat_history = _chat_history.slice(_chat_history.size() - CHAT_HISTORY_MAX)
+
+
+# Human-readable text for a typed CHAT_REJECTED reason (mirrors the server's validation).
+static func _chat_reject_text(reason: int, target: String) -> String:
+	match reason:
+		CHAT_REJECT_NOT_IN_WORLD: return "You cannot chat right now."
+		CHAT_REJECT_RATE_LIMITED: return "You are sending messages too quickly."
+		CHAT_REJECT_EMPTY: return "You cannot send an empty message."
+		CHAT_REJECT_TOO_LONG: return "Your message is too long."
+		CHAT_REJECT_NO_TARGET: return "Whisper to whom? (no target given)"
+		CHAT_REJECT_TARGET_OFFLINE:
+			return ("%s is not online." % target) if not target.is_empty() else "That player is not online."
+		_: return "Your message could not be delivered."

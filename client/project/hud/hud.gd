@@ -29,6 +29,8 @@ const LootWindow := preload("res://hud/loot_window.gd")
 const VendorWindow := preload("res://hud/vendor_window.gd")
 const TrainerWindow := preload("res://hud/trainer_window.gd")
 const BagsWindow := preload("res://hud/bags_window.gd")
+# Chat panel (SOC-01, #434) — same MVVM binding as the other views.
+const ChatPanel := preload("res://hud/chat_panel.gd")
 
 var _bus: MeridianEventBus
 var _player_frame: MeridianUnitFrame
@@ -42,6 +44,7 @@ var _loot: MeridianLootWindow
 var _vendor: MeridianVendorWindow
 var _trainer: MeridianTrainerWindow
 var _bags: MeridianBagsWindow
+var _chat: MeridianChatPanel
 
 
 func _ready() -> void:
@@ -73,6 +76,9 @@ func setup(bus: MeridianEventBus) -> void:
 		_trainer.setup(bus)
 	if _bags != null:
 		_bags.setup(bus)
+	# Chat panel subscribes to the SAME bus (SOC-01, #434).
+	if _chat != null:
+		_chat.setup(bus)
 	# Action bar + cast bar subscribe to the SAME bus (CMB-01, D-10, #432).
 	if _action_bar != null:
 		_action_bar.setup(bus)
@@ -100,6 +106,18 @@ func toggle_quest_log() -> void:
 func toggle_bags() -> void:
 	if _bags != null:
 		_bags.toggle()
+
+
+# Focus the chat input so the player can type (bound to Enter by the world scene, SOC-01 #434).
+func focus_chat_input() -> void:
+	if _chat != null:
+		_chat.focus_input()
+
+
+# True while the chat text input has keyboard focus — the world scene checks this to suppress
+# gameplay keybinds (WASD / number keys / TAB) while the player is typing (SOC-01 #434).
+func is_chat_input_focused() -> bool:
+	return _chat != null and _chat.is_input_focused()
 
 
 func _build() -> void:
@@ -188,6 +206,15 @@ func _build() -> void:
 	_cast_bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	add_child(_cast_bar)
 
+	# Chat panel: bottom-left, always visible (SOC-01, #434). Anchored to the bottom-left
+	# corner and grown upward so the scrollback + input row sit above the screen bottom.
+	_chat = ChatPanel.new()
+	_chat.name = "ChatPanel"
+	_chat.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_chat.position = Vector2(12.0, -224.0)
+	_chat.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	add_child(_chat)
+
 	# If setup() ran before _build() (node added after bind), paint + bind now.
 	if _bus != null:
 		_gossip.setup(_bus)
@@ -197,6 +224,7 @@ func _build() -> void:
 		_vendor.setup(_bus)
 		_trainer.setup(_bus)
 		_bags.setup(_bus)
+		_chat.setup(_bus)
 		_action_bar.setup(_bus)
 		_cast_bar.setup(_bus)
 		_refresh_player()
