@@ -47,6 +47,13 @@ inline constexpr std::uint16_t kOpEntityEnter    = 0x2001;  // S→C
 inline constexpr std::uint16_t kOpEntityUpdate   = 0x2002;  // S→C
 inline constexpr std::uint16_t kOpEntityLeave    = 0x2003;  // S→C
 inline constexpr std::uint16_t kOpVitalsUpdate   = 0x2004;  // S→C  HUD delta (#430/#431)
+// Combat — ability use + GCD/cast (M1 — CMB-01, D-10, #432). CAST_REQUEST is the C→S
+// ability use; the server ACCEPTS (CAST_START) or REJECTS (CAST_FAILED, carrying the
+// GCD-resync remainder), and the attack-table resolution arrives as CAST_RESULT.
+inline constexpr std::uint16_t kOpCastRequest    = 0x3001;  // C→S
+inline constexpr std::uint16_t kOpCastStart      = 0x3002;  // S→C  ACCEPT (cast_ms; 0=instant)
+inline constexpr std::uint16_t kOpCastFailed     = 0x3003;  // S→C  REJECT (reason + gcd_remaining_ms)
+inline constexpr std::uint16_t kOpCastResult     = 0x3004;  // S→C  attack-table resolution
 // Quest state (M1 — QST-01, #371/#433). QUEST_LOG is bidirectional: C→S it REQUESTS
 // the log (an empty QuestLog table body); S→C it CARRIES the log snapshot. The others
 // are one C→S request paired with a typed S→C result; QUEST_PROGRESS is S→C only.

@@ -164,6 +164,69 @@ Bytes encode_entity_leave(const EntityLeave& in);
 std::optional<EntityLeave> decode_entity_leave(const Bytes& buf);
 
 // ---------------------------------------------------------------------------
+// IF-2 (world.fbs) — COMBAT: ability use + GCD/cast prediction (M1 CMB-01, D-10,
+// #432). The optimistic-GCD path (server SAD §3.3, client SAD §2.2/§3c): the client
+// sends CAST_REQUEST on an ability press and predicts the GCD/cast start locally; the
+// server ACCEPTS (CastStart) or REJECTS (CastFailed) within one RTT so the client
+// confirms or ROLLS BACK (resyncing its GCD clock from CastFailed.gcd_remaining_ms).
+// The attack-table roll (hit/crit/…) and damage/heal are SERVER-AUTHORITATIVE and
+// NEVER predicted (Principle 1) — they arrive as CastResult.
+//
+// Enum fields ride as u16 ordinals (world.fbs CastFailReason / AttackOutcome) so this
+// POD API carries no generated-enum dependency, exactly like the status fields above.
+// ---------------------------------------------------------------------------
+
+// CAST_REQUEST (C→S): use `ability_id` against `target_guid` (0 = self / no target;
+// the server resolves the actual target legality). `client_time_ms` is ClockSync-keyed.
+struct CastRequest {
+    std::uint32_t ability_id = 0;
+    std::uint64_t target_guid = 0;
+    std::uint64_t client_time_ms = 0;
+};
+Bytes encode_cast_request(const CastRequest& in);
+std::optional<CastRequest> decode_cast_request(const Bytes& buf);  // test/mock symmetry
+
+// CAST_START (S→C): ACCEPT — the server validated the use and started the GCD / cast.
+// `cast_ms` = 0 is an instant ability (a CastResult follows immediately); > 0 is a
+// cast-time ability (the CastResult follows on cast completion).
+struct CastStart {
+    std::uint32_t ability_id = 0;
+    std::uint32_t cast_ms = 0;
+    std::uint64_t server_time_ms = 0;
+};
+Bytes encode_cast_start(const CastStart& in);  // test/mock symmetry (client decodes)
+std::optional<CastStart> decode_cast_start(const Bytes& buf);
+
+// CAST_FAILED (S→C): REJECT — the server refused the use. `reason` is world.fbs
+// CastFailReason (0=UNKNOWN_ABILITY … 3=ON_GCD … 6=NO_TARGET … 9=OUT_OF_RANGE …
+// 11=INTERRUPTED). `gcd_remaining_ms` is the authoritative GCD remainder the client
+// resyncs its optimistic clock to (0 = no GCD → a clean rollback of a bad prediction).
+struct CastFailed {
+    std::uint32_t ability_id = 0;
+    std::uint16_t reason = 0;  // CastFailReason
+    std::uint32_t gcd_remaining_ms = 0;
+};
+Bytes encode_cast_failed(const CastFailed& in);  // test/mock symmetry (client decodes)
+std::optional<CastFailed> decode_cast_failed(const Bytes& buf);
+
+// CAST_RESULT (S→C): the server-authoritative resolution — the attack-table outcome
+// and the damage/heal actually applied. `outcome` is world.fbs AttackOutcome
+// (0=MISS,1=DODGE,2=PARRY,3=HIT,4=CRIT). NEVER predicted by the client.
+struct CastResult {
+    std::uint32_t ability_id = 0;
+    std::uint64_t caster_guid = 0;
+    std::uint64_t target_guid = 0;
+    std::uint16_t outcome = 3;  // AttackOutcome (default HIT)
+    std::uint32_t amount = 0;   // damage or heal applied (0 on miss/dodge/parry)
+    bool is_heal = false;
+    std::uint32_t target_health = 0;  // target health AFTER application
+    bool target_dead = false;
+    std::uint64_t server_time_ms = 0;
+};
+Bytes encode_cast_result(const CastResult& in);  // test/mock symmetry (client decodes)
+std::optional<CastResult> decode_cast_result(const Bytes& buf);
+
+// ---------------------------------------------------------------------------
 // IF-2 (world.fbs) — character management (D-35 / #286) + server-authoritative
 // enter-world (D-35 / #341), over the AUTHENTICATED world session (post-HandshakeOk).
 // The client lists/creates/deletes its OWN account's characters (worldd scopes

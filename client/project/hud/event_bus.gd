@@ -808,3 +808,216 @@ func _apply_balance(balance: int) -> void:
 	_copper = balance
 	_copper_known = true
 	currency_changed.emit(_copper, true)
+
+
+# =============================================================================
+# COMBAT: ability set + ability cast + GCD/cast sweep (CMB-01/UI-01, D-10, #432)
+# =============================================================================
+# The SAME MVVM seam as the registries above, applied to combat's D-10 optimistic-GCD
+# path (server SAD §3.3, client SAD §2.2/§3c). The action bar / cast bar SUBSCRIBE to
+# the signals + READ through the getters; a slot press is an INTENT (request_cast) the
+# world scene turns into a CAST_REQUEST frame. The net layer PUBLISHES the server's typed
+# replies (CAST_START accept / CAST_FAILED reject / CAST_RESULT resolution).
+#
+# SERVER IS LAW (Principle 1) with ONE deliberate, bounded prediction: the client starts
+# the GCD OPTIMISTICALLY on the press (so the sweep feels instant) and ROLLS IT BACK
+# cleanly if the server rejects — resyncing its GCD clock from CAST_FAILED.gcd_remaining_ms.
+# It NEVER predicts the cast's OUTCOME (hit/crit/damage/heal) — that arrives as CAST_RESULT.
+#
+# ⛔ WIRE-CONTRACT GAP this story surfaced (reported like #439 self-vitals / #443
+# quest-reward-preview, NOT faked): the client is NEVER SENT the character's KNOWN
+# ABILITY SET. world.fbs teaches abilities server-side (TRAINER_LEARN_RESULT) and the
+# trainer window shows a per-NPC TRAINER_LIST, but there is NO S→C "your abilities" push
+# at enter-world (no spellbook/known-ability opcode). So the action bar is driven by a
+# documented GREYBOX ability set (hud/ability_set.gd), seeded via seed_abilities(); the
+# CAST_REQUEST / GCD / cast-bar wire path below is fully real and needs no change when a
+# KNOWN_ABILITIES contract lands — only the seed source swaps.
+#
+# TIMING: the bus stores GCD/cast as a start stamp + duration in the caller's monotonic
+# clock domain (Godot Time.get_ticks_msec(), passed in as `now_ms`). The bus itself does
+# NO time math beyond max(0, start+duration-now) on demand — so it stays 100% event-driven
+# and headlessly unit-testable (combat_verify.gd passes explicit timestamps). The VIEW owns
+# the per-frame sweep animation (and enables _process only while a GCD/cast is live).
+
+## The greybox predicted GCD length (ms). The server does NOT send the GCD duration on
+## CAST_START (only cast_ms), so the optimistic prediction assumes this; CAST_FAILED's
+## gcd_remaining_ms is the authoritative correction the bus snaps the clock to.
+const GCD_MS := 1500
+
+# world.fbs CastFailReason ordinals (kept here so views read them by name).
+const CAST_FAIL_UNKNOWN_ABILITY := 0
+const CAST_FAIL_NOT_IN_WORLD := 1
+const CAST_FAIL_CASTER_DEAD := 2
+const CAST_FAIL_ON_GCD := 3
+const CAST_FAIL_ALREADY_CASTING := 4
+const CAST_FAIL_INSUFFICIENT_RESOURCE := 5
+const CAST_FAIL_NO_TARGET := 6
+const CAST_FAIL_TARGET_DEAD := 7
+const CAST_FAIL_WRONG_FACTION := 8
+const CAST_FAIL_OUT_OF_RANGE := 9
+const CAST_FAIL_NO_LINE_OF_SIGHT := 10
+const CAST_FAIL_INTERRUPTED := 11
+
+# world.fbs AttackOutcome ordinals (CAST_RESULT).
+const OUTCOME_MISS := 0
+const OUTCOME_DODGE := 1
+const OUTCOME_PARRY := 2
+const OUTCOME_HIT := 3
+const OUTCOME_CRIT := 4
+
+# --- View subscription signals (bus -> action bar / cast bar) ----------------
+
+## The known-ability set changed (seeded from the greybox set — see the gap note). The
+## action bar (re)builds its slots. `abilities` is an Array of ability Dictionaries
+## {ability_id:int, name:String, icon_id:int, hotkey:int}.
+signal ability_set_changed(abilities: Array)
+
+## The GCD sweep changed. `start_ms`/`duration_ms` are in the Time.get_ticks_msec() domain
+## the caller passed in; `duration_ms` == 0 means the GCD was cleared (a clean rollback).
+## The action bar animates every slot's sweep from this window.
+signal gcd_changed(start_ms: int, duration_ms: int)
+
+## The cast bar changed. `active` false clears it (cast completed via CAST_RESULT, or was
+## rejected/interrupted via CAST_FAILED). `duration_ms` is the server's cast_ms.
+signal cast_bar_changed(active: bool, ability_id: int, start_ms: int, duration_ms: int)
+
+## A CAST_FAILED reason arrived (world.fbs CastFailReason). The action/cast bar flashes a
+## brief typed error; the GCD rollback is already applied via gcd_changed.
+signal cast_failed_reason(ability_id: int, reason: int)
+
+## A CAST_RESULT (server-authoritative attack-table resolution). Surfaced for a floating-
+## text / nameplate hook (combat-presentation epic #23); the action bar only clears the
+## cast bar on it. `result` carries {ability_id, caster_guid, target_guid, outcome, amount,
+## is_heal, target_health, target_dead, server_time_ms}.
+signal cast_result_received(result: Dictionary)
+
+# --- Intent signal (view -> the world scene, which owns the net thread) -------
+
+## A slot was pressed: send CAST_REQUEST for `ability_id` against `target_guid` (0 = self).
+## `client_time_ms` is the press stamp (ClockSync-keyed on the wire).
+signal cast_requested(ability_id: int, target_guid: int, client_time_ms: int)
+
+# --- Combat registry state ---------------------------------------------------
+var _abilities: Array = []       # greybox known-ability set (see the gap note)
+var _gcd_start_ms: int = 0       # optimistic GCD window start (caller's clock domain)
+var _gcd_duration_ms: int = 0    # GCD window length (0 = no GCD running)
+var _cast_active: bool = false   # a cast-time ability is in progress (cast bar visible)
+var _cast_ability_id: int = 0
+var _cast_start_ms: int = 0
+var _cast_duration_ms: int = 0
+var _pending_ability: int = 0    # ability whose CAST_REQUEST is in flight (0 = none)
+
+# --- Seed API (greybox ability set -> bus; no wire contract, see the gap note) -
+
+## Seed the known-ability set the action bar renders. Replaces the whole set + emits. The
+## world scene calls this once at enter-world from the documented greybox set; when a
+## KNOWN_ABILITIES wire contract lands this is the ONLY call site that changes.
+func seed_abilities(abilities: Array) -> void:
+	_abilities = abilities.duplicate(true)
+	ability_set_changed.emit(self.abilities())
+
+# --- Request API (view -> intent signal; the world scene sends the frame) -----
+
+## A slot press. Predicts the GCD optimistically and emits the CAST_REQUEST intent, UNLESS
+## a predicted GCD is still running (the press is dropped, exactly as the server would
+## reject ON_GCD — so we never spam the wire). `now_ms` is Time.get_ticks_msec(). Returns
+## true iff the cast was issued (the caller may flash the slot). Target is the current
+## target (0 = self); the server resolves the real target legality (Principle 1).
+func request_cast(ability_id: int, now_ms: int) -> bool:
+	if gcd_remaining_ms(now_ms) > 0:
+		return false  # predicted GCD busy — drop the press (no wire spam)
+	# Optimistic GCD: start the sweep on the press so it feels instant (D-10).
+	_gcd_start_ms = now_ms
+	_gcd_duration_ms = GCD_MS
+	_pending_ability = ability_id
+	gcd_changed.emit(_gcd_start_ms, _gcd_duration_ms)
+	cast_requested.emit(ability_id, _target_guid, now_ms)
+	return true
+
+# --- Publish API (the net layer -> bus) --------------------------------------
+
+## Publish a CAST_START (ACCEPT). Confirms the optimistic GCD and, for a cast-time ability
+## (cast_ms > 0), starts the cast bar. An instant ability (cast_ms == 0) has no cast bar —
+## its CAST_RESULT follows immediately. `now_ms` is Time.get_ticks_msec().
+func publish_cast_start(ability_id: int, cast_ms: int, _server_time_ms: int, now_ms: int) -> void:
+	_pending_ability = 0
+	if cast_ms > 0:
+		_cast_active = true
+		_cast_ability_id = ability_id
+		_cast_start_ms = now_ms
+		_cast_duration_ms = cast_ms
+		cast_bar_changed.emit(true, ability_id, now_ms, cast_ms)
+
+## Publish a CAST_FAILED (REJECT). Rolls the optimistic GCD back / resyncs it from the
+## authoritative `gcd_remaining_ms` (0 = no GCD → clean rollback; > 0 → snap the clock to
+## the server's remaining GCD), clears any in-progress cast (INTERRUPTED etc.), and surfaces
+## the typed reason. `now_ms` is Time.get_ticks_msec().
+func publish_cast_failed(ability_id: int, reason: int, gcd_remaining_ms: int, now_ms: int) -> void:
+	_pending_ability = 0
+	if gcd_remaining_ms > 0:
+		_gcd_start_ms = now_ms
+		_gcd_duration_ms = gcd_remaining_ms
+	else:
+		_gcd_start_ms = 0
+		_gcd_duration_ms = 0
+	gcd_changed.emit(_gcd_start_ms, _gcd_duration_ms)
+	if _cast_active:
+		_clear_cast()
+	cast_failed_reason.emit(ability_id, reason)
+
+## Publish a CAST_RESULT (server-authoritative resolution). Clears the cast bar if this
+## resolves the active cast, then re-emits the result for the combat-presentation hook
+## (#23). The GCD is untouched (it continues to sweep to its predicted end). `now_ms`
+## is accepted for signature symmetry (the result carries its own server_time_ms).
+func publish_cast_result(result: Dictionary, _now_ms: int = 0) -> void:
+	if _cast_active and _cast_ability_id == int(result.get("ability_id", -1)):
+		_clear_cast()
+	cast_result_received.emit(result.duplicate(true))
+
+# --- Read API (bus -> view-models; all return copies / scalars) --------------
+
+## The known-ability set (copies), in slot order.
+func abilities() -> Array:
+	return _abilities.duplicate(true)
+
+## The GCD window start stamp (caller's clock domain; 0 = no GCD).
+func gcd_start_ms() -> int:
+	return _gcd_start_ms
+
+## The GCD window length in ms (0 = no GCD running).
+func gcd_duration_ms() -> int:
+	return _gcd_duration_ms
+
+## Remaining GCD in ms at `now_ms` (0 = ready). Computed on demand so the bus needs no
+## clock of its own — the view calls this each animation frame with Time.get_ticks_msec().
+func gcd_remaining_ms(now_ms: int) -> int:
+	if _gcd_duration_ms <= 0:
+		return 0
+	return maxi(0, _gcd_start_ms + _gcd_duration_ms - now_ms)
+
+## True while a cast-time ability is in progress (the cast bar is visible).
+func cast_active() -> bool:
+	return _cast_active
+
+## The casting ability id (0 = none).
+func cast_ability_id() -> int:
+	return _cast_ability_id
+
+## The cast window start stamp (caller's clock domain).
+func cast_start_ms() -> int:
+	return _cast_start_ms
+
+## The cast window length in ms (the server's cast_ms).
+func cast_duration_ms() -> int:
+	return _cast_duration_ms
+
+# --- Combat internals --------------------------------------------------------
+
+# Clear the active cast + emit the cast-bar-hidden signal. Idempotent-ish (callers guard).
+func _clear_cast() -> void:
+	_cast_active = false
+	var ability := _cast_ability_id
+	_cast_ability_id = 0
+	_cast_start_ms = 0
+	_cast_duration_ms = 0
+	cast_bar_changed.emit(false, ability, 0, 0)

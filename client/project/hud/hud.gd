@@ -17,6 +17,9 @@ class_name MeridianHud
 extends CanvasLayer
 
 const UnitFrame := preload("res://hud/unit_frame.gd")
+# Action bar + cast bar (CMB-01, D-10, #432) — same MVVM binding as the unit frames.
+const ActionBar := preload("res://hud/action_bar.gd")
+const CastBar := preload("res://hud/cast_bar.gd")
 # Quest/gossip views (QST-01, #433) — same MVVM binding as the unit frames.
 const GossipWindow := preload("res://hud/gossip_window.gd")
 const QuestLogWindow := preload("res://hud/quest_log_window.gd")
@@ -30,6 +33,8 @@ const BagsWindow := preload("res://hud/bags_window.gd")
 var _bus: MeridianEventBus
 var _player_frame: MeridianUnitFrame
 var _target_frame: MeridianUnitFrame
+var _action_bar: MeridianActionBar
+var _cast_bar: MeridianCastBar
 var _gossip: MeridianGossipWindow
 var _quest_log: MeridianQuestLogWindow
 var _quest_tracker: MeridianQuestTracker
@@ -68,9 +73,21 @@ func setup(bus: MeridianEventBus) -> void:
 		_trainer.setup(bus)
 	if _bags != null:
 		_bags.setup(bus)
+	# Action bar + cast bar subscribe to the SAME bus (CMB-01, D-10, #432).
+	if _action_bar != null:
+		_action_bar.setup(bus)
+	if _cast_bar != null:
+		_cast_bar.setup(bus)
 	# Paint the initial state (the bus may already hold vitals from queued frames).
 	_refresh_player()
 	_refresh_target()
+
+
+# Fire action-bar slot `index` (0-based) — the world scene routes number keys 1..N here
+# (CMB-01, #432). No-op before the bar is built / bound.
+func press_action_slot(index: int) -> void:
+	if _action_bar != null:
+		_action_bar.press_slot(index)
 
 
 # Toggle the quest log window (bound to a HUD key by the world scene, QST-01 #433).
@@ -154,6 +171,23 @@ func _build() -> void:
 	_bags.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	add_child(_bags)
 
+	# Action bar: bottom-center, always visible (CMB-01, #432). Anchored to the bottom edge
+	# and grown upward so the row of slots sits above the screen bottom.
+	_action_bar = ActionBar.new()
+	_action_bar.name = "ActionBar"
+	_action_bar.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_action_bar.position = Vector2(-146.0, -74.0)
+	_action_bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	add_child(_action_bar)
+
+	# Cast bar: centered above the action bar, hidden until a cast-time ability starts.
+	_cast_bar = CastBar.new()
+	_cast_bar.name = "CastBar"
+	_cast_bar.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_cast_bar.position = Vector2(-130.0, -104.0)
+	_cast_bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	add_child(_cast_bar)
+
 	# If setup() ran before _build() (node added after bind), paint + bind now.
 	if _bus != null:
 		_gossip.setup(_bus)
@@ -163,6 +197,8 @@ func _build() -> void:
 		_vendor.setup(_bus)
 		_trainer.setup(_bus)
 		_bags.setup(_bus)
+		_action_bar.setup(_bus)
+		_cast_bar.setup(_bus)
 		_refresh_player()
 		_refresh_target()
 

@@ -87,6 +87,12 @@ void MeridianNetThread::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("build_movement_intent_frame", "intent"),
 	                     &MeridianNetThread::build_movement_intent_frame);
 
+	ClassDB::bind_method(
+	    D_METHOD("build_cast_request_frame", "ability_id", "target_guid", "client_time_ms"),
+	    &MeridianNetThread::build_cast_request_frame);
+	ClassDB::bind_method(D_METHOD("decode_cast_frame", "opcode", "payload"),
+	                     &MeridianNetThread::decode_cast_frame);
+
 	ClassDB::bind_method(D_METHOD("build_char_list_request_frame"),
 	                     &MeridianNetThread::build_char_list_request_frame);
 	ClassDB::bind_method(
@@ -376,6 +382,57 @@ PackedByteArray MeridianNetThread::build_movement_intent_frame(
 	net::Bytes payload = cn::codec::encode_movement_intent(mi);
 	net::Bytes frame = cn::encode_world_frame(cn::kOpMovementIntent, mi.seq, payload);
 	return to_pba(frame);
+}
+
+// ── Combat frame builder + decode (CMB-01, D-10, #432) ───────────────────────
+// The action bar builds CAST_REQUEST on a press (send_bulk); the server's ACCEPT /
+// REJECT / resolution arrive as raw `entity_frame`s decoded by decode_cast_frame.
+
+PackedByteArray MeridianNetThread::build_cast_request_frame(
+		int ability_id, int64_t target_guid, int64_t client_time_ms) const {
+	cn::codec::CastRequest req;
+	req.ability_id = static_cast<std::uint32_t>(ability_id);
+	req.target_guid = static_cast<std::uint64_t>(target_guid);
+	req.client_time_ms = static_cast<std::uint64_t>(client_time_ms);
+	net::Bytes payload = cn::codec::encode_cast_request(req);
+	return to_pba(cn::encode_world_frame(cn::kOpCastRequest, /*seq=*/1, payload));
+}
+
+Dictionary MeridianNetThread::decode_cast_frame(int opcode,
+		const PackedByteArray &payload) const {
+	Dictionary d;
+	d["kind"] = String("");
+	const net::Bytes buf = to_bytes(payload);
+
+	if (opcode == cn::kOpCastStart) {
+		auto r = cn::codec::decode_cast_start(buf);
+		if (!r) return d;
+		d["kind"] = String("cast_start");
+		d["ability_id"] = static_cast<int64_t>(r->ability_id);
+		d["cast_ms"] = static_cast<int64_t>(r->cast_ms);
+		d["server_time_ms"] = static_cast<int64_t>(r->server_time_ms);
+	} else if (opcode == cn::kOpCastFailed) {
+		auto r = cn::codec::decode_cast_failed(buf);
+		if (!r) return d;
+		d["kind"] = String("cast_failed");
+		d["ability_id"] = static_cast<int64_t>(r->ability_id);
+		d["reason"] = static_cast<int64_t>(r->reason);  // CastFailReason
+		d["gcd_remaining_ms"] = static_cast<int64_t>(r->gcd_remaining_ms);
+	} else if (opcode == cn::kOpCastResult) {
+		auto r = cn::codec::decode_cast_result(buf);
+		if (!r) return d;
+		d["kind"] = String("cast_result");
+		d["ability_id"] = static_cast<int64_t>(r->ability_id);
+		d["caster_guid"] = static_cast<int64_t>(r->caster_guid);
+		d["target_guid"] = static_cast<int64_t>(r->target_guid);
+		d["outcome"] = static_cast<int64_t>(r->outcome);  // AttackOutcome
+		d["amount"] = static_cast<int64_t>(r->amount);
+		d["is_heal"] = r->is_heal;
+		d["target_health"] = static_cast<int64_t>(r->target_health);
+		d["target_dead"] = r->target_dead;
+		d["server_time_ms"] = static_cast<int64_t>(r->server_time_ms);
+	}
+	return d;  // kind stays "" for a non-combat opcode / undecodable payload
 }
 
 // ── Character-select frame builders (D-35 / #286 / #341) ─────────────────────
