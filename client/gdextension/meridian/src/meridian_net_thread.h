@@ -111,6 +111,26 @@ public:
 	// send_movement_intent(). Returns an empty array on a malformed Dictionary.
 	godot::PackedByteArray build_movement_intent_frame(const godot::Dictionary &intent) const;
 
+	// ── Combat frame builder + decode (CMB-01, D-10, #432) ─────────────────────
+	// The action bar sends CAST_REQUEST on an ability press (target_guid = 0 means
+	// self / no target; the server resolves legality) and decodes the server's ACCEPT
+	// (CAST_START), REJECT (CAST_FAILED), and resolution (CAST_RESULT) — the SAME
+	// decode seam as decode_entity_frame / decode_econ_frame. The client predicts the
+	// optimistic GCD but NEVER the attack-table outcome (Principle 1).
+	//   cast_request → CAST_START (accept) | CAST_FAILED (reject) → CAST_RESULT (resolve)
+	godot::PackedByteArray build_cast_request_frame(int ability_id, int64_t target_guid,
+			int64_t client_time_ms) const;
+
+	// Decode a raw combat S→C frame (opcode + FlatBuffer payload, as delivered by the
+	// `entity_frame` signal) into a scene-ready Dictionary the event bus publishes to the
+	// action bar / cast bar view-models. Returns:
+	//   { "kind": "cast_start"|"cast_failed"|"cast_result"|"",   # "" if not a combat op
+	//     ...per-kind fields (see meridian_net_thread.cpp) }
+	// A non-combat opcode or an undecodable payload returns { "kind": "" }, so the scene
+	// can try the other decode seams first and fall through to this one.
+	godot::Dictionary decode_cast_frame(int opcode,
+			const godot::PackedByteArray &payload) const;
+
 	// ── Character-select frame builders (D-35 / #286 / #341) ───────────────────
 	// Each returns a ready-to-send IF-2 frame; pass to send_bulk() (char management)
 	// or send_control() (ENTER_WORLD). The server's reply is drained by pump() and

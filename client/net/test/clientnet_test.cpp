@@ -425,6 +425,101 @@ void test_vitals_codec() {
 }
 
 // ---------------------------------------------------------------------------
+// 3b. Combat codec — CastRequest / CastStart / CastFailed / CastResult (CMB-01,
+// D-10, #432). The action bar sends CastRequest on a press and decodes the server's
+// ACCEPT (CastStart) / REJECT (CastFailed, carrying the GCD-resync remainder) /
+// resolution (CastResult, the attack-table roll). Full byte round-trips + wrap under
+// the 0x300x opcodes + verify-before-GetRoot safety, mirroring test_trainer_codec.
+// ---------------------------------------------------------------------------
+void test_cast_codec() {
+    std::puts("[cast] CastRequest/Start/Failed/Result round-trip + wrap + verifier");
+
+    // CAST_REQUEST (C→S) — every field distinct so a mis-wired field is caught.
+    codec::CastRequest req;
+    req.ability_id = 301;
+    req.target_guid = 0xBEEF01ull;
+    req.client_time_ms = 1234567890ull;
+    auto req_out = codec::decode_cast_request(codec::encode_cast_request(req));
+    CHECK(req_out.has_value() && req_out->ability_id == 301 &&
+          req_out->target_guid == 0xBEEF01ull && req_out->client_time_ms == 1234567890ull);
+    {
+        Bytes frame = encode_world_frame(kOpCastRequest, 7, codec::encode_cast_request(req));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x3001 && f->opcode == kOpCastRequest);
+    }
+
+    // CAST_START (S→C) — a cast-time ability (cast_ms > 0). Instant abilities carry 0.
+    codec::CastStart start{/*ability=*/301, /*cast_ms=*/1500, /*server_time=*/999ull};
+    auto start_out = codec::decode_cast_start(codec::encode_cast_start(start));
+    CHECK(start_out.has_value() && start_out->ability_id == 301 &&
+          start_out->cast_ms == 1500 && start_out->server_time_ms == 999ull);
+    codec::CastStart instant{/*ability=*/302, /*cast_ms=*/0, /*server_time=*/1000ull};
+    auto instant_out = codec::decode_cast_start(codec::encode_cast_start(instant));
+    CHECK(instant_out.has_value() && instant_out->cast_ms == 0);
+    {
+        Bytes frame = encode_world_frame(kOpCastStart, 8, codec::encode_cast_start(start));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x3002 && f->opcode == kOpCastStart);
+    }
+
+    // CAST_FAILED (S→C) — a clean rollback (gcd_remaining_ms == 0 → no GCD) and a
+    // resync (ON_GCD=3 with a live remainder the client snaps its GCD clock to).
+    codec::CastFailed rollback{/*ability=*/301, /*reason=NO_TARGET*/ 6, /*gcd_remaining=*/0};
+    auto rb_out = codec::decode_cast_failed(codec::encode_cast_failed(rollback));
+    CHECK(rb_out.has_value() && rb_out->ability_id == 301 && rb_out->reason == 6 &&
+          rb_out->gcd_remaining_ms == 0);
+    codec::CastFailed on_gcd{/*ability=*/301, /*reason=ON_GCD*/ 3, /*gcd_remaining=*/800};
+    auto gcd_out = codec::decode_cast_failed(codec::encode_cast_failed(on_gcd));
+    CHECK(gcd_out.has_value() && gcd_out->reason == 3 && gcd_out->gcd_remaining_ms == 800);
+    {
+        Bytes frame = encode_world_frame(kOpCastFailed, 9, codec::encode_cast_failed(on_gcd));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x3003 && f->opcode == kOpCastFailed);
+    }
+
+    // CAST_RESULT (S→C) — a crit hit for 240 damage leaving the target at 60 HP alive,
+    // then a lethal hit (target_dead). Every field distinct.
+    codec::CastResult res;
+    res.ability_id = 301;
+    res.caster_guid = 0xAAull;
+    res.target_guid = 0xBEEF01ull;
+    res.outcome = 4;  // CRIT
+    res.amount = 240;
+    res.is_heal = false;
+    res.target_health = 60;
+    res.target_dead = false;
+    res.server_time_ms = 1001ull;
+    auto res_out = codec::decode_cast_result(codec::encode_cast_result(res));
+    CHECK(res_out.has_value() && res_out->ability_id == 301 && res_out->caster_guid == 0xAAull &&
+          res_out->target_guid == 0xBEEF01ull && res_out->outcome == 4 &&
+          res_out->amount == 240 && !res_out->is_heal && res_out->target_health == 60 &&
+          !res_out->target_dead && res_out->server_time_ms == 1001ull);
+    codec::CastResult heal{/*ability=*/302, /*caster=*/0xAAull, /*target=*/0xAAull,
+                           /*outcome=HIT*/ 3, /*amount=*/150, /*is_heal=*/true,
+                           /*target_health=*/900, /*target_dead=*/false, /*server_time=*/1002ull};
+    auto heal_out = codec::decode_cast_result(codec::encode_cast_result(heal));
+    CHECK(heal_out.has_value() && heal_out->is_heal && heal_out->amount == 150);
+    codec::CastResult lethal{/*ability=*/301, /*caster=*/0xAAull, /*target=*/0xBEEF01ull,
+                             /*outcome=HIT*/ 3, /*amount=*/999, /*is_heal=*/false,
+                             /*target_health=*/0, /*target_dead=*/true, /*server_time=*/1003ull};
+    auto lethal_out = codec::decode_cast_result(codec::encode_cast_result(lethal));
+    CHECK(lethal_out.has_value() && lethal_out->target_dead && lethal_out->target_health == 0);
+    {
+        Bytes frame = encode_world_frame(kOpCastResult, 10, codec::encode_cast_result(res));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x3004 && f->opcode == kOpCastResult);
+    }
+
+    // Verify-before-GetRoot: garbage + empty rejected on every S→C decoder.
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_cast_start(garbage).has_value());
+    CHECK(!codec::decode_cast_failed(garbage).has_value());
+    CHECK(!codec::decode_cast_result(garbage).has_value());
+    CHECK(!codec::decode_cast_start(Bytes{}).has_value());
+    CHECK(!codec::decode_cast_result(Bytes{}).has_value());
+}
+
+// ---------------------------------------------------------------------------
 // 4b. Character management + enter-world codec (D-35 / #286 / #341)
 //
 // The codec's public API is deliberately POD-in/POD-out and keeps the generated
@@ -654,7 +749,8 @@ void test_wire_frame_edge_cases() {
     const std::uint16_t opcodes[] = {
         0x0000, 0xFFFF, kOpWorldHello, kOpHandshakeOk, kOpDisconnect, kOpClockSync,
         kOpMovementIntent, kOpMovementState, kOpEntityEnter, kOpEntityUpdate,
-        kOpEntityLeave, kOpGossipHello, kOpGossipMenu, kOpLootRequest, kOpLootResponse,
+        kOpEntityLeave, kOpCastRequest, kOpCastStart, kOpCastFailed, kOpCastResult,
+        kOpGossipHello, kOpGossipMenu, kOpLootRequest, kOpLootResponse,
         kOpLootTake, kOpLootResult, kOpLootRelease, kOpLootClosed, kOpVendorBuyReq,
         kOpVendorBuyResult, kOpVendorSellReq, kOpVendorSellResult, kOpVendorBuybackReq,
         kOpVendorBuybackResult, kOpTrainerList, kOpTrainerLearn, kOpTrainerLearnResult};
@@ -1231,6 +1327,7 @@ int main() {
     test_codec();
     test_entity_codec();
     test_vitals_codec();
+    test_cast_codec();
     test_char_enter_codec();
     test_gossip_codec();
     test_quest_codec();

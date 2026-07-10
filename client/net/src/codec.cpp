@@ -185,6 +185,83 @@ std::optional<VitalsUpdate> decode_vitals_update(const Bytes& buf) {
     return out;
 }
 
+// ---- IF-2 COMBAT: CastRequest / CastStart / CastFailed / CastResult (CMB-01, D-10, #432) ----
+
+Bytes encode_cast_request(const CastRequest& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateCastRequest(b, in.ability_id, in.target_guid, in.client_time_ms));
+    return to_bytes(b);
+}
+
+std::optional<CastRequest> decode_cast_request(const Bytes& buf) {
+    const mn::CastRequest* t = verify_and_get<mn::CastRequest>(buf);
+    if (t == nullptr) return std::nullopt;
+    CastRequest out;
+    out.ability_id = t->ability_id();
+    out.target_guid = t->target_guid();
+    out.client_time_ms = t->client_time_ms();
+    return out;
+}
+
+Bytes encode_cast_start(const CastStart& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateCastStart(b, in.ability_id, in.cast_ms, in.server_time_ms));
+    return to_bytes(b);
+}
+
+std::optional<CastStart> decode_cast_start(const Bytes& buf) {
+    const mn::CastStart* t = verify_and_get<mn::CastStart>(buf);
+    if (t == nullptr) return std::nullopt;
+    CastStart out;
+    out.ability_id = t->ability_id();
+    out.cast_ms = t->cast_ms();
+    out.server_time_ms = t->server_time_ms();
+    return out;
+}
+
+Bytes encode_cast_failed(const CastFailed& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateCastFailed(b, in.ability_id,
+                                  static_cast<mn::CastFailReason>(in.reason),
+                                  in.gcd_remaining_ms));
+    return to_bytes(b);
+}
+
+std::optional<CastFailed> decode_cast_failed(const Bytes& buf) {
+    const mn::CastFailed* t = verify_and_get<mn::CastFailed>(buf);
+    if (t == nullptr) return std::nullopt;
+    CastFailed out;
+    out.ability_id = t->ability_id();
+    out.reason = static_cast<std::uint16_t>(t->reason());
+    out.gcd_remaining_ms = t->gcd_remaining_ms();
+    return out;
+}
+
+Bytes encode_cast_result(const CastResult& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateCastResult(b, in.ability_id, in.caster_guid, in.target_guid,
+                                  static_cast<mn::AttackOutcome>(in.outcome), in.amount,
+                                  in.is_heal, in.target_health, in.target_dead,
+                                  in.server_time_ms));
+    return to_bytes(b);
+}
+
+std::optional<CastResult> decode_cast_result(const Bytes& buf) {
+    const mn::CastResult* t = verify_and_get<mn::CastResult>(buf);
+    if (t == nullptr) return std::nullopt;
+    CastResult out;
+    out.ability_id = t->ability_id();
+    out.caster_guid = t->caster_guid();
+    out.target_guid = t->target_guid();
+    out.outcome = static_cast<std::uint16_t>(t->outcome());
+    out.amount = t->amount();
+    out.is_heal = t->is_heal();
+    out.target_health = t->target_health();
+    out.target_dead = t->target_dead();
+    out.server_time_ms = t->server_time_ms();
+    return out;
+}
+
 // ---- IF-2 EntityUpdate (#87 AoI relay) -------------------------------------
 
 Bytes encode_entity_update(const EntityUpdate& in) {

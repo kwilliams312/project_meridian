@@ -53,6 +53,7 @@ const PlayerClassColors := preload("res://scenes/world/player_class_colors.gd")
 # unit event into it; the HUD subscribes to the bus and never touches the net thread.
 const MeridianEventBusScript := preload("res://hud/event_bus.gd")
 const MeridianHudScript := preload("res://hud/hud.gd")
+const MeridianAbilitySetScript := preload("res://hud/ability_set.gd")
 
 var _session: Dictionary = {}
 var _character: Dictionary = {}
@@ -159,6 +160,8 @@ func _ready() -> void:
 	_bus.vendor_sell_requested.connect(_on_vendor_sell_requested)
 	_bus.vendor_buyback_requested.connect(_on_vendor_buyback_requested)
 	_bus.trainer_learn_requested.connect(_on_trainer_learn_requested)
+	# Combat intent (CMB-01, D-10, #432): a slot press → CAST_REQUEST frame.
+	_bus.cast_requested.connect(_on_cast_requested)
 
 	_interp = MeridianRemoteInterpolator.new()
 	_mover = MeridianMovementController.new()
@@ -369,6 +372,12 @@ func _on_movement_state(state: Dictionary) -> void:
 			_bus.seed_identity(_my_guid, String(_character.get("name", "")),
 				int(_character.get("level", 0)), int(_character.get("class", 0)))
 			_bus.set_local_player(_my_guid)
+			# CMB-01 (#432): seed the action bar's known-ability set. The wire has NO
+			# KNOWN_ABILITIES push (contract gap — see hud/ability_set.gd), so this comes
+			# from the documented greybox set until that contract lands. Idempotent-safe:
+			# only seed once (the first time we learn our guid).
+			if _bus.abilities().is_empty():
+				_bus.seed_abilities(MeridianAbilitySetScript.greybox_abilities())
 	_last_server_tick = int(state.get("server_time_ms", _last_server_tick))
 	if _mover != null:
 		# Wire (Z-UP) -> Godot (Y-UP): y = height (wire z), z = ground (wire y).
@@ -568,6 +577,12 @@ func _input(event: InputEvent) -> void:
 			# dev default (MERIDIAN_LOOT_CORPSE) so the flow is drivable in the greybox client.
 			_open_loot_on_current_corpse()
 			get_viewport().set_input_as_handled()
+		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9:
+			# CMB-01 (#432): action-bar keybinds. Slot index is the number key minus one;
+			# the HUD drops an out-of-range index. A press → optimistic GCD + CAST_REQUEST.
+			if _hud != null:
+				_hud.press_action_slot(code - KEY_1)
+			get_viewport().set_input_as_handled()
 		KEY_ESCAPE:
 			if _bus != null:
 				_bus.close_gossip()  # dismiss the gossip window
@@ -660,10 +675,47 @@ func _route_econ_frame(opcode: int, payload: PackedByteArray) -> void:
 		"trainer_learn_result":
 			_bus.publish_trainer_learn_result(e)
 		_:
-			pass  # not a loot/vendor/trainer opcode — ignore (ClockSync etc.)
+			# Not a loot/vendor/trainer opcode — try the combat decode seam (CMB-01, #432).
+			_route_cast_frame(opcode, payload)
+
+
+# Decode a raw combat S→C frame (CAST_START/FAILED/RESULT) and publish it to the bus. The
+# bus applies the D-10 optimistic-GCD confirm/rollback + drives the cast bar (CMB-01, #432).
+func _route_cast_frame(opcode: int, payload: PackedByteArray) -> void:
+	if _net == null or _bus == null:
+		return
+	var c: Dictionary = _net.decode_cast_frame(opcode, payload)
+	var now := Time.get_ticks_msec()
+	match String(c.get("kind", "")):
+		"cast_start":
+			_bus.publish_cast_start(int(c.get("ability_id", 0)), int(c.get("cast_ms", 0)),
+				int(c.get("server_time_ms", 0)), now)
+		"cast_failed":
+			_bus.publish_cast_failed(int(c.get("ability_id", 0)), int(c.get("reason", 0)),
+				int(c.get("gcd_remaining_ms", 0)), now)
+			print("[world] CAST_FAILED ability=%d reason=%d gcd_rem=%d" % [
+				int(c.get("ability_id", 0)), int(c.get("reason", 0)),
+				int(c.get("gcd_remaining_ms", 0))])
+		"cast_result":
+			_bus.publish_cast_result(c, now)
+		_:
+			pass  # not a combat opcode — ignore (ClockSync etc.)
 
 
 # --- Bus intent handlers (send the matching outbound frame) -------------------
+
+# Combat (CMB-01, D-10, #432): a slot press → CAST_REQUEST. `client_time_ms` is the press
+# stamp the bus captured (Time.get_ticks_msec()); it rides the frame ClockSync-keyed. The
+# server ACCEPTS (CAST_START) / REJECTS (CAST_FAILED) / RESOLVES (CAST_RESULT); those come
+# back through `entity_frame` → _route_cast_frame → the bus (never predicted here).
+func _on_cast_requested(ability_id: int, target_guid: int, client_time_ms: int) -> void:
+	if _net == null:
+		return
+	var frame: PackedByteArray = _net.build_cast_request_frame(ability_id, target_guid, client_time_ms)
+	if frame.size() > 0:
+		_net.send_bulk(frame)
+	print("[world] CAST_REQUEST -> ability=%d target=%d" % [ability_id, target_guid])
+
 
 func _on_gossip_hello_requested(npc_guid: int) -> void:
 	if _net == null:
