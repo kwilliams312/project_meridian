@@ -48,6 +48,9 @@ const LOCAL_DEMO_SCENE: String = "res://scenes/world/camera_demo.tscn"
 @onready var _name_edit: LineEdit = %NameEdit
 @onready var _race_option: OptionButton = %RaceOption
 @onready var _class_option: OptionButton = %ClassOption
+@onready var _hair_option: OptionButton = %HairOption
+@onready var _face_option: OptionButton = %FaceOption
+@onready var _skin_option: OptionButton = %SkinOption
 @onready var _create_button: Button = %CreateButton
 @onready var _delete_button: Button = %DeleteButton
 @onready var _enter_button: Button = %EnterWorldButton
@@ -58,6 +61,7 @@ var _store: CharacterStore
 var _account: String = ""
 var _session: Dictionary = {}
 var _pending_status: String = ""            # set by configure(), shown once in _ready
+var _preview_body: MeshInstance3D = null    # shared placeholder mesh (skin tint applies here, #435)
 
 # --- Server-authoritative character CRUD over the net thread (#279 / D-35) -----
 # When there is a live session (grant + WorldHello frame + worldd address), this
@@ -134,6 +138,8 @@ func _ready() -> void:
 	_enter_button.pressed.connect(_on_enter_pressed)
 	_char_list.item_selected.connect(_on_char_selected)
 	_name_edit.text_submitted.connect(func(_t: String) -> void: _on_create_pressed())
+	# Skin choice tints the shared preview so the appearance pick is visible (#435).
+	_skin_option.item_selected.connect(func(_i: int) -> void: _apply_preview_skin())
 
 	_refresh_list()
 	# A pending status (e.g. a world connect-failure the player was bounced back with,
@@ -190,8 +196,9 @@ func _process(_delta: float) -> void:
 		_net.pump()
 
 
-# Fill the race + class pickers from the M0-frozen roster. Each item carries its roster id
-# so create() reads ids, never list indices.
+# Fill the race + class + appearance pickers. Race/class come from the M0-frozen roster;
+# hair/face/skin from the M1 appearance placeholder set (MeridianAppearance — see the gap
+# note there). Each item carries its id so create() reads ids, never list indices.
 func _populate_pickers() -> void:
 	_race_option.clear()
 	for r in MeridianRoster.RACES:
@@ -199,9 +206,33 @@ func _populate_pickers() -> void:
 	_class_option.clear()
 	for c in MeridianRoster.CLASSES:
 		_class_option.add_item(String(c["name"]), int(c["id"]))
-	# Default to the M1-playable pair (Ardent / Vanguard).
+	# Appearance set (#435): hair / face / skin preset pickers.
+	_hair_option.clear()
+	for h in MeridianAppearance.HAIR:
+		_hair_option.add_item(String(h["name"]), int(h["id"]))
+	_face_option.clear()
+	for f in MeridianAppearance.FACE:
+		_face_option.add_item(String(f["name"]), int(f["id"]))
+	_skin_option.clear()
+	for s in MeridianAppearance.SKIN:
+		_skin_option.add_item(String(s["name"]), int(s["id"]))
+	# Default to the M1-playable pair (Ardent / Vanguard) + the first appearance preset.
 	_select_option_by_id(_race_option, MeridianRoster.DEFAULT_RACE_ID)
 	_select_option_by_id(_class_option, MeridianRoster.DEFAULT_CLASS_ID)
+	_select_option_by_id(_hair_option, MeridianAppearance.DEFAULT_HAIR_ID)
+	_select_option_by_id(_face_option, MeridianAppearance.DEFAULT_FACE_ID)
+	_select_option_by_id(_skin_option, MeridianAppearance.DEFAULT_SKIN_ID)
+
+
+# The appearance record the create form currently shows: {version, hair, face, skin}.
+# Ids come straight off the pickers (each item id IS the preset id).
+func _selected_appearance() -> Dictionary:
+	return {
+		"version": MeridianAppearance.VERSION,
+		"hair": _hair_option.get_selected_id(),
+		"face": _face_option.get_selected_id(),
+		"skin": _skin_option.get_selected_id(),
+	}
 
 
 func _select_option_by_id(option: OptionButton, id: int) -> void:
@@ -264,15 +295,18 @@ func _on_create_pressed() -> void:
 		if name.is_empty():
 			_set_status("Enter a name first.")
 			return
+		var look := _selected_appearance()
 		var frame: PackedByteArray = _net.build_char_create_request_frame(
-			name, _race_option.get_selected_id(), _class_option.get_selected_id())
+			name, _race_option.get_selected_id(), _class_option.get_selected_id(),
+			int(look["hair"]), int(look["face"]), int(look["skin"]))
 		if _net.send_bulk(frame):
 			_set_status("Creating %s…" % name)
 		else:
 			_set_status("Could not send the create request.")
 		return
 	var result := _store.create(
-		_name_edit.text, _race_option.get_selected_id(), _class_option.get_selected_id()
+		_name_edit.text, _race_option.get_selected_id(), _class_option.get_selected_id(),
+		_selected_appearance()
 	)
 	if not result.get("ok", false):
 		_set_status("Cannot create: %s" % String(result.get("detail", "unknown error")))
@@ -384,7 +418,11 @@ func _build_placeholder_preview() -> void:
 	capsule.height = 1.8
 	capsule.radius = 0.35
 	body.mesh = capsule
+	# Own material so the skin-preset pick can tint it live (#435).
+	body.material_override = StandardMaterial3D.new()
 	world_root.add_child(body)
+	_preview_body = body
+	_apply_preview_skin()
 
 	# A small "nose" so the model has an obvious front (facing -Z, Godot forward).
 	var nose := MeshInstance3D.new()
@@ -400,6 +438,18 @@ func _build_placeholder_preview() -> void:
 	world_root.add_child(cam)
 
 	_preview_holder.add_child(container)
+
+
+# Tint the shared placeholder model by the currently-selected skin preset, so the
+# appearance pick is visibly reflected before create (#435). No-op until the preview
+# is built (order-independent: _build_placeholder_preview also calls this once).
+func _apply_preview_skin() -> void:
+	if _preview_body == null:
+		return
+	var mat := _preview_body.material_override as StandardMaterial3D
+	if mat == null:
+		return
+	mat.albedo_color = MeridianAppearance.skin_color(_skin_option.get_selected_id())
 
 
 # --- Net-thread signal handlers (online only) --------------------------------

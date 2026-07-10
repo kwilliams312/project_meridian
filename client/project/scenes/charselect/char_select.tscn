@@ -100,6 +100,34 @@ text = "Class"
 unique_name_in_owner = true
 layout_mode = 2
 
+[node name="AppearanceLabel" type="Label" parent="Root/Body/CreatePanel"]
+layout_mode = 2
+text = "Appearance"
+
+[node name="HairLabel" type="Label" parent="Root/Body/CreatePanel"]
+layout_mode = 2
+text = "Hair"
+
+[node name="HairOption" type="OptionButton" parent="Root/Body/CreatePanel"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="FaceLabel" type="Label" parent="Root/Body/CreatePanel"]
+layout_mode = 2
+text = "Face"
+
+[node name="FaceOption" type="OptionButton" parent="Root/Body/CreatePanel"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="SkinLabel" type="Label" parent="Root/Body/CreatePanel"]
+layout_mode = 2
+text = "Skin"
+
+[node name="SkinOption" type="OptionButton" parent="Root/Body/CreatePanel"]
+unique_name_in_owner = true
+layout_mode = 2
+
 [node name="CreateButton" type="Button" parent="Root/Body/CreatePanel"]
 unique_name_in_owner = true
 layout_mode = 2

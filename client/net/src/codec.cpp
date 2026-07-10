@@ -379,8 +379,30 @@ std::optional<CharListResponse> decode_char_list_response(const Bytes& buf) {
 Bytes encode_char_create_request(const CharCreateRequest& in) {
     fb::FlatBufferBuilder b;
     auto name = b.CreateString(in.name);
-    b.Finish(mn::CreateCharCreateRequest(b, name, in.race, in.char_class));
+    // The chosen appearance (CHR-01 #435). Nested table must be built before the
+    // parent table is created (FlatBuffers requirement). morphs stay empty at M1.
+    auto appearance = mn::CreateAppearance(
+        b, in.appearance.version, in.appearance.hair, in.appearance.face,
+        in.appearance.skin);
+    b.Finish(mn::CreateCharCreateRequest(
+        b, name, in.race, in.char_class, appearance));
     return to_bytes(b);
+}
+
+std::optional<CharCreateRequest> decode_char_create_request(const Bytes& buf) {
+    const mn::CharCreateRequest* t = verify_and_get<mn::CharCreateRequest>(buf);
+    if (t == nullptr) return std::nullopt;
+    CharCreateRequest out;
+    if (t->name() != nullptr) out.name = t->name()->str();
+    out.race = t->race();
+    out.char_class = t->char_class();
+    if (const mn::Appearance* a = t->appearance()) {
+        out.appearance.version = a->version();
+        out.appearance.hair = a->hair();
+        out.appearance.face = a->face();
+        out.appearance.skin = a->skin();
+    }
+    return out;
 }
 
 std::optional<CharCreateResponse> decode_char_create_response(const Bytes& buf) {

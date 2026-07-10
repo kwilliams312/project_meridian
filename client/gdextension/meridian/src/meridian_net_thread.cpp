@@ -96,7 +96,8 @@ void MeridianNetThread::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("build_char_list_request_frame"),
 	                     &MeridianNetThread::build_char_list_request_frame);
 	ClassDB::bind_method(
-	    D_METHOD("build_char_create_request_frame", "name", "race", "char_class"),
+	    D_METHOD("build_char_create_request_frame", "name", "race", "char_class",
+	             "hair", "face", "skin"),
 	    &MeridianNetThread::build_char_create_request_frame);
 	ClassDB::bind_method(D_METHOD("build_char_delete_request_frame", "character_id"),
 	                     &MeridianNetThread::build_char_delete_request_frame);
@@ -467,11 +468,17 @@ PackedByteArray MeridianNetThread::build_char_list_request_frame() const {
 }
 
 PackedByteArray MeridianNetThread::build_char_create_request_frame(
-		const String &name, int race, int char_class) const {
+		const String &name, int race, int char_class,
+		int hair, int face, int skin) const {
 	cn::codec::CharCreateRequest req;
 	req.name = to_std(name);
 	req.race = static_cast<std::uint8_t>(race);
 	req.char_class = static_cast<std::uint8_t>(char_class);
+	// Appearance set (CHR-01 #435). version stays 1 (only v1 exists at M1); hair/
+	// face/skin are the 1-based preset ids the player picked (MeridianAppearance).
+	req.appearance.hair = static_cast<std::uint8_t>(hair);
+	req.appearance.face = static_cast<std::uint8_t>(face);
+	req.appearance.skin = static_cast<std::uint8_t>(skin);
 	net::Bytes payload = cn::codec::encode_char_create_request(req);
 	return to_pba(cn::encode_world_frame(cn::kOpCharCreateReq, /*seq=*/1, payload));
 }

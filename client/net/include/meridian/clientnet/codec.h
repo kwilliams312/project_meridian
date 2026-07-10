@@ -281,13 +281,32 @@ struct CharListResponse {
 };
 std::optional<CharListResponse> decode_char_list_response(const Bytes& buf);
 
-// CHAR_CREATE_REQUEST — name + M0-frozen race/class.
+// Per-character appearance (world.fbs Appearance, contract ① §5.2 / CHR-01 #435).
+// hair/face/skin are 1-based preset ids from the race/sex customization catalog;
+// version is the record version (only v1 at M1). Opaque-but-bounded: never gameplay-
+// authoritative, so the server clamps out-of-range values rather than rejecting.
+// morphs (§2.5 crowd budget) are 0 at M1 and so are not carried here.
+struct Appearance {
+    std::uint8_t version = 1;
+    std::uint8_t hair = 1;
+    std::uint8_t face = 1;
+    std::uint8_t skin = 1;
+};
+
+// CHAR_CREATE_REQUEST — name + M0-frozen race/class + the chosen appearance set
+// (CHR-01 #435). appearance is an APPENDED FlatBuffers field: omit it and the server
+// falls back to its default {v1,1,1,1}; the client always sends the player's picks.
 struct CharCreateRequest {
     std::string name;
     std::uint8_t race = 0;
     std::uint8_t char_class = 0;
+    Appearance appearance;
 };
 Bytes encode_char_create_request(const CharCreateRequest& in);
+// Decoder — the client never receives this C→S request, but the net-thread replay
+// harness / codec tests decode it back to prove the appearance round-trips (symmetric
+// with decode_movement_intent). Rejects garbage via verify-before-GetRoot.
+std::optional<CharCreateRequest> decode_char_create_request(const Bytes& buf);
 
 // CHAR_CREATE_RESPONSE — typed status + (on OK) the minted id.
 struct CharCreateResponse {

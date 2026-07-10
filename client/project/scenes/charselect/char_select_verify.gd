@@ -35,6 +35,7 @@ func _initialize() -> void:
 	print("meridian character-select RUNTIME verify (#110)")
 
 	_verify_roster()
+	_verify_appearance()
 	_verify_store()
 	await _verify_scene()
 	await _verify_relogin_roster()
@@ -69,6 +70,44 @@ func _verify_roster() -> void:
 		and MeridianRoster.is_valid_class(1) and MeridianRoster.is_valid_class(4))
 
 
+# --- 1b. Appearance placeholder set (CHR-01 #435) -----------------------------
+# The M1 appearance set (MeridianAppearance) is a documented client-side placeholder
+# (no server catalog is exposed to the client yet — see character_appearance.gd). These
+# checks assert the preset shape the create form and the wire Appearance record rely on:
+# 1-based ids, a working default, and skin-tint lookup.
+func _verify_appearance() -> void:
+	print(" appearance placeholder set (CHR-01 #435):")
+	_check("hair/face/skin presets non-empty",
+		not MeridianAppearance.HAIR.is_empty()
+		and not MeridianAppearance.FACE.is_empty()
+		and not MeridianAppearance.SKIN.is_empty())
+	_check("preset ids are 1-based and valid",
+		MeridianAppearance.is_valid_hair(1) and MeridianAppearance.is_valid_face(1)
+		and MeridianAppearance.is_valid_skin(1))
+	_check("id 0 rejected (unset)",
+		not MeridianAppearance.is_valid_hair(0) and not MeridianAppearance.is_valid_skin(0))
+	var def := MeridianAppearance.default_appearance()
+	_check("default appearance is v1 with valid presets",
+		int(def["version"]) == MeridianAppearance.VERSION
+		and MeridianAppearance.is_valid_hair(int(def["hair"]))
+		and MeridianAppearance.is_valid_face(int(def["face"]))
+		and MeridianAppearance.is_valid_skin(int(def["skin"])))
+	_check("skin_color returns a distinct tint per preset",
+		MeridianAppearance.SKIN.size() < 2
+		or MeridianAppearance.skin_color(1) != MeridianAppearance.skin_color(2))
+
+	# The create INTENT crosses the real GDExtension bridge (MeridianNetThread) — the
+	# same C++ path the online create uses. Proves the appearance-carrying signature
+	# (name, race, class, hair, face, skin) binds + builds a wire frame at runtime (#435).
+	var net := MeridianNetThread.new()
+	var themed_frame: PackedByteArray = net.build_char_create_request_frame(
+		"Kaelith", 1, 1, 2, 3, 1)
+	var plain_frame: PackedByteArray = net.build_char_create_request_frame(
+		"Kaelith", 1, 1, 1, 1, 1)
+	_check("bridge builds a CHAR_CREATE frame carrying the appearance set",
+		not themed_frame.is_empty() and themed_frame.size() >= plain_frame.size())
+
+
 # --- 2. Local char store enforces the server's create_character rules ----------
 func _verify_store() -> void:
 	print(" char store stub (⇄ server create_character validation order):")
@@ -80,7 +119,19 @@ func _verify_store() -> void:
 	_check("valid create succeeds", ok.get("ok", false) and int(ok["row"]["id"]) > 0)
 	_check("stored row keeps race + class ids",
 		int(ok["row"]["race"]) == 1 and int(ok["row"]["class"]) == 1)
+	_check("create with no appearance defaults to the v1 record",
+		int(ok["row"]["appearance"]["version"]) == MeridianAppearance.VERSION
+		and int(ok["row"]["appearance"]["hair"]) == MeridianAppearance.DEFAULT_HAIR_ID)
 	_check("list reflects the create", store.count() == 1)
+
+	# Appearance is carried verbatim onto the row when supplied (#435).
+	var look := {"version": 1, "hair": 2, "face": 3, "skin": 1}
+	var themed := store.create("Sylwen", 3, 2, look)
+	_check("create carries the chosen appearance set",
+		themed.get("ok", false)
+		and int(themed["row"]["appearance"]["hair"]) == 2
+		and int(themed["row"]["appearance"]["face"]) == 3
+		and int(themed["row"]["appearance"]["skin"]) == 1)
 
 	# 1. empty name.
 	_check("empty name rejected (invalid_name)",
@@ -131,6 +182,9 @@ func _verify_scene() -> void:
 
 	var race_opt: OptionButton = scene.find_child("RaceOption", true, false)
 	var class_opt: OptionButton = scene.find_child("ClassOption", true, false)
+	var hair_opt: OptionButton = scene.find_child("HairOption", true, false)
+	var face_opt: OptionButton = scene.find_child("FaceOption", true, false)
+	var skin_opt: OptionButton = scene.find_child("SkinOption", true, false)
 	var char_list: ItemList = scene.find_child("CharList", true, false)
 	var preview: Control = scene.find_child("PreviewHolder", true, false)
 
@@ -138,6 +192,20 @@ func _verify_scene() -> void:
 	_check("class picker populated from roster (4 items)", class_opt != null and class_opt.item_count == 4)
 	_check("race picker item ids are roster ids",
 		race_opt != null and race_opt.get_item_id(0) == 1 and race_opt.get_item_id(3) == 4)
+
+	# Appearance pickers are populated from the placeholder set with 1-based ids (#435).
+	_check("hair picker populated from the appearance set",
+		hair_opt != null and hair_opt.item_count == MeridianAppearance.HAIR.size())
+	_check("face picker populated from the appearance set",
+		face_opt != null and face_opt.item_count == MeridianAppearance.FACE.size())
+	_check("skin picker populated from the appearance set",
+		skin_opt != null and skin_opt.item_count == MeridianAppearance.SKIN.size())
+	_check("appearance picker item ids are preset ids",
+		hair_opt != null and hair_opt.get_item_id(0) == 1
+		and skin_opt != null and skin_opt.get_item_id(0) == 1)
+	_check("create form reports the selected appearance record",
+		scene._selected_appearance()["version"] == MeridianAppearance.VERSION
+		and int(scene._selected_appearance()["hair"]) == MeridianAppearance.DEFAULT_HAIR_ID)
 	_check("list shows the two seeded characters", char_list != null and char_list.item_count == 2)
 	_check("list label carries name + class",
 		char_list != null and char_list.get_item_text(0).begins_with("Kaelith — Vanguard"))
