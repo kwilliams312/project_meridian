@@ -433,9 +433,23 @@ table CharListEntry {
                          // old readers skip it; old writers omit it ⇒ default.
 }
 
-/// S→C. The account's characters, in creation order (may be empty).
+/// Typed outcome of a roster fetch (#479). Distinguishes "this account genuinely
+/// owns zero characters" (OK + empty `characters`) from "the roster could NOT be
+/// read" (INTERNAL — no characters DB, or a DB failure such as a missing column).
+/// Without this, a DB fault was indistinguishable from an empty account: worldd
+/// caught the DbError and sent an empty OK roster, so the client showed "no
+/// characters" while create was still refused with the character limit. The
+/// client MUST render a load-error state on INTERNAL, never "you have no characters".
+enum CharListStatus : uint16 {
+  OK       = 0,   // `characters` is the authoritative roster (may legitimately be empty)
+  INTERNAL = 1,   // roster unavailable (no characters DB / DB error) — NOT "zero characters"
+}
+
+/// S→C. The account's characters, in creation order (may be empty on OK).
 table CharListResponse {
   characters:[CharListEntry];
+  status:CharListStatus = OK;   // APPENDED field — additive; old readers default to
+                                // OK, so an old-format buffer decodes as a valid roster.
 }
 
 /// C→S. Create a character for this session's account (D-11 fields: name + race

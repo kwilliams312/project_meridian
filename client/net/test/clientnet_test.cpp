@@ -624,6 +624,34 @@ void test_char_enter_codec() {
     CHECK(!codec::decode_char_create_request(
               bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01})).has_value());
 
+    // #479: CharListResponse carries a typed status. A successful roster decodes
+    // with status OK and its rows; the client must NOT treat a load failure as an
+    // empty account, so the wire distinguishes the two.
+    codec::CharListResponse ok_roster;
+    ok_roster.status = 0;  // CharListStatus OK
+    ok_roster.characters.push_back(codec::CharSummary{42ull, "Aldric", 1, 1, 7});
+    auto ok_rt = codec::decode_char_list_response(
+        codec::encode_char_list_response(ok_roster));
+    CHECK(ok_rt.has_value());
+    CHECK(ok_rt->status == 0 && ok_rt->characters.size() == 1);
+    CHECK(ok_rt->characters.at(0).name == "Aldric"
+          && ok_rt->characters.at(0).level == 7);
+    // A genuinely empty account is ALSO status OK (zero characters is valid).
+    codec::CharListResponse empty_ok;
+    empty_ok.status = 0;
+    auto empty_ok_rt = codec::decode_char_list_response(
+        codec::encode_char_list_response(empty_ok));
+    CHECK(empty_ok_rt.has_value() && empty_ok_rt->status == 0
+          && empty_ok_rt->characters.empty());
+    // A DB fault is status INTERNAL with an empty roster — decodable and DISTINCT
+    // from the empty-OK account above (the whole point of the fix).
+    codec::CharListResponse failed;
+    failed.status = 1;  // CharListStatus INTERNAL
+    auto failed_rt = codec::decode_char_list_response(
+        codec::encode_char_list_response(failed));
+    CHECK(failed_rt.has_value());
+    CHECK(failed_rt->status == 1 && failed_rt->characters.empty());
+
     // Every response decoder rejects garbage (verify-before-GetRoot discipline).
     Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
     CHECK(!codec::decode_char_list_response(garbage).has_value());

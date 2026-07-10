@@ -799,6 +799,39 @@ std::vector<Message> build_corpus() {
                         "if2_char_list_response[1].appearance.face");
                  expect(a->skin() == 7u,
                         "if2_char_list_response[1].appearance.skin");
+                 // status defaults to OK (#479): a successful roster fetch. The
+                 // default is omitted from the wire, so this golden's bytes are
+                 // unchanged by the field's addition (additive-field evolution).
+                 expect(m->status() == mn::CharListStatus::OK,
+                        "if2_char_list_response.status OK (default)");
+               }});
+
+  // CharListResponse carrying a TYPED ERROR (#479): status=INTERNAL with an EMPTY
+  // roster. This is the wire shape worldd now sends when list_characters throws a
+  // DbError (e.g. the deploy `character` table missing the appearance column) — it
+  // must be distinguishable from a genuinely empty account (status OK, no rows),
+  // so the client renders a load-error instead of "you own no characters".
+  c.push_back({"if2_char_list_response_error", "IF-2", "CHAR_LIST_RESPONSE (0x0011)",
+               "S->C roster load FAILED: status=INTERNAL, empty characters (#479)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::CharListEntry>> rows;  // none
+                 auto vec = b.CreateVector(rows);
+                 b.Finish(mn::CreateCharListResponse(b, vec,
+                                                     mn::CharListStatus::INTERNAL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::CharListResponse>(nullptr),
+                             "if2_char_list_response_error verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::CharListResponse>(buf.data());
+                 expect(m->status() == mn::CharListStatus::INTERNAL,
+                        "if2_char_list_response_error.status INTERNAL");
+                 const auto* rows = m->characters();
+                 expect(rows == nullptr || rows->size() == 0,
+                        "if2_char_list_response_error has an empty roster");
                }});
 
   // CharCreateRequest — the D-11 create fields (name + race + class) WITHOUT the

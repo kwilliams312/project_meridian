@@ -8,6 +8,9 @@
 -- (empty) template tables exist; a real deploy points worldd at an mcc-emitted
 -- world DB. The DDL files are numbered (00_manifest .. 90_gossip) and SOURCEd in
 -- that order; they do not CREATE/USE a database. Dir mounted ro at /schemas/world.
+--
+-- ⛔ Adding a numbered DDL file to schema/sql/world/? SOURCE it here too — CI gate
+-- tests/test_db_init_migration_coverage.py enforces this wrapper covers them all.
 CREATE DATABASE IF NOT EXISTS meridian_world
   CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE meridian_world;

@@ -275,9 +275,14 @@ struct CharSummary {
 // CHAR_LIST_REQUEST carries no fields (the account is the session's).
 Bytes encode_char_list_request();
 
-// CHAR_LIST_RESPONSE — the account's roster (0 or 1 at M0, #329).
+// CHAR_LIST_RESPONSE — the account's roster (0 or 1 at M0, #329) + a typed status
+// (world.fbs CharListStatus{OK=0, INTERNAL=1}). status=INTERNAL means the roster
+// could NOT be read (server/DB fault, #479) — `characters` is empty but this is a
+// LOAD FAILURE, not "zero characters": char-select must render a retry/error state
+// rather than "no characters yet". An old-format buffer decodes as OK (default).
 struct CharListResponse {
     std::vector<CharSummary> characters;
+    std::uint16_t status = 0;  // CharListStatus: 0 OK, 1 INTERNAL
 };
 std::optional<CharListResponse> decode_char_list_response(const Bytes& buf);
 

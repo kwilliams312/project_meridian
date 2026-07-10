@@ -163,8 +163,12 @@ void MeridianNetThread::_bind_methods() {
 	ADD_SIGNAL(MethodInfo("connect_failed", PropertyInfo(Variant::STRING, "detail")));
 
 	// Character-select round-trips (D-35 / #286 / #341), re-emitted from pump().
-	// char_list carries an Array of Dictionaries {id,name,race,char_class,level}.
-	ADD_SIGNAL(MethodInfo("char_list", PropertyInfo(Variant::ARRAY, "characters")));
+	// char_list carries an Array of Dictionaries {id,name,race,char_class,level}
+	// plus a typed status (world.fbs CharListStatus: 0 OK, 1 INTERNAL). status!=0
+	// means the roster could NOT be read (server/DB fault, #479) — an empty
+	// `characters` is a LOAD FAILURE, not "zero characters".
+	ADD_SIGNAL(MethodInfo("char_list", PropertyInfo(Variant::ARRAY, "characters"),
+	                      PropertyInfo(Variant::INT, "status")));
 	ADD_SIGNAL(MethodInfo("char_create_result", PropertyInfo(Variant::INT, "status"),
 	                      PropertyInfo(Variant::INT, "character_id")));
 	ADD_SIGNAL(MethodInfo("char_delete_result", PropertyInfo(Variant::INT, "status")));
@@ -263,7 +267,8 @@ int MeridianNetThread::pump() {
 					row["level"] = static_cast<int64_t>(c.level);
 					chars.push_back(row);
 				}
-				emit_signal("char_list", chars);
+				emit_signal("char_list", chars,
+				            static_cast<int64_t>(msg.roster.status));
 				break;
 			}
 			case net::InboundKind::kCharCreate:

@@ -360,6 +360,7 @@ std::optional<CharListResponse> decode_char_list_response(const Bytes& buf) {
     const mn::CharListResponse* t = verify_and_get<mn::CharListResponse>(buf);
     if (t == nullptr) return std::nullopt;
     CharListResponse out;
+    out.status = static_cast<std::uint16_t>(t->status());  // OK default (#479)
     if (t->characters() != nullptr) {
         out.characters.reserve(t->characters()->size());
         for (const auto* e : *t->characters()) {
@@ -455,7 +456,8 @@ Bytes encode_char_list_response(const CharListResponse& in) {
         rows.push_back(mn::CreateCharListEntry(b, c.character_id, n, c.race,
                                                c.char_class, c.level));
     }
-    b.Finish(mn::CreateCharListResponse(b, b.CreateVector(rows)));
+    b.Finish(mn::CreateCharListResponse(b, b.CreateVector(rows),
+                                        static_cast<mn::CharListStatus>(in.status)));
     return to_bytes(b);
 }
 
