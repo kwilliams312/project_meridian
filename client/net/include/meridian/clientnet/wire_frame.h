@@ -60,6 +60,27 @@ inline constexpr std::uint16_t kOpQuestLog          = 0x4006;  // C↔S (request
 // GOSSIP_MENU is the server-computed, state-gated option list.
 inline constexpr std::uint16_t kOpGossipHello    = 0x5201;  // C→S
 inline constexpr std::uint16_t kOpGossipMenu     = 0x5202;  // S→C
+// Corpse looting (M1 — ITM-02, #369/#441). Open (LOOT_REQUEST → LOOT_RESPONSE), take a
+// slot / the money (LOOT_TAKE → LOOT_RESULT), close (LOOT_RELEASE → LOOT_CLOSED).
+inline constexpr std::uint16_t kOpLootRequest    = 0x5001;  // C→S
+inline constexpr std::uint16_t kOpLootResponse   = 0x5002;  // S→C
+inline constexpr std::uint16_t kOpLootTake       = 0x5003;  // C→S
+inline constexpr std::uint16_t kOpLootResult     = 0x5004;  // S→C
+inline constexpr std::uint16_t kOpLootRelease    = 0x5005;  // C→S
+inline constexpr std::uint16_t kOpLootClosed     = 0x5006;  // S→C
+// Vendor transactions (M1 — ECO-01, #370/#441). buy / sell / buyback each ride ONE
+// C→S request paired with a typed S→C result; all prices/balances server-computed.
+inline constexpr std::uint16_t kOpVendorBuyReq      = 0x5101;  // C→S
+inline constexpr std::uint16_t kOpVendorBuyResult   = 0x5102;  // S→C
+inline constexpr std::uint16_t kOpVendorSellReq     = 0x5103;  // C→S
+inline constexpr std::uint16_t kOpVendorSellResult  = 0x5104;  // S→C
+inline constexpr std::uint16_t kOpVendorBuybackReq  = 0x5105;  // C→S
+inline constexpr std::uint16_t kOpVendorBuybackResult = 0x5106;  // S→C
+// Trainer (M1 — NPC-02, #372/#441). TRAINER_LIST is pushed S→C alongside GOSSIP_MENU
+// when the player opens gossip on a trainer NPC; TRAINER_LEARN → TRAINER_LEARN_RESULT.
+inline constexpr std::uint16_t kOpTrainerList        = 0x5203;  // S→C
+inline constexpr std::uint16_t kOpTrainerLearn       = 0x5204;  // C→S
+inline constexpr std::uint16_t kOpTrainerLearnResult = 0x5205;  // S→C
 
 // IF-2 in-frame header size: u16 opcode + u64 seq (world_dispatch.h
 // kFrameHeaderBytes). A frame body shorter than this is malformed.

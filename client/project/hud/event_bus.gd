@@ -487,3 +487,324 @@ func _recompute_giver_marker(npc_guid: int, options: Array) -> void:
 		return
 	_giver_markers[npc_guid] = marker
 	giver_indicator_changed.emit(npc_guid, marker)
+
+
+# =============================================================================
+# LOOT + VENDOR + TRAINER + CURRENCY state (ITM-01/02, ECO-01, NPC-02; #369/#370/#372/#441)
+# =============================================================================
+# The SAME MVVM seam as the vitals/quest registries above: the net layer PUBLISHES
+# decoded loot/vendor/trainer server events here; the loot / vendor / trainer / bags
+# windows SUBSCRIBE to the signals and READ through the getters — they never touch the
+# net thread. SERVER IS LAW: the bus only stores + re-emits what worldd sent (a
+# LOOT_RESPONSE, a typed take/buy/sell/buyback/learn result, a pushed TRAINER_LIST). It
+# never rolls loot, prices an item, decides learn eligibility, or predicts a balance.
+#
+# The reverse direction (a view wants to DO something — open a corpse, take a slot,
+# buy / sell / buyback, learn) is an INTENT: the view calls a request_*() method, the bus
+# re-emits it as an intent signal, and the world scene turns it into an outbound frame
+# (extends the #431/#433 contract — the net thread stays hidden behind this one seam).
+#
+# ⛔ TWO WIRE-CONTRACT GAPS this story surfaced (world.fbs 0x50xx/0x51xx has NO opcode
+# for either — reported like #439 self-vitals / #443 quest-reward-preview, NOT faked):
+#   1. NO inventory-contents snapshot — worldd never sends the character's item list, so
+#      the bags window shows the server-authoritative COPPER balance (the only inventory-
+#      adjacent state the wire carries — via every transaction result's `balance`) but
+#      cannot show an item grid, and the vendor window cannot list the player's items to
+#      sell (the sell control is backpack-slot-driven pending an INVENTORY_LIST contract).
+#   2. NO vendor-catalog listing — worldd validates a buy against a server-side catalog
+#      but never sends its contents, so the vendor window's BUY control is item-template-
+#      id-driven (greybox, like gossip's "quest #N") pending a VENDOR_LIST contract.
+# The BUYBACK tab, in contrast, IS fully wire-populated (from each VENDOR_SELL_RESULT).
+
+# world.fbs enum ordinals kept here so views read them by name (mirrors the gossip block).
+# LootStatus (LOOT_RESPONSE) / LootTakeStatus (LOOT_RESULT).
+const LOOT_OK := 0
+# VendorBuyStatus / VendorSellStatus / VendorBuybackStatus / TrainerLearnStatus: 0 = OK.
+const RESULT_OK := 0
+# TrainableState (a TRAINER_LIST row's learn eligibility).
+const TRAIN_LEARNABLE := 0
+const TRAIN_ALREADY_KNOWN := 1
+const TRAIN_WRONG_CLASS := 2
+const TRAIN_LEVEL_TOO_LOW := 3
+const TRAIN_CANT_AFFORD := 4
+
+# --- View subscription signals (bus -> loot/vendor/trainer/bags view-models) --
+
+## A LOOT_RESPONSE arrived for `corpse_guid`: `copper` money pile + `items` (Array of
+## {slot,item_template_id,count,quality,quest_item}). The loot window opens/rebinds.
+signal loot_window_changed(corpse_guid: int, status: int, copper: int, items: Array)
+
+## A LOOT_RESULT (a take outcome) — already merged into the loot window state; fires so a
+## view can flash the taken row / surface a typed rejection. `result` carries
+## {corpse_guid,slot,status,item_template_id,count,copper}.
+signal loot_result(result: Dictionary)
+
+## The loot window closed (LOOT_RELEASE echo / corpse looted-out). Views hide.
+signal loot_closed(corpse_guid: int)
+
+## The vendor window should open on `vendor_id` (the gossip vendor entry was picked).
+signal vendor_opened(vendor_id: int)
+
+## A vendor transaction result. `result` carries a "kind" ("buy"/"sell"/"buyback"), the
+## typed `status`, and the transaction fields. Already merged (balance + buyback queue).
+signal vendor_result(result: Dictionary)
+
+## The buyback queue changed (a sell pushed an entry / a buyback removed one). `entries`
+## is an Array of {buyback_slot,item_template_id,quantity,price} in queue order.
+signal vendor_buyback_changed(entries: Array)
+
+## A TRAINER_LIST arrived (pushed alongside GOSSIP_MENU for a trainer NPC). `entries` is
+## an Array of {ability_id,cost,required_class,required_level,state}. The trainer window
+## rebinds; it opens when the gossip trainer entry is picked (trainer_opened).
+signal trainer_list_changed(npc_guid: int, entries: Array)
+
+## The trainer window should open on `npc_guid` (the gossip trainer entry was picked).
+signal trainer_opened(npc_guid: int)
+
+## A TRAINER_LEARN_RESULT. `result` carries {npc_guid,ability_id,status,cost,new_balance}.
+## Already merged (balance + known-ability set).
+signal trainer_learn_result(result: Dictionary)
+
+## The server-authoritative copper balance changed (from a transaction result's balance /
+## new_balance). `known` is false until the FIRST balance-carrying result arrives (there
+## is no spawn-time money snapshot on the wire — see the gap note above).
+signal currency_changed(copper: int, known: bool)
+
+# --- Intent signals (view -> the world scene, which owns the net thread) ------
+
+signal loot_request_requested(corpse_guid: int)
+signal loot_take_requested(corpse_guid: int, slot: int, money: bool)
+signal loot_release_requested(corpse_guid: int)
+signal vendor_buy_requested(vendor_id: int, item_template_id: int, quantity: int)
+signal vendor_sell_requested(vendor_id: int, backpack_slot: int, quantity: int)
+signal vendor_buyback_requested(buyback_slot: int)
+signal trainer_learn_requested(npc_guid: int, ability_id: int)
+
+# --- Loot/vendor/trainer/currency registry state -----------------------------
+var _loot_corpse: int = 0            # the corpse whose loot window is open (0 = none)
+var _loot_copper: int = 0            # money still on the open corpse
+var _loot_items: Array = []          # remaining lootable slots on the open corpse
+var _vendor_id: int = 0              # the open vendor (0 = none)
+var _buyback: Array = []             # buyback queue: {buyback_slot,item_template_id,quantity,price}
+var _trainer_npc: int = 0            # the trainer whose list we hold (0 = none)
+var _trainer_entries: Array = []     # the held TRAINER_LIST rows
+var _learned: Dictionary = {}        # ability_id -> true (learned this session, for greying)
+var _copper: int = 0                 # server-authoritative balance (valid iff _copper_known)
+var _copper_known: bool = false      # a balance-carrying result has been seen
+
+# --- Publish API (the net layer -> bus) --------------------------------------
+
+## Publish a LOOT_RESPONSE (decode_econ_frame kind "loot_response"). Stores the open
+## corpse's money + slots and emits. A non-OK status carries no items (a pre-check failed).
+func publish_loot_response(corpse_guid: int, status: int, copper: int, items: Array) -> void:
+	_loot_corpse = corpse_guid
+	_loot_copper = copper if status == LOOT_OK else 0
+	_loot_items = items.duplicate(true) if status == LOOT_OK else []
+	loot_window_changed.emit(corpse_guid, status, _loot_copper, _loot_items)
+
+
+## Publish a LOOT_RESULT (kind "loot_result"). On an OK take, removes the taken slot (or
+## clears the money pile) from the open corpse so the window reflects what remains, then
+## emits. A non-OK status leaves the corpse unchanged (the reason rides in `result`).
+func publish_loot_result(result: Dictionary) -> void:
+	var status := int(result.get("status", -1))
+	if status == LOOT_OK and int(result.get("corpse_guid", 0)) == _loot_corpse:
+		if int(result.get("copper", 0)) > 0 and int(result.get("item_template_id", 0)) == 0:
+			_loot_copper = 0  # the money pile was taken
+		else:
+			var slot := int(result.get("slot", -1))
+			var kept: Array = []
+			for it in _loot_items:
+				if int((it as Dictionary).get("slot", -1)) != slot:
+					kept.append(it)
+			_loot_items = kept
+		loot_window_changed.emit(_loot_corpse, LOOT_OK, _loot_copper, _loot_items)
+	loot_result.emit(result.duplicate(true))
+
+
+## Publish a LOOT_CLOSED (kind "loot_closed"). Clears the open corpse + emits.
+func publish_loot_closed(corpse_guid: int) -> void:
+	if corpse_guid == _loot_corpse:
+		_loot_corpse = 0
+		_loot_copper = 0
+		_loot_items = []
+	loot_closed.emit(corpse_guid)
+
+
+## Publish a VENDOR_BUY_RESULT. Applies the server balance, emits the typed result.
+func publish_vendor_buy_result(result: Dictionary) -> void:
+	_apply_balance(int(result.get("balance", 0)))
+	var out := result.duplicate(true)
+	out["kind"] = "buy"
+	vendor_result.emit(out)
+
+
+## Publish a VENDOR_SELL_RESULT. On OK, applies the balance and pushes the sold stack onto
+## the buyback queue at its server-assigned slot; emits the typed result + the queue.
+func publish_vendor_sell_result(result: Dictionary) -> void:
+	_apply_balance(int(result.get("balance", 0)))
+	if int(result.get("status", -1)) == RESULT_OK:
+		var slot := int(result.get("buyback_slot", 0))
+		var entry := {
+			"buyback_slot": slot,
+			"item_template_id": int(result.get("item_template_id", 0)),
+			"quantity": int(result.get("quantity", 0)),
+			"price": int(result.get("total_credit", 0)),
+		}
+		# The server owns the slot index; replace any stale entry at that slot.
+		var replaced := false
+		for i in range(_buyback.size()):
+			if int((_buyback[i] as Dictionary).get("buyback_slot", -1)) == slot:
+				_buyback[i] = entry
+				replaced = true
+				break
+		if not replaced:
+			_buyback.append(entry)
+		vendor_buyback_changed.emit(buyback_entries())
+	var out := result.duplicate(true)
+	out["kind"] = "sell"
+	vendor_result.emit(out)
+
+
+## Publish a VENDOR_BUYBACK_RESULT. On OK, applies the balance and removes the repurchased
+## entry from the buyback queue; emits the typed result + the queue.
+func publish_vendor_buyback_result(result: Dictionary, buyback_slot: int = -1) -> void:
+	_apply_balance(int(result.get("balance", 0)))
+	if int(result.get("status", -1)) == RESULT_OK and buyback_slot >= 0:
+		var kept: Array = []
+		for e in _buyback:
+			if int((e as Dictionary).get("buyback_slot", -1)) != buyback_slot:
+				kept.append(e)
+		_buyback = kept
+		vendor_buyback_changed.emit(buyback_entries())
+	var out := result.duplicate(true)
+	out["kind"] = "buyback"
+	vendor_result.emit(out)
+
+
+## Publish a TRAINER_LIST (kind "trainer_list"). Stores the held rows + emits. Rows the
+## player has already learned this session are shown as known regardless of the wire state.
+func publish_trainer_list(npc_guid: int, entries: Array) -> void:
+	_trainer_npc = npc_guid
+	_trainer_entries = entries.duplicate(true)
+	trainer_list_changed.emit(npc_guid, trainer_entries())
+
+
+## Publish a TRAINER_LEARN_RESULT. On OK, applies new_balance and marks the ability known
+## (so the row greys out immediately); emits the typed result.
+func publish_trainer_learn_result(result: Dictionary) -> void:
+	_apply_balance(int(result.get("new_balance", 0)))
+	if int(result.get("status", -1)) == RESULT_OK:
+		_learned[int(result.get("ability_id", 0))] = true
+		# Re-emit the list so a bound trainer window regreys the learned row.
+		if _trainer_npc != 0:
+			trainer_list_changed.emit(_trainer_npc, trainer_entries())
+	trainer_learn_result.emit(result.duplicate(true))
+
+# --- Request API (view -> intent signal; the world scene sends the frame) -----
+
+func request_loot(corpse_guid: int) -> void:
+	loot_request_requested.emit(corpse_guid)
+
+
+func request_loot_take(corpse_guid: int, slot: int, money: bool = false) -> void:
+	loot_take_requested.emit(corpse_guid, slot, money)
+
+
+func request_loot_release(corpse_guid: int) -> void:
+	loot_release_requested.emit(corpse_guid)
+
+
+func request_vendor_buy(vendor_id: int, item_template_id: int, quantity: int) -> void:
+	vendor_buy_requested.emit(vendor_id, item_template_id, quantity)
+
+
+func request_vendor_sell(vendor_id: int, backpack_slot: int, quantity: int) -> void:
+	vendor_sell_requested.emit(vendor_id, backpack_slot, quantity)
+
+
+func request_vendor_buyback(buyback_slot: int) -> void:
+	vendor_buyback_requested.emit(buyback_slot)
+
+
+func request_trainer_learn(npc_guid: int, ability_id: int) -> void:
+	trainer_learn_requested.emit(npc_guid, ability_id)
+
+
+## Open the vendor window on `vendor_id` (called by the world scene when the gossip vendor
+## entry fires). UI-only — no server frame (the wire has no vendor-catalog opcode; gap).
+func open_vendor(vendor_id: int) -> void:
+	_vendor_id = vendor_id
+	vendor_opened.emit(vendor_id)
+
+
+## Open the trainer window on `npc_guid` (called when the gossip trainer entry fires). The
+## TRAINER_LIST was already pushed with the GOSSIP_MENU — this only reveals the window.
+func open_trainer(npc_guid: int) -> void:
+	trainer_opened.emit(npc_guid)
+
+# --- Read API (bus -> view-models; all return copies) ------------------------
+
+## The corpse whose loot window is open (0 = none).
+func loot_corpse() -> int:
+	return _loot_corpse
+
+
+## The money still on the open corpse.
+func loot_copper() -> int:
+	return _loot_copper
+
+
+## The remaining lootable slots on the open corpse (copies).
+func loot_items() -> Array:
+	return _loot_items.duplicate(true)
+
+
+## The open vendor id (0 = none).
+func vendor_id() -> int:
+	return _vendor_id
+
+
+## The buyback queue (copies), in queue order.
+func buyback_entries() -> Array:
+	return _buyback.duplicate(true)
+
+
+## The held trainer's NPC guid (0 = none).
+func trainer_npc() -> int:
+	return _trainer_npc
+
+
+## The held TRAINER_LIST rows (copies), each with a derived "known" flag folding in
+## abilities learned this session (so a just-learned row greys even before a list resync).
+func trainer_entries() -> Array:
+	var out: Array = []
+	for e in _trainer_entries:
+		var row: Dictionary = (e as Dictionary).duplicate(true)
+		row["known"] = bool(_learned.get(int(row.get("ability_id", 0)), false)) \
+			or int(row.get("state", TRAIN_LEARNABLE)) == TRAIN_ALREADY_KNOWN
+		out.append(row)
+	return out
+
+
+## The server-authoritative copper balance (valid only when currency_known() is true).
+func copper() -> int:
+	return _copper
+
+
+## True once a balance-carrying result has been seen (else the balance is unknown — there
+## is no spawn-time money snapshot on the wire).
+func currency_known() -> bool:
+	return _copper_known
+
+# --- Loot/vendor/trainer internals -------------------------------------------
+
+# Apply a server-authoritative absolute balance and emit currency_changed if it changed
+# (or if this is the first balance we have seen). Deltas (loot money, quest rewards) are
+# NOT folded in here — only absolute post-transaction balances the server states.
+func _apply_balance(balance: int) -> void:
+	if _copper_known and balance == _copper:
+		return
+	_copper = balance
+	_copper_known = true
+	currency_changed.emit(_copper, true)

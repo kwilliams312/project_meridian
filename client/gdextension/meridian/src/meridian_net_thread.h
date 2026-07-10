@@ -150,6 +150,43 @@ public:
 	godot::Dictionary decode_quest_frame(int opcode,
 			const godot::PackedByteArray &payload) const;
 
+	// ── Loot / vendor / trainer frame builders (ITM-02/ECO-01/NPC-02, #369/370/372/441) ─
+	// Each returns a ready-to-send IF-2 frame; pass to send_bulk(). The server's typed
+	// reply is drained by pump() as an `entity_frame` (raw opcode+payload) and decoded by
+	// decode_econ_frame() below (mirrors the quest/gossip decode seam). The client only
+	// issues intents + renders results — it never rolls loot or prices an item (Principle 1).
+	//   loot_request  → LOOT_RESPONSE (money + the slots this looter sees)
+	//   loot_take     → LOOT_RESULT (a slot take, or the money pile when money = true)
+	//   loot_release  → LOOT_CLOSED (close the window)
+	//   vendor_buy    → VENDOR_BUY_RESULT     (minted item + debited copper + balance)
+	//   vendor_sell   → VENDOR_SELL_RESULT    (credited copper + a buyback slot + balance)
+	//   vendor_buyback→ VENDOR_BUYBACK_RESULT (re-minted item + re-debited copper + balance)
+	//   trainer_learn → TRAINER_LEARN_RESULT  (learned + debited copper, or a typed reason)
+	// There is NO trainer-list request builder: worldd PUSHES TRAINER_LIST alongside
+	// GOSSIP_MENU when the player opens gossip on a trainer NPC (world_dispatch.cpp).
+	godot::PackedByteArray build_loot_request_frame(int64_t corpse_guid) const;
+	godot::PackedByteArray build_loot_take_frame(int64_t corpse_guid, int slot,
+			bool money) const;
+	godot::PackedByteArray build_loot_release_frame(int64_t corpse_guid) const;
+	godot::PackedByteArray build_vendor_buy_frame(int vendor_id, int item_template_id,
+			int quantity) const;
+	godot::PackedByteArray build_vendor_sell_frame(int vendor_id, int backpack_slot,
+			int quantity) const;
+	godot::PackedByteArray build_vendor_buyback_frame(int buyback_slot) const;
+	godot::PackedByteArray build_trainer_learn_frame(int64_t npc_guid, int ability_id) const;
+
+	// Decode a raw loot/vendor/trainer S→C frame (opcode + FlatBuffer payload, as delivered
+	// by the `entity_frame` signal) into a scene-ready Dictionary the event bus publishes to
+	// the loot/vendor/trainer/bags view-models. Returns:
+	//   { "kind": "loot_response"|"loot_result"|"loot_closed"|"vendor_buy_result"|
+	//             "vendor_sell_result"|"vendor_buyback_result"|"trainer_list"|
+	//             "trainer_learn_result"|"",   # "" if not a loot/vendor/trainer op
+	//     ...per-kind fields (see meridian_net_thread.cpp) }
+	// A non-econ opcode or an undecodable payload returns { "kind": "" }, so the scene can
+	// try decode_entity_frame() / decode_quest_frame() first and fall through to this.
+	godot::Dictionary decode_econ_frame(int opcode,
+			const godot::PackedByteArray &payload) const;
+
 	// ── Diagnostics (atomic counters from the core) ────────────────────────────
 	int64_t frames_sent() const;
 	int64_t frames_received() const;
