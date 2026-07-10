@@ -55,6 +55,11 @@ enum class AbilityTarget {
     Friendly,
 };
 
+enum class AppearanceSex {
+    Male,
+    Female,
+};
+
 enum class AssetClass {
     CharacterModel,
     CreatureModel,
@@ -240,6 +245,13 @@ enum class QuestObjectiveKind {
     Collect,
     Deliver,
     Explore,
+};
+
+enum class RaceName {
+    Ardent,
+    Dolmen,
+    Sylvane,
+    Emberkin,
 };
 
 enum class School {
@@ -717,6 +729,45 @@ struct Asset {
     std::optional<AssetMusic> music;  // Required for music_stem / music_stinger classes; feeds ZoneMusicPlayer stream metadata.
     std::optional<AssetSfx> sfx;  // Required for sfx / ui_sound / ambience_emitter classes.
     std::optional<AssetEncode> encode;  // optional
+};
+
+struct AppearancePresetsHair {
+    std::int64_t id;
+    ArtRef model;
+};
+
+struct AppearancePresetsFace {
+    std::int64_t id;
+    ArtRef texture;
+};
+
+struct AppearancePresetsSkin {
+    std::int64_t id;
+    ArtRef palette;
+};
+
+struct AppearancePresets {
+    std::vector<AppearancePresetsHair> hair;
+    std::vector<AppearancePresetsFace> face;
+    std::vector<AppearancePresetsSkin> skin;
+};
+
+struct AppearanceMorph {
+    std::int64_t id;
+    std::string name;
+    std::string blendshape;
+    double min;
+    double max;
+};
+
+struct Appearance {
+    ContentId id;
+    RaceName race;
+    AppearanceSex sex;
+    ArtRef skeleton;
+    ArtRef body_model;
+    AppearancePresets presets;  // Customization set v1 (art-prd §5): hair meshes, face textures, skin palettes. Each preset entry's `id` is the stable integer the per-character appearance record stores (§5.2) — uniqueness within a list is lint L082.
+    std::vector<AppearanceMorph> morphs;  // 0 at M1; ships only if the §2.5 crowd budget allows (A-03/D-32). Capped at 2 entries.
 };
 
 }  // namespace mcc::content

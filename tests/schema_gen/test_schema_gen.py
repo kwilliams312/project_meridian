@@ -186,6 +186,7 @@ def test_real_schema_generates_all_root_types():
         "spawn",
         "zone",
         "asset",
+        "appearance",
     }
 
 

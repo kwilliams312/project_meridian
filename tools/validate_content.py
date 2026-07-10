@@ -38,6 +38,10 @@ Validates every YAML file under /content against the JSON Schemas in
   L081   visual.worn attach-vs-skinned rule (contract ① §4/§9): weapon.worn REQUIRES
          attach and FORBIDS hides (attach XOR skinned); armor.worn FORBIDS attach —
          always a hard error
+  L082   appearance_catalog preset ids are unique within each preset list
+         (hair/face/skin) — contract ①/T3, always a hard error
+  L083   at most one appearance_catalog per (race, sex) across the content tree
+         (contract ①/T3) — always a hard error
   L034   explore objectives reference a POI defined in the zone manifest
   L035   quest giver / turn-in / deliver NPCs have a spawn point (warn)
   L052   loot-table nesting exceeds one level (Tools PRD §4.4)
@@ -69,7 +73,17 @@ from jsonschema import Draft202012Validator
 
 import validate_imports
 
-CONTENT_TYPES = ("npc", "item", "quest", "ability", "loot", "vendor", "spawn", "zone")
+CONTENT_TYPES = (
+    "npc",
+    "item",
+    "quest",
+    "ability",
+    "loot",
+    "vendor",
+    "spawn",
+    "zone",
+    "appearance",
+)
 ASSET_PREFIXES = ("art", "mus", "sfx", "amb")
 
 # Per-type envelope schema version. Every type is @1 except those bumped here.
@@ -82,10 +96,18 @@ SCHEMA_VERSIONS: dict[str, int] = {"item": 2}
 # items in these slots carry no visual.worn (contract ① §4). Weapons never use them.
 INVISIBLE_SLOTS = frozenset({"neck", "finger", "trinket", "bag"})
 
+# ftype (the short file-suffix / schema-dict key, e.g. `appearance` from
+# `.appearance.yaml` and `appearance.schema.yaml`) -> the envelope's type word,
+# for the handful of types where they differ. `appearance_catalog` is longer
+# than its `.appearance.yaml` suffix (spec §5.1); every other type's envelope
+# word equals its ftype, so this map only needs the one exception.
+ENVELOPE_TYPE_NAMES: dict[str, str] = {"appearance": "appearance_catalog"}
+
 
 def expected_envelope(ftype: str) -> str:
     """The `schema:` envelope string a file of this type must declare (L001)."""
-    return f"meridian/{ftype}@{SCHEMA_VERSIONS.get(ftype, 1)}"
+    envelope_type = ENVELOPE_TYPE_NAMES.get(ftype, ftype)
+    return f"meridian/{envelope_type}@{SCHEMA_VERSIONS.get(ftype, 1)}"
 
 # --- Provenance / license policy (TD-09; Art PRD §3, Art SAD §3.2) ------------
 # License allowlist: original art is CC-BY-4.0, third-party must be CC0 or CC-BY.
@@ -453,6 +475,32 @@ def check_worn(doc: dict, rel_path: Path) -> list[str]:
     return errors
 
 
+def check_appearance_presets(doc: dict, rel_path: Path) -> list[str]:
+    """L082 — preset ids must be unique within each preset list (contract ①/T3).
+
+    Runs on appearance_catalog docs that already passed schema validation, so
+    each preset entry's shape (`id: int 1-255` plus its art field) is trusted
+    here; this layer adds the cross-entry uniqueness a JSON Schema array cannot
+    express. Uniqueness is scoped per list (hair/face/skin) — the same integer
+    may recur across different preset lists.
+    """
+    errors: list[str] = []
+    presets = doc.get("presets") or {}
+    for preset_name, entries in presets.items():
+        seen: dict[int, int] = {}
+        for i, entry in enumerate(entries or []):
+            pid = entry.get("id")
+            if pid in seen:
+                errors.append(
+                    f"L082 {rel_path}: duplicate preset id {pid} in presets.{preset_name}"
+                    f"[{i}] (also at [{seen[pid]}]) — preset ids must be unique per list "
+                    f"(contract ①/T3)"
+                )
+            else:
+                seen[pid] = i
+    return errors
+
+
 def validate(
     content_dir: Path,
     schema_dir: Path,
@@ -474,6 +522,8 @@ def validate(
     ] = []  # (file, location, normalized asset ref)
     pack_namespaces: dict[Path, str] = {}
     spawn_namespaces: set[str] = set()
+    # (race, sex) -> defining file (L083)
+    appearance_catalogs: dict[tuple[str, str], Path] = {}
     # `*.render.yaml` files are auxiliary strudel-render manifests (issue #410), not
     # content entities: they sit beside a music_stem sidecar so the L023 lint can find
     # them, and the strudel_render tool consumes them. They carry no `meridian/<type>@1`
@@ -575,6 +625,17 @@ def validate(
         if ftype == "spawn":
             spawn_namespaces.add(namespace)
 
+        if ftype == "appearance":
+            # L083 — at most one catalog per (race, sex) across the content tree.
+            key = (doc.get("race"), doc.get("sex"))
+            if key in appearance_catalogs:
+                res.errors.append(
+                    f"L083 {rel(path)}: duplicate appearance catalog for race "
+                    f"'{key[0]}' sex '{key[1]}' (also in {rel(appearance_catalogs[key])})"
+                )
+            else:
+                appearance_catalogs[key] = path
+
         for loc, value in walk_strings(doc):
             m = REF_RE.match(value)
             if m:
@@ -649,6 +710,10 @@ def validate(
         if dtype == "item":
             # L080/L081 — visual.worn presence + attach-vs-skinned rules.
             res.errors.extend(check_worn(doc, rel(path)))
+
+        if dtype == "appearance":
+            # L082 — preset ids unique per preset list.
+            res.errors.extend(check_appearance_presets(doc, rel(path)))
 
         if dtype == "quest":
             # L034 — explore objectives must name a POI the zone manifest defines.
