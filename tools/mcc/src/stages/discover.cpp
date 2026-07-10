@@ -13,9 +13,14 @@ namespace mcc::stages {
 
 namespace {
 
-// The eight content types, in schema-README order.
-constexpr std::array<std::string_view, 8> kContentTypes = {
-    "npc", "item", "quest", "ability", "loot", "vendor", "spawn", "zone"};
+// The content types, in schema-README order. The first eight are the original
+// server-backed entities; `appearance` (spec §5.1 catalogs) and `dye` (spec §6)
+// are the CLIENT-only visual types added by contract ① — they classify + flow
+// into the client pck but emit NO world.sql (the server never reads visuals,
+// spec §8). Mirrors validate_content.py's CONTENT_TYPES (the reference validator).
+constexpr std::array<std::string_view, 10> kContentTypes = {
+    "npc", "item", "quest", "ability", "loot", "vendor", "spawn", "zone",
+    "appearance", "dye"};
 
 // Split `s` on '.' into its dot-separated parts.
 std::vector<std::string> split_dots(const std::string& s) {

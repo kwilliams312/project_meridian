@@ -231,6 +231,20 @@ endif()
 
 add_test(NAME mcc-emit-pck-unit COMMAND mcc-emit-pck-tests)
 
+# dye/appearance pipeline test (contract ① C1): the CLIENT-side content types
+# classify + validate their envelope (incl. the irregular appearance_catalog
+# name), flow into the client pck, and produce NO world.sql (spec §8).
+add_executable(mcc-dye-pipeline-tests
+    tests/test_dye_pipeline.cpp)
+target_link_libraries(mcc-dye-pipeline-tests PRIVATE mcc_stages)
+if(MSVC)
+    target_compile_options(mcc-dye-pipeline-tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(mcc-dye-pipeline-tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_test(NAME mcc-dye-pipeline-unit COMMAND mcc-dye-pipeline-tests)
+
 # DB-backed emit-sql integration test (SAD §2.6, IF-4): loads the world DDL + the
 # mcc-emitted SQL into a REAL MariaDB and asserts world_manifest + content tables
 # are populated. ENV-GUARDED — SKIPS (exit 0) without MERIDIAN_DB_*/MERIDIAN_WORLDDB_*
