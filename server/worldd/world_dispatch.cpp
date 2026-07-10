@@ -326,10 +326,11 @@ Bytes encode_vendor_sell_result(mn::VendorSellStatus status, std::uint16_t backp
 
 Bytes encode_vendor_buyback_result(mn::VendorBuybackStatus status, std::uint32_t template_id,
                                    std::uint32_t quantity, std::uint64_t item_guid,
-                                   std::int64_t price, std::int64_t balance) {
+                                   std::int64_t price, std::int64_t balance,
+                                   std::uint16_t buyback_slot) {
     fb::FlatBufferBuilder b;
     b.Finish(mn::CreateVendorBuybackResult(b, status, template_id, quantity, item_guid,
-                                           price, balance));
+                                           price, balance, buyback_slot));
     return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
 }
 
@@ -542,6 +543,59 @@ Bytes encode_loot_closed(std::uint64_t corpse_guid) {
     return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
 }
 
+// ---- inventory-snapshot encoder (S→C, world.fbs; ITM-01 #453) ----------------
+
+// The character's backpack contents + money (INVENTORY_SNAPSHOT S→C, #453). Only
+// OCCUPIED backpack slots are emitted, keyed by their GRID index (0-based); each
+// carries the item's rarity + bind rule from its template for the bags window.
+// EQUIPMENT is intentionally excluded at M1 (bags window shows loose items only).
+Bytes encode_inventory_snapshot(std::int64_t money, const itm::Inventory& inv) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::InventoryItem>> rows;
+    const auto& slots = inv.backpack();
+    rows.reserve(slots.size());
+    for (std::uint16_t i = 0; i < slots.size(); ++i) {
+        const std::optional<itm::ItemInstance>& s = slots[i];
+        if (!s.has_value()) continue;  // omit empty slots
+        std::uint8_t binding = 0;
+        if (const itm::ItemTemplate* t = item_templates().find(s->template_id))
+            binding = static_cast<std::uint8_t>(t->binding);
+        rows.push_back(mn::CreateInventoryItem(b, i, s->template_id, s->stack,
+                                               template_quality(s->template_id), binding));
+    }
+    auto vec = b.CreateVector(rows);
+    b.Finish(mn::CreateInventorySnapshot(b, money, vec, inv.backpack_capacity()));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+// ---- vendor-catalog encoder (S→C, world.fbs; ECO-01 #453) --------------------
+
+// The vendor's for-sale catalog (VENDOR_LIST S→C, #453): each listing's item id +
+// its SERVER-COMPUTED buy price (override-or-template, via VendorCatalog::buy_price)
+// + rarity + stock. A listing whose price cannot be resolved (unknown template with
+// no override) is a stocked-but-not-purchasable row and is OMITTED — it is NOT_SOLD
+// on the buy path, so it never appears in the buy window. Stock is -1 (unlimited) at
+// M1 (limited stock is carried but unenforced — vendor_catalog.h).
+Bytes encode_vendor_list(std::uint32_t vendor_id,
+                         const std::vector<vend::VendorListing>& listings) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::VendorItem>> items;
+    items.reserve(listings.size());
+    for (const vend::VendorListing& l : listings) {
+        const std::optional<itm::Copper> price =
+            vend::VendorCatalog::buy_price(l, item_templates());
+        if (!price) continue;  // not purchasable -> NOT_SOLD; keep it out of the window
+        const std::int32_t stock =
+            l.limited ? static_cast<std::int32_t>(l.limited->count) : std::int32_t{-1};
+        items.push_back(mn::CreateVendorItem(b, l.item_template_id,
+                                             static_cast<std::int64_t>(*price),
+                                             template_quality(l.item_template_id), stock));
+    }
+    auto vec = b.CreateVector(items);
+    b.Finish(mn::CreateVendorList(b, vendor_id, vec));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
 // ---- gossip / trainer wire enum mapping + encoders (S→C; NPC-01/02 #372) -----
 
 mn::GossipOptionKind to_wire(npc::GossipOptionKind k) {
@@ -721,6 +775,27 @@ void send_s2c(net::Session& sess, ConnCtx& ctx, const Bytes& frame) {
         ctx.egress->emit_frame(frame);
     } else {
         sess.write_frame(frame);
+    }
+}
+
+// Push the session's OWN INVENTORY_SNAPSHOT (S→C, #453): the character's live
+// backpack contents + money, read straight off the characters DB. Sent at
+// ENTER_WORLD and after every server-authoritative inventory change (loot / vendor
+// / quest reward / GM .additem) so the bags window (#452) tracks durable state.
+// Best-effort — a session with no characters DB (the DB-less dispatch smoke test)
+// or a transient DB fault is skipped, never throwing into a handler. Reloads from
+// the DB so the snapshot reflects the just-committed mutation.
+void push_inventory_snapshot(net::Session& sess, ConnCtx& ctx) {
+    if (ctx.char_db == nullptr || ctx.char_id == 0) return;
+    try {
+        const std::int64_t money =
+            static_cast<std::int64_t>(itm::get_money(*ctx.char_db, ctx.char_id));
+        const itm::Inventory inv =
+            itm::load_inventory(*ctx.char_db, ctx.char_id, item_templates());
+        send_s2c(sess, ctx, encode_frame(net::Opcode::INVENTORY_SNAPSHOT, 0,
+                                         encode_inventory_snapshot(money, inv)));
+    } catch (const std::exception& e) {
+        log::warn(kCat, "INVENTORY_SNAPSHOT push failed", {log::field("error", e.what())});
     }
 }
 
@@ -1864,6 +1939,15 @@ void Dispatcher::register_m0_stubs() {
                // of the same snapshot (a harmless no-op on identical vitals).
                ctx.world->broadcast_vitals(er.entity_guid);
 
+               // SELF INVENTORY SNAPSHOT AT SPAWN (#453, ITM-01; part of #24).
+               // Alongside the self-vitals snapshot above, push the character's
+               // backpack contents + money so the client HUD bags window (#452) +
+               // the slot-driven vendor SELL control render REAL items the instant
+               // the player is in-world (money balance was "unknown" until the first
+               // transaction; contents were a copper-only greybox). Server-
+               // authoritative snapshot, re-sent after every inventory change below.
+               push_inventory_snapshot(sess, ctx);
+
                // Explore (QST-01, #396): a character that spawns already standing in
                // a discovery volume fires it on enter — credit any explore objective
                // it satisfies (QUEST_PROGRESS follows if it advanced).
@@ -2201,6 +2285,7 @@ void Dispatcher::register_m0_stubs() {
                     r.status = gm::EffectStatus::kApplied;
                     r.item_name = tmpl->name;
                     r.count = stack;
+                    push_inventory_snapshot(sess, ctx);  // #453: bags gained the item
                 } catch (const std::exception& e) {
                     log::warn(kCat, "GM .additem persist failed",
                               {log::field("error", e.what())});
@@ -2498,6 +2583,7 @@ void Dispatcher::register_m0_stubs() {
             reply(mn::VendorBuyStatus::OK, r.item_guid,
                   static_cast<std::int64_t>(r.total_price),
                   static_cast<std::int64_t>(r.balance_after));
+            push_inventory_snapshot(sess, ctx);  // #453: bags + money changed
         } catch (const vend::UnknownVendor&) {
             reply(mn::VendorBuyStatus::UNKNOWN_VENDOR, 0, 0, safe_balance(ctx));
         } catch (const vend::ItemNotSold&) {
@@ -2553,6 +2639,7 @@ void Dispatcher::register_m0_stubs() {
                   static_cast<std::int64_t>(r.total_credit),
                   static_cast<std::int64_t>(r.balance_after),
                   static_cast<std::uint16_t>(r.buyback_slot));
+            push_inventory_snapshot(sess, ctx);  // #453: bags + money changed
         } catch (const itm::SlotEmpty&) {
             reply(mn::VendorSellStatus::SLOT_EMPTY, 0, 0, 0, safe_balance(ctx), 0);
         } catch (const vend::NotSellable&) {
@@ -2571,13 +2658,15 @@ void Dispatcher::register_m0_stubs() {
         if (req == nullptr) return;
         const std::uint16_t buyback_slot = req->buyback_slot();
 
+        // buyback_slot ECHOES the request's slot (#453) so the client can drop that
+        // buyback row without correlating against its own request.
         auto reply = [&](mn::VendorBuybackStatus st, std::uint32_t template_id,
                          std::uint32_t qty, std::uint64_t guid, std::int64_t price,
                          std::int64_t balance) {
             send_s2c(sess, ctx,
                      encode_frame(net::Opcode::VENDOR_BUYBACK_RESULT, f.seq,
                                   encode_vendor_buyback_result(st, template_id, qty, guid,
-                                                               price, balance)));
+                                                               price, balance, buyback_slot)));
         };
 
         if (ctx.phase != SessionPhase::kInWorld) { reply(mn::VendorBuybackStatus::NOT_IN_WORLD, 0, 0, 0, 0, 0); return; }
@@ -2589,6 +2678,7 @@ void Dispatcher::register_m0_stubs() {
             reply(mn::VendorBuybackStatus::OK, r.item_template_id, r.quantity, r.item_guid,
                   static_cast<std::int64_t>(r.price),
                   static_cast<std::int64_t>(r.balance_after));
+            push_inventory_snapshot(sess, ctx);  // #453: bags + money changed
         } catch (const vend::BuybackSlotEmpty&) {
             reply(mn::VendorBuybackStatus::EMPTY_SLOT, 0, 0, 0, 0, safe_balance(ctx));
         } catch (const itm::InsufficientFunds&) {
@@ -2764,6 +2854,9 @@ void Dispatcher::register_m0_stubs() {
             // M1 (durable XP/level is CHR-03/mcc #28) — the amount is still surfaced.
             reply(mn::QuestTurnInStatus::OK, grant.xp, static_cast<std::int64_t>(grant.money),
                   grant.items);
+            // #453: the reward consumed objective items + minted reward items +
+            // credited reward copper — re-snapshot the bags window's real state.
+            push_inventory_snapshot(sess, ctx);
             send_s2c(sess, ctx, encode_frame(net::Opcode::QUEST_LOG, f.seq,
                                              encode_quest_log(*ctx.quests)));
         } catch (const std::exception& e) {
@@ -2884,6 +2977,7 @@ void Dispatcher::register_m0_stubs() {
                 }
             }
             reply(mn::LootTakeStatus::OK, 0, 0, static_cast<std::int64_t>(mo.copper));
+            push_inventory_snapshot(sess, ctx);  // #453: money balance changed
             close_if_looted(mo.fully_looted);
             return;
         }
@@ -2907,6 +3001,7 @@ void Dispatcher::register_m0_stubs() {
                                 itm::backpack_placement_slot(*target), minted.item_guid);
             }
             reply(mn::LootTakeStatus::OK, io.stack.item_template_id, io.stack.count, 0);
+            push_inventory_snapshot(sess, ctx);  // #453: backpack gained the looted stack
             // Advance any collect objective the pull satisfied (QUEST_PROGRESS S→C).
             sync_collect_and_emit(sess, ctx, inv);
             close_if_looted(io.fully_looted);
@@ -2972,6 +3067,22 @@ void Dispatcher::register_m0_stubs() {
                 }
                 send_s2c(sess, ctx, encode_frame(net::Opcode::TRAINER_LIST, f.seq,
                                                  encode_trainer_list(npc_guid, rows)));
+            }
+
+            // A vendor NPC also gets its for-sale catalog pushed (VendorList S→C,
+            // #453) — mirroring the trainer-list push. Server-computed prices from
+            // the vendor catalog (#390 DbVendorCatalog / M1 placeholder); the client
+            // renders the buy window from it instead of a template-id greybox. The
+            // buy path re-validates every price (Principle 1). An empty/unknown
+            // catalog yields an empty list (the window is simply empty).
+            if (def->is_vendor && def->vendor_id != 0) {
+                const std::vector<vend::VendorListing>* listings =
+                    vendor_catalog().listings(def->vendor_id);
+                static const std::vector<vend::VendorListing> kEmpty;
+                send_s2c(sess, ctx,
+                         encode_frame(net::Opcode::VENDOR_LIST, f.seq,
+                                      encode_vendor_list(def->vendor_id,
+                                                         listings != nullptr ? *listings : kEmpty)));
             }
         }
 

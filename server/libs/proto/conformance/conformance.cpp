@@ -1655,6 +1655,56 @@ std::vector<Message> build_corpus() {
                         "if2_loot_closed.corpse_guid");
                }});
 
+  // ==== IF-2 inventory contents (world.fbs; ITM-01 #453) ====================
+  // Server-authoritative bags snapshot: money + occupied backpack slots. A pure
+  // DISPLAY projection the client never predicts (Principle 1). The golden pins
+  // the int64-copper money field + the per-item {slot, template, count, quality,
+  // binding} row layout + the backpack capacity the bags window reads.
+
+  // InventorySnapshot — S->C money + a common stack + a bound rare in a 16-cell bag.
+  c.push_back({"if2_inventory_snapshot", "IF-2", "INVENTORY_SNAPSHOT (0x5007)",
+               "S->C bags: 4200 copper + a common stack + a soulbound rare",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::InventoryItem>> items;
+                 items.push_back(mn::CreateInventoryItem(b, /*slot=*/0u,
+                                                         /*item_template_id=*/900007u,
+                                                         /*count=*/5u, /*quality=*/1u,
+                                                         /*binding=*/0u));
+                 items.push_back(mn::CreateInventoryItem(b, /*slot=*/3u,
+                                                         /*item_template_id=*/900012u,
+                                                         /*count=*/1u, /*quality=*/3u,
+                                                         /*binding=*/1u));
+                 auto iv = b.CreateVector(items);
+                 b.Finish(mn::CreateInventorySnapshot(b, /*money=*/4200, iv,
+                                                      /*backpack_slots=*/16u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::InventorySnapshot>(nullptr),
+                             "if2_inventory_snapshot verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::InventorySnapshot>(buf.data());
+                 expect(m->money() == 4200, "if2_inventory_snapshot.money");
+                 expect(m->backpack_slots() == 16u,
+                        "if2_inventory_snapshot.backpack_slots");
+                 const auto* items = m->items();
+                 if (!expect(items != nullptr && items->size() == 2,
+                             "if2_inventory_snapshot has 2 items"))
+                   return;
+                 const auto* i0 = items->Get(0);
+                 expect(i0->slot() == 0u && i0->item_template_id() == 900007u &&
+                            i0->count() == 5u && i0->quality() == 1u &&
+                            i0->binding() == 0u,
+                        "if2_inventory_snapshot.items[0] (common stack)");
+                 const auto* i1 = items->Get(1);
+                 expect(i1->slot() == 3u && i1->item_template_id() == 900012u &&
+                            i1->count() == 1u && i1->quality() == 3u &&
+                            i1->binding() == 1u,
+                        "if2_inventory_snapshot.items[1] (bound rare)");
+               }});
+
   // ==== IF-2 inventory / economy: vendors (world.fbs; ECO-01 #370) ==========
   // Server-authoritative buy/sell/buyback. All prices + balances are int64
   // copper the SERVER owns — the requests carry no client price. Each canonical
@@ -1787,13 +1837,13 @@ std::vector<Message> build_corpus() {
   // VendorBuybackResult — S->C OK: re-minted item, 2 re-debited, balance 700.
   c.push_back({"if2_vendor_buyback_result", "IF-2",
                "VENDOR_BUYBACK_RESULT (0x5106)",
-               "S->C buyback OK: re-minted guid, price 2, balance 700",
+               "S->C buyback OK: re-minted guid, price 2, balance 700, slot 1",
                [] {
                  fb::FlatBufferBuilder b;
                  b.Finish(mn::CreateVendorBuybackResult(
                      b, mn::VendorBuybackStatus::OK, /*item_template_id=*/900007u,
                      /*quantity=*/2u, /*item_guid=*/0x00A1000000000002ULL,
-                     /*price=*/2, /*balance=*/700));
+                     /*price=*/2, /*balance=*/700, /*buyback_slot=*/1u));
                  return finish_to_bytes(b);
                },
                [](const Bytes& buf) {
@@ -1811,6 +1861,45 @@ std::vector<Message> build_corpus() {
                         "if2_vendor_buyback_result.item_guid");
                  expect(m->price() == 2, "if2_vendor_buyback_result.price");
                  expect(m->balance() == 700, "if2_vendor_buyback_result.balance");
+                 expect(m->buyback_slot() == 1u,
+                        "if2_vendor_buyback_result.buyback_slot");
+               }});
+
+  // VendorList — S->C a vendor's catalog: 2 items with server-computed prices.
+  c.push_back({"if2_vendor_list", "IF-2", "VENDOR_LIST (0x5107)",
+               "S->C vendor catalog: a 12-copper common + a 250-copper rare",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::VendorItem>> items;
+                 items.push_back(mn::CreateVendorItem(b, /*item_template_id=*/900007u,
+                                                      /*price=*/12, /*quality=*/1u,
+                                                      /*stock=*/-1));
+                 items.push_back(mn::CreateVendorItem(b, /*item_template_id=*/900012u,
+                                                      /*price=*/250, /*quality=*/3u,
+                                                      /*stock=*/5));
+                 auto iv = b.CreateVector(items);
+                 b.Finish(mn::CreateVendorList(b, /*vendor_id=*/990001u, iv));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::VendorList>(nullptr),
+                             "if2_vendor_list verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::VendorList>(buf.data());
+                 expect(m->vendor_id() == 990001u, "if2_vendor_list.vendor_id");
+                 const auto* items = m->items();
+                 if (!expect(items != nullptr && items->size() == 2,
+                             "if2_vendor_list has 2 items"))
+                   return;
+                 const auto* i0 = items->Get(0);
+                 expect(i0->item_template_id() == 900007u && i0->price() == 12 &&
+                            i0->quality() == 1u && i0->stock() == -1,
+                        "if2_vendor_list.items[0] (unlimited common)");
+                 const auto* i1 = items->Get(1);
+                 expect(i1->item_template_id() == 900012u && i1->price() == 250 &&
+                            i1->quality() == 3u && i1->stock() == 5,
+                        "if2_vendor_list.items[1] (limited rare)");
                }});
 
   // ---- 0x52xx NPC interaction (gossip + trainers; NPC-01/02 #372) -----------
