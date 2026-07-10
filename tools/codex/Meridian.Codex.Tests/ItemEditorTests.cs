@@ -44,6 +44,16 @@ public class ItemEditorTests
         Assert.Equal(425, item.Price!.Sell);
         Assert.Equal("core:art.icon.item.pickaxe_rusty", item.Visual.Icon.Id);
         Assert.Equal("core:art.item.weapon.pickaxe_rusty", item.Visual.Model!.Value.Id);
+
+        // item@2 worn block (contract ①): one model, mounted main_hand / sheathed back.
+        var worn = item.Visual.Worn!;
+        Assert.Single(worn.Models);
+        Assert.Equal("core:art.item.weapon.pickaxe_rusty", worn.Models[0].Model.Id);
+        Assert.Equal(ItemVisualWornModelMirror.None, worn.Models[0].Mirror);
+        Assert.Equal(AttachSocket.MainHand, worn.Attach!.Socket);
+        Assert.Equal(AttachSocket.Back, worn.Attach.SheathSocket);
+        Assert.Null(worn.Hides);
+        Assert.Null(worn.DyeChannels);
     }
 
     [Fact]
@@ -220,16 +230,24 @@ public class ItemEditorTests
         doc.Data.Set("price.buy", "25000");
         doc.Data.Set("visual.icon", "core:art.icon.item.test_blade");
         doc.Data.Set("visual.model", "core:art.item.weapon.test_blade");
+        // Weapons require a worn block with an attach socket (lints L080/L081).
+        doc.Data.Set("visual.worn.models[0].model", "core:art.item.weapon.test_blade");
+        doc.Data.Set("visual.worn.models[0].mirror", "none");
+        doc.Data.Set("visual.worn.attach.socket", "main_hand");
+        doc.Data.Set("visual.worn.attach.sheath_socket", "hip_l");
+        doc.Data.Set("visual.worn.dye_channels[0]", "primary");
 
         var yaml = doc.ToYaml();
 
         // Required envelope + fields per item.schema.yaml.
-        Assert.StartsWith("schema: meridian/item@1\n", yaml);
+        Assert.StartsWith("schema: meridian/item@2\n", yaml);
         Assert.Contains("id: core:item.test_blade", yaml);
         Assert.Contains("item_class: weapon", yaml);
         Assert.Contains("unique: true", yaml);
         Assert.Contains("damage: { min: 18, max: 27 }", yaml);
         Assert.Contains("school: fire", yaml);
+        Assert.Contains("worn:", yaml);
+        Assert.Contains("socket: main_hand", yaml);
 
         // Reloads and projects back to the model with all values intact.
         var reloaded = ItemDocument.Parse(yaml);
@@ -246,6 +264,62 @@ public class ItemEditorTests
         Assert.Equal("ability.flame_aura", item.Effects!.OnEquip![0].Id);
         Assert.Equal(25000, item.Price!.Buy);
         Assert.Equal("core:art.item.weapon.test_blade", item.Visual.Model!.Value.Id);
+
+        // The worn block survives the write→re-read round-trip intact.
+        var worn = item.Visual.Worn!;
+        Assert.Equal("core:art.item.weapon.test_blade", worn.Models[0].Model.Id);
+        Assert.Equal(ItemVisualWornModelMirror.None, worn.Models[0].Mirror);
+        Assert.Equal(AttachSocket.MainHand, worn.Attach!.Socket);
+        Assert.Equal(AttachSocket.HipL, worn.Attach.SheathSocket);
+        Assert.Equal(DyeChannel.Primary, Assert.Single(worn.DyeChannels!));
+    }
+
+    [Fact]
+    public void Editing_a_worn_attach_socket_is_surgical()
+    {
+        // rusty_pickaxe carries `attach: { socket: main_hand, sheath_socket: back }`
+        // in flow style; changing one member touches only that value.
+        var path = ContentFixtures.CopyToTemp(Pickaxe);
+        var original = File.ReadAllText(path, Utf8);
+
+        var doc = ItemDocument.Load(path);
+        doc.Data.Set("visual.worn.attach.sheath_socket", "hip_r");
+        var saved = doc.ToYaml();
+
+        Assert.Equal(original.Replace("sheath_socket: back", "sheath_socket: hip_r"), saved);
+    }
+
+    [Fact]
+    public void Armor_worn_with_hides_and_dye_channels_round_trips_through_canonical_emit()
+    {
+        // An armor item's worn block skins onto the body: models + hides + dye
+        // channels, no attach (L081). Emit → reload → model projection is intact,
+        // and a second emit is byte-stable.
+        var doc = ItemDocument.NewItem("core:item.test_vest", "Test Vest");
+        doc.Data.Set("item_class", "armor");
+        doc.Data.Set("subclass", "leather");
+        doc.Data.Set("slot", "chest");
+        doc.Data.Set("armor", "45");
+        doc.Data.Set("visual.icon", "core:art.icon.item.test_vest");
+        doc.Data.Set("visual.worn.models[0].model", "core:art.item.armor.test_vest");
+        doc.Data.Set("visual.worn.models[1].model", "core:art.item.armor.test_vest_trim");
+        doc.Data.Set("visual.worn.models[1].mirror", "x");
+        doc.Data.Set("visual.worn.hides[0]", "torso");
+        doc.Data.Set("visual.worn.hides[1]", "waist");
+        doc.Data.Set("visual.worn.dye_channels[0]", "primary");
+        doc.Data.Set("visual.worn.dye_channels[1]", "accent");
+
+        var first = doc.ToYaml();
+        var reloaded = ItemDocument.Parse(first);
+        Assert.Equal(first, reloaded.ToYaml());
+
+        var worn = reloaded.ToModel().Visual.Worn!;
+        Assert.Equal(2, worn.Models.Count);
+        Assert.Equal("core:art.item.armor.test_vest_trim", worn.Models[1].Model.Id);
+        Assert.Equal(ItemVisualWornModelMirror.X, worn.Models[1].Mirror);
+        Assert.Equal(new[] { GeosetRegion.Torso, GeosetRegion.Waist }, worn.Hides!);
+        Assert.Equal(new[] { DyeChannel.Primary, DyeChannel.Accent }, worn.DyeChannels!);
+        Assert.Null(worn.Attach);
     }
 
     [Fact]
