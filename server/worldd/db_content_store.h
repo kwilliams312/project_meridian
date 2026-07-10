@@ -48,6 +48,7 @@
 
 #include "meridian/db/connection.h"
 
+#include "ability_store.h"    // meridian::worldd::AbilityStore — DB-loaded ability catalog (#481)
 #include "area_triggers.h"    // meridian::worldd::TriggerVolume — DB-loaded POI volumes (#398)
 #include "item_template.h"    // meridian::items::TemplateStore / ItemTemplate
 #include "loot_table.h"       // meridian::loot::LootTableStore / LootTable
@@ -167,7 +168,18 @@ struct WorldContent {
     // player positions — carries the real `poi` so explore objectives credit against
     // authored content (#398). Empty when the world DB has no `area` rows.
     std::vector<TriggerVolume>        area_triggers;
+    // The authored ability catalog (ability / ability_effect / ability_effect_stat_mod
+    // rows), keyed by IF-9 numeric id (#481). Installed onto the live cast path via
+    // WorldServer::set_abilities() so a client casting an authored id (minor_healing=1)
+    // resolves against real content instead of the placeholder store's synthetic ids.
+    std::unique_ptr<AbilityStore>     abilities;
 };
+
+// Load the authored ability catalog (ability + ability_effect + ability_effect_stat_mod)
+// from the world DB into an AbilityStore keyed by IF-9 numeric id (#481). The read path
+// #390 left open — installed on the live cast path in place of the M1 placeholder store.
+// Throws meridian::db::DbError on a query failure (same fail-fast policy as the others).
+AbilityStore load_db_ability_store(db::Connection& world_db);
 
 // Load every content store from the (already-boot-verified) world DB connection.
 // Throws meridian::db::DbError on a query failure — the caller treats a load fault

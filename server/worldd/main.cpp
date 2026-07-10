@@ -346,7 +346,8 @@ int main(int argc, char** argv) {
                     std::to_string(content.npcs->ids().size()) + " npcs, " +
                     std::to_string(content.loot->ids().size()) + " loot tables, " +
                     std::to_string(content.vendor->ids().size()) + " vendors, " +
-                    std::to_string(content.items->ids().size()) + " item templates");
+                    std::to_string(content.items->ids().size()) + " item templates, " +
+                    std::to_string(content.abilities->size()) + " abilities");
         } catch (const meridian::db::DbError& e) {
             // Could not even connect to the world DB, or a content query failed. A
             // world DB was explicitly configured, so this is a hard boot failure, not
@@ -450,6 +451,13 @@ int main(int argc, char** argv) {
     // set. No-op when no world DB is wired (content.loot is null) — the tick keeps its
     // placeholder loot tables.
     if (content.loot) world.set_loot_tables(*content.loot);
+
+    // Install the DB-backed ability catalog on the LIVE cast path (#481) when world
+    // content was loaded, so a CAST_REQUEST resolves AUTHORED ability ids (e.g.
+    // minor_healing=1) instead of answering UNKNOWN_ABILITY against the placeholder
+    // store's synthetic ids. No-op when no world DB is wired (content.abilities is
+    // null) — the cast path keeps the M1 placeholder store for DB-free dispatch tests.
+    if (content.abilities) world.set_abilities(std::move(*content.abilities));
 
     try {
         meridian::net::TlsListener listener(lc);

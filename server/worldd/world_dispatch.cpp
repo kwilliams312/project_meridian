@@ -3437,6 +3437,14 @@ void WorldServer::set_loot_tables(const loot::LootTableStore& store) {
     impl_->map.set_loot_tables(store);
 }
 
+void WorldServer::set_abilities(AbilityStore store) {
+    // Move-assign into the store MapTick + every ConnCtx already reference by address
+    // (impl_->abilities). The object's address is unchanged by a move-assign, so the
+    // MapTick reference (map_tick.h abilities_) and ctx.abilities pointers stay valid.
+    // Boot-time only (before start()), so no concurrent reader races the swap.
+    impl_->abilities = std::move(store);
+}
+
 void WorldServer::world_thread_main() {
     // The per-map map tick (SAD §2.5 / §3.2), 20 Hz with a 40 ms soft budget
     // (SAD §8.1). Each wake runs ONE tick in the SAD §2.5 PHASE ORDER:
