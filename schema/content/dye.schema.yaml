@@ -1,0 +1,14 @@
+# meridian/dye@1 — curated dye palette (contract ① §6). Dyes are content-defined
+# colors, NOT free RGB pickers — the painterly art direction stays coherent.
+# Acquisition/economy (dye items, vendors) is ITM/ECO scope, deliberately absent.
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/dye.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, id, name, color, rarity]
+properties:
+  schema: { const: "meridian/dye@1" }
+  id: { $ref: "#/$defs/contentId" }
+  name: { $ref: "#/$defs/displayName" }
+  color: { type: string, pattern: "^#[0-9a-f]{6}$" }
+  rarity: { enum: [poor, common, uncommon, rare, epic, legendary] }

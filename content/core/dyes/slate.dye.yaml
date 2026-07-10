@@ -1,0 +1,5 @@
+schema: meridian/dye@1
+id: core:dye.slate
+name: Slate
+color: "#5a6672"
+rarity: common

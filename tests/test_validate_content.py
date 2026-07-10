@@ -803,6 +803,113 @@ class TestItem2Worn:
         assert "L001" in codes(res.errors)
 
 
+@pytest.mark.unit
+class TestAppearanceCatalog:
+    """meridian/appearance_catalog@1 — per race/sex customization catalog +
+    L082/L083 (contract ①/T3). One valid fixture; each negative case copies it
+    and mutates one field, per the one-negative-fixture-per-lint convention
+    (Tools PRD §11.1)."""
+
+    # A fully-valid catalog: race ardent, 1 hair/1 face/1 skin preset, no morphs.
+    CATALOG_OK = """\
+    schema: meridian/appearance_catalog@1
+    id: tp:appearance.ardent.male
+    race: ardent
+    sex: male
+    skeleton: art.char.ardent.male.skeleton
+    body_model: art.char.ardent.male.base
+    presets:
+      hair: [{ id: 1, model: art.char.ardent.male.hair_short }]
+      face: [{ id: 1, texture: art.char.ardent.male.face_a }]
+      skin: [{ id: 1, palette: art.char.ardent.male.skin_pale }]
+    morphs: []
+    """
+
+    def test_catalog_valid_passes(self, tmp_path):
+        res = run(tmp_path, {"tp/appearance/ardent_male.appearance.yaml": self.CATALOG_OK})
+        assert res.errors == []
+
+    def test_l082_duplicate_preset_id(self, tmp_path):
+        # Two hair presets share id 1 — L082 (preset ids unique per preset list).
+        catalog = self.CATALOG_OK.replace(
+            "  hair: [{ id: 1, model: art.char.ardent.male.hair_short }]\n",
+            "  hair: [{ id: 1, model: art.char.ardent.male.hair_short }, "
+            "{ id: 1, model: art.char.ardent.male.hair_long }]\n",
+        )
+        res = run(tmp_path, {"tp/appearance/ardent_male.appearance.yaml": catalog})
+        assert "L082" in codes(res.errors)
+
+    def test_l083_duplicate_race_sex_catalog(self, tmp_path):
+        # Two catalog files both declare race=ardent sex=male — L083 (one catalog
+        # per race/sex across the tree). Different ids so L010 does not also fire.
+        second = self.CATALOG_OK.replace(
+            "id: tp:appearance.ardent.male", "id: tp:appearance.ardent.male_dup"
+        )
+        res = run(
+            tmp_path,
+            {
+                "tp/appearance/ardent_male.appearance.yaml": self.CATALOG_OK,
+                "tp/appearance/ardent_male_2.appearance.yaml": second,
+            },
+        )
+        assert "L083" in codes(res.errors)
+
+    def test_preset_id_zero_fails_schema(self, tmp_path):
+        # Preset ids are `minimum: 1` — 0 is out of range.
+        catalog = self.CATALOG_OK.replace(
+            "{ id: 1, model: art.char.ardent.male.hair_short }",
+            "{ id: 0, model: art.char.ardent.male.hair_short }",
+        )
+        res = run(tmp_path, {"tp/appearance/ardent_male.appearance.yaml": catalog})
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_unknown_race_fails_schema(self, tmp_path):
+        # race must be one of the skeleton.defs raceName roster ids.
+        catalog = self.CATALOG_OK.replace("race: ardent", "race: elf")
+        res = run(tmp_path, {"tp/appearance/ardent_male.appearance.yaml": catalog})
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_more_than_two_morphs_fails_schema(self, tmp_path):
+        # morphs is capped at 2 entries (A-03/D-32 crowd-render budget, §2.5).
+        catalog = self.CATALOG_OK.replace(
+            "morphs: []",
+            "morphs:\n"
+            "      - { id: 1, name: Brow Height, blendshape: brow_height, min: 0, max: 1 }\n"
+            "      - { id: 2, name: Jaw Width, blendshape: jaw_width, min: 0, max: 1 }\n"
+            "      - { id: 3, name: Nose Size, blendshape: nose_size, min: 0, max: 1 }",
+        )
+        res = run(tmp_path, {"tp/appearance/ardent_male.appearance.yaml": catalog})
+        assert "SCHEMA" in codes(res.errors)
+
+
+@pytest.mark.unit
+class TestDye:
+    """meridian/dye@1 — curated dye palette (contract ① §6). One valid fixture;
+    each negative case copies it and mutates one field."""
+
+    DYE_OK = """\
+    schema: meridian/dye@1
+    id: tp:dye.russet
+    name: Russet
+    color: "#8a4b2d"
+    rarity: common
+    """
+
+    def test_dye_valid_passes(self, tmp_path):
+        res = run(tmp_path, {"tp/dyes/russet.dye.yaml": self.DYE_OK})
+        assert res.errors == []
+
+    def test_bad_hex_color_fails_schema(self, tmp_path):
+        dye = self.DYE_OK.replace('color: "#8a4b2d"', "color: red")
+        res = run(tmp_path, {"tp/dyes/russet.dye.yaml": dye})
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_missing_rarity_fails_schema(self, tmp_path):
+        dye = self.DYE_OK.replace("rarity: common\n", "")
+        res = run(tmp_path, {"tp/dyes/russet.dye.yaml": dye})
+        assert "SCHEMA" in codes(res.errors)
+
+
 @pytest.mark.integration
 class TestRepoContent:
     def test_repo_content_validates_clean(self):

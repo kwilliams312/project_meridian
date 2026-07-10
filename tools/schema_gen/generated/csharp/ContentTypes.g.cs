@@ -53,6 +53,12 @@ public enum AbilityTarget
     Friendly,
 }
 
+public enum AppearanceSex
+{
+    Male,
+    Female,
+}
+
 public enum AssetClass
 {
     CharacterModel,
@@ -144,6 +150,16 @@ public enum DyeChannel
     Primary,
     Secondary,
     Accent,
+}
+
+public enum DyeRarity
+{
+    Poor,
+    Common,
+    Uncommon,
+    Rare,
+    Epic,
+    Legendary,
 }
 
 public enum GeosetRegion
@@ -260,6 +276,14 @@ public enum QuestObjectiveKind
     Collect,
     Deliver,
     Explore,
+}
+
+public enum RaceName
+{
+    Ardent,
+    Dolmen,
+    Sylvane,
+    Emberkin,
 }
 
 public enum School
@@ -879,5 +903,60 @@ public sealed record Asset
     /// <summary>Required for sfx / ui_sound / ambience_emitter classes.</summary>
     public AssetSfx? Sfx { get; init; }
     public AssetEncode? Encode { get; init; }
+}
+
+public sealed record AppearancePresetsHair
+{
+    public required long Id { get; init; }
+    public required ArtRef Model { get; init; }
+}
+
+public sealed record AppearancePresetsFace
+{
+    public required long Id { get; init; }
+    public required ArtRef Texture { get; init; }
+}
+
+public sealed record AppearancePresetsSkin
+{
+    public required long Id { get; init; }
+    public required ArtRef Palette { get; init; }
+}
+
+public sealed record AppearancePresets
+{
+    public required IReadOnlyList<AppearancePresetsHair> Hair { get; init; }
+    public required IReadOnlyList<AppearancePresetsFace> Face { get; init; }
+    public required IReadOnlyList<AppearancePresetsSkin> Skin { get; init; }
+}
+
+public sealed record AppearanceMorph
+{
+    public required long Id { get; init; }
+    public required string Name { get; init; }
+    public required string Blendshape { get; init; }
+    public required double Min { get; init; }
+    public required double Max { get; init; }
+}
+
+public sealed record Appearance
+{
+    public required ContentId Id { get; init; }
+    public required RaceName Race { get; init; }
+    public required AppearanceSex Sex { get; init; }
+    public required ArtRef Skeleton { get; init; }
+    public required ArtRef BodyModel { get; init; }
+    /// <summary>Customization set v1 (art-prd §5): hair meshes, face textures, skin palettes. Each preset entry's `id` is the stable integer the per-character appearance record stores (§5.2) — uniqueness within a list is lint L082.</summary>
+    public required AppearancePresets Presets { get; init; }
+    /// <summary>0 at M1; ships only if the §2.5 crowd budget allows (A-03/D-32). Capped at 2 entries.</summary>
+    public IReadOnlyList<AppearanceMorph>? Morphs { get; init; }
+}
+
+public sealed record Dye
+{
+    public required ContentId Id { get; init; }
+    public required string Name { get; init; }
+    public required string Color { get; init; }
+    public required DyeRarity Rarity { get; init; }
 }
 

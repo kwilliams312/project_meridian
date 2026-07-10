@@ -1,0 +1,70 @@
+# meridian/appearance_catalog@1 — per race/sex character customization catalog
+# (contract ①/T3, spec §5.1). One file per race/sex under content/<ns>/appearance/.
+# Preset ids are small integers, stable forever within a catalog — new presets
+# append; this additive-only promise is what lets the per-character appearance
+# record (§5.2, contract ①/T5) stay forward-compatible (A-03/D-32). M1 ships zero
+# morphs; `morphs` is capped at 2 entries per the §2.5 crowd-render budget.
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/appearance.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, id, race, sex, skeleton, body_model, presets]
+properties:
+  schema: { const: "meridian/appearance_catalog@1" }
+  id: { $ref: "#/$defs/contentId" }
+  race: { $ref: "#/$defs/raceName" }
+  sex: { enum: [male, female] }
+  skeleton: { $ref: "#/$defs/artRef" }
+  body_model: { $ref: "#/$defs/artRef" }
+  presets:
+    description: >-
+      Customization set v1 (art-prd §5): hair meshes, face textures, skin
+      palettes. Each preset entry's `id` is the stable integer the per-character
+      appearance record stores (§5.2) — uniqueness within a list is lint L082.
+    type: object
+    additionalProperties: false
+    required: [hair, face, skin]
+    properties:
+      hair:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [id, model]
+          properties:
+            id: { type: integer, minimum: 1, maximum: 255 }
+            model: { $ref: "#/$defs/artRef" }
+      face:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [id, texture]
+          properties:
+            id: { type: integer, minimum: 1, maximum: 255 }
+            texture: { $ref: "#/$defs/artRef" }
+      skin:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [id, palette]
+          properties:
+            id: { type: integer, minimum: 1, maximum: 255 }
+            palette: { $ref: "#/$defs/artRef" }
+  morphs:
+    description: >-
+      0 at M1; ships only if the §2.5 crowd budget allows (A-03/D-32). Capped at
+      2 entries.
+    type: array
+    maxItems: 2
+    items:
+      type: object
+      additionalProperties: false
+      required: [id, name, blendshape, min, max]
+      properties:
+        id: { type: integer, minimum: 1 }
+        name: { $ref: "#/$defs/displayName" }
+        blendshape: { type: string, minLength: 1 }
+        min: { type: number }
+        max: { type: number }
