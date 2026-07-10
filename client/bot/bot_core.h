@@ -71,7 +71,10 @@ BotPath parse_path(const std::string& s);
 struct BotRunResult {
     // --- Enter-world (WorldHello → HandshakeOk) ---
     bool connected = false;        // WorldHello sent (transport frames flowed)
-    bool handshake_ok = false;     // HandshakeOk received (entered the world)
+    bool handshake_ok = false;     // HandshakeOk received (reached character-select)
+    bool in_world = false;         // ENTER_WORLD_RESPONSE(OK) received (spawned)
+    std::uint16_t enter_world_status = 0;  // world.fbs EnterWorldStatus (0 = OK)
+    std::uint64_t character_id = 0;        // the character the bot entered as
     bool disconnected = false;     // server sent a Disconnect (grant reject / error)
     std::uint16_t disconnect_reason = 0;  // world.fbs DisconnectReason (0 = none)
     std::string detail;            // human-readable note (logs / failure reason)
@@ -108,13 +111,28 @@ struct BotRunResult {
         return n;
     }
 
-    bool entered_world() const { return handshake_ok; }
+    // "Entered the world" now means SPAWNED via ENTER_WORLD OK — not merely the
+    // handshake (server-authoritative characters, D-35). A session that reaches
+    // character-select but never enters (e.g. NOT_FOUND) is NOT in-world.
+    bool entered_world() const { return in_world; }
 };
 
 // Config for one bot world session.
 struct BotWorldConfig {
     std::uint32_t client_build = 1000;  // must match the grant's build gate
     BotPath path = BotPath::kSquare;
+
+    // Server-authoritative characters (D-35 / #341). After HandshakeOk the bot is
+    // at character-select and must ENTER_WORLD as a REAL owned character before it
+    // can move. It lists the account's roster and, if empty, creates one named
+    // `character_name` (race/class default to the M0 roster's 1/1). The load
+    // harness usually pre-creates via meridian-character, so CharList finds it.
+    std::string character_name;  // create-if-empty name; falls back to "bot" when empty
+
+    // Test hook: when non-zero, skip CharList/CharCreate and ENTER_WORLD with THIS
+    // id directly — used to prove a bot pointed at an UNOWNED id gets NOT_FOUND and
+    // does not spawn. 0 (default) = normal list/create/enter flow.
+    std::uint64_t force_character_id = 0;
     // How many 20 Hz sim ticks to run the movement loop for. At 20 Hz, 200 ticks
     // = 10 s of simulated movement. The CLI derives this from --duration.
     std::uint32_t movement_ticks = 200;

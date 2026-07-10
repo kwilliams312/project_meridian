@@ -77,6 +77,7 @@ enum class LoginOutcome {
     kRejectedHello,     // ClientHello failed the build/proto gate (Error sent)
     kRejectedAuth,      // SRP proof failed (AuthResult error sent); NO grant
     kRejectedRealm,     // RealmSelect named an unknown/unavailable realm (Error)
+    kRejectedBanned,    // a banned account / source IP was refused (OPS-02c, #419)
     kProtocolError,     // peer sent an unexpected/undecodable message
     kTransportClosed,   // peer closed the connection at a frame boundary
 };
@@ -86,6 +87,10 @@ struct LoginResult {
     LoginOutcome outcome = LoginOutcome::kProtocolError;
     std::uint64_t grant_id = 0;   // set iff kGranted
     std::uint64_t account_id = 0; // resolved account (0 if never resolved)
+    std::uint8_t gm_level = 0;    // resolved account's GM level (D-16; #417). authd
+                                  // reads account.gm_level at SrpStart and exposes it
+                                  // here so the login audit records WHO the actor is
+                                  // AND their privilege tier. 0 (player) until resolved.
     std::string detail;           // human-readable note for logs
 
     // OPS-05 log↔trace correlation (#166 + #165). When a trace exporter is

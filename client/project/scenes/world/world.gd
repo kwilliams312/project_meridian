@@ -48,10 +48,17 @@ const CHAR_SELECT_SCENE := "res://scenes/charselect/char_select.tscn"
 # remote coloring can never drift — every client renders a class the same way.
 const PlayerClassColors := preload("res://scenes/world/player_class_colors.gd")
 
+# HUD foundation (UI-01, #431): the MVVM event bus + the unit-frame HUD. world.gd
+# owns the ONE event bus for this world session and publishes every decoded server
+# unit event into it; the HUD subscribes to the bus and never touches the net thread.
+const MeridianEventBusScript := preload("res://hud/event_bus.gd")
+const MeridianHudScript := preload("res://hud/hud.gd")
+
 var _session: Dictionary = {}
 var _character: Dictionary = {}
 
 var _net: MeridianNetThread
+var _net_preconnected: bool = false  # net thread handed over LIVE by char-select (D-35)
 var _interp: MeridianRemoteInterpolator
 var _mover: MeridianMovementController
 
@@ -73,8 +80,17 @@ var _hud_guid: Label
 var _hud_remotes: Label
 var _hud_tick: Label
 
+# UI-01 HUD foundation (#431): the server-state registry + the unit-frame HUD view.
+var _bus: MeridianEventBus
+var _hud: MeridianHud
+
 var _my_guid: int = 0
 var _last_server_tick: int = 0
+
+# ITM/ECO (#441): the buyback slot of the most recent VENDOR_BUYBACK_REQUEST. The typed
+# VENDOR_BUYBACK_RESULT does not echo the slot, so the client correlates its own request
+# with the next result to drop the right entry from the local buyback queue.
+var _pending_buyback_slot: int = -1
 var _conn_text: String = "offline"
 var _client_ms: int = 0                     # monotonic client clock for the sim
 
@@ -91,6 +107,12 @@ var _last_move_debug_ms: int = -100000
 func configure(session: Dictionary, character: Dictionary = {}) -> void:
 	_session = session if session != null else {}
 	_character = character if character != null else {}
+	# Server-authoritative characters (D-35 / #279): char-select established the world
+	# session (WorldHello → CharList → ENTER_WORLD OK) on a LIVE net thread and handed
+	# it over here. Reuse it — the grant is single-use, so we must NOT reconnect.
+	if _session.get("net_thread", null) != null:
+		_net = _session.get("net_thread")
+		_net_preconnected = true
 
 
 func _ready() -> void:
@@ -106,16 +128,66 @@ func _ready() -> void:
 	add_child(_remotes)
 	_build_hud()
 
+	# UI-01 (#431): stand up the event bus + unit-frame HUD BEFORE wiring the net
+	# signals, so the very first drained EntityEnter/VITALS_UPDATE can publish into a
+	# live bus. The HUD subscribes to the bus; it never sees the net thread.
+	_bus = MeridianEventBusScript.new()
+	_hud = MeridianHudScript.new()
+	_hud.name = "UnitFrameHud"
+	add_child(_hud)
+	_hud.setup(_bus)
+
+	# QST-01 (#433): the world scene owns BOTH the bus and the net thread, so it is the
+	# controller that turns a UI INTENT (a bus request_* signal) into an outbound frame,
+	# and a decoded quest/gossip server frame into a bus publish. The HUD windows only
+	# ever see the bus — the net thread stays behind this one seam (extends #431).
+	_bus.gossip_hello_requested.connect(_on_gossip_hello_requested)
+	_bus.quest_accept_requested.connect(_on_quest_accept_requested)
+	_bus.quest_turn_in_requested.connect(_on_quest_turn_in_requested)
+	_bus.quest_log_requested.connect(_on_quest_log_requested)
+	_bus.giver_indicator_changed.connect(_on_giver_indicator_changed)
+
+	# ITM/ECO/NPC (#441): the same controller seam for loot/vendor/trainer. The gossip
+	# vendor/trainer entry hooks open the sibling windows; loot/vendor/trainer intents
+	# become outbound frames; the server's typed results are decoded + published back.
+	_bus.vendor_entry_selected.connect(_on_vendor_entry_selected)
+	_bus.trainer_entry_selected.connect(_on_trainer_entry_selected)
+	_bus.loot_request_requested.connect(_on_loot_request_requested)
+	_bus.loot_take_requested.connect(_on_loot_take_requested)
+	_bus.loot_release_requested.connect(_on_loot_release_requested)
+	_bus.vendor_buy_requested.connect(_on_vendor_buy_requested)
+	_bus.vendor_sell_requested.connect(_on_vendor_sell_requested)
+	_bus.vendor_buyback_requested.connect(_on_vendor_buyback_requested)
+	_bus.trainer_learn_requested.connect(_on_trainer_learn_requested)
+
 	_interp = MeridianRemoteInterpolator.new()
 	_mover = MeridianMovementController.new()
 	_mover.reset(SPAWN, 0.0)
 
-	if _has_session():
+	if _net_preconnected and _net != null:
+		_attach_preconnected()
+	elif _has_session():
 		_connect_to_world()
 	else:
 		_conn_text = "offline (no session — local sandbox)"
 		print("[world] no session context — running OFFLINE local sandbox")
 	_refresh_hud()
+
+
+# Reuse the LIVE net thread handed over by char-select (D-35 / #279). HandshakeOk +
+# ENTER_WORLD already happened there, so no handshake_ok signal will arrive here — we
+# mark ourselves in-world and let _physics_process pump() drain the queued AoI
+# EntityEnter frames. Wire the same signals _connect_to_world() would have.
+func _attach_preconnected() -> void:
+	_router = MeridianWorldConnectRouter.new()
+	_net.handshake_ok.connect(_on_handshake_ok)  # harmless if a late one arrives
+	_net.movement_state.connect(_on_movement_state)
+	_net.entity_frame.connect(_on_entity_frame)
+	_net.disconnected.connect(_on_disconnected)
+	_net.transport_closed.connect(_on_transport_closed)
+	_net.connect_failed.connect(_on_connect_failed)
+	print("[world] reusing the live world session from character-select (in-world)")
+	_on_handshake_ok()  # we are already past char-select — treat as entered
 
 
 func _exit_tree() -> void:
@@ -278,11 +350,25 @@ func _on_handshake_ok() -> void:
 	if _router != null:
 		_router.note_handshake_ok()   # past this point a drop is an in-world disconnect
 	print("[world] HandshakeOk — entered the world")
+	# QST-01 (#433): pull the initial quest-log snapshot now that we are in world (worldd
+	# does NOT push it unsolicited — #388 — so the client asks). Populates the tracker.
+	if _bus != null:
+		_bus.request_quest_log()
 
 
 func _on_movement_state(state: Dictionary) -> void:
 	# Our own authoritative state: learn our guid + reconcile the local prediction.
-	_my_guid = int(state.get("entity_guid", _my_guid))
+	var new_guid := int(state.get("entity_guid", _my_guid))
+	if new_guid != 0 and new_guid != _my_guid:
+		_my_guid = new_guid
+		# UI-01 (#431): identify the local player to the event bus so the player frame
+		# binds to it. worldd sends the local session no self EntityEnter at spawn, so
+		# seed name/level/class from character-select; health/power fill in on the
+		# first self VITALS_UPDATE (a combat/heal delta).
+		if _bus != null:
+			_bus.seed_identity(_my_guid, String(_character.get("name", "")),
+				int(_character.get("level", 0)), int(_character.get("class", 0)))
+			_bus.set_local_player(_my_guid)
 	_last_server_tick = int(state.get("server_time_ms", _last_server_tick))
 	if _mover != null:
 		# Wire (Z-UP) -> Godot (Y-UP): y = height (wire z), z = ground (wire y).
@@ -298,8 +384,27 @@ func _on_entity_frame(opcode: int, _seq: int, payload: PackedByteArray) -> void:
 	var d: Dictionary = _net.decode_entity_frame(opcode, payload)
 	var kind := String(d.get("kind", ""))
 	if kind.is_empty():
-		return  # non-entity opcode (e.g. ClockSync) or undecodable
+		# Not an entity-relay opcode — try the QUEST/GOSSIP decode seam (QST-01, #433).
+		# worldd forwards these S→C frames raw through `entity_frame`; we decode + route
+		# them through the SAME event bus the HUD reads (never predicting quest state).
+		_route_quest_gossip_frame(opcode, payload)
+		return  # non-entity opcode (ClockSync / quest / gossip) or undecodable
 	var guid := int(d.get("guid", 0))
+
+	# UI-01 (#431): route ALL server unit state through the event bus first — including
+	# our OWN (the HUD reads the local player from the bus). This runs BEFORE the
+	# "don't render self as a remote" guard below, so self vitals still reach the frame.
+	if _bus != null:
+		match kind:
+			"enter":
+				_bus.publish_entity_enter(guid, d)
+			"vitals":
+				_bus.publish_vitals_update(guid, d)
+			"leave":
+				_bus.publish_entity_leave(guid)
+	if kind == "vitals":
+		return  # a vitals delta only updates the HUD — it never spawns/moves a node
+
 	if guid == _my_guid and _my_guid != 0:
 		return  # never render ourselves as a remote
 	_last_server_tick = _client_ms
@@ -426,6 +531,276 @@ func _despawn_remote(guid: int) -> void:
 		node.queue_free()
 	_remote_nodes.erase(guid)
 	print("[world] remote LEAVE guid=%d (%d remotes)" % [guid, _remote_nodes.size()])
+
+
+# --- Targeting stub (UI-01, #431) --------------------------------------------
+# A MINIMAL tab-target so the target unit frame is demonstrable: TAB cycles through
+# the remote entities nearest-first, and the choice flows through the event bus
+# (set_target) exactly like real targeting will. Full click/tab targeting + friend/
+# foe + range/LoS is the combat-presentation epic (#23) — this is only the seam that
+# proves the target frame binds to and renders a server unit's vitals from the bus.
+func _input(event: InputEvent) -> void:
+	if not (event is InputEventKey) or not event.pressed or event.echo:
+		return
+	var code := (event as InputEventKey).physical_keycode
+	match code:
+		KEY_TAB:
+			_cycle_target()
+			get_viewport().set_input_as_handled()  # TAB targets, does not move UI focus
+		KEY_G:
+			# QST-01 (#433): open gossip on the current NPC. NPC entities don't spawn at
+			# M1 (npc_guid maps 1:1 to the npc_template id), so the giver is the current
+			# target guid if set, else the dev default (MERIDIAN_GOSSIP_NPC, quartermaster
+			# Bren=27) so the flow is drivable in the greybox client.
+			_open_gossip_on_current_npc()
+			get_viewport().set_input_as_handled()
+		KEY_L:
+			if _hud != null:
+				_hud.toggle_quest_log()  # toggle the quest log window
+			get_viewport().set_input_as_handled()
+		KEY_B:
+			if _hud != null:
+				_hud.toggle_bags()  # toggle the bags/inventory window (ITM-01, #441)
+			get_viewport().set_input_as_handled()
+		KEY_F:
+			# ITM-02 (#441): open the loot window on the current NPC/corpse. Corpse entities
+			# do not spawn at M1, so the corpse is the current target guid if set, else the
+			# dev default (MERIDIAN_LOOT_CORPSE) so the flow is drivable in the greybox client.
+			_open_loot_on_current_corpse()
+			get_viewport().set_input_as_handled()
+		KEY_ESCAPE:
+			if _bus != null:
+				_bus.close_gossip()  # dismiss the gossip window
+			get_viewport().set_input_as_handled()
+
+
+# --- Quest / gossip controller (QST-01, #433) --------------------------------
+# The world scene is the ONLY place both the bus and the net thread meet: it turns bus
+# INTENTS into outbound frames and decoded server frames into bus publishes. The HUD
+# windows stay pure views that know only the bus.
+
+# The dev NPC to open gossip on when nothing is targeted (npc_template id; overridable
+# with MERIDIAN_GOSSIP_NPC). 27 = quartermaster_bren, the IT-M1 kobold-chain giver.
+func _default_gossip_npc() -> int:
+	var env := OS.get_environment("MERIDIAN_GOSSIP_NPC")
+	return int(env) if env.is_valid_int() and int(env) > 0 else 27
+
+
+func _open_gossip_on_current_npc() -> void:
+	if _bus == null:
+		return
+	var npc := _bus.target_guid()
+	if npc == 0:
+		npc = _default_gossip_npc()
+	print("[world] GOSSIP_HELLO -> npc=%d" % npc)
+	_bus.request_gossip_hello(npc)
+
+
+# The dev corpse to open loot on when nothing is targeted (overridable with
+# MERIDIAN_LOOT_CORPSE). Corpse entities do not spawn at M1, so this drives the greybox
+# loot flow against a server-side loot session created by a kill.
+func _default_loot_corpse() -> int:
+	var env := OS.get_environment("MERIDIAN_LOOT_CORPSE")
+	return int(env) if env.is_valid_int() and int(env) > 0 else 1
+
+
+func _open_loot_on_current_corpse() -> void:
+	if _bus == null:
+		return
+	var corpse := _bus.target_guid()
+	if corpse == 0:
+		corpse = _default_loot_corpse()
+	_bus.request_loot(corpse)
+
+
+# Decode a raw quest/gossip S→C frame and publish it to the bus (the HUD reads it there).
+func _route_quest_gossip_frame(opcode: int, payload: PackedByteArray) -> void:
+	if _net == null or _bus == null:
+		return
+	var q: Dictionary = _net.decode_quest_frame(opcode, payload)
+	var kind := String(q.get("kind", ""))
+	match kind:
+		"gossip_menu":
+			_bus.publish_gossip_menu(int(q.get("npc_guid", 0)), q.get("options", []))
+		"quest_accept_result":
+			_bus.publish_quest_accept_result(int(q.get("quest_id", 0)), int(q.get("status", 0)))
+		"quest_progress":
+			_bus.publish_quest_progress(q)
+		"quest_turn_in_result":
+			_bus.publish_quest_turn_in_result(q)
+		"quest_log":
+			_bus.publish_quest_log(q.get("quests", []))
+		_:
+			# Not a quest/gossip opcode — try the loot/vendor/trainer decode seam (#441).
+			_route_econ_frame(opcode, payload)
+
+
+# Decode a raw loot/vendor/trainer S→C frame and publish it to the bus (ITM/ECO/NPC, #441).
+func _route_econ_frame(opcode: int, payload: PackedByteArray) -> void:
+	if _net == null or _bus == null:
+		return
+	var e: Dictionary = _net.decode_econ_frame(opcode, payload)
+	match String(e.get("kind", "")):
+		"loot_response":
+			_bus.publish_loot_response(int(e.get("corpse_guid", 0)), int(e.get("status", 0)),
+				int(e.get("copper", 0)), e.get("items", []))
+		"loot_result":
+			_bus.publish_loot_result(e)
+		"loot_closed":
+			_bus.publish_loot_closed(int(e.get("corpse_guid", 0)))
+		"vendor_buy_result":
+			_bus.publish_vendor_buy_result(e)
+		"vendor_sell_result":
+			_bus.publish_vendor_sell_result(e)
+		"vendor_buyback_result":
+			_bus.publish_vendor_buyback_result(e, _pending_buyback_slot)
+			_pending_buyback_slot = -1
+		"trainer_list":
+			_bus.publish_trainer_list(int(e.get("npc_guid", 0)), e.get("entries", []))
+		"trainer_learn_result":
+			_bus.publish_trainer_learn_result(e)
+		_:
+			pass  # not a loot/vendor/trainer opcode — ignore (ClockSync etc.)
+
+
+# --- Bus intent handlers (send the matching outbound frame) -------------------
+
+func _on_gossip_hello_requested(npc_guid: int) -> void:
+	if _net == null:
+		return
+	var frame: PackedByteArray = _net.build_gossip_hello_frame(npc_guid)
+	if frame.size() > 0:
+		_net.send_bulk(frame)
+
+
+func _on_quest_accept_requested(quest_id: int, giver_guid: int) -> void:
+	if _net == null:
+		return
+	var frame: PackedByteArray = _net.build_quest_accept_frame(quest_id, giver_guid)
+	if frame.size() > 0:
+		_net.send_bulk(frame)
+	print("[world] QUEST_ACCEPT -> quest=%d giver=%d" % [quest_id, giver_guid])
+
+
+func _on_quest_turn_in_requested(quest_id: int, turn_in_guid: int, choice_index: int) -> void:
+	if _net == null:
+		return
+	var frame: PackedByteArray = _net.build_quest_turn_in_frame(quest_id, turn_in_guid, choice_index)
+	if frame.size() > 0:
+		_net.send_bulk(frame)
+	print("[world] QUEST_TURN_IN -> quest=%d npc=%d choice=%d" % [quest_id, turn_in_guid, choice_index])
+
+
+func _on_quest_log_requested() -> void:
+	if _net == null:
+		return
+	var frame: PackedByteArray = _net.build_quest_log_request_frame()
+	if frame.size() > 0:
+		_net.send_bulk(frame)
+
+
+# Float a giver indicator (!/?) over an NPC's remote node when one exists. NPC entities
+# do not spawn at M1 (npc_guid maps to a template id), so this is a no-op until spawns
+# land (mcc #28) — but the seam is wired so the marker appears the moment an NPC does.
+func _on_giver_indicator_changed(npc_guid: int, marker: String) -> void:
+	var node: Node3D = _remote_nodes.get(npc_guid)
+	if node == null:
+		return
+	var existing := node.get_node_or_null("GiverMarker") as Label3D
+	if marker.is_empty():
+		if existing != null:
+			existing.queue_free()
+		return
+	if existing == null:
+		existing = Label3D.new()
+		existing.name = "GiverMarker"
+		existing.position = Vector3(0, 2.6, 0)
+		existing.font_size = 64
+		existing.outline_size = 12
+		existing.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		existing.no_depth_test = true
+		node.add_child(existing)
+	existing.text = marker
+	existing.modulate = Color(1.0, 0.85, 0.2) if marker == "!" else Color(0.55, 0.9, 0.4)
+
+
+# --- Loot / vendor / trainer controller (ITM-02/ECO-01/NPC-02, #441) ----------
+# Gossip vendor/trainer entries open the sibling windows through the bus; loot/vendor/
+# trainer INTENTS become outbound frames (send_bulk). The server's typed results are
+# decoded by _route_econ_frame and published back to the bus.
+
+func _on_vendor_entry_selected(npc_guid: int) -> void:
+	# The vendor catalog is not on the wire (gap), so the greybox uses the gossip NPC guid
+	# as the vendor id — the server validates it (UNKNOWN_VENDOR if it is not a vendor).
+	if _bus != null:
+		_bus.open_vendor(npc_guid)
+
+
+func _on_trainer_entry_selected(npc_guid: int) -> void:
+	# TRAINER_LIST was pushed with the GOSSIP_MENU; this only reveals the window.
+	if _bus != null:
+		_bus.open_trainer(npc_guid)
+
+
+func _on_loot_request_requested(corpse_guid: int) -> void:
+	_send_econ(_net.build_loot_request_frame(corpse_guid) if _net != null else PackedByteArray())
+	print("[world] LOOT_REQUEST -> corpse=%d" % corpse_guid)
+
+
+func _on_loot_take_requested(corpse_guid: int, slot: int, money: bool) -> void:
+	_send_econ(_net.build_loot_take_frame(corpse_guid, slot, money) if _net != null else PackedByteArray())
+
+
+func _on_loot_release_requested(corpse_guid: int) -> void:
+	_send_econ(_net.build_loot_release_frame(corpse_guid) if _net != null else PackedByteArray())
+
+
+func _on_vendor_buy_requested(vendor_id: int, item_template_id: int, quantity: int) -> void:
+	_send_econ(_net.build_vendor_buy_frame(vendor_id, item_template_id, quantity) if _net != null else PackedByteArray())
+	print("[world] VENDOR_BUY -> vendor=%d item=%d x%d" % [vendor_id, item_template_id, quantity])
+
+
+func _on_vendor_sell_requested(vendor_id: int, backpack_slot: int, quantity: int) -> void:
+	_send_econ(_net.build_vendor_sell_frame(vendor_id, backpack_slot, quantity) if _net != null else PackedByteArray())
+	print("[world] VENDOR_SELL -> vendor=%d slot=%d x%d" % [vendor_id, backpack_slot, quantity])
+
+
+func _on_vendor_buyback_requested(buyback_slot: int) -> void:
+	_pending_buyback_slot = buyback_slot  # correlate with the next VENDOR_BUYBACK_RESULT
+	_send_econ(_net.build_vendor_buyback_frame(buyback_slot) if _net != null else PackedByteArray())
+
+
+func _on_trainer_learn_requested(npc_guid: int, ability_id: int) -> void:
+	_send_econ(_net.build_trainer_learn_frame(npc_guid, ability_id) if _net != null else PackedByteArray())
+	print("[world] TRAINER_LEARN -> npc=%d ability=%d" % [npc_guid, ability_id])
+
+
+# Send an already-built econ frame at bulk priority (guards an empty build / offline net).
+func _send_econ(frame: PackedByteArray) -> void:
+	if _net != null and frame.size() > 0:
+		_net.send_bulk(frame)
+
+
+func _cycle_target() -> void:
+	if _bus == null:
+		return
+	var guids: Array = _remote_nodes.keys()
+	if guids.is_empty():
+		_bus.set_target(0)  # nothing to target — clear the frame
+		return
+	var ppos: Vector3 = _player.position if _player != null else SPAWN
+	guids.sort_custom(func(a, b): return _dist2_to(int(a), ppos) < _dist2_to(int(b), ppos))
+	var cur := _bus.target_guid()
+	var idx := guids.find(cur)
+	# Cycle to the next-nearest after the current target; else pick the nearest.
+	var next_guid := int(guids[(idx + 1) % guids.size()]) if idx != -1 else int(guids[0])
+	_bus.set_target(next_guid)
+	print("[world] target -> guid=%d (%d candidates)" % [next_guid, guids.size()])
+
+
+func _dist2_to(guid: int, ppos: Vector3) -> float:
+	var n: Node3D = _remote_nodes.get(guid)
+	return ppos.distance_squared_to(n.position) if n != null else INF
 
 
 # --- Scene construction (built in code, like camera_demo.gd) -----------------

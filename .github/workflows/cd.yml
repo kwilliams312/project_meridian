@@ -3,8 +3,18 @@
 # server images natively on the ARC self-hosted runners (amd64 on the NUCs, arm64
 # on the Talos workers), publish per-arch by digest, then merge into manifest
 # lists tagged <short-sha> + the moving per-branch tag (:dev/:ptr/:prod; :latest
-# on main), cosign-signed + SBOM-attested on the merged digest. dev/ptr then
-# auto-restart to repull the moving tag. Supersedes dev-images.yml.
+# on main), cosign-signed + SBOM-attested on the merged digest.
+#
+# Rollout is GitOps write-back for every realm — no `kubectl rollout restart`:
+#   - `dev` (issue #380): the `pin` job commits the just-built immutable
+#     <short-sha> into deploy/gitops/realms/dev/image.yaml on every dev push, and
+#     ArgoCD drives the rollout off that manifest diff.
+#   - `ptr`/`main` (issue #382): the pin is carried by promotion, not built here.
+#     The `promote` workflow (.github/workflows/promote.yml) copies the SHA
+#     validated on the prior tier into realms/{ptr,prod}/image.yaml on dev→ptr /
+#     ptr→main. ArgoCD auto-syncs ptr; Prod stays manual-sync (design §3).
+# So this workflow only builds/publishes/signs — the interim ptr rollout-restart
+# is gone. Supersedes dev-images.yml.
 name: cd
 
 on:
@@ -12,6 +22,7 @@ on:
     branches: [dev, ptr, main]
     paths:
       - server/**
+      - client/**
       - schema/**
       - deploy/docker/**
       - .github/workflows/cd.yml
@@ -47,7 +58,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [authd, worldd, meridian-db, meridian-account]
+        image: [authd, worldd, meridian-db, meridian-account, meridian-bot, meridian-character]
         arch: [amd64, arm64]
     runs-on: meridian-${{ matrix.arch }}
     steps:
@@ -64,6 +75,8 @@ jobs:
             authd|worldd)    echo "file=deploy/docker/Dockerfile" >> "$GITHUB_OUTPUT"; echo "args=DAEMON=${{ matrix.image }}" >> "$GITHUB_OUTPUT" ;;
             meridian-db)     echo "file=deploy/docker/Dockerfile.db" >> "$GITHUB_OUTPUT"; echo "args=" >> "$GITHUB_OUTPUT" ;;
             meridian-account) echo "file=deploy/docker/Dockerfile.account" >> "$GITHUB_OUTPUT"; echo "args=" >> "$GITHUB_OUTPUT" ;;
+            meridian-character) echo "file=deploy/docker/Dockerfile.character" >> "$GITHUB_OUTPUT"; echo "args=" >> "$GITHUB_OUTPUT" ;;
+            meridian-bot)     echo "file=deploy/docker/Dockerfile.bot" >> "$GITHUB_OUTPUT"; echo "args=" >> "$GITHUB_OUTPUT" ;;
           esac
       - id: build
         uses: docker/build-push-action@v6
@@ -89,7 +102,7 @@ jobs:
     needs: [meta, build]
     strategy:
       matrix:
-        image: [authd, worldd, meridian-db, meridian-account]
+        image: [authd, worldd, meridian-db, meridian-account, meridian-bot, meridian-character]
     runs-on: meridian-amd64
     steps:
       - uses: docker/setup-buildx-action@v3
@@ -129,16 +142,61 @@ jobs:
           COSIGN_YES: "true"
         run: cosign attest --yes --type cyclonedx --predicate sbom-${{ matrix.image }}.cdx.json "${{ steps.create.outputs.ref }}"
 
-  restart:
+  # Dev rollout is GitOps: commit the just-built immutable <short-sha> into the
+  # dev realm's image overlay and let ArgoCD roll the Deployments off the diff
+  # (issue #380). No cluster access needed here — ArgoCD reconciles the commit.
+  pin:
     needs: [meta, merge]
-    if: github.ref_name == 'dev' || github.ref_name == 'ptr'
+    if: github.ref_name == 'dev'
     runs-on: meridian-amd64
+    permissions:
+      contents: write        # write-back the pin commit (job-scoped)
     steps:
-      - uses: azure/setup-kubectl@v4
-      - name: Rollout-restart the realm daemons
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pin meridian-dev to the immutable <short-sha>
+        env:
+          SHA: ${{ needs.meta.outputs.sha }}
         run: |
-          NS="meridian-${{ github.ref_name }}"
-          # Daemons only — never rollout-restart MariaDB (ephemeral in dev wipes
-          # accounts on reseed; persistent in PTR/Prod it is pure downtime).
-          kubectl -n "$NS" rollout restart deployment -l 'app.kubernetes.io/part-of=meridian,app.kubernetes.io/component in (authd,worldd)'
-          kubectl -n "$NS" rollout status deployment -l app.kubernetes.io/component=authd --timeout=120s
+          set -euo pipefail
+          f=deploy/gitops/realms/dev/image.yaml
+          # Regenerate the machine-managed overlay deterministically (all four
+          # images share the <short-sha> tag from the merge job): daemons via
+          # image.tag, MariaDB via mariadb.image.tag, the seed account CLI via
+          # seed.accountImage.tag. printf keeps column-0 YAML regardless of the
+          # workflow's own indentation.
+          printf '%s\n' \
+            '# SPDX-License-Identifier: Apache-2.0' \
+            '# MACHINE-MANAGED by .github/workflows/cd.yml — do NOT edit by hand.' \
+            '# Immutable image pin for the Dev realm (issue #380): the just-built' \
+            '# <short-sha>, committed back on every push to dev so ArgoCD sees a' \
+            '# manifest diff and drives the rollout declaratively. Overrides the' \
+            '# moving :dev tag from realms/dev/values.yaml (loaded before this file).' \
+            'image:' \
+            "  tag: \"${SHA}\"" \
+            'mariadb:' \
+            '  image:' \
+            "    tag: \"${SHA}\"" \
+            'seed:' \
+            '  accountImage:' \
+            "    tag: \"${SHA}\"" \
+            > "$f"
+          if git diff --quiet -- "$f"; then
+            echo "meridian-dev already pinned to ${SHA}; nothing to commit"
+            exit 0
+          fi
+          git config user.name  "meridian-cd[bot]"
+          git config user.email "meridian-cd[bot]@users.noreply.github.com"
+          git add "$f"
+          # Loop guard 1: the commit touches only deploy/gitops/**, which is NOT
+          # in this workflow's push `paths:` filter, so it cannot re-trigger cd.
+          # Loop guard 2: [skip ci] belt-and-braces in case paths are widened.
+          git commit -m "ci(cd): pin meridian-dev to ${SHA} [skip ci]"
+          git push origin HEAD:dev
+
+  # NOTE (issue #382): the `ptr` rollout-restart job was removed. PTR now rolls
+  # out declaratively like dev — the `promote` workflow carries the Dev-validated
+  # <short-sha> into realms/ptr/image.yaml and ArgoCD reconciles the diff. Prod
+  # stays manual-sync. cd.yml no longer touches any cluster (no kubectl / RBAC).

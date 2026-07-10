@@ -418,6 +418,41 @@ class TestSchemaConstraints:
 
 
 @pytest.mark.unit
+class TestSkeletonDefsMerge:
+    """meridian/skeleton@1 vocabulary $defs are merged into every content schema
+    (contract ①/T1) the same way common.defs.yaml is — see load_schemas()."""
+
+    def test_skeleton_defs_merged_into_schemas(self):
+        from validate_content import load_schemas
+
+        validators = load_schemas(SCHEMA_DIR)
+        # any loaded validator's schema resolves the merged defs
+        merged = validators["item"].schema["$defs"]
+        assert set(merged["geosetRegion"]["enum"]) == {
+            "head",
+            "hands",
+            "forearms",
+            "torso",
+            "waist",
+            "hips_legs",
+            "lower_legs",
+            "feet",
+        }
+        assert "main_hand" in merged["attachSocket"]["enum"]
+        assert merged["dyeChannel"]["enum"] == ["primary", "secondary", "accent"]
+
+    def test_contentid_accepts_dye_and_appearance_segments(self):
+        import re
+
+        from validate_content import load_schemas
+
+        defs = load_schemas(SCHEMA_DIR)["item"].schema["$defs"]
+        pat = re.compile(defs["contentId"]["pattern"])
+        assert pat.match("core:dye.russet")
+        assert pat.match("core:appearance.ardent.male")
+
+
+@pytest.mark.unit
 class TestProvenanceLint:
     """L021/L022 — provenance completeness + license/origin policy (TD-09)."""
 
@@ -554,6 +589,69 @@ class TestBudgetLint:
         # Real content declares no budget block yet — must still pass.
         res = run(tmp_path, {"tp/assets/art/hero.asset.yaml": ASSET})
         assert res.errors == []
+
+
+@pytest.mark.unit
+class TestStemManifestLint:
+    """L023 — a strudel-backed music_stem must ship a sibling render manifest."""
+
+    # A schema-valid music_stem sidecar whose WAV `source` is rendered from a
+    # Strudel pattern (declared in extra_sources). Individual tests decide whether
+    # the sibling `<name>.render.yaml` manifest is present.
+    STRUDEL_STEM = """\
+    schema: meridian/asset@1
+    id: tp:mus.z1.explore
+    class: music_stem
+    source: assets/audio/mus/explore.wav
+    extra_sources:
+      - assets/audio/mus/explore.strudel
+    license: CC-BY-4.0
+    provenance:
+      source_tier: original
+      authors: [tester]
+    music:
+      stem_set: mus.z1.explore_set
+      layer: L1
+      bpm: 120
+      time_signature: "4/4"
+      length_bars: 8
+    loudness:
+      lufs_integrated: -18
+      true_peak_dbtp: -1.5
+    """
+
+    def test_l023_strudel_stem_without_manifest_errors(self, tmp_path):
+        res = run(tmp_path, {"tp/assets/mus/z1_explore.asset.yaml": self.STRUDEL_STEM})
+        assert "L023" in codes(res.errors)
+
+    def test_l023_strudel_stem_with_manifest_passes(self, tmp_path):
+        res = run(
+            tmp_path,
+            {
+                "tp/assets/mus/z1_explore.asset.yaml": self.STRUDEL_STEM,
+                "tp/assets/mus/z1_explore.render.yaml": "# strudel render manifest\n",
+            },
+        )
+        assert "L023" not in codes(res.errors)
+
+    def test_render_manifest_not_flagged_as_bad_filename(self, tmp_path):
+        # A *.render.yaml manifest is an auxiliary strudel-render artifact, not a
+        # content entity — discovery must skip it, so it never trips L001.
+        manifest = (
+            "schema: meridian/strudel-render@1\n"
+            "pattern: assets/audio/mus/explore.strudel\n"
+            "variant: 0\n"
+            "tail_seconds: 4.0\n"
+            "sample_banks: []\n"
+        )
+        res = run(
+            tmp_path,
+            {
+                "tp/assets/mus/z1_explore.asset.yaml": self.STRUDEL_STEM,
+                "tp/assets/mus/z1_explore.render.yaml": manifest,
+            },
+        )
+        assert "L001" not in codes(res.errors)
 
 
 @pytest.mark.integration

@@ -69,19 +69,27 @@ inline std::string disconnect_reason_label(net::DisconnectReason r) {
 
 // The movement-violation `kind` label value (catalog
 // meridian_movement_violations_total{...,kind}). The catalog names the taxonomy
-// "speed/teleport/bounds/flag"; the M0 validator's MoveReject maps as: per-packet
-// over-cap -> "speed", sliding-window over-cap (burst-then-idle, catches the
-// teleport/blink cheat) -> "teleport", outside map bounds -> "bounds", z outside
-// the ground envelope -> "z" (its own kind — an honest label rather than forcing
-// it into "flag", which is reserved for state-flag violations landing with the v1
-// envelope at M1). Low-cardinality, stable strings safe as a label.
+// "speed/teleport/bounds/flag" (+ "z" for the ground-envelope check). With the v1
+// full envelope (OPS-03a, #420) each MoveReject maps to its honest taxonomy kind:
+//   • per-packet / sliding-window over-cap        -> "speed"
+//   • single-packet warp beyond the teleport cap,
+//     replay / out-of-order, un-acked forced move -> "teleport" (the teleport/
+//                                                    ack-counter family)
+//   • outside map bounds                          -> "bounds"
+//   • z outside the ground envelope               -> "z"
+//   • illegal state-flag combination              -> "flag"
+// Low-cardinality, stable strings safe as a label.
 inline std::string move_reject_kind(MoveReject r) {
     switch (r) {
-        case MoveReject::kSpeedPerPacket: return "speed";
-        case MoveReject::kSpeedWindow:    return "teleport";
-        case MoveReject::kOutOfBounds:    return "bounds";
-        case MoveReject::kZOutOfRange:    return "z";
-        case MoveReject::kNone:           return "none";
+        case MoveReject::kSpeedPerPacket:    return "speed";
+        case MoveReject::kSpeedWindow:       return "speed";
+        case MoveReject::kTeleport:          return "teleport";
+        case MoveReject::kStaleSequence:     return "teleport";
+        case MoveReject::kUnackedForcedMove: return "teleport";
+        case MoveReject::kOutOfBounds:       return "bounds";
+        case MoveReject::kZOutOfRange:       return "z";
+        case MoveReject::kIllegalFlag:       return "flag";
+        case MoveReject::kNone:              return "none";
     }
     return "none";
 }

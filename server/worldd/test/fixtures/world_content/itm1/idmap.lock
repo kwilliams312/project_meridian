@@ -1,0 +1,21 @@
+schema: meridian/idmap@1
+namespace: itm1
+band: 0                      # assigned once, immutable (SAD §2.4)
+released_watermark: 0      # highest local index frozen by a tagged release
+map:                         # append-only; local index (SAD §2.4)
+  itm1:art.char.human.male.warden: 11
+  itm1:art.creature.wolf.gray: 12
+  itm1:art.icon.item.boots_leather: 13
+  itm1:art.icon.item.draught_green: 14
+  itm1:art.icon.item.pelt_gray: 15
+  itm1:art.icon.item.trinket_iron: 16
+  itm1:item.healing_draught: 1
+  itm1:item.iron_trinket: 2
+  itm1:item.travelers_boots: 3
+  itm1:item.wolf_pelt: 4
+  itm1:loot.gray_wolf: 5
+  itm1:npc.gray_wolf: 6
+  itm1:npc.marshal_bren: 7
+  itm1:quest.pelts_for_bren: 8
+  itm1:quest.thin_the_pack: 9
+  itm1:vendor.bren_supplies: 10

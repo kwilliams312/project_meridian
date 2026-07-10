@@ -1,0 +1,8 @@
+// Zone-01 EXPLORE stem — adaptive layers L1 (pad) + L2 (melody).
+// Pure synthesis only (no sample banks): deterministic, source_tier original.
+// D dorian, 96 bpm, 4/4. Self-contained one-bar loop; the renderer repeats it
+// across the sidecar's declared 96 bars and wraps a seamless tail.
+stack(
+  note("<d3 f3 g3 a3>").s("triangle").gain(0.32),  // L1 slow harmonic pad, one note/bar
+  note("d4 a3 f4 a3").s("sine").gain(0.26)         // L2 gentle melodic figure
+)

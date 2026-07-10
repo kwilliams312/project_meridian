@@ -204,10 +204,21 @@ worldd:
   port: 7200
   bindAddress: "0.0.0.0"
   db:
-    # worldd has NO DB dependency at M0 (SAD §5.2 / compose). Off by default;
-    # set true (and db.name) if a future worldd build reads the world DB here.
+    # worldd's AUTH DB connection (MERIDIAN_DB_*) — the session_grant store worldd
+    # consumes on WORLD_HELLO (IF-3, #340). Off in the base chart; realm overlays
+    # enable it with name=meridian_auth so grant validation works.
     enabled: false
     name: ""                        # empty → db.names.world
+  chardb:
+    # worldd's CHARACTERS DB connection (MERIDIAN_CHARDB_*) — the meridian_characters
+    # store worldd loads from on ENTER_WORLD to validate ownership + spawn the real
+    # character (server-authoritative characters, D-35/#341). worldd enables its
+    # characters DB ONLY when MERIDIAN_CHARDB_USER is non-empty, and reads a SEPARATE
+    # CHARDB env block (it does NOT reuse MERIDIAN_DB_*). Off in the base chart;
+    # realm overlays enable it with name=meridian_characters. When disabled, every
+    # ENTER_WORLD returns INTERNAL (no fabrication) — so a live realm MUST enable it.
+    enabled: false
+    name: ""                        # empty → db.names.characters
   service:
     type: ClusterIP
     port: 7200

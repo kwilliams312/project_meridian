@@ -1,0 +1,8 @@
+# strudel-render manifest for core:mus.zone01.explore (issue #410).
+# Auxiliary artifact consumed by tools/strudel_render; not a content entity.
+# `pattern`/`source` are pack-root-relative (content/core/pack.yaml).
+schema: meridian/strudel-render@1
+pattern: assets/audio/mus/zone01/explore.strudel
+variant: 0
+tail_seconds: 4.0
+sample_banks: []

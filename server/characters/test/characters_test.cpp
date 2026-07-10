@@ -26,9 +26,12 @@
 //
 // Clean-room, original code; no GPL source consulted (CONTRIBUTING.md).
 
+#include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "characters.h"
@@ -86,6 +89,98 @@ bool has_id(const std::vector<characters::CharacterSummary>& list, std::uint64_t
     }
     return false;
 }
+
+// --- Concurrency (scenario 9) ------------------------------------------------
+// MariaDB error number for a detected lock cycle (ER_LOCK_DEADLOCK). Mirrors the
+// constant create_character retries on; used here to recognise the deadlock we
+// are deliberately reproducing.
+constexpr unsigned kErLockDeadlock = 1213;
+
+// Minimal single-use two-party rendezvous. Both parties call sync(); neither
+// returns until BOTH have arrived — used to align two threads at a precise point
+// so their transactions interleave deterministically. Hand-rolled (not
+// std::barrier) so the test does not depend on <barrier>, which some macOS libc++
+// versions still omit. A party that errors out before its sync() calls arrive()
+// instead so its peer is never left spinning.
+struct TwoGate {
+    std::atomic<int> n{0};
+    void arrive() { n.fetch_add(1, std::memory_order_acq_rel); }
+    void sync() {
+        arrive();
+        while (n.load(std::memory_order_acquire) < 2) std::this_thread::yield();
+    }
+};
+
+// Outcome of one concurrent create attempt (each runs on its own thread + its
+// own connection — meridian-db Connections are not shared across threads).
+struct ConcOutcome {
+    bool ok = false;       // create + COMMIT succeeded
+    unsigned db_code = 0;  // db::DbError code that escaped (0 = none)
+    std::string err;       // exception message, if any
+};
+
+// The RAW check-then-insert transaction create_character ran BEFORE the fix,
+// with NO deadlock retry. `gate` is synced AFTER the FOR UPDATE so both threads
+// hold their idx_character_account gap lock before either INSERTs — making the
+// cross-account insert-intention deadlock deterministic. Forces REPEATABLE READ
+// so the gap lock (hence the deadlock) does not hinge on the server default.
+// This is the CONTROL: it proves the pattern is deadlock-prone.
+ConcOutcome raw_create_no_retry(const db::ConnectParams& p, std::uint64_t account_id,
+                                const std::string& name, TwoGate& gate) {
+    ConcOutcome o;
+    bool synced = false;
+    try {
+        db::Connection conn(p);
+        conn.execute("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ");
+        conn.execute("START TRANSACTION");
+        try {
+            conn.execute(
+                "SELECT COUNT(*) FROM `character` WHERE account_id = ? FOR UPDATE",
+                {db::Param{std::to_string(account_id)}});
+            gate.sync();  // both gap locks held -> now race the INSERT
+            synced = true;
+            conn.execute(
+                "INSERT INTO `character` "
+                "(account_id, name, race, class, map_id, pos_x, pos_y, pos_z) "
+                "VALUES (?, ?, 1, 1, 0, 0, 0, 0)",
+                {db::Param{std::to_string(account_id)}, db::Param{name}});
+            conn.execute("COMMIT");
+            o.ok = true;
+        } catch (const db::DbError& e) {
+            try { conn.execute("ROLLBACK"); } catch (...) { /* already rolled back */ }
+            o.db_code = e.code();
+            o.err = e.what();
+        }
+    } catch (const std::exception& e) {
+        o.err = e.what();
+    }
+    if (!synced) gate.arrive();  // never leave the peer spinning
+    return o;
+}
+
+// Runs create_character (the FIXED path, with retry) on its own thread/connection.
+// `gate` aligns both threads at create_character's entry so their internal
+// gap-lock windows overlap; the fix must absorb any resulting deadlock and still
+// succeed for both distinct accounts.
+ConcOutcome conc_create(const db::ConnectParams& p, characters::CreateRequest req,
+                        TwoGate& gate) {
+    ConcOutcome o;
+    bool synced = false;
+    try {
+        db::Connection conn(p);
+        gate.sync();  // align both threads at the create entry point
+        synced = true;
+        characters::CreateResult r = characters::create_character(conn, req);
+        o.ok = r.character_id > 0;
+    } catch (const db::DbError& e) {
+        o.db_code = e.code();
+        o.err = e.what();
+    } catch (const std::exception& e) {
+        o.err = e.what();
+    }
+    if (!synced) gate.arrive();
+    return o;
+}
 }  // namespace
 
 int main() {
@@ -132,6 +227,16 @@ int main() {
     const std::string name_e = "Chr_" + std::to_string(salt) + "_e";
     const std::string name_f = "Chr_" + std::to_string(salt) + "_f";
 
+    // Concurrency scenario (9) reserves a contiguous id block [conc_base,
+    // conc_base + kConcSpan) so two-thread rounds always target FRESH, empty
+    // accounts (the gap-lock-vulnerable state). The control phase uses the first
+    // kControlSpan ids; the fixed-path phase uses ids from kControlSpan onward.
+    constexpr std::uint64_t kControlSpan = 100;
+    constexpr std::uint64_t kConcSpan = 300;
+    const std::uint64_t conc_base =
+        5'000'000'000ULL + static_cast<std::uint64_t>(static_cast<unsigned>(salt)) * kConcSpan;
+    const std::string conc_name = "Cc_" + std::to_string(salt) + "_";
+
     auto cleanup = [&](db::Connection& db) {
         for (std::uint64_t acct :
              {account_a, account_b, account_c, account_d, account_e, account_f,
@@ -139,6 +244,10 @@ int main() {
             db.execute("DELETE FROM `character` WHERE account_id = ?",
                        {db::Param{std::to_string(acct)}});
         }
+        // Range-delete the whole concurrency id block (scenario 9).
+        db.execute("DELETE FROM `character` WHERE account_id >= ? AND account_id < ?",
+                   {db::Param{std::to_string(conc_base)},
+                    db::Param{std::to_string(conc_base + kConcSpan)}});
     };
 
     try {
@@ -307,7 +416,78 @@ int main() {
                   rd.character_id > 0);
         }
 
-        // ---- 9. appearance ABSENT -> server default {1,1,1,1} --------------
+        // ---- 9. concurrency: distinct-account creates must not deadlock -----
+        // The self-create path (worldd CHAR_CREATE_REQUEST) lets two DIFFERENT
+        // accounts create at once. Their check-then-insert transactions gap-lock
+        // the same slice of idx_character_account (both accounts still empty), so
+        // their INSERTs deadlock (ER_LOCK_DEADLOCK, 1213). Two facets:
+        //   (a) CONTROL — the raw non-retrying pattern deterministically
+        //       reproduces the 1213 deadlock (proving the bug is real);
+        //   (b) FIX — create_character, run under the same two-thread load,
+        //       ALWAYS succeeds for both accounts because it retries the loser.
+        {
+            // (a) control — deterministic deadlock reproduction. Adjacent ids
+            // (a1, a1+1) are DISTINCT accounts guaranteed to share one index gap.
+            constexpr int kControlRounds = 16;
+            int control_deadlocks = 0;
+            for (int r = 0; r < kControlRounds; ++r) {
+                const std::uint64_t a1 = conc_base + static_cast<std::uint64_t>(2 * r);
+                const std::uint64_t a2 = a1 + 1;
+                const std::string n1 = conc_name + std::to_string(r) + "x";
+                const std::string n2 = conc_name + std::to_string(r) + "y";
+                TwoGate gate;
+                ConcOutcome o1, o2;
+                std::thread t1([&] { o1 = raw_create_no_retry(p, a1, n1, gate); });
+                std::thread t2([&] { o2 = raw_create_no_retry(p, a2, n2, gate); });
+                t1.join();
+                t2.join();
+                if (o1.db_code == kErLockDeadlock || o2.db_code == kErLockDeadlock)
+                    ++control_deadlocks;
+            }
+            check("concurrency control: raw check-then-insert reproduces the "
+                  "distinct-account deadlock (ER_LOCK_DEADLOCK)",
+                  control_deadlocks > 0);
+
+            // (b) fix — create_character retries the transient loser, so both
+            // distinct-account creates succeed under the same concurrency.
+            constexpr int kFixRounds = 40;
+            int fix_failures = 0;
+            int fix_deadlocks_escaped = 0;
+            for (int r = 0; r < kFixRounds; ++r) {
+                const std::uint64_t a1 =
+                    conc_base + kControlSpan + static_cast<std::uint64_t>(2 * r);
+                const std::uint64_t a2 = a1 + 1;
+                characters::CreateRequest req1;
+                req1.account_id = a1;
+                req1.name = conc_name + "f" + std::to_string(r) + "x";
+                req1.race = static_cast<std::uint8_t>(characters::Race::kArdent);
+                req1.char_class = static_cast<std::uint8_t>(characters::Class::kVanguard);
+                characters::CreateRequest req2 = req1;
+                req2.account_id = a2;
+                req2.name = conc_name + "f" + std::to_string(r) + "y";
+                TwoGate gate;
+                ConcOutcome o1, o2;
+                std::thread t1([&] { o1 = conc_create(p, req1, gate); });
+                std::thread t2([&] { o2 = conc_create(p, req2, gate); });
+                t1.join();
+                t2.join();
+                for (const ConcOutcome* o : {&o1, &o2}) {
+                    if (!o->ok) {
+                        ++fix_failures;
+                        std::printf("      round %d: create failed (code %u: %s)\n",
+                                    r, o->db_code, o->err.c_str());
+                    }
+                    if (o->db_code == kErLockDeadlock) ++fix_deadlocks_escaped;
+                }
+            }
+            check("concurrency fix: every distinct-account create_character "
+                  "succeeded under two-thread load",
+                  fix_failures == 0);
+            check("concurrency fix: no ER_LOCK_DEADLOCK escaped the retry",
+                  fix_deadlocks_escaped == 0);
+        }
+
+        // ---- 10. appearance ABSENT -> server default {1,1,1,1} --------------
         // A create that supplies no appearance (the CHR-01 stub / old client)
         // stores the NULL column; list must materialise the versioned default
         // (contract ① §5.2: absent ⇒ {v:1,hair:1,face:1,skin:1}).
@@ -331,7 +511,7 @@ int main() {
             }
         }
 
-        // ---- 10. appearance out-of-bounds -> clamped -----------------------
+        // ---- 11. appearance out-of-bounds -> clamped -----------------------
         // The record is opaque-but-bounded, never gameplay-authoritative
         // (contract ① §9): version!=1 clamps to 1 (only v1 exists at M1) and a
         // preset id of 0 clamps to 1 (ids are 1-based). No new failure taxonomy —

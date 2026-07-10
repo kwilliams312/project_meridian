@@ -153,6 +153,20 @@ int main() {
             check("SRP: wrong password is REJECTED (no M2)", !m2.has_value());
         }
 
+        // ---- 4b. set_gm_level changes an existing account's GM level (#417) --
+        // The account was created at gm_level=3; demote it to 1 (helper), then
+        // read it back. A non-existent username updates nothing (returns false).
+        {
+            bool updated = account::set_gm_level(db, username, 1);
+            check("set_gm_level: existing account updated", updated);
+            db::Result lv = db.execute(
+                "SELECT gm_level FROM account WHERE username = ?", {db::Param{username}});
+            check("set_gm_level: new level persisted",
+                  lv.rows.size() == 1 && lv.rows[0][0].has_value() && *lv.rows[0][0] == "1");
+            bool missing = account::set_gm_level(db, "no_such_user_" + username, 2);
+            check("set_gm_level: unknown username updates nothing", !missing);
+        }
+
         // ---- 5. Duplicate username is refused ------------------------------
         bool threw_dup = false;
         try {

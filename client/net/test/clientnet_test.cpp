@@ -49,6 +49,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace meridian::clientnet;
@@ -322,6 +323,14 @@ void test_entity_codec() {
     en.z = 0.5f;
     en.orientation = 1.25f;
     en.char_class = 3;  // #328: Warden — round-trips so the client can color by class
+    // Vitals (#430/#431 HUD contract): health/power/level/name for the unit frame.
+    en.health = 850;
+    en.max_health = 1000;
+    en.power = 60;
+    en.max_power = 100;
+    en.power_type = 2;  // ENERGY (Warden)
+    en.level = 12;
+    en.name = "Aelric";
     auto en_buf = codec::encode_entity_enter(en);
     auto en_out = codec::decode_entity_enter(en_buf);
     CHECK(en_out.has_value());
@@ -329,14 +338,22 @@ void test_entity_codec() {
     CHECK(en_out->x == 64.0f && en_out->y == 65.0f && en_out->z == 0.5f);
     CHECK(std::fabs(en_out->orientation - 1.25f) < 1e-6f);
     CHECK(en_out->char_class == 3);
+    CHECK(en_out->health == 850 && en_out->max_health == 1000);
+    CHECK(en_out->power == 60 && en_out->max_power == 100);
+    CHECK(en_out->power_type == 2 && en_out->level == 12);
+    CHECK(en_out->name == "Aelric");
 
-    // #328: char_class defaults to 0 (unset/unknown) when a producer omits it —
-    // the additive field is backward-compatible (a pre-#328 EntityEnter decodes to 0).
+    // #328/#430: char_class + vitals default to 0 / empty when a producer omits them —
+    // additive fields are backward-compatible (a pre-#430 EntityEnter decodes to 0).
     codec::EntityEnter en_noclass;
     en_noclass.entity_guid = 0x99ull;
     auto en_nc_out = codec::decode_entity_enter(codec::encode_entity_enter(en_noclass));
     CHECK(en_nc_out.has_value());
     CHECK(en_nc_out->char_class == 0);
+    CHECK(en_nc_out->health == 0 && en_nc_out->max_health == 0);
+    CHECK(en_nc_out->power == 0 && en_nc_out->max_power == 0);
+    CHECK(en_nc_out->power_type == 0 && en_nc_out->level == 0);
+    CHECK(en_nc_out->name.empty());
 
     // EntityUpdate — a movement delta (all position fields present, as worldd sends).
     codec::EntityUpdate up;
@@ -366,6 +383,89 @@ void test_entity_codec() {
     CHECK(!codec::decode_entity_enter(garbage).has_value());
     CHECK(!codec::decode_entity_update(garbage).has_value());
     CHECK(!codec::decode_entity_leave(garbage).has_value());
+}
+
+// ---------------------------------------------------------------------------
+// 4c. VitalsUpdate codec (#430/#431 — the HUD health/power/level delta, UI-01)
+// ---------------------------------------------------------------------------
+void test_vitals_codec() {
+    std::puts("[codec] VitalsUpdate round-trip + verifier");
+
+    // A full vitals delta — every field distinct so a mis-wired field is caught.
+    codec::VitalsUpdate v;
+    v.entity_guid = 0xCAFEBABEull;
+    v.health = 420;
+    v.max_health = 1000;
+    v.power = 75;
+    v.max_power = 100;
+    v.power_type = 1;  // MANA (Runcaller / Mender)
+    v.level = 8;
+    auto v_out = codec::decode_vitals_update(codec::encode_vitals_update(v));
+    CHECK(v_out.has_value());
+    CHECK(v_out->entity_guid == 0xCAFEBABEull);
+    CHECK(v_out->health == 420 && v_out->max_health == 1000);
+    CHECK(v_out->power == 75 && v_out->max_power == 100);
+    CHECK(v_out->power_type == 1 && v_out->level == 8);
+
+    // A death delta: health 0, no secondary pool (power_type NONE) — the frame reads
+    // "dead" from health==0 and hides the power bar from power_type==0.
+    codec::VitalsUpdate dead;
+    dead.entity_guid = 0x1ull;
+    dead.max_health = 500;  // health stays 0
+    auto dead_out = codec::decode_vitals_update(codec::encode_vitals_update(dead));
+    CHECK(dead_out.has_value());
+    CHECK(dead_out->health == 0 && dead_out->max_health == 500);
+    CHECK(dead_out->power_type == 0);
+
+    // Garbage is rejected by the verifier (never GetRoot on unverified bytes).
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_vitals_update(garbage).has_value());
+    Bytes empty;
+    CHECK(!codec::decode_vitals_update(empty).has_value());
+}
+
+// ---------------------------------------------------------------------------
+// 4b. Character management + enter-world codec (D-35 / #286 / #341)
+//
+// The codec's public API is deliberately POD-in/POD-out and keeps the generated
+// FlatBuffers types PRIVATE (only codec.cpp sees world_generated.h). So here we
+// test what that boundary allows: (a) every request encoder produces a non-empty,
+// frame-wrappable payload, and (b) every response decoder rejects garbage without
+// GetRoot-ing unverified bytes. The FULL response-decode round-trip (real worldd
+// frames -> POD fields) is proven in net_thread_core_test, which simulates the
+// server and already depends on the generated types.
+// ---------------------------------------------------------------------------
+void test_char_enter_codec() {
+    std::puts("[char] CharList/Create/Delete + EnterWorld request encoders + decoder safety");
+
+    // Request encoders produce non-empty payloads that wrap + unwrap at the IF-2
+    // frame layer under the right opcodes (client -> worldd direction).
+    codec::CharCreateRequest cc;
+    cc.name = "Gandalf";
+    cc.race = 4;
+    cc.char_class = 2;
+    const std::pair<std::uint16_t, Bytes> reqs[] = {
+        {kOpCharListReq, codec::encode_char_list_request()},
+        {kOpCharCreateReq, codec::encode_char_create_request(cc)},
+        {kOpCharDeleteReq, codec::encode_char_delete_request(0xABCDull)},
+        {kOpEnterWorldReq, codec::encode_enter_world_request(777ull)},
+    };
+    for (const auto& [op, payload] : reqs) {
+        // CharList request is an empty table (may be 0 bytes); the others carry fields.
+        Bytes frame = encode_world_frame(op, /*seq=*/1, payload);
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == op && f->payload == payload);
+    }
+    CHECK(!codec::encode_char_create_request(cc).empty());
+    CHECK(!codec::encode_char_delete_request(1).empty());
+    CHECK(!codec::encode_enter_world_request(1).empty());
+
+    // Every response decoder rejects garbage (verify-before-GetRoot discipline).
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_char_list_response(garbage).has_value());
+    CHECK(!codec::decode_char_create_response(garbage).has_value());
+    CHECK(!codec::decode_char_delete_response(garbage).has_value());
+    CHECK(!codec::decode_enter_world_response(garbage).has_value());
 }
 
 // ---------------------------------------------------------------------------
@@ -554,7 +654,10 @@ void test_wire_frame_edge_cases() {
     const std::uint16_t opcodes[] = {
         0x0000, 0xFFFF, kOpWorldHello, kOpHandshakeOk, kOpDisconnect, kOpClockSync,
         kOpMovementIntent, kOpMovementState, kOpEntityEnter, kOpEntityUpdate,
-        kOpEntityLeave};
+        kOpEntityLeave, kOpGossipHello, kOpGossipMenu, kOpLootRequest, kOpLootResponse,
+        kOpLootTake, kOpLootResult, kOpLootRelease, kOpLootClosed, kOpVendorBuyReq,
+        kOpVendorBuyResult, kOpVendorSellReq, kOpVendorSellResult, kOpVendorBuybackReq,
+        kOpVendorBuybackResult, kOpTrainerList, kOpTrainerLearn, kOpTrainerLearnResult};
     for (std::uint16_t op : opcodes) {
         auto f = decode_world_frame(encode_world_frame(op, 1, Bytes{}));
         CHECK(f.has_value() && f->opcode == op);
@@ -767,6 +870,357 @@ void test_transport_error_paths() {
     CHECK(mock.last_timeout_ms == 250);
 }
 
+// ---------------------------------------------------------------------------
+// 11. QUEST + GOSSIP codec (QST-01 / NPC-01/02, #371/#372/#433)
+//
+// The client is a pure DISPLAY of server-authoritative quest/gossip state: it ENCODES
+// intents (gossip hello, quest accept/turn-in, quest-log request) and DECODES the
+// typed results + snapshots. These round-trips are the STRONG automated proof that the
+// client agrees byte-for-byte with worldd's world.fbs quest/gossip tables (the same
+// flatc codegen worldd uses), and that every decoder applies the verify-before-GetRoot
+// discipline. Each message wraps + unwraps cleanly under its IF-2 opcode too.
+// ---------------------------------------------------------------------------
+void test_gossip_codec() {
+    std::puts("[gossip] GossipHello/GossipMenu round-trip + opcode wrap + verifier");
+
+    // GossipHello (C→S) — the npc_guid the client opens gossip on.
+    codec::GossipHello hello{/*npc_guid=*/27ull};  // quartermaster_bren (IT-M1 idmap)
+    auto hello_out = codec::decode_gossip_hello(codec::encode_gossip_hello(hello));
+    CHECK(hello_out.has_value() && hello_out->npc_guid == 27ull);
+    // Wraps under GOSSIP_HELLO (0x5201) at the IF-2 frame layer.
+    {
+        Bytes frame = encode_world_frame(kOpGossipHello, /*seq=*/3,
+                                         codec::encode_gossip_hello(hello));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x5201 && f->opcode == kOpGossipHello);
+    }
+
+    // GossipMenu (S→C) — a state-gated menu: an available quest, an in-progress quest,
+    // a turn-in-ready quest, plus vendor + trainer entries (kinds 0..4).
+    codec::GossipMenu menu;
+    menu.npc_guid = 27ull;
+    menu.options.push_back({/*kind=QUEST_AVAILABLE*/ 0, /*target_id=*/28});
+    menu.options.push_back({/*kind=QUEST_IN_PROGRESS*/ 1, /*target_id=*/29});
+    menu.options.push_back({/*kind=QUEST_COMPLETE*/ 2, /*target_id=*/30});
+    menu.options.push_back({/*kind=VENDOR*/ 3, /*target_id=*/0});
+    menu.options.push_back({/*kind=TRAINER*/ 4, /*target_id=*/0});
+    auto menu_out = codec::decode_gossip_menu(codec::encode_gossip_menu(menu));
+    CHECK(menu_out.has_value());
+    CHECK(menu_out->npc_guid == 27ull && menu_out->options.size() == 5);
+    CHECK(menu_out->options[0].kind == 0 && menu_out->options[0].target_id == 28);
+    CHECK(menu_out->options[1].kind == 1 && menu_out->options[1].target_id == 29);
+    CHECK(menu_out->options[2].kind == 2 && menu_out->options[2].target_id == 30);
+    CHECK(menu_out->options[3].kind == 3 && menu_out->options[3].target_id == 0);
+    CHECK(menu_out->options[4].kind == 4 && menu_out->options[4].target_id == 0);
+
+    // An empty menu (an NPC the player cannot usefully interact with) round-trips.
+    codec::GossipMenu none;
+    none.npc_guid = 99ull;
+    auto none_out = codec::decode_gossip_menu(codec::encode_gossip_menu(none));
+    CHECK(none_out.has_value() && none_out->npc_guid == 99ull && none_out->options.empty());
+
+    // Verify-before-GetRoot: garbage + empty are rejected on both decoders.
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_gossip_hello(garbage).has_value());
+    CHECK(!codec::decode_gossip_menu(garbage).has_value());
+    CHECK(!codec::decode_gossip_menu(Bytes{}).has_value());
+}
+
+void test_quest_codec() {
+    std::puts("[quest] Accept/Progress/TurnIn/Log round-trip + opcode wrap + verifier");
+
+    // QuestAccept (C→S) — accept quest 28 from giver 27.
+    codec::QuestAccept acc{/*quest_id=*/28, /*giver_guid=*/27ull};
+    auto acc_out = codec::decode_quest_accept(codec::encode_quest_accept(acc));
+    CHECK(acc_out.has_value() && acc_out->quest_id == 28 && acc_out->giver_guid == 27ull);
+    {
+        Bytes frame = encode_world_frame(kOpQuestAccept, 1, codec::encode_quest_accept(acc));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == kOpQuestAccept && f->opcode == 0x4001);
+    }
+
+    // QuestAcceptResult (S→C) — a typed rejection (LEVEL_TOO_LOW=4) survives the enum.
+    codec::QuestAcceptResult ar{/*quest_id=*/28, /*status=LEVEL_TOO_LOW*/ 4};
+    auto ar_out = codec::decode_quest_accept_result(codec::encode_quest_accept_result(ar));
+    CHECK(ar_out.has_value() && ar_out->quest_id == 28 && ar_out->status == 4);
+
+    // QuestProgress (S→C) — a kill objective advanced 5/8, not yet complete.
+    codec::QuestProgress pr{/*quest_id=*/28, /*objective_index=*/0, /*type=KILL*/ 0,
+                            /*have=*/5, /*need=*/8, /*complete=*/false};
+    auto pr_out = codec::decode_quest_progress(codec::encode_quest_progress(pr));
+    CHECK(pr_out.has_value());
+    CHECK(pr_out->quest_id == 28 && pr_out->objective_index == 0 && pr_out->type == 0);
+    CHECK(pr_out->have == 5 && pr_out->need == 8 && !pr_out->complete);
+    // A completing delta: 8/8, complete=true.
+    codec::QuestProgress done{28, 0, 0, 8, 8, true};
+    auto done_out = codec::decode_quest_progress(codec::encode_quest_progress(done));
+    CHECK(done_out.has_value() && done_out->have == 8 && done_out->complete);
+
+    // QuestTurnIn (C→S) — turn in at NPC 27 with reward choice 1.
+    codec::QuestTurnIn ti{/*quest_id=*/29, /*turn_in_guid=*/27ull, /*choice_index=*/1};
+    auto ti_out = codec::decode_quest_turn_in(codec::encode_quest_turn_in(ti));
+    CHECK(ti_out.has_value());
+    CHECK(ti_out->quest_id == 29 && ti_out->turn_in_guid == 27ull && ti_out->choice_index == 1);
+    // The no-choice default (-1) round-trips as a signed int32.
+    codec::QuestTurnIn ti_nc{28, 27ull, -1};
+    auto ti_nc_out = codec::decode_quest_turn_in(codec::encode_quest_turn_in(ti_nc));
+    CHECK(ti_nc_out.has_value() && ti_nc_out->choice_index == -1);
+
+    // QuestTurnInResult (S→C) — OK with XP, copper, two reward items, and a level-up.
+    codec::QuestTurnInResult tr;
+    tr.quest_id = 29;
+    tr.status = 0;  // OK
+    tr.reward_xp = 420;
+    tr.reward_money = 400;
+    tr.reward_items.push_back({/*item_id=*/101, /*count=*/1});
+    tr.reward_items.push_back({/*item_id=*/102, /*count=*/3});
+    tr.new_level = 6;
+    auto tr_out = codec::decode_quest_turn_in_result(codec::encode_quest_turn_in_result(tr));
+    CHECK(tr_out.has_value());
+    CHECK(tr_out->quest_id == 29 && tr_out->status == 0 && tr_out->reward_xp == 420);
+    CHECK(tr_out->reward_money == 400 && tr_out->new_level == 6);
+    CHECK(tr_out->reward_items.size() == 2);
+    CHECK(tr_out->reward_items[0].item_id == 101 && tr_out->reward_items[0].count == 1);
+    CHECK(tr_out->reward_items[1].item_id == 102 && tr_out->reward_items[1].count == 3);
+
+    // QuestLog: the EMPTY body is the C→S "send me my log" request; it wraps under
+    // QUEST_LOG (0x4006) and decodes to an empty snapshot.
+    Bytes req = codec::encode_quest_log(codec::QuestLog{});
+    {
+        Bytes frame = encode_world_frame(kOpQuestLog, 1, req);
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == kOpQuestLog && f->opcode == 0x4006);
+    }
+    auto empty_log = codec::decode_quest_log(req);
+    CHECK(empty_log.has_value() && empty_log->quests.empty());
+
+    // A populated QuestLog (S→C snapshot): two quests, one with two objectives (a kill
+    // in progress + a collect complete), one turn-in-ready — the tracker's data source.
+    codec::QuestLog log;
+    codec::QuestLogEntry e0;
+    e0.quest_id = 28;
+    e0.level = 4;
+    e0.complete = false;
+    e0.objectives.push_back({/*type=KILL*/ 0, /*target_id=*/26, /*have=*/5, /*need=*/8, false});
+    e0.objectives.push_back({/*type=COLLECT*/ 1, /*target_id=*/50, /*have=*/6, /*need=*/6, true});
+    codec::QuestLogEntry e1;
+    e1.quest_id = 29;
+    e1.level = 5;
+    e1.complete = true;
+    e1.objectives.push_back({/*type=DELIVER*/ 2, /*target_id=*/27, /*have=*/1, /*need=*/1, true});
+    log.quests.push_back(e0);
+    log.quests.push_back(e1);
+    auto log_out = codec::decode_quest_log(codec::encode_quest_log(log));
+    CHECK(log_out.has_value() && log_out->quests.size() == 2);
+    CHECK(log_out->quests[0].quest_id == 28 && log_out->quests[0].level == 4);
+    CHECK(!log_out->quests[0].complete && log_out->quests[0].objectives.size() == 2);
+    CHECK(log_out->quests[0].objectives[0].type == 0 && log_out->quests[0].objectives[0].have == 5 &&
+          log_out->quests[0].objectives[0].need == 8 && !log_out->quests[0].objectives[0].complete);
+    CHECK(log_out->quests[0].objectives[1].type == 1 && log_out->quests[0].objectives[1].complete);
+    CHECK(log_out->quests[1].quest_id == 29 && log_out->quests[1].complete);
+    CHECK(log_out->quests[1].objectives.size() == 1 && log_out->quests[1].objectives[0].type == 2);
+
+    // Verify-before-GetRoot: garbage + empty are rejected on every S→C decoder.
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_quest_accept(garbage).has_value());
+    CHECK(!codec::decode_quest_accept_result(garbage).has_value());
+    CHECK(!codec::decode_quest_progress(garbage).has_value());
+    CHECK(!codec::decode_quest_turn_in(garbage).has_value());
+    CHECK(!codec::decode_quest_turn_in_result(garbage).has_value());
+    CHECK(!codec::decode_quest_log(garbage).has_value());
+    CHECK(!codec::decode_quest_log(Bytes{}).has_value());
+}
+
+// ---------------------------------------------------------------------------
+// LOOT / VENDOR / TRAINER codec (ITM-02 #369, ECO-01 #370, NPC-02 #372; client #441).
+// The client is a pure DISPLAY of server-authoritative loot/economy/trainer state: it
+// ENCODES intents (open/take/close loot; buy/sell/buyback; learn) and DECODES the typed
+// S→C results. These prove the client's decode of each shipped table agrees byte-for-
+// byte with worldd's world.fbs 0x50xx/0x51xx/0x52xx tables, and that every decoder
+// rejects a garbage/empty buffer (verify-before-GetRoot). All money is int64 copper.
+// ---------------------------------------------------------------------------
+
+void test_loot_codec() {
+    std::puts("[loot] Request/Response/Take/Result/Release/Closed round-trip + wrap + verifier");
+
+    // LOOT_REQUEST (C→S) — open the window on a corpse guid; wraps under 0x5001.
+    codec::LootRequest rq{/*corpse_guid=*/0xDEADBEEFull};
+    auto rq_out = codec::decode_loot_request(codec::encode_loot_request(rq));
+    CHECK(rq_out.has_value() && rq_out->corpse_guid == 0xDEADBEEFull);
+    {
+        Bytes frame = encode_world_frame(kOpLootRequest, 1, codec::encode_loot_request(rq));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x5001 && f->opcode == kOpLootRequest);
+    }
+
+    // LOOT_RESPONSE (S→C) — money + two lootable slots (a common item + a quest item).
+    codec::LootResponse resp;
+    resp.corpse_guid = 0xDEADBEEFull;
+    resp.status = 0;  // OK
+    resp.copper = 137;
+    resp.items.push_back({/*slot=*/0, /*tmpl=*/1201, /*count=*/2, /*quality=*/1, false});
+    resp.items.push_back({/*slot=*/1, /*tmpl=*/9002, /*count=*/1, /*quality=*/3, true});
+    auto resp_out = codec::decode_loot_response(codec::encode_loot_response(resp));
+    CHECK(resp_out.has_value() && resp_out->corpse_guid == 0xDEADBEEFull);
+    CHECK(resp_out->status == 0 && resp_out->copper == 137 && resp_out->items.size() == 2);
+    CHECK(resp_out->items[0].slot == 0 && resp_out->items[0].item_template_id == 1201 &&
+          resp_out->items[0].count == 2 && resp_out->items[0].quality == 1 &&
+          !resp_out->items[0].quest_item);
+    CHECK(resp_out->items[1].item_template_id == 9002 && resp_out->items[1].quality == 3 &&
+          resp_out->items[1].quest_item);
+    // A non-OK response (ALREADY_LOOTED=4) carries no items.
+    codec::LootResponse empty_resp;
+    empty_resp.corpse_guid = 7;
+    empty_resp.status = 4;
+    auto er_out = codec::decode_loot_response(codec::encode_loot_response(empty_resp));
+    CHECK(er_out.has_value() && er_out->status == 4 && er_out->items.empty());
+
+    // LOOT_TAKE (C→S) — a slot take and a money take.
+    codec::LootTake take_slot{/*corpse=*/0xDEADBEEFull, /*slot=*/1, /*money=*/false};
+    auto ts_out = codec::decode_loot_take(codec::encode_loot_take(take_slot));
+    CHECK(ts_out.has_value() && ts_out->slot == 1 && !ts_out->money);
+    codec::LootTake take_money{/*corpse=*/0xDEADBEEFull, /*slot=*/0, /*money=*/true};
+    auto tm_out = codec::decode_loot_take(codec::encode_loot_take(take_money));
+    CHECK(tm_out.has_value() && tm_out->money);
+
+    // LOOT_RESULT (S→C) — an OK item take + an OK money take + a typed rejection.
+    codec::LootResult item_res{/*corpse=*/0xDEADBEEFull, /*slot=*/1, /*status=OK*/ 0,
+                               /*tmpl=*/9002, /*count=*/1, /*copper=*/0};
+    auto ir_out = codec::decode_loot_result(codec::encode_loot_result(item_res));
+    CHECK(ir_out.has_value() && ir_out->status == 0 && ir_out->item_template_id == 9002 &&
+          ir_out->count == 1 && ir_out->copper == 0);
+    codec::LootResult money_res{/*corpse=*/0xDEADBEEFull, /*slot=*/0, /*status=OK*/ 0,
+                                /*tmpl=*/0, /*count=*/0, /*copper=*/137};
+    auto mr_out = codec::decode_loot_result(codec::encode_loot_result(money_res));
+    CHECK(mr_out.has_value() && mr_out->copper == 137 && mr_out->item_template_id == 0);
+    codec::LootResult full_res{/*corpse=*/1, /*slot=*/2, /*status=INVENTORY_FULL*/ 5, 0, 0, 0};
+    auto fr_out = codec::decode_loot_result(codec::encode_loot_result(full_res));
+    CHECK(fr_out.has_value() && fr_out->status == 5);
+
+    // LOOT_RELEASE (C→S) + LOOT_CLOSED (S→C) — close round-trips both directions.
+    codec::LootRelease rel{/*corpse=*/0xDEADBEEFull};
+    auto rel_out = codec::decode_loot_release(codec::encode_loot_release(rel));
+    CHECK(rel_out.has_value() && rel_out->corpse_guid == 0xDEADBEEFull);
+    codec::LootClosed closed{/*corpse=*/0xDEADBEEFull};
+    auto closed_out = codec::decode_loot_closed(codec::encode_loot_closed(closed));
+    CHECK(closed_out.has_value() && closed_out->corpse_guid == 0xDEADBEEFull);
+
+    // Verify-before-GetRoot: garbage + empty rejected on every S→C decoder.
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_loot_response(garbage).has_value());
+    CHECK(!codec::decode_loot_result(garbage).has_value());
+    CHECK(!codec::decode_loot_closed(garbage).has_value());
+    CHECK(!codec::decode_loot_response(Bytes{}).has_value());
+}
+
+void test_vendor_codec() {
+    std::puts("[vendor] Buy/Sell/Buyback Request+Result round-trip + wrap + verifier");
+
+    // VENDOR_BUY_REQUEST (C→S) — buy 5 of template 1201 from vendor 42; wraps under 0x5101.
+    codec::VendorBuyRequest buy{/*vendor=*/42, /*tmpl=*/1201, /*qty=*/5};
+    auto buy_out = codec::decode_vendor_buy_request(codec::encode_vendor_buy_request(buy));
+    CHECK(buy_out.has_value() && buy_out->vendor_id == 42 && buy_out->item_template_id == 1201 &&
+          buy_out->quantity == 5);
+    {
+        Bytes frame = encode_world_frame(kOpVendorBuyReq, 1, codec::encode_vendor_buy_request(buy));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x5101 && f->opcode == kOpVendorBuyReq);
+    }
+
+    // VENDOR_BUY_RESULT (S→C) — OK: minted guid + debited price + resulting balance.
+    codec::VendorBuyResult br{/*status=OK*/ 0, /*vendor=*/42, /*tmpl=*/1201, /*qty=*/5,
+                              /*item_guid=*/0xABCDull, /*total_price=*/250, /*balance=*/9750};
+    auto br_out = codec::decode_vendor_buy_result(codec::encode_vendor_buy_result(br));
+    CHECK(br_out.has_value() && br_out->status == 0 && br_out->item_guid == 0xABCDull &&
+          br_out->total_price == 250 && br_out->balance == 9750 && br_out->quantity == 5);
+    // A rejection (INSUFFICIENT_FUNDS=3): nothing minted, balance unchanged.
+    codec::VendorBuyResult brf{/*status=*/3, 42, 1201, 5, 0, 0, 40};
+    auto brf_out = codec::decode_vendor_buy_result(codec::encode_vendor_buy_result(brf));
+    CHECK(brf_out.has_value() && brf_out->status == 3 && brf_out->item_guid == 0 &&
+          brf_out->balance == 40);
+
+    // VENDOR_SELL_REQUEST (C→S) — sell 3 units from backpack slot 7.
+    codec::VendorSellRequest sell{/*vendor=*/42, /*slot=*/7, /*qty=*/3};
+    auto sell_out = codec::decode_vendor_sell_request(codec::encode_vendor_sell_request(sell));
+    CHECK(sell_out.has_value() && sell_out->backpack_slot == 7 && sell_out->quantity == 3);
+
+    // VENDOR_SELL_RESULT (S→C) — OK: credit + resulting balance + buyback slot.
+    codec::VendorSellResult sr{/*status=OK*/ 0, /*slot=*/7, /*tmpl=*/1201, /*qty=*/3,
+                               /*total_credit=*/75, /*balance=*/9825, /*buyback_slot=*/0};
+    auto sr_out = codec::decode_vendor_sell_result(codec::encode_vendor_sell_result(sr));
+    CHECK(sr_out.has_value() && sr_out->status == 0 && sr_out->item_template_id == 1201 &&
+          sr_out->quantity == 3 && sr_out->total_credit == 75 && sr_out->balance == 9825 &&
+          sr_out->buyback_slot == 0);
+
+    // VENDOR_BUYBACK_REQUEST (C→S) — repurchase buyback slot 0.
+    codec::VendorBuybackRequest bb{/*buyback_slot=*/0};
+    auto bb_out = codec::decode_vendor_buyback_request(codec::encode_vendor_buyback_request(bb));
+    CHECK(bb_out.has_value() && bb_out->buyback_slot == 0);
+
+    // VENDOR_BUYBACK_RESULT (S→C) — OK: re-minted item + re-debited price + balance.
+    codec::VendorBuybackResult bbr{/*status=OK*/ 0, /*tmpl=*/1201, /*qty=*/3,
+                                   /*item_guid=*/0xBEEFull, /*price=*/75, /*balance=*/9750};
+    auto bbr_out =
+        codec::decode_vendor_buyback_result(codec::encode_vendor_buyback_result(bbr));
+    CHECK(bbr_out.has_value() && bbr_out->status == 0 && bbr_out->item_template_id == 1201 &&
+          bbr_out->item_guid == 0xBEEFull && bbr_out->price == 75 && bbr_out->balance == 9750);
+
+    // Verify-before-GetRoot: garbage rejected on every S→C decoder.
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_vendor_buy_result(garbage).has_value());
+    CHECK(!codec::decode_vendor_sell_result(garbage).has_value());
+    CHECK(!codec::decode_vendor_buyback_result(garbage).has_value());
+    CHECK(!codec::decode_vendor_buy_result(Bytes{}).has_value());
+}
+
+void test_trainer_codec() {
+    std::puts("[trainer] List/Learn/LearnResult round-trip + wrap + verifier");
+
+    // TRAINER_LIST (S→C) — pushed alongside GOSSIP_MENU; two rows: a learnable ability
+    // and an unaffordable one (different TrainableState). Wraps under 0x5203.
+    codec::TrainerList list;
+    list.npc_guid = 64;
+    list.entries.push_back({/*ability=*/301, /*cost=*/50, /*class=*/1, /*level=*/1,
+                            /*state=LEARNABLE*/ 0});
+    list.entries.push_back({/*ability=*/415, /*cost=*/9999, /*class=*/1, /*level=*/4,
+                            /*state=CANT_AFFORD*/ 4});
+    auto list_out = codec::decode_trainer_list(codec::encode_trainer_list(list));
+    CHECK(list_out.has_value() && list_out->npc_guid == 64 && list_out->entries.size() == 2);
+    CHECK(list_out->entries[0].ability_id == 301 && list_out->entries[0].cost == 50 &&
+          list_out->entries[0].required_class == 1 && list_out->entries[0].required_level == 1 &&
+          list_out->entries[0].state == 0);
+    CHECK(list_out->entries[1].ability_id == 415 && list_out->entries[1].cost == 9999 &&
+          list_out->entries[1].state == 4);
+    {
+        Bytes frame = encode_world_frame(kOpTrainerList, 3, codec::encode_trainer_list(list));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x5203 && f->opcode == kOpTrainerList);
+    }
+
+    // TRAINER_LEARN (C→S) — learn ability 301 from NPC 64.
+    codec::TrainerLearn learn{/*npc=*/64, /*ability=*/301};
+    auto learn_out = codec::decode_trainer_learn(codec::encode_trainer_learn(learn));
+    CHECK(learn_out.has_value() && learn_out->npc_guid == 64 && learn_out->ability_id == 301);
+
+    // TRAINER_LEARN_RESULT (S→C) — OK: cost debited + new balance.
+    codec::TrainerLearnResult res{/*npc=*/64, /*ability=*/301, /*status=OK*/ 0,
+                                  /*cost=*/50, /*new_balance=*/9700};
+    auto res_out = codec::decode_trainer_learn_result(codec::encode_trainer_learn_result(res));
+    CHECK(res_out.has_value() && res_out->status == 0 && res_out->cost == 50 &&
+          res_out->new_balance == 9700 && res_out->ability_id == 301);
+    // A rejection (INSUFFICIENT_FUNDS=6): unchanged balance, nothing debited.
+    codec::TrainerLearnResult resf{/*npc=*/64, /*ability=*/415, /*status=*/6, /*cost=*/0,
+                                   /*new_balance=*/40};
+    auto resf_out = codec::decode_trainer_learn_result(codec::encode_trainer_learn_result(resf));
+    CHECK(resf_out.has_value() && resf_out->status == 6 && resf_out->new_balance == 40);
+
+    // Verify-before-GetRoot: garbage + empty rejected on every S→C decoder.
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_trainer_list(garbage).has_value());
+    CHECK(!codec::decode_trainer_learn_result(garbage).has_value());
+    CHECK(!codec::decode_trainer_list(Bytes{}).has_value());
+}
+
 }  // namespace
 
 int main() {
@@ -776,6 +1230,13 @@ int main() {
     test_world_session();
     test_codec();
     test_entity_codec();
+    test_vitals_codec();
+    test_char_enter_codec();
+    test_gossip_codec();
+    test_quest_codec();
+    test_loot_codec();
+    test_vendor_codec();
+    test_trainer_codec();
     test_full_stack();
     test_transport_links();
 

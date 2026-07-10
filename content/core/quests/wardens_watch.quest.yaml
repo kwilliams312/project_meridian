@@ -1,0 +1,31 @@
+# Pure explore quest — Sela's introduction to the ridge. Gated behind the first
+# culling so the ridge threat reads as an escalation.
+schema: meridian/quest@1
+id: core:quest.wardens_watch
+name: Warden's Watch
+summary: Climb to the Ashvent Overlook and take in the ridge with Warden Sela.
+offer_text: >-
+  Bren keeps you looking down at the mine. I need you looking up. Climb to the
+  Ashvent Overlook — the high shelf above the vents — and see what I see.
+  Then we'll talk about what's coming off that ridge.
+completion_text: >-
+  Now you've seen it. Wisps drifting off the vents, stalkers on the low trail.
+  The Hollow's edges are fraying. Good — you came back. Most don't climb twice.
+level: 4
+required_level: 3
+zone: zone.zone01
+giver: npc.warden_sela
+prerequisites:
+  quests:
+    - quest.culling_the_kobolds
+objectives:
+  - type: explore
+    zone: zone.zone01
+    poi: ashvent_overlook
+rewards:
+  xp: 300
+  money: 200
+  items:
+    - item: item.minor_healing_potion
+      count: 2
+script: null

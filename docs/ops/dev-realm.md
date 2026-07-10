@@ -84,6 +84,27 @@ needs the containerized `meridian-bot` + `meridian-account` (Phase 2).
 - **amd64 pin dropped** — the realm now schedules across both node pools; verified
   running on arm64 Talos nodes (TLS on 31710/31720, DB seeded).
 
+## Server-authoritative characters (D-35 / #341)
+
+worldd is the source of truth for characters. `WORLD_HELLO` lands the session at
+character-select (no spawn); the client must send an explicit
+`ENTER_WORLD(character_id)` and worldd spawns only if that character is **owned by
+the session's account** (else a typed `NOT_FOUND`/`NO_CHARACTER`). The old
+hardcoded "Placeholder" fabrication is gone, so **worldd must reach
+`meridian_characters`** — the chart wires all five `MERIDIAN_CHARDB_*` vars
+(`worldd.chardb.enabled: true`, name `meridian_characters`). Verify on the realm:
+
+```bash
+kubectl -n meridian-dev exec deploy/meridian-dev-worldd -- \
+  sh -c 'echo $MERIDIAN_CHARDB_HOST $MERIDIAN_CHARDB_USER $MERIDIAN_CHARDB_NAME'
+# → meridian-dev-mariadb meridian meridian_characters   (all non-empty)
+```
+
+If the chardb env is empty, every `ENTER_WORLD` returns `INTERNAL` and the realm
+is unenterable. The concurrency harness pre-creates one character per account
+(`add-characters` runs before the bots), so the bots enter as real, persisted
+characters (`scripts/dev/loadtest.sh` step 2/3).
+
 ## Follow-ups / known deltas
 
 - **Phase 3:** PTR/Prod realms (Longhorn StatefulSet, `:ptr`/`:prod`, Prod

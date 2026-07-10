@@ -56,6 +56,7 @@ void usage(const char* prog) {
     std::fprintf(stderr,
         "usage: %s --authd HOST:PORT --worldd HOST:PORT --user U --pass P\n"
         "          [--realm R] [--duration S] [--build N] [--no-walk]\n"
+        "          [--character-id ID] [--char-name NAME] [--no-create]\n"
         "\n"
         "  --authd    HOST:PORT   authd IF-1 TLS listener (the client logs in here)\n"
         "  --worldd   HOST:PORT   worldd IF-2 listener (the client enters here)\n"
@@ -63,7 +64,10 @@ void usage(const char* prog) {
         "  --realm    R           realm id to select (default: first in range)\n"
         "  --duration S           seconds to stay in-world draining the relay (default 8)\n"
         "  --build    N           client build (default 1000; must be in realm range)\n"
-        "  --no-walk              enter + observe only (do not send MovementIntents)\n",
+        "  --no-walk              enter + observe only (do not send MovementIntents)\n"
+        "  --character-id ID      ENTER_WORLD this owned character (default: first in roster)\n"
+        "  --char-name NAME       name to self-provision if the roster is empty (default 'probe')\n"
+        "  --no-create            do not create a character when the roster is empty\n",
         prog);
 }
 
@@ -107,6 +111,16 @@ int main(int argc, char** argv) {
     cfg.duration_ms = static_cast<std::uint32_t>(duration_s_int > 0 ? duration_s_int : 8) * 1000u;
     cfg.walk = !has_flag(argc, argv, "--no-walk");
 
+    // Server-authoritative enter-world (D-35/#341): after HandshakeOk we ENTER_WORLD an
+    // owned character. --character-id enters a specific id; otherwise the probe lists
+    // the account roster and (unless --no-create) self-provisions one if it is empty.
+    const char* char_id_s = arg_after(argc, argv, "--character-id");
+    const char* char_name = arg_after(argc, argv, "--char-name");
+    cfg.character_id =
+        char_id_s ? static_cast<std::uint64_t>(std::strtoull(char_id_s, nullptr, 10)) : 0u;
+    if (char_name) cfg.character_name = char_name;
+    cfg.auto_create = !has_flag(argc, argv, "--no-create");
+
     OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS, nullptr);
 
     std::printf("meridian-client-probe (#301): headless GUI net path — see-a-bot-move\n");
@@ -122,7 +136,10 @@ int main(int argc, char** argv) {
     std::printf("  login_ok        : %s%s\n", r.login_ok ? "yes" : "no",
                 r.login_ok ? "" : (" — " + r.login_detail).c_str());
     std::printf("  entered_world   : %s%s\n", r.entered_world ? "yes" : "no",
-                r.entered_world ? " (HandshakeOk from real worldd)" : "");
+                r.entered_world ? " (HandshakeOk — reached character-select)" : "");
+    std::printf("  spawned         : %s (ENTER_WORLD status=%u, character_id=%llu)\n",
+                r.spawned ? "yes" : "no", r.enter_world_status,
+                static_cast<unsigned long long>(r.character_id));
     std::printf("  intents_sent    : %u\n", r.intents_sent);
     std::printf("  movement_states : %u (our authoritative replies)\n", r.movement_states);
     std::printf("  entity_frames   : %u (enters=%zu, updates=%u, leaves=%zu)\n",
@@ -152,18 +169,19 @@ int main(int argc, char** argv) {
     const bool saw_enter = r.distinct_entities_seen() > 0;
     const bool saw_move = r.total_updates_seen() > 0;
     std::printf(
-        "\nCLIENT_PROBE_RESULT login_ok=%d entered=%d saw_peer_enter=%d saw_peer_move=%d "
-        "distinct_peers=%zu updates=%u tracked_remote=%u\n",
-        r.login_ok ? 1 : 0, r.entered_world ? 1 : 0, saw_enter ? 1 : 0, saw_move ? 1 : 0,
-        r.distinct_entities_seen(), r.total_updates_seen(), r.tracked_remote);
+        "\nCLIENT_PROBE_RESULT login_ok=%d entered=%d spawned=%d saw_peer_enter=%d "
+        "saw_peer_move=%d distinct_peers=%zu updates=%u tracked_remote=%u\n",
+        r.login_ok ? 1 : 0, r.entered_world ? 1 : 0, r.spawned ? 1 : 0, saw_enter ? 1 : 0,
+        saw_move ? 1 : 0, r.distinct_entities_seen(), r.total_updates_seen(),
+        r.tracked_remote);
 
-    if (r.entered_world && saw_enter && saw_move) {
-        std::printf("\nmeridian-client-probe: OK — the GUI net path SAW A BOT ENTER + MOVE "
-                    "(EntityEnter + EntityUpdate over the #87 relay)\n");
+    if (r.spawned && saw_enter && saw_move) {
+        std::printf("\nmeridian-client-probe: OK — the GUI net path SPAWNED (ENTER_WORLD OK) "
+                    "and SAW A BOT ENTER + MOVE (EntityEnter + EntityUpdate over the #87 relay)\n");
         return 0;
     }
-    std::printf("\nmeridian-client-probe: INCOMPLETE (entered=%d saw_enter=%d saw_move=%d) — "
+    std::printf("\nmeridian-client-probe: INCOMPLETE (spawned=%d saw_enter=%d saw_move=%d) — "
                 "see the report above\n",
-                r.entered_world, saw_enter, saw_move);
+                r.spawned, saw_enter, saw_move);
     return 1;
 }

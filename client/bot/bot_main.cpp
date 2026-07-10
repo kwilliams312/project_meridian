@@ -104,6 +104,7 @@ int main(int argc, char** argv) {
     const char* duration_s = arg_after(argc, argv, "--duration");
     const char* path_s = arg_after(argc, argv, "--path");
     const char* build_s = arg_after(argc, argv, "--build");
+    const char* char_name_s = arg_after(argc, argv, "--character-name");  // default: --user
     const bool want_reconnect = has_flag(argc, argv, "--reconnect");
     const char* reconnect_mode_s = arg_after(argc, argv, "--reconnect");  // optional MODE token
 
@@ -181,6 +182,10 @@ int main(int argc, char** argv) {
     wcfg.client_build = client_build;
     wcfg.path = path;
     wcfg.movement_ticks = movement_ticks;
+    // Character name to create-if-empty on ENTER_WORLD (D-35). Defaults to the
+    // account username (matches the harness's add-characters), overridable via
+    // --character-name. The harness usually pre-creates it, so CharList finds it.
+    wcfg.character_name = char_name_s ? std::string(char_name_s) : std::string(user);
 
     bot::BotRunResult run;
     if (!want_reconnect) {

@@ -1,0 +1,30 @@
+schema: meridian/npc@1
+id: core:npc.kobold_firecaller
+name: Kobold Firecaller
+subtitle: Cinder Cultist
+level: { min: 5, max: 6 }
+creature_type: humanoid
+rank: normal
+faction: hostile
+stats:
+  health: 140
+  armor: 40
+  damage: { min: 9, max: 13 }
+  attack_speed_ms: 2100
+ai:
+  behavior: aggressive
+  aggro_radius_m: 20
+  leash_radius_m: 60
+  call_for_help_radius_m: 14
+  flee_at_health_pct: 20
+  abilities:
+    - ability: ability.pickaxe_slam
+      priority: 0
+      use_at_health_below_pct: 70
+loot:
+  table: loot.kobold_firecaller
+  money: { min: 20, max: 55 }
+visual:
+  model: core:art.char.kobold.miner
+  scale: 1.05
+  sound_set: core:sfx.char.kobold

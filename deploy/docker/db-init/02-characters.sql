@@ -7,3 +7,4 @@ CREATE DATABASE IF NOT EXISTS meridian_characters
   CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE meridian_characters;
 SOURCE /schemas/characters/0001_init_characters.up.sql;
+SOURCE /schemas/characters/0002_character_mute.up.sql;

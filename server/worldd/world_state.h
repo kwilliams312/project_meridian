@@ -59,15 +59,21 @@
 #ifndef MERIDIAN_WORLDD_WORLD_STATE_H
 #define MERIDIAN_WORLDD_WORLD_STATE_H
 
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include "aoi_grid.h"
+#include "area_triggers.h"        // AreaTriggerSet — area triggers + POI discovery (#368)
+#include "combat_resolver.h"      // CombatRng — per-map seeded combat RNG (#345)
+#include "combat_unit.h"          // WorldObject→Unit→Player hierarchy (#342)
 #include "movement_validation.h"  // Position
 #include "world_generated.h"
 #include "world_session.h"        // WorldSession (AEAD s2c channel)
@@ -102,6 +108,54 @@ struct EntityIdentity {
     std::uint8_t char_class = 0;  // M0-frozen class id (roster.h Class; #328) — relayed
                                   // on EntityEnter so every client colors the placeholder
                                   // capsule by class. 0 = unset/unknown.
+    std::string name;             // character name (#367 SOC-01) — the whisper name key
+                                  // (case-insensitive) + the ChatDeliver sender_name. Empty
+                                  // for the D-11 placeholder (no characters DB): such a
+                                  // session is unaddressable by whisper but still chats
+                                  // spatially / on channels by guid.
+};
+
+// ---------------------------------------------------------------------------
+// SOC-01 chat limits (#367). Clean-room from server SAD §2.5 + §3.8 (slow-mode
+// chat rate). The say/yell RADII are spatial tuning and live in aoi_grid.h
+// (kChatSayRadiusM / kChatYellRadiusM) next to the AoI radii.
+// ---------------------------------------------------------------------------
+// Server-enforced max chat body length (bytes). An over-length send is refused
+// with ChatRejected{TOO_LONG} — no silent truncation (server is authoritative).
+inline constexpr std::size_t kChatMaxTextBytes = 255;
+
+// Chat rate class (OPS-03): max chat sends admitted per rolling 1 s per
+// connection. Over-rate sends are refused with ChatRejected{RATE_LIMITED}.
+inline constexpr int kChatMaxPerSecond = 5;
+
+// ---------------------------------------------------------------------------
+// ChatIntake — the per-connection chat rate gate (OPS-03 rate class; #367).
+// ---------------------------------------------------------------------------
+// Mirrors MovementIntake (the existing dispatcher rate mechanism): a sliding
+// 1 s window that admits at most kChatMaxPerSecond sends, dropping the rest. One
+// per connection (single-threaded on its IO worker, like MovementIntake), so it
+// needs no locking.
+class ChatIntake {
+public:
+    // Admit a chat send arriving at `now_ms` (a steady ms clock) if fewer than
+    // kChatMaxPerSecond sends were admitted in the trailing 1000 ms; otherwise
+    // drop it. Expires stamps older than the window on each call.
+    bool admit(std::uint64_t now_ms);
+
+    std::uint64_t dropped() const { return dropped_; }
+    std::uint64_t admitted() const { return admitted_; }
+
+private:
+    std::deque<std::uint64_t> window_;  // admit timestamps within the last 1000 ms
+    std::uint64_t dropped_ = 0;
+    std::uint64_t admitted_ = 0;
+};
+
+// The outcome of a whisper (WorldState::whisper) — routed cross-session by name.
+enum class ChatWhisperOutcome {
+    kDelivered,      // the named in-world target received the whisper
+    kNoTarget,       // no / empty target name supplied
+    kTargetOffline,  // the name is not held by any in-world session
 };
 
 // ---------------------------------------------------------------------------
@@ -150,6 +204,52 @@ private:
     bool alive_ = true;
 };
 
+// ---------------------------------------------------------------------------
+// ForcedMoveMailbox — a thread-safe one-slot hand-off for a GM `.summon` (#418).
+// ---------------------------------------------------------------------------
+// A `.summon` runs on the SUMMONER's IO worker but must reposition the TARGET,
+// whose authoritative SessionMovementState (the #420 validator + forced-move ack
+// barrier) is single-threaded on the TARGET's own IO worker. Rather than race that
+// state cross-thread, the summoner POSTs the destination here (the target's grid
+// position + AoI relay it updates directly under WorldState's lock, which observers
+// see at once); the TARGET then DRAINs it on its own worker — at the top of its
+// next MOVEMENT_INTENT and after each handled frame — and applies force_correction
+// there, arming the ack barrier + sending itself the authoritative snap. This keeps
+// SessionMovementState strictly single-threaded (the same discipline QuestCredit
+// uses for the kill bus). Held by shared_ptr so a mid-teardown summoner keeps it
+// alive; a null pending slot is the common (no-summon-queued) case.
+struct ForcedMoveMailbox {
+    // Post a pending forced destination (last write wins — a fresh summon overrides
+    // a not-yet-drained one). Thread-safe.
+    void post(const Position& dest) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        pending_ = dest;
+    }
+    // Take + clear the pending destination, if any. Thread-safe.
+    std::optional<Position> take() {
+        std::lock_guard<std::mutex> lk(mtx_);
+        std::optional<Position> out = pending_;
+        pending_.reset();
+        return out;
+    }
+    // Non-consuming test/diagnostic peek.
+    bool has_pending() const {
+        std::lock_guard<std::mutex> lk(mtx_);
+        return pending_.has_value();
+    }
+
+private:
+    mutable std::mutex mtx_;
+    std::optional<Position> pending_;
+};
+
+// A per-session control signal the world holds so a GM command targeting ANOTHER
+// session by name can reach it: `disconnect` tears the session down (`.kick`), and
+// `forced_move` is the summon mailbox above. Registered via set_session_control
+// after enter(); both default-empty (an un-controlled session is un-summonable /
+// un-kickable — the DB-less smoke path never wires them).
+using DisconnectFn = std::function<void()>;
+
 // The result of entering a session: its slot + the EFFECTIVE entity guid the
 // relay assigned it (see WorldState::enter — a 0 stub guid is replaced by a
 // unique synthetic one so two D-11 placeholder sessions are distinguishable on
@@ -158,6 +258,10 @@ private:
 struct EnterResult {
     SessionSlot slot = 0;
     AoiId entity_guid = 0;
+    // Area-trigger crossings the spawn position produced (#368/#396). A character
+    // that logs in already standing inside a discovery volume fires it here; the
+    // ENTER_WORLD handler credits any explore quest objective these satisfy.
+    std::vector<TriggerEvent> triggers;
 };
 
 // The base for synthetic per-session entity guids assigned when the D-11
@@ -196,30 +300,186 @@ public:
     // session in the grid to `pos`, recompute its interest set with hysteresis,
     // and relay the enter/update/leave deltas both ways (see the file header).
     // `ack_seq` / `state_flags` / `server_time_ms` are echoed into the
-    // EntityUpdate/MovementState fields. No-op if `slot` is not entered.
-    // Thread-safe.
-    void on_movement(SessionSlot slot, const Position& pos, std::uint32_t ack_seq,
-                     std::uint32_t state_flags, std::uint64_t server_time_ms);
+    // EntityUpdate/MovementState fields. Returns the mover's area-trigger crossings
+    // this move produced (#368/#396) so the caller can credit explore quest
+    // objectives on the session path; empty if `slot` is not entered or nothing
+    // crossed. Thread-safe.
+    std::vector<TriggerEvent> on_movement(SessionSlot slot, const Position& pos,
+                                          std::uint32_t ack_seq, std::uint32_t state_flags,
+                                          std::uint64_t server_time_ms);
 
     // Remove a session (world-leave / disconnect): send EntityLeave{DESPAWNED} to
     // everyone who currently sees it and drop it from the grid + registry.
     // Thread-safe. No-op if `slot` is not entered.
     void leave(SessionSlot slot);
 
+    // ── GM commands targeting a session (OPS-02b, #418) ──────────────────────
+    // These let a GM command reach a session by name (`.summon`, `.kick`) or set a
+    // session's level (`.setlevel`), all thread-safely under the world lock (the
+    // cross-session s2c writes / teardown run through the same serialized egress
+    // the AoI relay uses). Registered per-session by set_session_control after
+    // enter(); a session that never registered controls is un-summonable/-kickable.
+
+    // Register the control signals for `slot` (the summon mailbox + the disconnect
+    // teardown closure). Call once, right after enter(). Thread-safe; no-op if
+    // `slot` is not entered.
+    void set_session_control(SessionSlot slot, ForcedMoveMailbox* forced_move,
+                             DisconnectFn disconnect);
+
+    // Outcome of a summon/kick by target name.
+    enum class TargetOutcome {
+        kApplied,        // the target was found + the effect performed
+        kTargetOffline,  // no in-world session holds that name
+    };
+
+    // `.summon` — move the in-world player named `target_name` (case-insensitive) to
+    // `dest`: update its grid position + relay the AoI deltas (observers see it move
+    // at once), and POST `dest` to its ForcedMoveMailbox so the target arms its
+    // forced-move ack barrier + snaps its own client on its next worker turn.
+    // `ack_seq`/`state_flags`/`server_time_ms` are echoed into the relayed
+    // EntityUpdate. Returns kTargetOffline for an unknown name. Thread-safe.
+    TargetOutcome summon_to(const std::string& target_name, const Position& dest,
+                            std::uint32_t ack_seq, std::uint32_t state_flags,
+                            std::uint64_t server_time_ms);
+
+    // `.kick` — signal the in-world player named `target_name` (case-insensitive) to
+    // disconnect by invoking its registered DisconnectFn (Disconnect{KICKED} + AoI
+    // leave, run OUTSIDE the world lock like the #326 kick-old teardown). The closure
+    // is consumed (a second kick of the same session is a no-op). Returns
+    // kTargetOffline for an unknown name or a session with no disconnect control.
+    // Thread-safe.
+    TargetOutcome disconnect_by_name(const std::string& target_name);
+
+    // `.setlevel` — set the authoritative Unit level of the session in `slot` (the
+    // combat/simulation level; #342). The caller also sets its own gate-level in its
+    // ConnCtx — this keeps the world-owned Unit in step. Thread-safe. No-op (returns
+    // false) if `slot` is not entered.
+    bool set_unit_level(SessionSlot slot, std::uint16_t level);
+
+    // Broadcast a VITALS_UPDATE (#430, UI-01 HUD contract) for the unit with wire
+    // guid `guid` to every client that currently sees it — the subject's OWN client
+    // (its player unit frame) plus every session that has it in AoI (their target /
+    // nameplate frame). Reads the CURRENT vitals straight off the authoritative Unit
+    // (health/max, power/max + type, level), so callers first MUTATE the Unit (a
+    // combat damage/heal, a level-up stat bump) and then call this to push the delta.
+    // Server-authoritative — the client DISPLAYS it, never predicts it (Principle 1).
+    // Returns the recipient count (0 if `guid` is not an entered unit). Thread-safe.
+    std::size_t broadcast_vitals(AoiId guid);
+
     // Test/diagnostic: how many sessions are currently entered.
     std::size_t session_count() const;
 
+    // The Unit backing the session in `slot` (its combat/lifecycle state — health,
+    // level, faction, alive/dead; #342). Returns nullptr if `slot` is not entered.
+    //
+    // OWNERSHIP: the pointer is into WorldState-owned storage and stays valid until
+    // that session leaves (std::unordered_map keeps element addresses stable across
+    // rehash). Per SAD §2.5/§6 a map is single-threaded — "the tick owns entity
+    // state" — so this hands the owning (map/tick) thread the entity to spawn /
+    // damage / kill; it is NOT a handle for another thread to race on. The combat
+    // resolver (#344+) reaches a target's Unit through here.
+    Unit* unit_for_slot(SessionSlot slot);
+    const Unit* unit_for_slot(SessionSlot slot) const;
+
+    // The Unit for the entity with wire guid `guid` (the CastRequest.target_guid
+    // path — the combat resolver reaches a TARGET's Unit by its guid, since the
+    // client names targets by guid, not by our internal slot id). Returns nullptr
+    // if no entered session holds that guid. Same ownership/threading contract as
+    // unit_for_slot (map-owned storage, single-threaded access).
+    Unit* unit_for_guid(AoiId guid);
+    const Unit* unit_for_guid(AoiId guid) const;
+
+    // The per-map seeded combat RNG (#345, SAD §2.5 "all rolls server-side,
+    // seeded-RNG unit-testable"). One RNG per map so every combat roll on this map
+    // draws from a single deterministic stream owned by the (single-threaded) map;
+    // the resolver's instant-resolution path draws from here. Tests that need a
+    // pinned sequence construct their own CombatRng instead.
+    CombatRng& combat_rng() { return combat_rng_; }
+
+    // ── Area triggers + POI discovery (#368; WLD-01/03) ──────────────────────
+    // The map tick evaluates every entered character's authoritative position
+    // against the loaded trigger volumes (SAD §2.5) each time it advances — at M0
+    // that advance is enter() + on_movement(), the authoritative-position seams
+    // that stand in for the tick's movement phase until the #349 map tick lands.
+    // A discovery crossing marks the POI on the character and sends POI_DISCOVERED
+    // to that client; every enter/leave crossing also fires the server-side
+    // OnAreaTrigger hook (SAD §2.5 script-hook seam).
+
+    // Load the trigger volume set — the mcc #28 seam (placeholder → compiled world
+    // data). Call once at boot before any session enters. Thread-safe.
+    void load_area_triggers(std::vector<TriggerVolume> volumes);
+
+    // Install the server-side OnAreaTrigger hook (SAD §2.5). Invoked once per
+    // enter/leave crossing (including discovery) with the mover's guid + the event,
+    // under the world lock. Default (unset) logs the crossing. Thread-safe to set
+    // before start; intended for boot wiring + tests. Thread-safe.
+    using AreaTriggerHook = std::function<void(AoiId guid, const TriggerEvent&)>;
+    void set_area_trigger_hook(AreaTriggerHook hook);
+
+    // -----------------------------------------------------------------------
+    // SOC-01 chat routing (#367). Server-authoritative chat delivery over the
+    // entered sessions' egress sinks — the SAME per-subscriber s2c channel the
+    // AoI relay uses (SAD §2.5 "spatial chat stays here"; §3.8). At M1 worldd is
+    // the in-process "world-thread manager" the v0.1 SAD routes whisper/zone to;
+    // #88 re-addresses these call sites over the real bus at M3. All are
+    // thread-safe (take mtx_) and a no-op for an unentered `from`.
+    // -----------------------------------------------------------------------
+
+    // SAY / YELL — SPATIAL. Deliver a ChatDeliver(channel) to `from` (its own
+    // echo) and to every OTHER entered session within the channel's radius (say =
+    // kChatSayRadiusM, yell = kChatYellRadiusM), found via the #87 grid's
+    // within_radius visitor. `channel` must be SAY or YELL. Returns how many
+    // clients received it (including the sender's echo).
+    std::size_t deliver_spatial(SessionSlot from, net::ChatChannel channel,
+                                const std::string& text);
+
+    // WHISPER — DIRECTED / CROSS-SESSION. Deliver a ChatDeliver(WHISPER) to the
+    // in-world session whose character name equals `target_name` (case-
+    // insensitive). A session never whispers itself into being its own target
+    // through the name index (a self-whisper by name still delivers — the client
+    // decides how to render it). Returns kNoTarget for an empty name,
+    // kTargetOffline when no in-world session holds it, else kDelivered.
+    ChatWhisperOutcome whisper(SessionSlot from, const std::string& target_name,
+                               const std::string& text);
+
+    // ZONE — CHANNEL. Deliver a ChatDeliver(ZONE) to EVERY entered session
+    // (including the sender). At M1 the zone/general channel membership is "all
+    // in-world sessions on this shard" (one map); realm-wide-across-shards
+    // membership via servicesd is M3 (SAD §3.8). Returns the recipient count.
+    std::size_t deliver_channel(SessionSlot from, const std::string& text);
+
 private:
     struct SessionRec {
+        // The wire projection relayed on EntityEnter (guid + type_id + char_class).
         EntityIdentity identity;
-        Position pos;
+        // The session's Unit — the authoritative simulation entity (SAD §2.5
+        // WorldObject→Unit→Player). It OWNS the authoritative position (via its
+        // WorldObject base) and carries the combat/lifecycle state (#342). The grid
+        // is keyed by identity.entity_guid; the Unit's position mirrors what the
+        // grid is updated with each movement.
+        Player unit;
         std::uint32_t state_flags = 0;
         EgressFn egress;
         // The set of OTHER slots this session currently SEES (its interest set),
         // by slot id. Diffed each movement to drive enter/update/leave + resolve
         // the hysteresis band.
         std::unordered_set<SessionSlot> visible;
+        // GM-command control signals (OPS-02b, #418). `forced_move` is the summon
+        // mailbox (borrowed — owned by the target's ConnCtx); `disconnect` is the
+        // .kick teardown closure. Both null until set_session_control (unset on the
+        // DB-less smoke path). See ForcedMoveMailbox / DisconnectFn.
+        ForcedMoveMailbox* forced_move = nullptr;
+        DisconnectFn disconnect;
     };
+
+    // Move an entered `slot` to `pos` and relay the AoI enter/update/leave deltas
+    // (the body of on_movement, assuming mtx_ is already held). Shared by the public
+    // on_movement (mover path) and summon_to (a GM moves another session). Returns
+    // the mover's area-trigger crossings. Caller holds mtx_.
+    std::vector<TriggerEvent> move_session_locked(SessionSlot slot, const Position& pos,
+                                                  std::uint32_t ack_seq,
+                                                  std::uint32_t state_flags,
+                                                  std::uint64_t server_time_ms);
 
     // Emit an EntityEnter for `subject` to the session at `to`. Caller holds mtx_.
     void send_enter(SessionRec& to, const SessionRec& subject);
@@ -233,11 +493,37 @@ private:
     // grid's id-based interest set back to session records.
     std::optional<SessionSlot> slot_of_guid(AoiId guid) const;
 
+    // Evaluate `self`'s current authoritative position against the trigger volumes
+    // and dispatch each crossing: a first-time discovery sends POI_DISCOVERED to
+    // `self`'s client; every crossing fires the OnAreaTrigger hook. Returns the
+    // crossings so the caller can surface them (explore crediting, #396). Caller
+    // holds mtx_.
+    std::vector<TriggerEvent> fire_area_triggers(SessionRec& self);
+
+    // Emit a ChatDeliver(channel) for (`sender_guid`, `sender_name`, `text`) to
+    // the session at `to`. Caller holds mtx_. (#367)
+    void send_chat(SessionRec& to, net::ChatChannel channel, AoiId sender_guid,
+                   const std::string& sender_name, const std::string& text);
+
     mutable std::mutex mtx_;
     AoiGrid grid_;
     std::unordered_map<SessionSlot, SessionRec> sessions_;
     std::unordered_map<AoiId, SessionSlot> slot_by_guid_;
+    // Case-insensitive character-name → slot index, for whisper routing (#367).
+    // Keyed by the lower-cased name; a session with an empty name (D-11
+    // placeholder) is absent, so it is unaddressable by whisper.
+    std::unordered_map<std::string, SessionSlot> slot_by_name_ci_;
     SessionSlot next_slot_ = 1;
+
+    // Per-map combat RNG. A fixed default seed keeps a single-worker M0 boot
+    // deterministic; a per-map seed derived from the MapKey is a later concern
+    // (the tick loop / map manager, #349).
+    CombatRng combat_rng_{0x9E3779B97F4A7C15ULL};
+
+    // Area triggers + POI discovery (#368). Owned by the world thread; serialized
+    // under mtx_ with the rest of the world state (same invariant as grid_).
+    AreaTriggerSet triggers_;
+    AreaTriggerHook area_trigger_hook_;
 };
 
 // ---------------------------------------------------------------------------
@@ -247,9 +533,16 @@ private:
 // (the seq coming from the subscriber's WorldSession s2c counter).
 // ---------------------------------------------------------------------------
 
-// EntityEnter payload for `subject` (full spawn state).
+// EntityEnter payload for `subject` (full spawn state) — position + class (#328) +
+// the #430 vitals block (health/power/level/name), read from `unit` (the subject's
+// authoritative Unit) and `subject.name`.
 std::vector<std::uint8_t> encode_entity_enter_payload(const EntityIdentity& subject,
-                                                      const Position& pos);
+                                                      const Unit& unit);
+
+// VitalsUpdate payload (#430) for `subject_guid`, projected from `unit`'s current
+// vitals (health/max, power/max + type, level). The HUD delta the relay broadcasts
+// to AoI observers when combat/heal/death/level-up moves a unit's vitals.
+std::vector<std::uint8_t> encode_vitals_update_payload(AoiId subject_guid, const Unit& unit);
 
 // EntityUpdate payload for `subject_guid` (position delta).
 std::vector<std::uint8_t> encode_entity_update_payload(AoiId subject_guid,
@@ -258,6 +551,20 @@ std::vector<std::uint8_t> encode_entity_update_payload(AoiId subject_guid,
 // EntityLeave payload for `subject_guid`.
 std::vector<std::uint8_t> encode_entity_leave_payload(AoiId subject_guid,
                                                       net::LeaveReason reason);
+
+// PoiDiscovered payload (world.fbs 0x9xxx) — the S→C notification that the
+// character discovered `trigger_id` (in `area_id`, named by idmap `name_id`).
+std::vector<std::uint8_t> encode_poi_discovered_payload(TriggerId trigger_id,
+                                                        std::uint32_t area_id,
+                                                        std::uint32_t name_id);
+
+// ChatDeliver payload (#367 SOC-01): the routed channel + the author's guid/name
+// + the body. Public so the chat integration test can decode what the router
+// emits and the serve loop can share the encoder.
+std::vector<std::uint8_t> encode_chat_deliver_payload(net::ChatChannel channel,
+                                                      AoiId sender_guid,
+                                                      const std::string& sender_name,
+                                                      const std::string& text);
 
 }  // namespace meridian::worldd
 

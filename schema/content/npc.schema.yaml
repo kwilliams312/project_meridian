@@ -79,6 +79,30 @@ properties:
         type: string
         maxLength: 2000
       vendor: { $ref: "#/$defs/vendorRef" }
+      trainer:
+        description: >-
+          Abilities this NPC teaches (NPC-02). A non-empty list makes the NPC a trainer
+          and surfaces the "train" gossip option. Every gate is server-authoritative
+          content — the client never supplies cost/level/class (Principle 1).
+        type: array
+        minItems: 1
+        items:
+          type: object
+          additionalProperties: false
+          required: [ability, cost]
+          properties:
+            ability: { $ref: "#/$defs/abilityRef" }
+            cost:
+              description: Copper cost to learn this ability.
+              $ref: "#/$defs/money"
+            required_class:
+              description: Class gate — only this class may learn the ability. Omit = any class.
+              enum: [vanguard, runcaller, warden, mender]
+            required_level:
+              description: Minimum character level to learn.
+              type: integer
+              minimum: 1
+              default: 1
 
   loot:
     type: object

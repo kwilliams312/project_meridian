@@ -60,4 +60,14 @@ public:
 CreateResult create_account(db::Connection& conn, const CreateRequest& req,
                             const srp::Parameters& params = {});
 
+// Set an existing account's GM permission level (auth DB account.gm_level, D-16
+// ladder: 0 player < 1 helper < 2 GM < 3 admin). This is how an operator grants
+// (or revokes) GM rights on a live account, and how the GM-command tests (OPS-02a
+// #417) promote a seeded account to a GM level. Parameterized UPDATE keyed by the
+// unique username (never concatenated). Returns true when a row was updated,
+// false when no account has that username. Throws meridian::db::DbError on a DB
+// failure, std::invalid_argument on an empty username.
+bool set_gm_level(db::Connection& conn, const std::string& username,
+                  std::uint8_t gm_level);
+
 }  // namespace meridian::account

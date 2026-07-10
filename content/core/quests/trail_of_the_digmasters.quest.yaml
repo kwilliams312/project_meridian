@@ -1,0 +1,31 @@
+# Kill quest — the elite digmasters have started ranging out of the camp onto
+# the low trail. Reuses the existing kobold_digmaster creature.
+schema: meridian/quest@1
+id: core:quest.trail_of_the_digmasters
+name: Trail of the Digmasters
+summary: Kill 4 Kobold Digmasters ranging onto the low trail.
+offer_text: >-
+  It isn't just miners on the trail now — the digmasters are out, and where a
+  digmaster walks, a work-gang follows. Break four of them and the gangs lose
+  their nerve. Do it before they reach the village road.
+completion_text: >-
+  Four supervisors down. The gangs are already drifting back to the dark. You
+  bought the low trail a week of quiet — spend it well.
+level: 6
+required_level: 4
+zone: zone.zone01
+giver: npc.warden_sela
+prerequisites:
+  quests:
+    - quest.wardens_watch
+objectives:
+  - type: kill
+    target: npc.kobold_digmaster
+    count: 4
+rewards:
+  xp: 480
+  money: 420
+  items:
+    - item: item.emberforged_pick
+      count: 1
+script: null

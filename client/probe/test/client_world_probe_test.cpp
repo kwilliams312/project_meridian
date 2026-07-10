@@ -57,6 +57,12 @@ cn::Bytes leave_payload(std::uint64_t guid, std::uint16_t reason) {
     return cn::codec::encode_entity_leave(l);
 }
 
+// Decode a request frame the sequencer emitted → opcode + payload (empty on failure).
+cn::WorldFrame decode_frame(const cn::Bytes& frame) {
+    auto f = cn::decode_world_frame(frame);
+    return f ? *f : cn::WorldFrame{};
+}
+
 // ---------------------------------------------------------------------------
 // Enter → the interpolator tracks the peer + a sighting is logged.
 // ---------------------------------------------------------------------------
@@ -168,6 +174,114 @@ void test_saw_a_peer_move_predicate() {
     CHECK(res.saw_a_peer_move());   // enter + move
 }
 
+// ---------------------------------------------------------------------------
+// EnterWorldSequencer (D-35 / #341): the character-select → ENTER_WORLD contract,
+// proven socket-free. This is the #293 regression seam — HandshakeOk alone no longer
+// spawns; the client must send ENTER_WORLD(character_id) and only spawns on a typed OK
+// (mirrors client/bot/bot_core.cpp's request/response chain + char_select.gd's gate).
+// ---------------------------------------------------------------------------
+void test_forced_id_enters_directly() {
+    std::puts("[probe] EnterWorld: forced id → ENTER_WORLD sent on HandshakeOk (no roster)");
+    probe::EnterWorldSequencer seq(/*forced=*/4242, /*auto_create=*/true, "");
+    probe::EnterStep s = seq.on_handshake_ok();
+    CHECK(seq.phase() == probe::EnterPhase::kEntering);
+    cn::WorldFrame f = decode_frame(s.frame);
+    CHECK(f.opcode == cn::kOpEnterWorldReq);
+    CHECK(f.payload == cn::codec::encode_enter_world_request(4242));
+    CHECK(!s.spawned);
+    CHECK(!s.failed);
+    CHECK(seq.character_id() == 4242);
+}
+
+void test_enter_world_ok_spawns() {
+    std::puts("[probe] EnterWorld: EnterWorldResponse OK → spawned (the ONE spawn seam)");
+    probe::EnterWorldSequencer seq(4242, true, "");
+    seq.on_handshake_ok();  // → kEntering (ENTER_WORLD in flight)
+    cn::codec::EnterWorldResponse ok;
+    ok.status = 0;  // EnterWorldStatus::OK
+    probe::EnterStep s = seq.on_enter_world(ok);
+    CHECK(s.spawned);
+    CHECK(!s.failed);
+    CHECK(seq.phase() == probe::EnterPhase::kSpawned);
+    CHECK(seq.last_enter_status() == 0);
+    CHECK(seq.character_id() == 4242);
+}
+
+void test_enter_world_rejected_does_not_spawn() {
+    std::puts("[probe] EnterWorld: EnterWorldResponse NOT_FOUND → failed, NO spawn (#293 guard)");
+    probe::EnterWorldSequencer seq(9999, true, "");
+    seq.on_handshake_ok();
+    cn::codec::EnterWorldResponse rej;
+    rej.status = 1;  // EnterWorldStatus::NOT_FOUND
+    probe::EnterStep s = seq.on_enter_world(rej);
+    CHECK(!s.spawned);
+    CHECK(s.failed);
+    CHECK(seq.phase() == probe::EnterPhase::kFailed);
+    CHECK(seq.last_enter_status() == 1);
+}
+
+void test_lists_then_enters_first_owned() {
+    std::puts("[probe] EnterWorld: no forced id → CharList, then ENTER first owned");
+    probe::EnterWorldSequencer seq(/*forced=*/0, true, "");
+    probe::EnterStep list = seq.on_handshake_ok();
+    CHECK(seq.phase() == probe::EnterPhase::kListing);
+    CHECK(decode_frame(list.frame).opcode == cn::kOpCharListReq);
+
+    cn::codec::CharListResponse roster;
+    cn::codec::CharSummary c;
+    c.character_id = 7;
+    roster.characters.push_back(c);
+    probe::EnterStep enter = seq.on_char_list(roster);
+    CHECK(seq.phase() == probe::EnterPhase::kEntering);
+    cn::WorldFrame f = decode_frame(enter.frame);
+    CHECK(f.opcode == cn::kOpEnterWorldReq);
+    CHECK(f.payload == cn::codec::encode_enter_world_request(7));
+    CHECK(seq.character_id() == 7);
+}
+
+void test_empty_roster_creates_then_enters() {
+    std::puts("[probe] EnterWorld: empty roster + auto_create → CharCreate, then ENTER mint");
+    probe::EnterWorldSequencer seq(/*forced=*/0, /*auto_create=*/true, "probe");
+    seq.on_handshake_ok();
+    cn::codec::CharListResponse empty;
+    probe::EnterStep create = seq.on_char_list(empty);
+    CHECK(seq.phase() == probe::EnterPhase::kCreating);
+    CHECK(decode_frame(create.frame).opcode == cn::kOpCharCreateReq);
+
+    cn::codec::CharCreateResponse minted;
+    minted.status = 0;  // CharCreateStatus::OK
+    minted.character_id = 55;
+    probe::EnterStep enter = seq.on_char_create(minted);
+    CHECK(seq.phase() == probe::EnterPhase::kEntering);
+    cn::WorldFrame f = decode_frame(enter.frame);
+    CHECK(f.opcode == cn::kOpEnterWorldReq);
+    CHECK(f.payload == cn::codec::encode_enter_world_request(55));
+    CHECK(seq.character_id() == 55);
+}
+
+void test_empty_roster_no_create_fails() {
+    std::puts("[probe] EnterWorld: empty roster + --no-create → fail (no spawn)");
+    probe::EnterWorldSequencer seq(/*forced=*/0, /*auto_create=*/false, "");
+    seq.on_handshake_ok();
+    cn::codec::CharListResponse empty;
+    probe::EnterStep s = seq.on_char_list(empty);
+    CHECK(s.failed);
+    CHECK(seq.phase() == probe::EnterPhase::kFailed);
+}
+
+void test_char_create_rejected_fails() {
+    std::puts("[probe] EnterWorld: CharCreate rejected → fail (no ENTER)");
+    probe::EnterWorldSequencer seq(/*forced=*/0, true, "probe");
+    seq.on_handshake_ok();
+    cn::codec::CharListResponse empty;
+    seq.on_char_list(empty);  // → kCreating
+    cn::codec::CharCreateResponse rej;
+    rej.status = 1;  // non-OK (e.g. DUPLICATE_NAME)
+    probe::EnterStep s = seq.on_char_create(rej);
+    CHECK(s.failed);
+    CHECK(seq.phase() == probe::EnterPhase::kFailed);
+}
+
 }  // namespace
 
 int main() {
@@ -177,6 +291,13 @@ int main() {
     test_leave_forgets_peer();
     test_ignores_non_entity();
     test_saw_a_peer_move_predicate();
+    test_forced_id_enters_directly();
+    test_enter_world_ok_spawns();
+    test_enter_world_rejected_does_not_spawn();
+    test_lists_then_enters_first_owned();
+    test_empty_roster_creates_then_enters();
+    test_empty_roster_no_create_fails();
+    test_char_create_rejected_fails();
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     if (g_failures == 0) {
         std::puts("ALL PASS");

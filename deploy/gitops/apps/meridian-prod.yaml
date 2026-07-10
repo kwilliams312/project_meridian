@@ -17,14 +17,17 @@ spec:
     helm:
       valueFiles:
         - ../../gitops/realms/prod/values.yaml
+        # Machine-managed immutable image pin (issue #382). The promote workflow
+        # copies the PTR-validated <short-sha> into this file on ptr→main; being
+        # listed AFTER values.yaml, its tags win. Prod stays MANUAL-sync: ArgoCD
+        # shows the manifest diff and an operator triggers the sync (human gate).
+        - ../../gitops/realms/prod/image.yaml
   destination:
     server: https://kubernetes.default.svc
     namespace: meridian-prod
   ignoreDifferences:
-    - group: apps
-      kind: Deployment
-      jqPathExpressions:
-        - '.spec.template.metadata.annotations."kubectl.kubernetes.io/restartedAt"'
+    # StatefulSet volumeClaimTemplates are immutable + apiserver-defaulted
+    # (apiVersion/kind/status/volumeMode) — ignore so the SS isn't perma-OutOfSync.
     - group: apps
       kind: StatefulSet
       jqPathExpressions:

@@ -28,6 +28,14 @@ const char* action_name(Action action) {
         case Action::kGrantRejected: return "grant_rejected";
         case Action::kSessionEnter:  return "session_enter";
         case Action::kSessionLeave:  return "session_leave";
+        case Action::kMovementRejected: return "movement_rejected";
+        case Action::kGmCommand:        return "gm_command";
+        case Action::kRateLimited:      return "rate_limited";
+        case Action::kEconomyRejected:  return "economy_rejected";
+        case Action::kBanRejected:      return "ban_rejected";
+        case Action::kBanIssued:        return "ban_issued";
+        case Action::kMuteIssued:       return "mute_issued";
+        case Action::kChatMuted:        return "chat_muted";
     }
     return "unknown";
 }

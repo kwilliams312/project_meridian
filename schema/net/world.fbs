@@ -43,19 +43,133 @@ enum Opcode : uint16 {
   CHAR_DELETE_REQUEST  = 0x0014,  // C→S  delete one owned character by id
   CHAR_DELETE_RESPONSE = 0x0015,  // S→C  ok / refused (ownership-checked)
 
+  // --- 0x0xxx  enter-world  (M0, server-authoritative spawn) ---
+  ENTER_WORLD_REQUEST  = 0x0016,  // C→S  spawn as an OWNED character (by id)
+  ENTER_WORLD_RESPONSE = 0x0017,  // S→C  typed result (OK spawns; else no spawn)
+
+  // --- 0x0xxx  character progression  (M1 — CHR-03: XP awards + level-up) ---
+  // Server-authoritative XP/leveling (#360). The client only DISPLAYS these — it
+  // never predicts XP or a level-up (server is law, Principle 1). Both are S→C.
+  XP_GAINED = 0x0020,  // S→C  XP earned (e.g. a kill) + progress toward next level
+  LEVEL_UP  = 0x0021,  // S→C  level increased + the stat growth applied
+
   // --- 0x1xxx  movement  (M0) ---
   MOVEMENT_INTENT = 0x1001,  // C→S  client movement intent (validated OPS-03)
   MOVEMENT_STATE  = 0x1002,  // S→C  authoritative movement state broadcast
 
-  // --- 0x2xxx  entity state  (M0) ---
+  // --- 0x2xxx  entity state  (M0; VITALS_UPDATE M1 — UI-01 HUD contract, #430) ---
   ENTITY_ENTER   = 0x2001,   // S→C  full state — entity enters AoI
   ENTITY_UPDATE  = 0x2002,   // S→C  delta update for an in-AoI entity
   ENTITY_LEAVE   = 0x2003,   // S→C  entity leaves AoI
+  VITALS_UPDATE  = 0x2004,   // S→C  a unit's vitals changed (health/power/level) — HUD delta (#430)
 
-  // --- 0x3xxx  combat            (reserved — see placeholder below) ---
-  // --- 0x4xxx  quest / gossip    (reserved — see placeholder below) ---
-  // --- 0x5xxx  inventory/economy (reserved — see placeholder below) ---
-  // --- 0x6xxx  chat / social     (reserved — see placeholder below) ---
+  // --- 0x3xxx  combat            (M1 — CMB-01: ability use + GCD/cast, D-10) ---
+  CAST_REQUEST = 0x3001,     // C→S  use an ability (id + target + client_time)
+  CAST_START   = 0x3002,     // S→C  ACCEPT: cast/GCD started (cast_ms; 0 = instant)
+  CAST_FAILED  = 0x3003,     // S→C  REJECT: reason + gcd_remaining_ms (D-10 rollback)
+  CAST_RESULT  = 0x3004,     // S→C  resolution outcome (attack table + damage/heal)
+
+  // --- 0x3xxx  death / resurrect (M1 — CMB-03: death state machine, #359) ---
+  // Server-authoritative death→resurrect flow. On death the server spawns a corpse
+  // and starts the graveyard-release countdown; the client requests release +
+  // resurrect and is told the outcome. All state is the server's.
+  DEATH_STATE       = 0x3010,  // S→C  you died: corpse guid + auto-release countdown
+  RELEASE_REQUEST   = 0x3011,  // C→S  request an early release to the graveyard
+  GHOST_STATE       = 0x3012,  // S→C  released: now a ghost at the graveyard
+  RESURRECT_REQUEST = 0x3013,  // C→S  resurrect at your corpse (corpse-run complete)
+  RESURRECT_RESULT  = 0x3014,  // S→C  resurrection outcome (alive + health, or refused)
+
+  // --- 0x9xxx  world / area triggers  (M1, ISSUE #368 — WLD-01/03, epic #20) ---
+  // Server-authoritative area triggers (enter/leave volumes from compiled world
+  // data) fire SERVER-side events — discovery, quest-objective hooks, graveyard
+  // zones (SAD §2.5 OnAreaTrigger hook seam) — evaluated in the map tick against
+  // player positions. The ONLY client-facing message is POI discovery: crossing a
+  // discovery volume marks it discovered on the character and notifies the client
+  // (re-entry does not re-fire). This dedicated world/area nibble extends the SAD
+  // §5.2 range map (which enumerates 0x0..0x8 / 0xE / 0xF) so discovery stays OUT
+  // of the quest range (0x4xxx). Append within this range; never renumber.
+  POI_DISCOVERED = 0x9001,   // S→C  character discovered a point of interest
+
+  // --- 0x4xxx  quest state       (M1 — QST-01: quest state machine, #371) ---
+  // Server-authoritative quest flow (server PRD §4-M1 QST-01; epic #20). The
+  // client asks to ACCEPT a quest from a targeted giver NPC and to TURN a completed
+  // quest IN at the turn-in NPC; the server validates (level + prerequisites;
+  // objectives complete; correct NPC; reward choice; backpack room) and replies
+  // with a typed result. Objective PROGRESS and the full quest LOG are server-
+  // pushed — the client only DISPLAYS quest state, never predicts it (Principle 1).
+  // Quest defs are server content (placeholder set at M1; real chain via mcc #28).
+  QUEST_ACCEPT         = 0x4001,  // C→S  accept a quest offered by a giver NPC
+  QUEST_ACCEPT_RESULT  = 0x4002,  // S→C  typed accept outcome (accepted / gated)
+  QUEST_PROGRESS       = 0x4003,  // S→C  an objective advanced toward its goal
+  QUEST_TURN_IN        = 0x4004,  // C→S  turn a completed quest in at the turn-in NPC
+  QUEST_TURN_IN_RESULT = 0x4005,  // S→C  typed turn-in outcome + rewards granted
+  QUEST_LOG            = 0x4006,  // S→C  the character's active quest log snapshot
+
+  // --- 0x5xxx  inventory / loot / economy  (M1 — ITM-02: loot, #369, epic #20) ---
+  // Server-authoritative corpse looting (server PRD §4-M1: "loot generation from
+  // loot tables at kill time, loot window sessions … loot items into inventory
+  // with server-side validation"). On a creature death the server rolls the
+  // creature's loot table into a per-corpse loot SESSION; the client opens the
+  // window (LOOT_REQUEST → LOOT_RESPONSE), pulls a slot or the money (LOOT_TAKE →
+  // LOOT_RESULT, validated: ownership / in-range / not-already-looted / quest gate),
+  // and closes it (LOOT_RELEASE → LOOT_CLOSED). Loot occupies the LOW end of the
+  // 0x5xxx range; vendors/economy (ECO, #370) take 0x5010+ so the two parallel
+  // stories keep DISTINCT opcode blocks. Append within 0x5001..0x500F; never renumber.
+  LOOT_REQUEST  = 0x5001,  // C→S  open the loot window on a corpse (by guid)
+  LOOT_RESPONSE = 0x5002,  // S→C  the loot window: money + the slots THIS looter sees
+  LOOT_TAKE     = 0x5003,  // C→S  take one slot (or the money pile) from the corpse
+  LOOT_RESULT   = 0x5004,  // S→C  the outcome of a take (moved item/copper, or a reason)
+  LOOT_RELEASE  = 0x5005,  // C→S  close the loot window
+  LOOT_CLOSED   = 0x5006,  // S→C  the loot window closed (released / corpse looted-out)
+
+  // --- 0x5xxx  inventory / economy : vendors  (M1 — ECO-01: vendors, #370, epic #20) ---
+  // Server-authoritative vendor transactions (server PRD §4-M1 ECO-01). buy /
+  // sell / buyback each ride ONE C→S request opcode with a paired S→C result.
+  // All prices + copper balances are server-computed int64 copper — a request
+  // NEVER carries a client-trusted price (the server looks the price up from the
+  // vendor catalog / item template). Vendors take the 0x51xx SUB-band, DISJOINT
+  // from loot's 0x5001..0x5006 above, so the two economy stories never collide on
+  // a value. Append within 0x51xx; never renumber.
+  VENDOR_BUY_REQUEST      = 0x5101,  // C→S  buy a vendor item (vendor_id + template + qty)
+  VENDOR_BUY_RESULT       = 0x5102,  // S→C  typed outcome: minted item + debited copper
+  VENDOR_SELL_REQUEST     = 0x5103,  // C→S  sell an owned backpack item to a vendor
+  VENDOR_SELL_RESULT      = 0x5104,  // S→C  typed outcome: credited copper + buyback slot
+  VENDOR_BUYBACK_REQUEST  = 0x5105,  // C→S  repurchase a recently-sold item by buyback slot
+  VENDOR_BUYBACK_RESULT   = 0x5106,  // S→C  typed outcome: restored item + re-debited copper
+
+  // --- 0x52xx  NPC interaction   (M1 — NPC-01/02: gossip + trainers, #372) ---
+  // Server-authoritative NPC interaction (server PRD §4-M1 NPC-01/02; epic #20).
+  // The client opens gossip on a targeted NPC (GOSSIP_HELLO); the server computes
+  // the menu — quest options gated by the player's quest state (available / in-
+  // progress / complete-turn-in-able) plus vendor/trainer role options — and
+  // replies (GOSSIP_MENU). For a TRAINER, the server also sends the per-player
+  // ability list (TRAINER_LIST: each entry priced in copper + a class/level gate +
+  // the player's learn state). The client asks to learn one ability (TRAINER_LEARN)
+  // and the server validates (right class, high enough level, not already known,
+  // enough copper), debits the copper, grants the ability, and replies with a typed
+  // outcome (TRAINER_LEARN_RESULT). The server computes EVERY option, cost, and
+  // eligibility — the client never decides them (Principle 1, "server is law").
+  // NPC/gossip/trainer data is placeholder content at M1 (real via mcc #28). This
+  // block takes 0x52xx — DISJOINT from quests (0x4xxx), loot (0x5001..0x5006) and
+  // vendors (0x51xx). Append within 0x5201..0x520F; never renumber.
+  GOSSIP_HELLO         = 0x5201,  // C→S  open gossip on a targeted NPC (by entity guid)
+  GOSSIP_MENU          = 0x5202,  // S→C  the computed gossip menu (options gated by state)
+  TRAINER_LIST         = 0x5203,  // S→C  a trainer NPC's per-player ability list (cost + gates + state)
+  TRAINER_LEARN        = 0x5204,  // C→S  learn one ability from a trainer NPC
+  TRAINER_LEARN_RESULT = 0x5205,  // S→C  typed learn outcome (learned + copper debited, or a reason)
+
+  // --- 0x6xxx  chat / social     (M1 — SOC-01: chat router, #367) ---
+  // Server-authoritative chat routing in worldd (server SAD §2.5 "spatial chat
+  // stays here", §3.8). say/yell are delivered by the AoI grid (#87 — say = a
+  // local radius, yell = wider); whisper is routed cross-session by target name
+  // (v0.1 routed it "via the bus to a world-thread manager" — the in-process
+  // in-world registry at M1; #88 addresses it over the real bus at M3);
+  // zone/general is a channel broadcast. The server validates sender state +
+  // applies the dispatcher rate class (OPS-03). No profanity filter at M1.
+  CHAT_MESSAGE  = 0x6001,  // C→S  send a chat message (say/yell/whisper/zone)
+  CHAT_DELIVER  = 0x6002,  // S→C  a chat message delivered to this client
+  CHAT_REJECTED = 0x6003,  // S→C  the send was refused (typed reason)
+
   // --- 0x7xxx  group / instance  (reserved — see placeholder below) ---
   // --- 0x8xxx  shard / transfer  (reserved — see placeholder below) ---
   // --- 0xExxx  GM                (reserved — see placeholder below) ---
@@ -149,7 +263,23 @@ table AttrDelta {
   value:int64;             // scalar value (interpret per key)
 }
 
+/// The secondary power a unit spends on abilities — the M1 set the server unit
+/// model owns (combat_unit.h ResourceType: mana/energy/rage). Values MIRROR that
+/// enum 1:1 so the server projection is a straight cast. NONE = the unit has no
+/// secondary pool (a basic melee creature). The client HUD colors the power bar
+/// by this (UI-01, #430). Append within a major; never renumber.
+enum PowerType : uint8 {
+  NONE   = 0,   // no secondary resource
+  MANA   = 1,   // caster pool (Runcaller / Mender)
+  ENERGY = 2,   // fast-regen pool (Warden)
+  RAGE   = 3,   // combat-generated pool (Vanguard)
+}
+
 /// S→C. Full state snapshot when an entity enters the client's area of interest.
+/// The vitals block (health/power/level/name; #430) is server-authoritative — the
+/// client HUD (UI-01) DISPLAYS it and never predicts it (Principle 1). Vitals are
+/// appended additively (additive-field FlatBuffers evolution within a major); a
+/// pre-#430 decoder still reads the original position/class fields.
 table EntityEnter {
   entity_guid:uint64;
   type_id:uint32;          // entity/template kind
@@ -163,6 +293,13 @@ table EntityEnter {
                            // capsule in a class-derived color. 0 = unset/unknown.
                            // Additive (appended, defaulted) — additive-field FlatBuffers
                            // evolution within a major (README versioning note).
+  health:uint32 = 0;       // current health at entry (#430 HUD contract)
+  max_health:uint32 = 0;   // health cap
+  power:uint32 = 0;        // current secondary power at entry
+  max_power:uint32 = 0;    // secondary-power cap (0 when power_type = NONE)
+  power_type:PowerType = NONE;  // which secondary pool (mana/energy/rage/none)
+  level:uint16 = 0;        // unit level (0 = unset/unknown)
+  name:string;             // display name for the unit frame (empty = unnamed placeholder)
 }
 
 /// S→C. Delta update for an entity already in AoI. Only changed fields are present;
@@ -186,6 +323,49 @@ enum LeaveReason : uint16 {
 table EntityLeave {
   entity_guid:uint64;
   reason:LeaveReason = OUT_OF_RANGE;
+}
+
+/// S→C. A unit's VITALS changed — the HUD delta (UI-01, #430). Emitted to every
+/// client that has `entity_guid` in its area of interest (the subject's own client
+/// + every observer) whenever combat/heal/death/level-up moves the unit's
+/// health/power/level, so the unit frames update WITHOUT a full re-enter. A
+/// dedicated opcode (not an ENTITY_UPDATE extension) because vitals change on a
+/// different axis than movement — combat/death/XP, not position — and the AoI relay
+/// drives ENTITY_UPDATE strictly from movement; this keeps the two deltas cleanly
+/// separated and gives the HUD typed fields instead of the generic AttrDelta vector.
+/// Server-authoritative: the client DISPLAYS these, never predicts them (Principle 1).
+/// `name` is NOT here — it does not change in-life; it rides EntityEnter.
+table VitalsUpdate {
+  entity_guid:uint64;
+  health:uint32;           // current health after the change (0 = dead)
+  max_health:uint32;       // health cap (may change on level-up)
+  power:uint32;            // current secondary power after the change
+  max_power:uint32;        // secondary-power cap (0 when power_type = NONE)
+  power_type:PowerType = NONE;  // which secondary pool (mana/energy/rage/none)
+  level:uint16 = 0;        // unit level after the change (level-up)
+}
+
+// ===========================================================================
+// 0x9xxx — world / area triggers  (M1, ISSUE #368 — WLD-01/03, epic #20)
+// ===========================================================================
+// Area triggers are server-authoritative enter/leave volumes compiled into world
+// content (world DB `area_trigger` / `graveyard`, SAD §4.5; real data via mcc #28).
+// The map tick evaluates them against player positions each tick and fires
+// server-side events (discovery, quest-objective hooks, graveyard zones — the SAD
+// §2.5 OnAreaTrigger hook seam). Only ONE of those events is client-facing: POI
+// discovery. The others stay entirely server-side (no wire message at M1).
+
+/// S→C. The session's character crossed a DISCOVERY trigger volume for the first
+/// time: the server has marked the point of interest discovered on the character
+/// and is notifying the client (to surface a "discovered" toast and reveal it on
+/// the map). Fires ONCE per character per POI — re-entering an already-discovered
+/// volume does not re-send this. `name_id` is an idmap string id (§4.6) for the
+/// POI's display name (0 = unnamed placeholder). `area_id` is the owning area/zone
+/// (world DB `area`) so the client can group discoveries by region.
+table PoiDiscovered {
+  trigger_id:uint32;   // world `area_trigger` id of the discovered POI (stable content id)
+  area_id:uint32;      // owning area/zone id (world DB `area`); 0 = unspecified
+  name_id:uint32;      // idmap string id for the POI display name (§4.6); 0 = unnamed
 }
 
 // ===========================================================================
@@ -290,17 +470,748 @@ table CharDeleteResponse {
 }
 
 // ===========================================================================
+// 0x0xxx — enter world  (M0, server-authoritative character spawn)
+// ===========================================================================
+// After HANDSHAKE_OK the session is authenticated but NOT spawned (it sits at
+// character-select). The client selects one of its OWN characters (from a
+// CharListResponse / a fresh CharCreateResponse) and asks to enter as it. worldd
+// validates ownership against its own store (grant-derived account, the CRUD's
+// `WHERE id=? AND account_id=?`) and only then spawns the entity. The server
+// NEVER fabricates a character: an account with none, or an unknown/unowned id,
+// is rejected and the session STAYS at character-select so it can create/select
+// a valid one (char management rides this same session — a disconnect would
+// strand a new account). Movement/entity opcodes are only valid after OK.
+
+/// C→S. Enter the world as one of this session's characters. The account is the
+/// session's own (grant-derived, IF-3) — never a field. `character_id` is the
+/// server-minted id from CharListResponse / CharCreateResponse.
+table EnterWorldRequest {
+  character_id:uint64;
+}
+
+/// Typed outcome of an enter-world attempt.
+enum EnterWorldStatus : uint16 {
+  OK           = 0,   // authorized — the character is spawned (self ENTITY_ENTER follows)
+  NOT_FOUND    = 1,   // no such character owned by this account (unknown id / not owned)
+  NO_CHARACTER = 2,   // the account owns zero characters — create one first
+  INTERNAL     = 3,   // server/DB error (no characters DB, or a DB failure)
+}
+
+/// S→C. Result of an EnterWorldRequest. On OK the player entity is spawned and
+/// the session transitions to in-world; otherwise no spawn and the session stays
+/// at character-select.
+table EnterWorldResponse {
+  status:EnterWorldStatus = OK;
+}
+
+// ===========================================================================
+// 0x3xxx — combat  (M1 — CMB-01: ability use + GCD/cast prediction, D-10)
+// ===========================================================================
+// The D-10 optimistic-GCD path (server SAD §3.3, client SAD §2.2/§3c): on an
+// ability press the client predicts the GCD/cast start locally, then the server
+// ACCEPTS (CastStart) or REJECTS (CastFailed) so the client confirms or ROLLS
+// BACK within one RTT (resyncing its GCD clock from CastFailed.gcd_remaining_ms).
+// All outcomes — the attack-table roll, damage/heal, death — are SERVER-
+// AUTHORITATIVE and NEVER predicted (Principle 1); they arrive as CastResult.
+
+/// C→S. Use an ability against a target. `target_guid` = 0 means self / no target
+/// (the server resolves the actual target legality). `client_time_ms` is keyed to
+/// the ClockSync estimate. Combat rate class (OPS-03).
+table CastRequest {
+  ability_id:uint32;      // AbilityStore id (server SAD §3.3 "known ability")
+  target_guid:uint64;     // subject entity guid (0 = self)
+  client_time_ms:uint64;  // client clock at press (ClockSync-keyed)
+}
+
+/// S→C. ACCEPT: the server validated the use and started the GCD / cast. Instant
+/// ability -> `cast_ms` = 0 (a CastResult follows immediately); cast-time ability
+/// -> `cast_ms` > 0 and the CastResult follows on cast completion. Confirms the
+/// client's optimistic GCD/cast prediction (D-10).
+table CastStart {
+  ability_id:uint32;
+  cast_ms:uint32;         // cast time in ms (0 = instant)
+  server_time_ms:uint64;  // authoritative cast-start timestamp
+}
+
+/// S→C. REJECT: the server refused the ability use. The client rolls its
+/// optimistic GCD/cast back within one RTT and resyncs its GCD clock from
+/// `gcd_remaining_ms` (D-10; client SAD §3c). One opaque reason per check.
+enum CastFailReason : uint16 {
+  UNKNOWN_ABILITY       = 0,   // ability id not in the store
+  NOT_IN_WORLD          = 1,   // session authenticated but not spawned
+  CASTER_DEAD           = 2,   // a corpse cannot cast
+  ON_GCD                = 3,   // global cooldown still running
+  ALREADY_CASTING       = 4,   // a cast is already in progress
+  INSUFFICIENT_RESOURCE = 5,   // not enough mana/rage/energy
+  NO_TARGET             = 6,   // ability needs a target; none / not found
+  TARGET_DEAD           = 7,   // target is a corpse
+  WRONG_FACTION         = 8,   // target not attackable / not assistable
+  OUT_OF_RANGE          = 9,   // target beyond the ability range
+  NO_LINE_OF_SIGHT      = 10,  // an occluder blocks the target
+  INTERRUPTED           = 11,  // in-progress cast cancelled (e.g. movement)
+}
+
+table CastFailed {
+  ability_id:uint32;
+  reason:CastFailReason = UNKNOWN_ABILITY;
+  gcd_remaining_ms:uint32;   // remaining GCD so the client resyncs its clock (D-10)
+}
+
+/// The server-rolled attack-table outcome (server SAD §2.5). Damage abilities roll
+/// the full table; heals cannot be avoided (only HIT / CRIT).
+enum AttackOutcome : uint16 {
+  MISS  = 0,
+  DODGE = 1,
+  PARRY = 2,
+  HIT   = 3,
+  CRIT  = 4,
+}
+
+/// S→C. The server-authoritative resolution of an ability use: the attack-table
+/// outcome and the damage or heal actually applied to the target. NEVER predicted
+/// by the client (server is law — Principle 1). Sent on instant use or on cast
+/// completion.
+table CastResult {
+  ability_id:uint32;
+  caster_guid:uint64;
+  target_guid:uint64;
+  outcome:AttackOutcome = HIT;
+  amount:uint32;          // damage or heal applied (0 on miss/dodge/parry)
+  is_heal:bool = false;   // true = heal, false = damage
+  target_health:uint32;   // target health AFTER application
+  target_dead:bool = false;
+  server_time_ms:uint64;
+}
+
+// ===========================================================================
+// 0x3xxx — death / resurrect  (M1 — CMB-03: death state machine, #359)
+// ===========================================================================
+// Server-authoritative death→resurrect flow (server SAD §2.5 shallow hierarchy +
+// Corpse; PRD CMB-03). On a player reaching 0 HP the server spawns a Corpse at the
+// death spot and starts the graveyard-release countdown (DEATH_STATE). The player
+// may release early (RELEASE_REQUEST) — auto-release fires on the timer regardless —
+// becoming a ghost at the nearest graveyard (GHOST_STATE). The ghost runs back to
+// its corpse (corpse-run) and resurrects there (RESURRECT_REQUEST → RESURRECT_RESULT:
+// restore a % of max health, clear the ghost, despawn the corpse). The nearest
+// graveyard + resurrection-sickness knobs come from world data (content epic #28).
+
+/// S→C. You died. The server spawned your corpse at your death location and
+/// started the graveyard-release countdown.
+table DeathState {
+  victim_guid:uint64;       // the player who died (self)
+  killer_guid:uint64;       // who dealt the killing blow (0 = environment/unknown)
+  corpse_guid:uint64;       // the spawned corpse (your corpse-run destination)
+  corpse_x:float;
+  corpse_y:float;
+  corpse_z:float;
+  auto_release_ms:uint32;   // ms until the server auto-releases you to the graveyard
+}
+
+/// C→S. Request an early release to the nearest graveyard (become a ghost now,
+/// rather than waiting out DeathState.auto_release_ms). Empty — acts on self.
+table ReleaseRequest {}
+
+/// S→C. You have been released and are now a ghost at the graveyard. Run back to
+/// your corpse (corpse-run) to resurrect.
+table GhostState {
+  player_guid:uint64;
+  graveyard_x:float;
+  graveyard_y:float;
+  graveyard_z:float;
+  corpse_guid:uint64;       // your corpse (the corpse-run destination)
+}
+
+/// C→S. Resurrect at your corpse — valid once the corpse-run is complete (you are
+/// a ghost standing at your corpse). Empty — acts on self.
+table ResurrectRequest {}
+
+/// Typed outcome of a resurrection attempt (mirrors death_state.h ResurrectReject).
+enum ResurrectStatus : uint16 {
+  OK           = 0,   // resurrected — health restored, corpse despawned
+  NOT_DEAD     = 1,   // you are not dead
+  NOT_RELEASED = 2,   // release to the graveyard first
+  TOO_FAR      = 3,   // corpse-run not complete — move closer to your corpse
+}
+
+/// S→C. Resurrection outcome. On OK the player is alive again with restored health
+/// and the corpse is despawned; otherwise the reason and no state change.
+table ResurrectResult {
+  player_guid:uint64;
+  status:ResurrectStatus = OK;
+  health:uint32;            // health after resurrection (0 unless OK)
+  max_health:uint32;        // max health (for the client bar)
+}
+
+// ===========================================================================
+// 0x0xxx — character progression  (M1 — CHR-03: XP awards + level-up, #360)
+// ===========================================================================
+// Server-authoritative XP/leveling (PRD CHR-03). XP is awarded on a kill
+// (attributed via the threat table) and accumulates toward the next level; a
+// crossed threshold levels the player up and applies stat growth from the level
+// curve. The client only DISPLAYS these — never predicted. The real per-level XP
+// curve + per-class/level stat tables load from the world DB (content epic #28).
+
+/// S→C. XP award + progress toward the next level. `xp_gained` is this award;
+/// `xp_total` is XP accumulated INTO the current level (resets on level-up);
+/// `xp_to_next` is the threshold to reach the next level.
+table XpGained {
+  player_guid:uint64;
+  xp_gained:uint32;
+  level:uint16;
+  xp_total:uint32;          // XP into the current level
+  xp_to_next:uint32;        // XP required to reach the next level
+}
+
+/// S→C. The player leveled up — the new level + the stat growth applied from the
+/// level curve.
+table LevelUp {
+  player_guid:uint64;
+  old_level:uint16;
+  new_level:uint16;
+  max_health:uint32;        // new health cap after stat growth
+  max_resource:uint32;      // new secondary-resource cap after stat growth
+}
+
+// ===========================================================================
+// 0x6xxx — chat / social  (M1 — SOC-01: chat router, #367)
+// ===========================================================================
+// Server-authoritative chat (server SAD §2.5 "spatial chat stays here", §3.8).
+// The client sends ONE ChatMessage per line; the channel selects the routing:
+//   • SAY / YELL — spatial: delivered by the AoI grid (#87) to the sessions
+//     within a radius of the sender (say = a local radius, yell = wider). Never
+//     leaves the map — AoI visitors on the shard, shard-local by construction.
+//   • WHISPER    — directed: routed cross-session to the named target (v0.1 "via
+//     the bus to a world-thread manager"; #88 over the real bus at M3). `target`
+//     is the recipient's character name (case-insensitive).
+//   • ZONE       — channel: broadcast to every in-world session (the zone/general
+//     channel; realm-wide across shards at M3 via servicesd).
+// The server validates sender state (must be in-world) + applies the dispatcher
+// chat rate class (OPS-03) and drops empty/over-length/over-rate sends with a
+// typed ChatRejected. No profanity/content filtering at M1 (later).
+
+/// The routing channel a ChatMessage selects (server SAD §2.5 / §3.8).
+enum ChatChannel : uint16 {
+  SAY     = 0,   // spatial, local AoI radius
+  YELL    = 1,   // spatial, wider AoI radius
+  WHISPER = 2,   // directed to a named target (cross-session)
+  ZONE    = 3,   // zone/general channel broadcast
+}
+
+/// C→S. Send one chat line. `target` is meaningful only for WHISPER (the
+/// recipient's character name, case-insensitive) and ignored otherwise. `text`
+/// is the message body; the server rejects empty/whitespace-only or over-length
+/// bodies (ChatRejected). Chat rate class (OPS-03).
+table ChatMessage {
+  channel:ChatChannel = SAY;
+  target:string;          // WHISPER recipient name (ignored for other channels)
+  text:string;            // the message body
+}
+
+/// S→C. A chat line delivered to this client. `sender_guid` is the author's
+/// entity guid (0 = system); `sender_name` is its display name; `channel` is how
+/// it was routed (so the client renders it in the right chat tab / bubble).
+table ChatDeliver {
+  channel:ChatChannel = SAY;
+  sender_guid:uint64;
+  sender_name:string;
+  text:string;
+}
+
+/// Typed reason a ChatMessage was refused (mirrors the server's chat validation).
+enum ChatRejectReason : uint16 {
+  NOT_IN_WORLD   = 0,   // sender is authenticated but not spawned in-world
+  RATE_LIMITED   = 1,   // over the chat rate class (OPS-03) — slow down
+  EMPTY          = 2,   // empty / whitespace-only body
+  TOO_LONG       = 3,   // body exceeds the server's max chat length
+  NO_TARGET      = 4,   // WHISPER with no / empty target name
+  TARGET_OFFLINE = 5,   // WHISPER target name not currently in-world
+}
+
+/// S→C. The server refused a ChatMessage. `channel` echoes the attempted
+/// channel; `target` echoes the attempted WHISPER target (empty otherwise) so
+/// the client can surface "X is not online".
+table ChatRejected {
+  channel:ChatChannel = SAY;
+  reason:ChatRejectReason = NOT_IN_WORLD;
+  target:string;
+}
+
+// ===========================================================================
+// 0x4xxx — quest state  (M1 — QST-01: quest state machine, #371)
+// ===========================================================================
+// Server-authoritative quest flow (server PRD §4-M1 QST-01; epic #20). Accept from
+// a giver, track objectives (kill / collect / deliver / explore), validate turn-in
+// at the turn-in NPC, and grant rewards (items + copper + XP). All state and every
+// gate live on the server (quest_log.h); these messages are the client contract.
+// The mcc #28 content seam supplies the real quest defs (placeholder set at M1).
+
+/// C→S. Accept a quest offered by a giver NPC. `giver_guid` is the targeted NPC
+/// entity — the server validates it actually offers `quest_id` and that the
+/// character passes the level + prerequisite gates before adding it to the log.
+table QuestAccept {
+  quest_id:uint32;      // quest_template.id to accept
+  giver_guid:uint64;    // the targeted giver NPC entity (0 = unspecified/self-serve)
+}
+
+/// Typed outcome of an accept attempt (mirrors quest_log.h AcceptStatus, plus the
+/// wire-only WRONG_GIVER / LOG_FULL the dispatch layer adds).
+enum QuestAcceptStatus : uint16 {
+  OK                   = 0,   // accepted — the quest is now in the character's log
+  UNKNOWN_QUEST        = 1,   // no such quest in the server's content
+  ALREADY_ACTIVE       = 2,   // already in the log
+  ALREADY_COMPLETED    = 3,   // already turned in (not repeatable at M1)
+  LEVEL_TOO_LOW        = 4,   // character level below the quest's required_level
+  MISSING_PREREQUISITE = 5,   // a prerequisite quest is not yet completed
+  WRONG_GIVER          = 6,   // the targeted NPC does not offer this quest
+  LOG_FULL             = 7,   // the character's quest log is at capacity
+}
+
+/// S→C. Result of a QuestAccept. On OK the quest is in the log (a QuestLog snapshot
+/// / QuestProgress follows); otherwise `status` names the typed rejection.
+table QuestAcceptResult {
+  quest_id:uint32;
+  status:QuestAcceptStatus = OK;
+}
+
+/// The objective kind — mirrors quest_objective.type (kill/collect/deliver/explore).
+enum QuestObjectiveType : uint16 {
+  KILL    = 0,
+  COLLECT = 1,
+  DELIVER = 2,
+  EXPLORE = 3,
+}
+
+/// One objective's live state within a QuestLogEntry. `target_id` is the
+/// objective's subject content id — the creature (kill), item (collect/deliver) or
+/// zone (explore) id — so the client can label progress without re-reading content.
+table QuestObjectiveState {
+  type:QuestObjectiveType = KILL;
+  target_id:uint32;      // subject content id (npc / item / zone), per `type`
+  have:uint16;           // units accumulated
+  need:uint16;           // goal
+  complete:bool = false;
+}
+
+/// S→C. A single objective advanced. `objective_index` is its position in the
+/// quest's objective list; have/need/complete are the new state. Pushed whenever a
+/// kill/collect/deliver/explore source moves the needle.
+table QuestProgress {
+  quest_id:uint32;
+  objective_index:uint8;
+  type:QuestObjectiveType = KILL;
+  have:uint16;
+  need:uint16;
+  complete:bool = false;
+}
+
+/// C→S. Turn a completed quest in at the turn-in NPC. `turn_in_guid` is the
+/// targeted NPC entity (server validates it is the quest's turn-in NPC).
+/// `choice_index` selects rewards.choice_items[] (>= 0) for a choice-reward quest,
+/// or -1 when the quest offers no reward choice.
+table QuestTurnIn {
+  quest_id:uint32;
+  turn_in_guid:uint64;
+  choice_index:int32 = -1;
+}
+
+/// Typed outcome of a turn-in attempt (mirrors quest_log.h TurnInStatus).
+enum QuestTurnInStatus : uint16 {
+  OK             = 0,   // turned in — rewards granted, quest completed
+  UNKNOWN_QUEST  = 1,   // no such quest in the server's content
+  NOT_ACTIVE     = 2,   // not in the log (never accepted / already done)
+  WRONG_NPC      = 3,   // this NPC is not the quest's turn-in NPC
+  INCOMPLETE     = 4,   // one or more objectives not yet complete
+  BAD_CHOICE     = 5,   // choice_index missing/out of range for a choice-reward quest
+  INVENTORY_FULL = 6,   // no backpack room for the reward items (nothing changed)
+}
+
+/// A reward item actually granted at turn-in (item template id + count).
+table QuestRewardItem {
+  item_id:uint32;
+  count:uint16 = 1;
+}
+
+/// S→C. Turn-in outcome. On OK the reward was granted: `reward_items` were minted
+/// into the backpack, `reward_xp` and `reward_money` (copper) were applied via the
+/// leveling / economy paths, and `new_level` is the character's level after any XP
+/// roll-up. On any non-OK status nothing changed.
+table QuestTurnInResult {
+  quest_id:uint32;
+  status:QuestTurnInStatus = OK;
+  reward_xp:uint32;
+  reward_money:int64;        // copper (ECO-01)
+  reward_items:[QuestRewardItem];
+  new_level:uint16;
+}
+
+/// One active quest in the log snapshot: the quest id, its level (log coloring),
+/// whether every objective is complete (ready to turn in), and the live objectives.
+table QuestLogEntry {
+  quest_id:uint32;
+  level:uint16;
+  complete:bool = false;
+  objectives:[QuestObjectiveState];
+}
+
+/// S→C. The character's active quest log (sent on enter-world and on resync). The
+/// authoritative snapshot the client renders its quest tracker from.
+table QuestLog {
+  quests:[QuestLogEntry];
+}
+
+// ===========================================================================
+// 0x5xxx — inventory / loot / economy  (M1 — ITM-02: loot, #369, epic #20)
+// ===========================================================================
+// Server-authoritative corpse looting (server PRD §4-M1 ITM-02; server SAD §2.5
+// "loot-table evaluation + loot sessions", §4.4 world-DB `loot_table` family). The
+// loot roll (weighted drops + quantity ranges + money) and the four validation
+// gates (ownership, in-range, not-already-looted, quest-gate) are computed in the
+// server loot session (server/loot); these tables are only its wire projection —
+// the client never rolls loot or decides eligibility (Principle 1, "server is law").
+//
+// Flow: creature dies → server rolls its table into a corpse session → client opens
+// the window (LootRequest → LootResponse listing the slots THIS looter may take +
+// the money) → client pulls a slot or the money (LootTake → LootResult) → client
+// closes it (LootRelease → LootClosed). A quest item appears in LootResponse ONLY
+// for a looter who holds the required quest.
+
+/// C→S. Open the loot window on a corpse (the dead creature's entity guid). The
+/// account/character is the session's own — never a field. The server replies with
+/// a LootResponse listing what THIS looter may currently take.
+table LootRequest {
+  corpse_guid:uint64;    // the corpse (dead-creature) entity guid to loot
+}
+
+/// Typed result of opening a loot window (mirrors the server's ownership/range
+/// pre-checks). On OK the LootResponse carries the lootable slots + money.
+enum LootStatus:uint16 {
+  OK             = 0,   // window open — items/copper follow
+  NOT_A_LOOTER   = 1,   // this player is not an eligible looter of the corpse
+  OUT_OF_RANGE   = 2,   // too far from the corpse to loot
+  NO_SUCH_CORPSE = 3,   // no corpse / no loot session by that guid
+  ALREADY_LOOTED = 4,   // the corpse's shared loot is exhausted
+}
+
+/// One lootable slot as this looter sees it (a row of the loot window). `quality`
+/// is the item's rarity tier (item.schema.yaml rarity: 0=poor … 5=legendary) for
+/// the client's colour; `quest_item` flags a quest-gated drop.
+table LootItem {
+  slot:uint32;              // stable slot index within this corpse's loot
+  item_template_id:uint32;  // -> world DB item_template (IF-9)
+  count:uint32;             // stack size dropped in this slot
+  quality:uint8 = 0;        // rarity tier (Rarity)
+  quest_item:bool = false;  // true = a quest-gated drop (visible only to eligible looters)
+}
+
+/// S→C. The loot window for a corpse: the money pile + the slots THIS looter may
+/// currently take (common slots not yet looted + quest slots they qualify for).
+/// A non-OK `status` carries no items (the pre-check failed).
+table LootResponse {
+  corpse_guid:uint64;
+  status:LootStatus = OK;
+  copper:int64;             // money available to take (0 = none / already taken)
+  items:[LootItem];         // the slots visible to this looter (empty unless OK)
+}
+
+/// C→S. Take one slot from the corpse — or the money pile when `money` is true
+/// (then `slot` is ignored). The server re-validates ownership / range / not-taken
+/// / quest eligibility and, on success, transfers the stack into the looter's
+/// inventory (server-authoritative — no client-trusted move).
+table LootTake {
+  corpse_guid:uint64;
+  slot:uint32;              // slot to take (ignored when money = true)
+  money:bool = false;       // true = take the copper pile instead of a slot
+}
+
+/// Typed outcome of a LootTake (mirrors the server loot-session errors 1:1 so the
+/// client can surface the exact reason).
+enum LootTakeStatus:uint16 {
+  OK             = 0,   // taken — item_template_id/count (or copper) moved to inventory
+  NOT_A_LOOTER   = 1,   // not an eligible looter of this corpse
+  OUT_OF_RANGE   = 2,   // too far from the corpse
+  ALREADY_LOOTED = 3,   // that slot / the money was already taken
+  QUEST_REQUIRED = 4,   // a quest slot, and the looter is not on the quest
+  INVENTORY_FULL = 5,   // no room in the looter's inventory (loot stays on the corpse)
+  INVALID_SLOT   = 6,   // no such slot on this corpse
+  NO_SUCH_CORPSE = 7,   // no corpse / no loot session by that guid
+}
+
+/// S→C. The result of a LootTake. On OK, an item take carries item_template_id +
+/// count (copper = 0); a money take carries copper (item_template_id/count = 0).
+/// On any non-OK status nothing moved and the reason is `status`.
+table LootResult {
+  corpse_guid:uint64;
+  slot:uint32;              // the slot taken (0 for a money take)
+  status:LootTakeStatus = OK;
+  item_template_id:uint32;  // item moved on OK (0 for money / failure)
+  count:uint32;             // stack moved on OK (0 for money / failure)
+  copper:int64;             // copper moved on a money take (0 otherwise)
+}
+
+/// C→S. Close the loot window (the client walked away / finished). Empty beyond the
+/// corpse id — acts on the session's own looting.
+table LootRelease {
+  corpse_guid:uint64;
+}
+
+/// S→C. The loot window on a corpse closed — either the client released it, or the
+/// corpse's shared loot was fully taken (the corpse may now despawn).
+table LootClosed {
+  corpse_guid:uint64;
+}
+
+// ===========================================================================
+// 0x5xxx — inventory / economy : vendors  (M1 — ECO-01, #370, epic #20)
+// ===========================================================================
+// Server-authoritative vendor transactions (server PRD §4-M1 ECO-01). The server
+// owns every price and every copper balance — all money is int64 copper (never a
+// FLOAT), and NO request carries a client-supplied price. A buy/sell/buyback is
+// validated end-to-end on the server (vendor sells it / player owns it / player
+// can afford it / has inventory space) against the vendor catalog (placeholder
+// data at M1, real via mcc #28) and the item template's buy/sell price. Each of
+// the three transactions is ONE C→S request opcode paired with a typed S→C
+// result; a rejected transaction changes NO durable state (all-or-nothing).
+//
+// BUYBACK: selling an item pushes it onto a bounded, per-session buyback queue;
+// the player may repurchase a recently-sold item — at the exact copper it was
+// sold for — by its slot in that queue, until the queue evicts it (oldest-out
+// when full). The queue is session-scoped and non-durable (a fresh login starts
+// empty), matching the classic vendor buyback UX.
+
+/// C→S. Buy `quantity` of item template `item_template_id` from vendor
+/// `vendor_id`. The price is the server's (catalog override or the template's
+/// buy price) — never sent by the client. `quantity` is the number of units (a
+/// single stack; must be within the template's max stack).
+table VendorBuyRequest {
+  vendor_id:uint32;         // which vendor (catalog id; placeholder data at M1)
+  item_template_id:uint32;  // the item to buy (world DB item_template id / IF-9)
+  quantity:uint32;          // units to buy (1..=template.max_stack)
+}
+
+/// Typed outcome of a buy (mirrors the server's vendor validation 1:1).
+enum VendorBuyStatus : uint16 {
+  OK                  = 0,   // bought — item_guid minted, total_price debited
+  UNKNOWN_VENDOR      = 1,   // no such vendor in the catalog
+  NOT_SOLD            = 2,   // this vendor does not sell that template (no price)
+  INSUFFICIENT_FUNDS  = 3,   // the player cannot afford total_price
+  INVENTORY_FULL      = 4,   // no backpack space for the purchased stack
+  BAD_QUANTITY        = 5,   // quantity 0 or above the template's max stack
+  NOT_IN_WORLD        = 6,   // session authenticated but not spawned in-world
+  INTERNAL            = 7,   // server/DB error (no characters DB, or a DB failure)
+}
+
+/// S→C. Result of a VendorBuyRequest. On OK the item is minted into the backpack
+/// and `total_price` copper is debited; `balance` is the resulting money. On any
+/// rejection no state changed and item_guid/total_price are 0 (balance echoes the
+/// unchanged money).
+table VendorBuyResult {
+  status:VendorBuyStatus = OK;
+  vendor_id:uint32;
+  item_template_id:uint32;
+  quantity:uint32;
+  item_guid:uint64;      // minted instance guid on OK (0 otherwise)
+  total_price:int64;     // copper debited on OK (0 otherwise)
+  balance:int64;         // the character's money AFTER the transaction
+}
+
+/// C→S. Sell the owned backpack item at `backpack_slot` to a vendor, `quantity`
+/// units of it (clamped server-side to the stack size). The vendor pays the
+/// item template's sell price (server-owned). `vendor_id` records who bought it
+/// (M1 accepts any sellable item at any vendor; buy-filter is mcc #28 content).
+table VendorSellRequest {
+  vendor_id:uint32;         // the vendor being sold to
+  backpack_slot:uint16;     // backpack index of the item to sell
+  quantity:uint32;          // units to sell (clamped to the stack)
+}
+
+/// Typed outcome of a sell.
+enum VendorSellStatus : uint16 {
+  OK             = 0,   // sold — units removed, total_credit credited
+  SLOT_EMPTY     = 1,   // no item at that backpack slot
+  NOT_SELLABLE   = 2,   // the item has no sell price (a quest item etc.)
+  BAD_QUANTITY   = 3,   // quantity 0
+  NOT_IN_WORLD   = 4,   // session authenticated but not spawned in-world
+  INTERNAL       = 5,   // server/DB error
+}
+
+/// S→C. Result of a VendorSellRequest. On OK `quantity` units left the backpack,
+/// `total_credit` copper was credited, and the sold stack was pushed onto the
+/// buyback queue at `buyback_slot` (the index a VendorBuybackRequest names to
+/// repurchase it). On rejection nothing changed.
+table VendorSellResult {
+  status:VendorSellStatus = OK;
+  backpack_slot:uint16;
+  item_template_id:uint32;
+  quantity:uint32;
+  total_credit:int64;    // copper credited on OK (0 otherwise)
+  balance:int64;         // the character's money AFTER the transaction
+  buyback_slot:uint16;   // where the sold item landed in the buyback queue (OK only)
+}
+
+/// C→S. Repurchase the item at `buyback_slot` of the session's buyback queue, for
+/// the exact copper it was sold for (server-owned; not sent by the client).
+table VendorBuybackRequest {
+  buyback_slot:uint16;      // index into the buyback queue (from VendorSellResult)
+}
+
+/// Typed outcome of a buyback.
+enum VendorBuybackStatus : uint16 {
+  OK                  = 0,   // repurchased — item restored, price re-debited
+  EMPTY_SLOT          = 1,   // no buyback entry at that slot (evicted / never sold)
+  INSUFFICIENT_FUNDS  = 2,   // cannot afford the buyback price
+  INVENTORY_FULL      = 3,   // no backpack space to restore the item
+  NOT_IN_WORLD        = 4,   // session authenticated but not spawned in-world
+  INTERNAL            = 5,   // server/DB error
+}
+
+/// S→C. Result of a VendorBuybackRequest. On OK the item is minted back into the
+/// backpack and `price` copper is re-debited; the entry leaves the buyback queue.
+table VendorBuybackResult {
+  status:VendorBuybackStatus = OK;
+  item_template_id:uint32;
+  quantity:uint32;
+  item_guid:uint64;      // re-minted instance guid on OK (0 otherwise)
+  price:int64;           // copper re-debited on OK (0 otherwise)
+  balance:int64;         // the character's money AFTER the transaction
+}
+
+// ===========================================================================
+// 0x52xx — NPC interaction  (M1 — NPC-01/02: gossip + trainers, #372)
+// ===========================================================================
+// Server-authoritative NPC interaction (server PRD §4-M1 NPC-01/02; epic #20). The
+// gossip menu + the trainer eligibility/cost are computed on the SERVER (server/npc,
+// meridian::npc) from placeholder NPC content (real via mcc #28); these tables are
+// only the wire projection — the client never decides which options appear, what an
+// ability costs, or whether a learn is allowed (Principle 1, "server is law").
+//
+// Flow: client opens gossip on a targeted NPC (GossipHello → GossipMenu listing the
+// options the server computed from quest state + role flags). For a trainer NPC the
+// server also sends TrainerList (the abilities it teaches, each priced in copper with
+// its class/level gate + the player's per-ability learn state). The client asks to
+// learn one (TrainerLearn → TrainerLearnResult): on OK the server debited the copper
+// from character.money and granted the ability; otherwise a typed reason and nothing
+// moved.
+
+/// The kind of a gossip option — mirrors gossip.h GossipOptionKind. A quest option's
+/// `target_id` is the quest id; a vendor/trainer option carries 0.
+enum GossipOptionKind : uint16 {
+  QUEST_AVAILABLE   = 0,   // the player may accept this quest here (a giver + gates pass)
+  QUEST_IN_PROGRESS = 1,   // the quest is in the player's log, objectives not all complete
+  QUEST_COMPLETE    = 2,   // objectives complete + this NPC is the turn-in (turn it in here)
+  VENDOR            = 3,   // "browse goods" — the NPC's vendor role flag
+  TRAINER           = 4,   // "train abilities" — the NPC's trainer role flag
+}
+
+/// C→S. Open gossip on a targeted NPC. The account/character is the session's own
+/// (grant-derived) — never a field. The server replies with the GossipMenu it
+/// computed for THIS player's quest state + the NPC's roles.
+table GossipHello {
+  npc_guid:uint64;         // the targeted NPC entity guid to talk to
+}
+
+/// One computed gossip option (a row of the menu). `target_id` is the quest id for
+/// the quest option kinds, 0 for VENDOR / TRAINER.
+table GossipOption {
+  kind:GossipOptionKind = QUEST_AVAILABLE;
+  target_id:uint32;        // quest id (quest options); 0 for vendor/trainer
+}
+
+/// S→C. The gossip menu for an NPC as THIS player sees it: the options the server
+/// computed (quest options gated by quest state, then a vendor option, then a trainer
+/// option). An NPC the player cannot usefully interact with yields an empty list.
+table GossipMenu {
+  npc_guid:uint64;
+  options:[GossipOption];
+}
+
+/// This player's learn state for one trainable ability — mirrors trainer.h
+/// TrainStatus's rejection axes, so the client can grey out an ineligible row and
+/// show why. LEARNABLE means all gates pass right now (the player may buy it).
+enum TrainableState : uint16 {
+  LEARNABLE     = 0,   // right class + high enough level + not known + affordable
+  ALREADY_KNOWN = 1,   // the player already knows it
+  WRONG_CLASS   = 2,   // the player's class is not the ability's required class
+  LEVEL_TOO_LOW = 3,   // the player's level is below the required level
+  CANT_AFFORD   = 4,   // right class + level + not known, but not enough copper
+}
+
+/// One trainable ability as THIS player sees it (a row of the trainer window). All
+/// server-computed: `cost` is content copper (never client-supplied), the gate is
+/// the ability's class/level requirement, and `state` is the player's eligibility.
+table TrainerListEntry {
+  ability_id:uint32;       // -> AbilityStore id (the ability taught)
+  cost:int64;              // copper to learn (ECO-01, server-computed)
+  required_class:uint8;    // roster.h Class id gate (0 = any class)
+  required_level:uint16;   // minimum character level to learn
+  state:TrainableState = LEARNABLE;  // this player's learn eligibility for the row
+}
+
+/// S→C. A trainer NPC's ability list for THIS player (sent when the player opens a
+/// trainer's train option). The client renders the train window from it; the server
+/// re-validates on the actual TrainerLearn (the list is a display projection).
+table TrainerList {
+  npc_guid:uint64;
+  entries:[TrainerListEntry];
+}
+
+/// C→S. Learn one ability from a trainer NPC. The cost is NOT a field — it is the
+/// server's content value (Principle 1); the client only names the NPC + ability.
+table TrainerLearn {
+  npc_guid:uint64;
+  ability_id:uint32;
+}
+
+/// Typed outcome of a learn attempt (mirrors trainer.h TrainStatus).
+enum TrainerLearnStatus : uint16 {
+  OK                 = 0,   // learned — the copper was debited + the ability granted
+  NOT_TRAINER        = 1,   // the NPC is not a trainer
+  UNKNOWN_ABILITY    = 2,   // the NPC does not teach this ability id
+  WRONG_CLASS        = 3,   // the character's class is not the ability's required class
+  LEVEL_TOO_LOW      = 4,   // the character's level is below the required level
+  ALREADY_KNOWN      = 5,   // the character already knows this ability
+  INSUFFICIENT_FUNDS = 6,   // the character cannot afford the cost (nothing debited)
+}
+
+/// S→C. The result of a TrainerLearn. On OK, `cost` copper was debited from
+/// character.money and `new_balance` is the balance AFTER the debit; the ability is
+/// now known. On any non-OK status nothing changed and `new_balance` is the
+/// UNCHANGED balance (server-authoritative — the client never predicts it).
+table TrainerLearnResult {
+  npc_guid:uint64;
+  ability_id:uint32;
+  status:TrainerLearnStatus = OK;
+  cost:int64;              // copper debited on OK (0 otherwise)
+  new_balance:int64;       // balance after the debit (unchanged on any rejection)
+}
+
+// ===========================================================================
 // RESERVED RANGES — commented placeholders only (do NOT define tables until milestone).
 // Each names its opcode range and the owning future issue / SAD section.
 // ===========================================================================
 //
-// 0x3xxx  combat            — ability cast / GCD prediction (server SAD §3.3, D-10). Future issue.
-// 0x4xxx  quest / gossip    — quest state, gossip menus (content schemas: quest.*, gossip). Future issue.
-// 0x5xxx  inventory/economy — inventory, loot rolls, vendor/economy (loot.*, vendor.*). Future issue.
-// 0x6xxx  chat / social     — chat channels, whisper, social lists (cross-shard, server SAD §3.8). Future issue.
+// 0x3xxx  combat            — DEFINED above (M1, CMB-01): CastRequest / CastStart / CastFailed / CastResult;
+//                             (M1, CMB-03 #359): DeathState / ReleaseRequest / GhostState / ResurrectRequest / ResurrectResult.
+// 0x4xxx  quest state       — DEFINED above (M1, QST-01 #371): QuestAccept / QuestAcceptResult /
+//                             QuestProgress / QuestTurnIn / QuestTurnInResult / QuestLog (accept from a
+//                             giver, objective tracking, turn-in + reward grant; server PRD §4-M1).
+//                             NPC gossip menus (which surface these quest options) are DEFINED in the 0x52xx
+//                             block (M1, NPC-01 #372); scripted quest events (QST-02) are a later issue.
+// 0x5xxx  inventory/economy — LOOT (0x5001..0x5006) DEFINED above (M1, ITM-02 #369): LootRequest / LootResponse /
+//                             LootTake / LootResult / LootRelease / LootClosed. VENDORS (0x5101..0x5106) DEFINED
+//                             above (M1, ECO-01 #370): VendorBuy/Sell/Buyback Request+Result — the 0x51xx sub-band,
+//                             disjoint from loot's 0x50xx. Bank/trade (ECO-05/SOC-03) + inventory-move ops append later.
+//                             NPC interaction (0x5201..0x5205) DEFINED above (M1, NPC-01/02 #372): GossipHello /
+//                             GossipMenu / TrainerList / TrainerLearn / TrainerLearnResult (gossip menus gated by
+//                             quest state + vendor/trainer role flags; trainers learn abilities for copper, class/
+//                             level gated). Disjoint 0x52xx block; server PRD §4-M1.
+// 0x6xxx  chat / social     — DEFINED above (M1, SOC-01 #367): ChatMessage / ChatDeliver / ChatRejected
+//                             (say/yell via AoI #87, whisper cross-session, zone broadcast; server SAD §2.5/§3.8).
+//                             Social lists + cross-shard routing via servicesd are M3.
 // 0x7xxx  group / instance  — party/raid, instance lifecycle. Future issue.
 // 0x8xxx  shard / transfer  — ShardTransferRequest/Deny/Begin, AoIRefreshBegin/End, ShardPresence
 //                             (server SAD §5.2.1, D-23; client handling A-13). M3. Future issue.
+// 0x9xxx  world / area      — area triggers + POI discovery (PoiDiscovered above). M1, ISSUE #368
+//                             (WLD-01/03, epic #20). Extends the SAD §5.2 range map.
 // 0xExxx  GM                — GM commands / audit surface. Future issue.
 // 0xFxxx  hot-reload        — IF-7 editor channel: EditorHello/AuthOk, PushDelta, ApplyResult,
 //                             RespawnRequest, TeleportPreview, SubscribeLog/LogEvent

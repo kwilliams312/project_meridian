@@ -32,6 +32,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "meridian/clientnet/codec.h"         // clientnet::codec::* (char-select round-trips)
 #include "meridian/clientnet/framing.h"       // clientnet::Bytes
 #include "remote_interpolation.h"             // remote::RemoteInterpolator
 
@@ -59,7 +60,10 @@ struct ProbeResult {
     std::string login_detail;       // login failure reason (empty on success)
 
     bool connect_failed = false;    // net thread could not reach/enter worldd
-    bool entered_world = false;     // HandshakeOk received (entered the world)
+    bool entered_world = false;     // HandshakeOk received (reached CHARACTER-SELECT)
+    bool spawned = false;           // EnterWorldResponse OK — actually in world (D-35/#341)
+    std::uint16_t enter_world_status = 0xFFFF;  // last EnterWorldStatus (0xFFFF = none)
+    std::uint64_t character_id = 0; // the owned character we entered as (0 = none)
     bool disconnected = false;      // server sent a Disconnect
     std::uint16_t disconnect_reason = 0;  // world.fbs DisconnectReason
     bool transport_closed = false;  // peer closed mid-session
@@ -101,6 +105,71 @@ bool apply_entity_frame(remote::RemoteInterpolator& interp, ProbeResult& res,
                         std::uint16_t opcode, const Bytes& payload,
                         std::uint64_t recv_server_ms);
 
+// -----------------------------------------------------------------------------
+// Character-select → ENTER_WORLD sequencer (server-authoritative, D-35 / #341).
+// -----------------------------------------------------------------------------
+// After HandshakeOk the world session is at CHARACTER-SELECT, NOT spawned — worldd no
+// longer fabricates a placeholder; a session spawns ONLY when it sends an explicit
+// ENTER_WORLD_REQUEST naming an OWNED character and worldd replies EnterWorldStatus OK
+// (server/worldd/world_dispatch.cpp — the single spawn seam). This tiny state machine
+// drives that handshake exactly as client/bot/bot_core.cpp sequences it and
+// scenes/charselect/char_select.gd gates its world-scene transition:
+//
+//   HandshakeOk ─▶ [forced id? ENTER_WORLD] else CharListRequest
+//   CharListResponse ─▶ roster non-empty? ENTER_WORLD(first) : CharCreateRequest
+//   CharCreateResponse(OK) ─▶ ENTER_WORLD(minted id)     (else: fail)
+//   EnterWorldResponse(OK) ─▶ SPAWNED                    (else: fail — stay at select)
+//
+// It is engine-free AND socket-free: run_probe feeds it decoded inbound messages and
+// sends the frames it returns, but the whole enter-world contract is unit-tested with
+// NO server (client/probe/test), mirroring how apply_entity_frame is tested in isolation.
+enum class EnterPhase : std::uint8_t {
+    kConnecting = 0,  // pre-HandshakeOk (session establishing)
+    kListing    = 1,  // CharListRequest sent — awaiting the roster
+    kCreating   = 2,  // CharCreateRequest sent — awaiting the minted id
+    kEntering   = 3,  // ENTER_WORLD_REQUEST sent — awaiting the typed result
+    kSpawned    = 4,  // EnterWorldResponse OK — in world (the ONE spawn seam)
+    kFailed     = 5,  // terminal: rejected create/enter, or empty roster w/o create
+};
+
+// The outcome of feeding the sequencer one inbound message.
+struct EnterStep {
+    Bytes frame;             // request frame to SEND now (empty ⇒ nothing to send)
+    bool spawned = false;    // just transitioned to in-world (EnterWorld OK)
+    bool failed = false;     // just reached a terminal failure
+    std::string detail;      // human note (failure reason / spawn confirmation)
+};
+
+class EnterWorldSequencer {
+public:
+    // forced_character_id != 0 enters THAT owned character directly (deterministic,
+    // like bot_core's force_character_id) — no CharList round-trip. 0 ⇒ list, and if
+    // the roster is empty and auto_create is set, self-provision one first (character_name).
+    EnterWorldSequencer(std::uint64_t forced_character_id, bool auto_create,
+                        std::string character_name);
+
+    EnterPhase phase() const { return phase_; }
+    std::uint64_t character_id() const { return character_id_; }
+    std::uint16_t last_enter_status() const { return last_enter_status_; }
+
+    // Drive one step per inbound message (mirrors the bot's request/response chain).
+    EnterStep on_handshake_ok();
+    EnterStep on_char_list(const clientnet::codec::CharListResponse& roster);
+    EnterStep on_char_create(const clientnet::codec::CharCreateResponse& resp);
+    EnterStep on_enter_world(const clientnet::codec::EnterWorldResponse& resp);
+
+private:
+    EnterStep send_enter_();               // build ENTER_WORLD(character_id_) → kEntering
+    EnterStep fail_(std::string why);      // → kFailed with a note
+
+    EnterPhase phase_ = EnterPhase::kConnecting;
+    std::uint64_t forced_id_ = 0;
+    bool auto_create_ = true;
+    std::string character_name_;
+    std::uint64_t character_id_ = 0;
+    std::uint16_t last_enter_status_ = 0xFFFF;
+};
+
 // Config for one live probe run against real authd + worldd.
 struct ProbeConfig {
     std::string authd_host;
@@ -113,6 +182,12 @@ struct ProbeConfig {
     std::uint32_t client_build = 1000;
     std::uint32_t duration_ms = 8000;  // how long to stay in-world draining the relay
     bool walk = true;                  // send MovementIntents (be a live AoI mover)
+
+    // Server-authoritative enter-world (D-35 / #341): after HandshakeOk the session is
+    // at CHARACTER-SELECT, not spawned — the probe must ENTER_WORLD an OWNED character.
+    std::uint64_t character_id = 0;    // 0 → CharList (first owned), else enter THIS id
+    std::string character_name;        // name to self-provision when the roster is empty
+    bool auto_create = true;           // create a character when the roster is empty
 };
 
 // Drive the full GUI net path live: authd login → NetThreadCore world session →

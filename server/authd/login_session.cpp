@@ -27,6 +27,8 @@
 #include <ctime>
 
 #include "auth_generated.h"
+#include "meridian/bans/bans.h"
+#include "meridian/core/audit.hpp"
 #include "meridian/metrics/catalog.h"
 #include "meridian/trace/session_flow.h"
 #include "meridian/trace/span.h"
@@ -48,6 +50,7 @@ const char* outcome_label(LoginOutcome o) {
         case LoginOutcome::kRejectedHello:   return "rejected_hello";
         case LoginOutcome::kRejectedAuth:    return "rejected_auth";
         case LoginOutcome::kRejectedRealm:   return "rejected_realm";
+        case LoginOutcome::kRejectedBanned:  return "rejected_banned";
         case LoginOutcome::kProtocolError:   return "protocol_error";
         case LoginOutcome::kTransportClosed: return "transport_closed";
     }
@@ -367,6 +370,33 @@ LoginResult run_login(net::Session& sess, db::Connection& db,
         result.detail = "build below floor";
         return result;
     }
+
+    // OPS-02c (#419): refuse a banned SOURCE IP before any SRP work — an IP ban is
+    // account-independent, so it gates the earliest point we have a validated peer.
+    // The check is exact-match on the peer's address (port stripped). A DB error
+    // here must NOT wedge login (fail-open on the moderation lookup); the account
+    // ban below still gates the credentialed path.
+    const std::string peer_ip = bans::ip_of_peer(sess.peer());
+    try {
+        if (!peer_ip.empty() && bans::ip_ban(db, peer_ip).has_value()) {
+            sess.write_frame(encode_error(mn::AuthErrorCode::ACCOUNT_BANNED,
+                                          "this address is banned"));
+            core::audit::emit(core::audit::Record{
+                .action = core::audit::Action::kBanRejected,
+                .outcome = core::audit::Outcome::kFailure,
+                .target = "ip:" + peer_ip,
+                .reason = "ip_banned",
+                .peer = sess.peer(),
+            });
+            result.outcome = LoginOutcome::kRejectedBanned;
+            result.detail = "source IP banned";
+            return result;
+        }
+    } catch (const db::DbError& e) {
+        // Moderation lookup fault: log-and-continue (do not deny a legitimate login
+        // on a transient DB hiccup); the account-ban check remains the gate.
+    }
+
     sess.write_frame(encode_server_hello(cfg.server_build, cfg.proto_ver));
 
     // ---- 2. SrpStart{account} -> SrpChallenge{salt,B} -----------------------
@@ -385,17 +415,19 @@ LoginResult run_login(net::Session& sess, db::Connection& db,
     // Parameterized — the username binds through a prepared-statement parameter,
     // never concatenated (backend standards; meridian-db contract).
     db::Result acct = db.execute(
-        "SELECT id, srp_salt, srp_verifier FROM account WHERE username = ?",
+        "SELECT id, srp_salt, srp_verifier, gm_level FROM account WHERE username = ?",
         {db::Param{username}});
 
     Bytes salt, verifier;
     std::uint64_t account_id = 0;
+    std::uint8_t gm_level = 0;  // account's GM tier (D-16; #417) — exposed via result
     bool known_user = (acct.rows.size() == 1);
     if (known_user) {
         const db::Row& r = acct.rows[0];
         account_id = cell_u64(r[0]);
         if (r[1].has_value()) salt.assign(r[1]->begin(), r[1]->end());
         if (r[2].has_value()) verifier.assign(r[2]->begin(), r[2]->end());
+        gm_level = static_cast<std::uint8_t>(cell_u64(r[3]));
     } else {
         // Anti-enumeration: fabricate a stable fake salt + a throwaway verifier
         // so an unknown user is indistinguishable from a wrong password. We
@@ -415,6 +447,7 @@ LoginResult run_login(net::Session& sess, db::Connection& db,
         verifier = v.verifier;
     }
     result.account_id = account_id;
+    result.gm_level = gm_level;  // 0 for an unknown user (anti-enumeration path)
 
     srp::ServerSession srp(username, salt, verifier, cfg.srp_params);
     sess.write_frame(encode_srp_challenge(salt, srp.B()));
@@ -442,6 +475,32 @@ LoginResult run_login(net::Session& sess, db::Connection& db,
         result.detail = known_user ? "bad SRP proof" : "unknown user";
         return result;
     }
+
+    // OPS-02c (#419): the credentials verified — now refuse a BANNED account. This
+    // runs AFTER the SRP proof (the actor is proven, so surfacing "banned" leaks
+    // nothing they don't already know) and BEFORE any grant is written, so a banned
+    // account never receives a SessionGrant. A moderation-lookup DB error fails
+    // OPEN (a transient hiccup must not lock out a legitimate, non-banned login).
+    try {
+        if (std::optional<bans::Active> ban = bans::account_ban(db, account_id)) {
+            sess.write_frame(encode_auth_result_error(
+                mn::AuthErrorCode::ACCOUNT_BANNED, "this account is banned"));
+            core::audit::emit(core::audit::Record{
+                .action = core::audit::Action::kBanRejected,
+                .outcome = core::audit::Outcome::kFailure,
+                .account_id = account_id,
+                .target = "account:" + std::to_string(account_id),
+                .reason = "account_banned",
+                .peer = sess.peer(),
+            });
+            result.outcome = LoginOutcome::kRejectedBanned;
+            result.detail = "account banned";
+            return result;
+        }
+    } catch (const db::DbError& e) {
+        // Fail-open on a moderation lookup fault (see the IP-ban note above).
+    }
+
     sess.write_frame(encode_auth_result_ok(*M2));
 
     // ---- 4. RealmListRequest -> RealmList -----------------------------------

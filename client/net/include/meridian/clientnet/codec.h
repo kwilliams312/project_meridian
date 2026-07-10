@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "meridian/clientnet/framing.h"  // Bytes
 
@@ -95,7 +96,9 @@ std::optional<Disconnect> decode_disconnect(const Bytes& buf);
 // height. The consumer maps to the render frame (the interpolator / Godot node).
 
 // EntityEnter (world.fbs): a full spawn/enter snapshot. attrs are ignored at M0
-// (D-11 placeholder carries none); only guid + type + pose are decoded for render.
+// (D-11 placeholder carries none); guid + type + pose drive render, and the vitals
+// block (#430/#431 HUD contract, UI-01) drives the unit frame. Vitals are additive
+// FlatBuffers fields — a pre-#430 EntityEnter decodes them to 0 / empty.
 struct EntityEnter {
     std::uint64_t entity_guid = 0;
     std::uint32_t type_id = 0;
@@ -104,10 +107,36 @@ struct EntityEnter {
     std::uint8_t char_class = 0;  // M0-frozen class id (roster.h Class; #328) — the
                                   // client colors the placeholder capsule by class.
                                   // 0 = unset/unknown.
+    // Vitals (#430 HUD contract): server-authoritative; the client DISPLAYS them.
+    std::uint32_t health = 0;      // current health at entry
+    std::uint32_t max_health = 0;  // health cap
+    std::uint32_t power = 0;       // current secondary power at entry
+    std::uint32_t max_power = 0;   // secondary-power cap (0 when power_type = NONE)
+    std::uint8_t power_type = 0;   // world.fbs PowerType (0=NONE,1=MANA,2=ENERGY,3=RAGE)
+    std::uint16_t level = 0;       // unit level (0 = unset/unknown)
+    std::string name;              // display name for the unit frame (empty = unnamed)
 };
 
 Bytes encode_entity_enter(const EntityEnter& in);
 std::optional<EntityEnter> decode_entity_enter(const Bytes& buf);
+
+// VitalsUpdate (world.fbs, #430/#431): a unit's vitals changed — the HUD delta the
+// server pushes to the subject's own client + every observer whenever combat / heal
+// / death / level-up moves health/power/level (no full re-enter). `name` is NOT here
+// (it does not change in-life; it rides EntityEnter). Server-authoritative — the
+// client DISPLAYS these, never predicts them (Principle 1).
+struct VitalsUpdate {
+    std::uint64_t entity_guid = 0;
+    std::uint32_t health = 0;      // current health after the change (0 = dead)
+    std::uint32_t max_health = 0;  // health cap (may change on level-up)
+    std::uint32_t power = 0;       // current secondary power after the change
+    std::uint32_t max_power = 0;   // secondary-power cap (0 when power_type = NONE)
+    std::uint8_t power_type = 0;   // world.fbs PowerType (0=NONE,1=MANA,2=ENERGY,3=RAGE)
+    std::uint16_t level = 0;       // unit level after the change (level-up)
+};
+
+Bytes encode_vitals_update(const VitalsUpdate& in);
+std::optional<VitalsUpdate> decode_vitals_update(const Bytes& buf);
 
 // EntityUpdate (world.fbs): a delta. Position fields are OPTIONAL (a move delta
 // carries them; an attribute-only delta would not), so each is flagged present.
@@ -133,6 +162,399 @@ struct EntityLeave {
 
 Bytes encode_entity_leave(const EntityLeave& in);
 std::optional<EntityLeave> decode_entity_leave(const Bytes& buf);
+
+// ---------------------------------------------------------------------------
+// IF-2 (world.fbs) — character management (D-35 / #286) + server-authoritative
+// enter-world (D-35 / #341), over the AUTHENTICATED world session (post-HandshakeOk).
+// The client lists/creates/deletes its OWN account's characters (worldd scopes
+// every op to the session's grant-derived account) and then ENTER_WORLDs one.
+// Status fields are the world.fbs enum ordinals (kept as u16 so the codec has no
+// generated-enum dependency): CharCreateStatus{OK=0,DUPLICATE_NAME=1,INVALID_NAME=2,
+// INVALID_RACE=3,INVALID_CLASS=4,LIMIT_REACHED=5,INTERNAL=6},
+// CharDeleteStatus{OK=0,REFUSED=1,INTERNAL=2}, EnterWorldStatus{OK=0,NOT_FOUND=1,
+// NO_CHARACTER=2,INTERNAL=3}.
+// ---------------------------------------------------------------------------
+
+// One roster row (world.fbs CharListEntry).
+struct CharSummary {
+    std::uint64_t character_id = 0;
+    std::string name;
+    std::uint8_t race = 0;
+    std::uint8_t char_class = 0;
+    std::uint16_t level = 0;
+};
+
+// CHAR_LIST_REQUEST carries no fields (the account is the session's).
+Bytes encode_char_list_request();
+
+// CHAR_LIST_RESPONSE — the account's roster (0 or 1 at M0, #329).
+struct CharListResponse {
+    std::vector<CharSummary> characters;
+};
+std::optional<CharListResponse> decode_char_list_response(const Bytes& buf);
+
+// CHAR_CREATE_REQUEST — name + M0-frozen race/class.
+struct CharCreateRequest {
+    std::string name;
+    std::uint8_t race = 0;
+    std::uint8_t char_class = 0;
+};
+Bytes encode_char_create_request(const CharCreateRequest& in);
+
+// CHAR_CREATE_RESPONSE — typed status + (on OK) the minted id.
+struct CharCreateResponse {
+    std::uint16_t status = 0;  // CharCreateStatus
+    std::uint64_t character_id = 0;
+};
+std::optional<CharCreateResponse> decode_char_create_response(const Bytes& buf);
+
+// CHAR_DELETE_REQUEST — one owned character id.
+Bytes encode_char_delete_request(std::uint64_t character_id);
+
+// CHAR_DELETE_RESPONSE — ok / refused.
+struct CharDeleteResponse {
+    std::uint16_t status = 0;  // CharDeleteStatus
+};
+std::optional<CharDeleteResponse> decode_char_delete_response(const Bytes& buf);
+
+// ENTER_WORLD_REQUEST — spawn as this owned character.
+Bytes encode_enter_world_request(std::uint64_t character_id);
+
+// ENTER_WORLD_RESPONSE — typed enter result (OK spawns; else no spawn).
+struct EnterWorldResponse {
+    std::uint16_t status = 0;  // EnterWorldStatus
+};
+std::optional<EnterWorldResponse> decode_enter_world_response(const Bytes& buf);
+
+// S→C response ENCODERS — the client never sends these, but mocks/tests (the net
+// thread's replay harness, #97) build server frames through the SAME POD API rather
+// than the generated types. Symmetric with encode_movement_state / encode_entity_*.
+Bytes encode_char_list_response(const CharListResponse& in);
+Bytes encode_char_create_response(const CharCreateResponse& in);
+Bytes encode_char_delete_response(const CharDeleteResponse& in);
+Bytes encode_enter_world_response(const EnterWorldResponse& in);
+
+// ---------------------------------------------------------------------------
+// IF-2 (world.fbs) — QUEST STATE (M1 QST-01, #371/#433) and NPC GOSSIP (M1
+// NPC-01/02, #372/#433). The client is a pure DISPLAY of server-authoritative
+// quest/gossip state (Principle 1 "server is law"): it ENCODES intents (accept a
+// quest, turn one in, open gossip, request the log) and DECODES the typed results +
+// snapshots the server pushes back. It never predicts quest state.
+//
+// Enum fields ride as u16/u8 ordinals (world.fbs QuestAcceptStatus / QuestTurnInStatus
+// / QuestObjectiveType / GossipOptionKind) so this POD API carries no generated-enum
+// dependency, exactly like the CharCreateStatus/EnterWorldStatus fields above.
+// ---------------------------------------------------------------------------
+
+// --- Gossip (0x52xx) --------------------------------------------------------
+
+// GOSSIP_HELLO (C→S): open gossip on a targeted NPC entity guid. At M1 the guid maps
+// 1:1 to the NPC template id (no NPC entities spawn yet — worldd's npc_store lookup).
+struct GossipHello {
+    std::uint64_t npc_guid = 0;
+};
+Bytes encode_gossip_hello(const GossipHello& in);
+std::optional<GossipHello> decode_gossip_hello(const Bytes& buf);  // test/mock symmetry
+
+// One computed gossip option (a menu row). `kind` is world.fbs GossipOptionKind
+// (0=QUEST_AVAILABLE, 1=QUEST_IN_PROGRESS, 2=QUEST_COMPLETE, 3=VENDOR, 4=TRAINER);
+// `target_id` is the quest id for the quest kinds, 0 for vendor/trainer.
+struct GossipOption {
+    std::uint16_t kind = 0;
+    std::uint32_t target_id = 0;
+};
+
+// GOSSIP_MENU (S→C): the server-computed, state-gated option list for THIS player.
+struct GossipMenu {
+    std::uint64_t npc_guid = 0;
+    std::vector<GossipOption> options;
+};
+Bytes encode_gossip_menu(const GossipMenu& in);  // test/mock symmetry (client decodes)
+std::optional<GossipMenu> decode_gossip_menu(const Bytes& buf);
+
+// --- Quest (0x40xx) ---------------------------------------------------------
+
+// QUEST_ACCEPT (C→S): accept `quest_id` from the targeted `giver_guid` NPC.
+struct QuestAccept {
+    std::uint32_t quest_id = 0;
+    std::uint64_t giver_guid = 0;
+};
+Bytes encode_quest_accept(const QuestAccept& in);
+std::optional<QuestAccept> decode_quest_accept(const Bytes& buf);  // test/mock symmetry
+
+// QUEST_ACCEPT_RESULT (S→C): typed accept outcome. `status` is world.fbs
+// QuestAcceptStatus (0=OK; 1..7 = the typed rejections).
+struct QuestAcceptResult {
+    std::uint32_t quest_id = 0;
+    std::uint16_t status = 0;
+};
+Bytes encode_quest_accept_result(const QuestAcceptResult& in);  // test/mock symmetry
+std::optional<QuestAcceptResult> decode_quest_accept_result(const Bytes& buf);
+
+// One objective's live state within a quest-log entry. `type` is world.fbs
+// QuestObjectiveType (0=KILL,1=COLLECT,2=DELIVER,3=EXPLORE); `target_id` is the
+// subject content id (creature/item/zone) per `type`.
+struct QuestObjectiveState {
+    std::uint16_t type = 0;
+    std::uint32_t target_id = 0;
+    std::uint16_t have = 0;
+    std::uint16_t need = 0;
+    bool complete = false;
+};
+
+// QUEST_PROGRESS (S→C): a single objective advanced (kill/collect/deliver/explore).
+struct QuestProgress {
+    std::uint32_t quest_id = 0;
+    std::uint8_t objective_index = 0;
+    std::uint16_t type = 0;  // QuestObjectiveType
+    std::uint16_t have = 0;
+    std::uint16_t need = 0;
+    bool complete = false;
+};
+Bytes encode_quest_progress(const QuestProgress& in);  // test/mock symmetry
+std::optional<QuestProgress> decode_quest_progress(const Bytes& buf);
+
+// QUEST_TURN_IN (C→S): turn `quest_id` in at `turn_in_guid`. `choice_index` selects a
+// reward for a choice-reward quest (>= 0), or -1 when the quest offers no choice.
+struct QuestTurnIn {
+    std::uint32_t quest_id = 0;
+    std::uint64_t turn_in_guid = 0;
+    std::int32_t choice_index = -1;
+};
+Bytes encode_quest_turn_in(const QuestTurnIn& in);
+std::optional<QuestTurnIn> decode_quest_turn_in(const Bytes& buf);  // test/mock symmetry
+
+// A reward item actually granted at turn-in (item template id + count).
+struct QuestRewardItem {
+    std::uint32_t item_id = 0;
+    std::uint16_t count = 1;
+};
+
+// QUEST_TURN_IN_RESULT (S→C): typed turn-in outcome. On OK the rewards were granted;
+// `status` is world.fbs QuestTurnInStatus (0=OK; 1..6 = the typed rejections).
+struct QuestTurnInResult {
+    std::uint32_t quest_id = 0;
+    std::uint16_t status = 0;
+    std::uint32_t reward_xp = 0;
+    std::int64_t reward_money = 0;  // copper (ECO-01)
+    std::vector<QuestRewardItem> reward_items;
+    std::uint16_t new_level = 0;
+};
+Bytes encode_quest_turn_in_result(const QuestTurnInResult& in);  // test/mock symmetry
+std::optional<QuestTurnInResult> decode_quest_turn_in_result(const Bytes& buf);
+
+// One active quest in the log snapshot.
+struct QuestLogEntry {
+    std::uint32_t quest_id = 0;
+    std::uint16_t level = 0;
+    bool complete = false;
+    std::vector<QuestObjectiveState> objectives;
+};
+
+// QUEST_LOG (C↔S): C→S an EMPTY QuestLog is the "send me my log" request; S→C the
+// populated QuestLog is the authoritative active-quest snapshot the client renders its
+// quest log + tracker from. `encode_quest_log({})` builds the empty request body.
+struct QuestLog {
+    std::vector<QuestLogEntry> quests;
+};
+Bytes encode_quest_log(const QuestLog& in);  // C→S request (empty) + S→C mock symmetry
+std::optional<QuestLog> decode_quest_log(const Bytes& buf);
+
+// ---------------------------------------------------------------------------
+// IF-2 (world.fbs) — CORPSE LOOTING (M1 ITM-02, #369/#441), VENDORS (M1 ECO-01,
+// #370/#441), TRAINERS (M1 NPC-02, #372/#441). Server-authoritative throughout
+// (Principle 1): the client issues intents (open loot, take a slot, buy/sell/buyback,
+// learn) and DECODES the typed results/snapshots. It never rolls loot, prices an
+// item, or decides learn eligibility — every value here is the server's.
+//
+// Enum fields ride as u16/u8 ordinals (world.fbs LootStatus / LootTakeStatus /
+// VendorBuyStatus / VendorSellStatus / VendorBuybackStatus / TrainableState /
+// TrainerLearnStatus) so this POD API carries no generated-enum dependency, exactly
+// like the quest/gossip status fields above. All money is int64 COPPER (never FLOAT).
+// ---------------------------------------------------------------------------
+
+// --- Loot (0x5001..0x5006) --------------------------------------------------
+
+// LOOT_REQUEST (C→S): open the loot window on a corpse (the dead creature's guid).
+struct LootRequest {
+    std::uint64_t corpse_guid = 0;
+};
+Bytes encode_loot_request(const LootRequest& in);
+std::optional<LootRequest> decode_loot_request(const Bytes& buf);  // test/mock symmetry
+
+// One lootable slot as THIS looter sees it (a row of the loot window). `quality` is
+// the item's rarity tier (0=poor … 5=legendary) for the client's colour.
+struct LootItem {
+    std::uint32_t slot = 0;
+    std::uint32_t item_template_id = 0;
+    std::uint32_t count = 0;
+    std::uint8_t quality = 0;
+    bool quest_item = false;
+};
+
+// LOOT_RESPONSE (S→C): the money pile + the slots this looter may take. `status` is
+// world.fbs LootStatus (0=OK; 1..4 = the typed pre-check rejections; empty items).
+struct LootResponse {
+    std::uint64_t corpse_guid = 0;
+    std::uint16_t status = 0;  // LootStatus
+    std::int64_t copper = 0;
+    std::vector<LootItem> items;
+};
+Bytes encode_loot_response(const LootResponse& in);  // test/mock symmetry (client decodes)
+std::optional<LootResponse> decode_loot_response(const Bytes& buf);
+
+// LOOT_TAKE (C→S): take one slot from the corpse — or the money pile when `money` is
+// true (then `slot` is ignored).
+struct LootTake {
+    std::uint64_t corpse_guid = 0;
+    std::uint32_t slot = 0;
+    bool money = false;
+};
+Bytes encode_loot_take(const LootTake& in);
+std::optional<LootTake> decode_loot_take(const Bytes& buf);  // test/mock symmetry
+
+// LOOT_RESULT (S→C): the outcome of a take. On OK an item take carries
+// item_template_id + count (copper 0); a money take carries copper. `status` is
+// world.fbs LootTakeStatus (0=OK; 1..7 = the typed rejections).
+struct LootResult {
+    std::uint64_t corpse_guid = 0;
+    std::uint32_t slot = 0;
+    std::uint16_t status = 0;  // LootTakeStatus
+    std::uint32_t item_template_id = 0;
+    std::uint32_t count = 0;
+    std::int64_t copper = 0;
+};
+Bytes encode_loot_result(const LootResult& in);  // test/mock symmetry
+std::optional<LootResult> decode_loot_result(const Bytes& buf);
+
+// LOOT_RELEASE (C→S): close the loot window on a corpse.
+struct LootRelease {
+    std::uint64_t corpse_guid = 0;
+};
+Bytes encode_loot_release(const LootRelease& in);
+std::optional<LootRelease> decode_loot_release(const Bytes& buf);  // test/mock symmetry
+
+// LOOT_CLOSED (S→C): the loot window on a corpse closed (released / looted-out).
+struct LootClosed {
+    std::uint64_t corpse_guid = 0;
+};
+Bytes encode_loot_closed(const LootClosed& in);  // test/mock symmetry
+std::optional<LootClosed> decode_loot_closed(const Bytes& buf);
+
+// --- Vendor (0x5101..0x5106) ------------------------------------------------
+
+// VENDOR_BUY_REQUEST (C→S): buy `quantity` of `item_template_id` from `vendor_id`.
+// The price is the server's — NEVER sent by the client.
+struct VendorBuyRequest {
+    std::uint32_t vendor_id = 0;
+    std::uint32_t item_template_id = 0;
+    std::uint32_t quantity = 0;
+};
+Bytes encode_vendor_buy_request(const VendorBuyRequest& in);
+std::optional<VendorBuyRequest> decode_vendor_buy_request(const Bytes& buf);  // mock
+
+// VENDOR_BUY_RESULT (S→C): typed outcome. `status` is world.fbs VendorBuyStatus
+// (0=OK; 1..7). On OK item_guid minted + total_price debited; `balance` is money after.
+struct VendorBuyResult {
+    std::uint16_t status = 0;  // VendorBuyStatus
+    std::uint32_t vendor_id = 0;
+    std::uint32_t item_template_id = 0;
+    std::uint32_t quantity = 0;
+    std::uint64_t item_guid = 0;
+    std::int64_t total_price = 0;
+    std::int64_t balance = 0;
+};
+Bytes encode_vendor_buy_result(const VendorBuyResult& in);  // test/mock symmetry
+std::optional<VendorBuyResult> decode_vendor_buy_result(const Bytes& buf);
+
+// VENDOR_SELL_REQUEST (C→S): sell `quantity` units of the item at `backpack_slot`.
+struct VendorSellRequest {
+    std::uint32_t vendor_id = 0;
+    std::uint16_t backpack_slot = 0;
+    std::uint32_t quantity = 0;
+};
+Bytes encode_vendor_sell_request(const VendorSellRequest& in);
+std::optional<VendorSellRequest> decode_vendor_sell_request(const Bytes& buf);  // mock
+
+// VENDOR_SELL_RESULT (S→C): typed outcome. `status` is world.fbs VendorSellStatus
+// (0=OK; 1..5). On OK `total_credit` credited, the sold stack pushed onto the buyback
+// queue at `buyback_slot`; `balance` is money after.
+struct VendorSellResult {
+    std::uint16_t status = 0;  // VendorSellStatus
+    std::uint16_t backpack_slot = 0;
+    std::uint32_t item_template_id = 0;
+    std::uint32_t quantity = 0;
+    std::int64_t total_credit = 0;
+    std::int64_t balance = 0;
+    std::uint16_t buyback_slot = 0;
+};
+Bytes encode_vendor_sell_result(const VendorSellResult& in);  // test/mock symmetry
+std::optional<VendorSellResult> decode_vendor_sell_result(const Bytes& buf);
+
+// VENDOR_BUYBACK_REQUEST (C→S): repurchase the item at `buyback_slot` of the queue.
+struct VendorBuybackRequest {
+    std::uint16_t buyback_slot = 0;
+};
+Bytes encode_vendor_buyback_request(const VendorBuybackRequest& in);
+std::optional<VendorBuybackRequest> decode_vendor_buyback_request(const Bytes& buf);  // mock
+
+// VENDOR_BUYBACK_RESULT (S→C): typed outcome. `status` is world.fbs VendorBuybackStatus
+// (0=OK; 1..4). On OK the item is re-minted and `price` re-debited; `balance` after.
+struct VendorBuybackResult {
+    std::uint16_t status = 0;  // VendorBuybackStatus
+    std::uint32_t item_template_id = 0;
+    std::uint32_t quantity = 0;
+    std::uint64_t item_guid = 0;
+    std::int64_t price = 0;
+    std::int64_t balance = 0;
+};
+Bytes encode_vendor_buyback_result(const VendorBuybackResult& in);  // test/mock symmetry
+std::optional<VendorBuybackResult> decode_vendor_buyback_result(const Bytes& buf);
+
+// --- Trainer (0x5203..0x5205) -----------------------------------------------
+
+// One trainable ability as THIS player sees it (a row of the trainer window). All
+// server-computed: `cost` is content copper, the gate is class/level, `state` is the
+// player's eligibility (world.fbs TrainableState: 0=LEARNABLE, 1=ALREADY_KNOWN,
+// 2=WRONG_CLASS, 3=LEVEL_TOO_LOW, 4=CANT_AFFORD).
+struct TrainerListEntry {
+    std::uint32_t ability_id = 0;
+    std::int64_t cost = 0;
+    std::uint8_t required_class = 0;
+    std::uint16_t required_level = 0;
+    std::uint16_t state = 0;  // TrainableState
+};
+
+// TRAINER_LIST (S→C): a trainer NPC's ability list for THIS player (pushed alongside
+// GOSSIP_MENU on a GOSSIP_HELLO to a trainer NPC — there is no C→S request for it).
+struct TrainerList {
+    std::uint64_t npc_guid = 0;
+    std::vector<TrainerListEntry> entries;
+};
+Bytes encode_trainer_list(const TrainerList& in);  // test/mock symmetry (client decodes)
+std::optional<TrainerList> decode_trainer_list(const Bytes& buf);
+
+// TRAINER_LEARN (C→S): learn one ability from a trainer NPC. The cost is NOT a field —
+// it is the server's content value.
+struct TrainerLearn {
+    std::uint64_t npc_guid = 0;
+    std::uint32_t ability_id = 0;
+};
+Bytes encode_trainer_learn(const TrainerLearn& in);
+std::optional<TrainerLearn> decode_trainer_learn(const Bytes& buf);  // test/mock symmetry
+
+// TRAINER_LEARN_RESULT (S→C): typed learn outcome. `status` is world.fbs
+// TrainerLearnStatus (0=OK; 1..6). On OK `cost` was debited and `new_balance` is the
+// balance after; on any rejection `new_balance` is the UNCHANGED balance.
+struct TrainerLearnResult {
+    std::uint64_t npc_guid = 0;
+    std::uint32_t ability_id = 0;
+    std::uint16_t status = 0;  // TrainerLearnStatus
+    std::int64_t cost = 0;
+    std::int64_t new_balance = 0;
+};
+Bytes encode_trainer_learn_result(const TrainerLearnResult& in);  // test/mock symmetry
+std::optional<TrainerLearnResult> decode_trainer_learn_result(const Bytes& buf);
 
 }  // namespace meridian::clientnet::codec
 

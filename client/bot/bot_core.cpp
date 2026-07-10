@@ -238,7 +238,88 @@ BotRunResult run_world_session(login::ILoginTransport& transport,
         return res;
     }
     res.handshake_ok = true;
-    res.detail = "entered world (HandshakeOk)";
+    res.detail = "reached character-select (HandshakeOk)";
+
+    // --- 3a. Character-select -> ENTER_WORLD (server-authoritative, D-35 / #341).
+    //   After HandshakeOk the session is at character-select, NOT spawned. The bot
+    //   must enter as a REAL character it OWNS before it can move. It lists the
+    //   account's roster and, if empty, self-provisions one (name = cfg.character_name),
+    //   then sends ENTER_WORLD(character_id) and only proceeds on a typed OK. These
+    //   are strict request/response round-trips over the still-blocking transport
+    //   (the server sends no unsolicited frames at character-select, and replies OK
+    //   BEFORE any relayed EntityEnter). A test hook (force_character_id) enters a
+    //   specific id directly to exercise the NOT_FOUND reject path.
+    auto send_recv = [&](std::uint16_t op, std::uint64_t seq,
+                         const Bytes& payload) -> std::optional<WorldFrame> {
+        Bytes frame = encode_world_frame(op, seq, payload);
+        if (!transport.send_frame(login::Bytes(frame.begin(), frame.end())))
+            return std::nullopt;
+        std::optional<login::Bytes> rep = transport.recv_frame();
+        if (!rep) return std::nullopt;
+        return decode_world_frame(Bytes(rep->begin(), rep->end()));
+    };
+    auto fb_bytes = [](fb::FlatBufferBuilder& b) {
+        return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+    };
+
+    std::uint64_t character_id = cfg.force_character_id;
+    if (character_id == 0) {
+        // CHAR_LIST — find the account's character.
+        fb::FlatBufferBuilder lb;
+        lb.Finish(mn::CreateCharListRequest(lb));
+        std::optional<WorldFrame> lf = send_recv(kOpCharListReq, /*seq=*/1, fb_bytes(lb));
+        if (!lf || lf->opcode != kOpCharListResp) {
+            res.detail = "no/unexpected reply to CharList at character-select";
+            return res;
+        }
+        const mn::CharListResponse* lr = decode<mn::CharListResponse>(lf->payload);
+        if (lr == nullptr) { res.detail = "undecodable CharListResponse"; return res; }
+        if (lr->characters() != nullptr && lr->characters()->size() > 0) {
+            character_id = lr->characters()->Get(0)->character_id();
+        } else {
+            // Roster empty -> self-provision one (race/class = M0 roster 1/1).
+            const std::string name =
+                cfg.character_name.empty() ? std::string("bot") : cfg.character_name;
+            fb::FlatBufferBuilder cb;
+            auto n = cb.CreateString(name);
+            cb.Finish(mn::CreateCharCreateRequest(cb, n, /*race=*/1, /*char_class=*/1));
+            std::optional<WorldFrame> cf =
+                send_recv(kOpCharCreateReq, /*seq=*/2, fb_bytes(cb));
+            if (!cf || cf->opcode != kOpCharCreateResp) {
+                res.detail = "no/unexpected reply to CharCreate";
+                return res;
+            }
+            const mn::CharCreateResponse* cr = decode<mn::CharCreateResponse>(cf->payload);
+            if (cr == nullptr || cr->status() != mn::CharCreateStatus::OK) {
+                res.detail = "CharCreate rejected (status=" +
+                             std::to_string(cr ? static_cast<int>(cr->status()) : -1) + ")";
+                return res;
+            }
+            character_id = cr->character_id();
+        }
+    }
+
+    // ENTER_WORLD(character_id) — spawn as the owned character; proceed only on OK.
+    {
+        fb::FlatBufferBuilder eb;
+        eb.Finish(mn::CreateEnterWorldRequest(eb, character_id));
+        std::optional<WorldFrame> ef = send_recv(kOpEnterWorldReq, /*seq=*/3, fb_bytes(eb));
+        if (!ef || ef->opcode != kOpEnterWorldResp) {
+            res.detail = "no/unexpected reply to EnterWorld";
+            return res;
+        }
+        const mn::EnterWorldResponse* er = decode<mn::EnterWorldResponse>(ef->payload);
+        if (er == nullptr) { res.detail = "undecodable EnterWorldResponse"; return res; }
+        res.enter_world_status = static_cast<std::uint16_t>(er->status());
+        res.character_id = character_id;
+        if (er->status() != mn::EnterWorldStatus::OK) {
+            res.detail = "ENTER_WORLD rejected (status=" +
+                         std::to_string(res.enter_world_status) + ")";
+            return res;  // server-authoritative: no spawn, do not move
+        }
+        res.in_world = true;
+        res.detail = "entered world (ENTER_WORLD OK)";
+    }
 
     // --- 3b. AoI drain seam (#248). worldd's enter() sends EntityEnter for anyone
     //         ALREADY in range the instant we enter (login-time visibility, #87),

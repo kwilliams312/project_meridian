@@ -32,8 +32,10 @@
 # GPU device — exits 0 cleanly) and always runs the client windowed. Do NOT add
 # --headless here.
 #
-# Requires a prior GDExtension build (client/project/bin/ populated):
-#   cd client && cmake -B build -DGODOTCPP_TARGET=editor && cmake --build build -j
+# Requires a prior GDExtension build (client/project/bin/ populated). This script
+# does NOT build — rebuild after ANY client C++ change (client/net, client/gdextension):
+#   scripts/dev/build-client.sh
+# (GDScript-only changes reload from source and need no rebuild.)
 set -euo pipefail
 
 # shellcheck source=scripts/dev/_common.sh

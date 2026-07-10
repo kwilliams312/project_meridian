@@ -72,6 +72,12 @@ enum class InboundKind : std::uint8_t {
     kEntityFrame = 3,     // EntityEnter/Update/Leave — raw (opcode/seq/payload)
     kTransportClosed = 4, // peer closed / socket error (session over)
     kConnectFailed = 5,   // the net thread could not establish the world connection
+    // Character management + server-authoritative enter-world (D-35 / #286 / #341),
+    // decoded off the main thread; the matching field below is populated.
+    kCharList = 6,        // CharListResponse (roster valid)
+    kCharCreate = 7,      // CharCreateResponse (char_create valid)
+    kCharDelete = 8,      // CharDeleteResponse (char_delete valid)
+    kEnterWorld = 9,      // EnterWorldResponse (enter_world valid) — OK means spawned
 };
 
 // One decoded server event handed to the main thread via the inbound SPSC ring.
@@ -89,6 +95,13 @@ struct InboundMessage {
 
     // Valid when kind == kDisconnect.
     meridian::clientnet::codec::Disconnect disc;
+
+    // Valid when kind == kCharList / kCharCreate / kCharDelete / kEnterWorld
+    // (character-select round-trips, D-35). Only the one named by `kind` is set.
+    meridian::clientnet::codec::CharListResponse roster;
+    meridian::clientnet::codec::CharCreateResponse char_create;
+    meridian::clientnet::codec::CharDeleteResponse char_delete;
+    meridian::clientnet::codec::EnterWorldResponse enter_world;
 
     // Valid when kind == kEntityFrame: the raw FlatBuffer body (the main-thread sim
     // layer decodes EntityEnter/Update/Leave from it). Also carries a human note on

@@ -66,6 +66,7 @@ concrete tables; the rest are reserved with commented placeholders in `world.fbs
 | `0x6xxx` | chat / social     | ⛔ stub | channels, whisper, social (SAD §3.8) |
 | `0x7xxx` | group / instance  | ⛔ stub | party/raid, instance lifecycle |
 | `0x8xxx` | shard / transfer  | ⛔ stub | ShardTransfer*, AoIRefresh*, ShardPresence (SAD §5.2.1, D-23, M3) |
+| `0x9xxx` | world / area      | ✅ M1 | PoiDiscovered (area triggers + POI discovery; #368 WLD-01/03, epic #20) |
 | `0xExxx` | GM                | ⛔ stub | GM commands / audit |
 | `0xFxxx` | hot-reload        | ⛔ stub | IF-7 editor channel (SAD §5.4, M1) |
 

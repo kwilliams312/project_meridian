@@ -1,0 +1,35 @@
+# Deliver + explore quest. Bren sends a lamp down to the trapped foreman and asks
+# you to scout the sunken gallery. Turn-in is Dain himself (met by reaching him).
+schema: meridian/quest@1
+id: core:quest.sparks_in_the_dark
+name: Sparks in the Dark
+summary: Carry a spare lamp to Foreman Dain and scout the Sunken Gallery.
+offer_text: >-
+  Dain went down after the foreman's shift never came up, and now he hasn't
+  come up either. Take him a lamp — a lit one, mind — and see how deep the rot
+  goes. If the galleries have flooded with kobolds, I want to hear it from you.
+completion_text: >-
+  A friendly light. You have no idea. Set it there — and thank you for
+  putting eyes on the deep. It's worse than Bren fears.
+level: 5
+required_level: 3
+zone: zone.zone01
+giver: npc.quartermaster_bren
+turn_in: npc.foreman_dain
+prerequisites:
+  quests:
+    - quest.culling_the_kobolds
+objectives:
+  - type: deliver
+    item: item.spare_lamp
+    to: npc.foreman_dain
+  - type: explore
+    zone: zone.zone01
+    poi: sunken_gallery
+rewards:
+  xp: 380
+  money: 300
+  items:
+    - item: item.minor_healing_potion
+      count: 3
+script: null

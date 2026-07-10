@@ -77,18 +77,56 @@ enum class Outcome {
 const char* outcome_name(Outcome outcome);
 
 // A canonical, stable set of audit action names. Passing the enum (rather than a
-// raw string) keeps the vocabulary closed and greppable; the taxonomy is the M0
-// core set scoped by #92 — auth + grant + session lifecycle. GM-command,
-// economy, and anti-cheat actions (PRD §6) are deferred to their milestones and
-// slot in beside these as the features land.
+// raw string) keeps the vocabulary closed and greppable; the taxonomy started as
+// the M0 core set scoped by #92 — auth + grant + session lifecycle — and grows one
+// action at a time as PRD §6 streams land: the ANTI-CHEAT movement flag
+// (kMovementRejected, OPS-03a #420) is the first. GM-command + economy actions slot
+// in beside these as those features land.
 enum class Action {
-    kLoginSuccess,   // authd: SRP proof verified, account authenticated
-    kLoginFailure,   // authd: login rejected (build gate / bad creds / realm)
-    kGrantIssued,    // authd: a single-use session grant was written for a login
-    kGrantConsumed,  // worldd: a grant was validated + atomically consumed
-    kGrantRejected,  // worldd: a WorldHello grant was rejected (replay/expiry/...)
-    kSessionEnter,   // worldd: an authenticated session entered the world
-    kSessionLeave,   // worldd: a session left the world / disconnected
+    kLoginSuccess,     // authd: SRP proof verified, account authenticated
+    kLoginFailure,     // authd: login rejected (build gate / bad creds / realm)
+    kGrantIssued,      // authd: a single-use session grant was written for a login
+    kGrantConsumed,    // worldd: a grant was validated + atomically consumed
+    kGrantRejected,    // worldd: a WorldHello grant was rejected (replay/expiry/...)
+    kSessionEnter,     // worldd: an authenticated session entered the world
+    kSessionLeave,     // worldd: a session left the world / disconnected
+    kMovementRejected, // worldd: an OPS-03 movement-validation violation (anti-cheat,
+                       //         #420) — snap-back correction + audit flag. `reason`
+                       //         is the reject kind (speed/teleport/bounds/flag/...).
+    kGmCommand,        // worldd: a GM command attempt (OPS-02a, #417) — ALLOWED or
+                       //         DENIED. `target` is the command, `reason` the denial
+                       //         classification (insufficient_level/unknown_command),
+                       //         and `extra` carries the actor's gm_level + args. Both
+                       //         outcomes are recorded on the append-only GM audit
+                       //         stream (PRD §6).
+    kRateLimited,      // worldd: a per-opcode RATE-CLASS flood was dropped (OPS-03b,
+                       //         #421) — the dispatcher's per-session rate gate refused
+                       //         a frame that exceeded its opcode class ceiling.
+                       //         `target` is the offending opcode, `reason` the rate
+                       //         class (chat/move/action/session). Anti-cheat throughput
+                       //         signal on the append-only audit stream (PRD §6).
+    kEconomyRejected,  // worldd: a defense-in-depth ECONOMY sanity check rejected a
+                       //         transaction with an impossible delta (OPS-03b, #421) —
+                       //         a bad quantity, a negative price/credit, or a copper
+                       //         over/underflow. `target` is the transaction path
+                       //         (vendor_buy/vendor_sell/quest_reward/loot_money), the
+                       //         `reason` the classification. The economy audit stream
+                       //         (PRD §6), complementing the per-feature validation.
+    kBanRejected,      // authd/worldd: a login or in-world session was refused because
+                       //         the account / source IP / character is BANNED (OPS-02c,
+                       //         #419). `reason` is the subject kind (account_banned/
+                       //         ip_banned/character_banned), `target` the subject
+                       //         (account:<id>/ip:<addr>/character:<id>), `peer` the
+                       //         source address. The moderation audit stream (PRD §6).
+    kBanIssued,        // worldd: a GM `.ban` wrote a ban record (OPS-02c, #419).
+                       //         `target` is the banned subject, `reason` records the
+                       //         subject kind + whether it is permanent/time-boxed; the
+                       //         actor is the issuing GM's account_id.
+    kMuteIssued,       // worldd: a GM `.mute` wrote a character mute (OPS-02c, #419).
+                       //         `target` is character:<id>; `reason` records perm/temp.
+    kChatMuted,        // worldd: a muted character's CHAT_MESSAGE was dropped at the
+                       //         chat router (OPS-02c, #419). `target` is character:<id>,
+                       //         `reason` = "muted". Moderation enforcement signal.
 };
 
 // The stable JSON `action` string for an Action (e.g. "login_failure"). This is

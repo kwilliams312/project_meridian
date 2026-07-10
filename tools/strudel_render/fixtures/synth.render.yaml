@@ -1,0 +1,5 @@
+schema: meridian/strudel-render@1
+pattern: assets/audio/mus/fixture/synth.strudel
+variant: 0
+tail_seconds: 2.0
+sample_banks: []

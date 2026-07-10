@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+# ${COUNT} concurrent meridian-bot sessions (bot i logs in as ${PREFIX}<i>), spread
+# across both arch pools. Rendered by scripts/dev/loadtest.sh via envsubst.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: meridian-${REALM}-loadtest
+  namespace: meridian-${REALM}
+spec:
+  completionMode: Indexed
+  completions: ${COUNT}
+  parallelism: ${COUNT}
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 1800
+  template:
+    metadata:
+      labels:
+        app: meridian-loadtest
+    spec:
+      restartPolicy: Never
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/arch
+                labelSelector:
+                  matchLabels:
+                    app: meridian-loadtest
+      containers:
+        - name: bot
+          image: ghcr.io/kwilliams312/project_meridian/meridian-bot:${TAG}
+          # ${TAG} (e.g. :dev) is a MOVING tag — force a fresh pull so nodes with a
+          # cached older digest don't run stale bot code (k8s defaults non-:latest
+          # tags to IfNotPresent). Without this the harness silently runs old bots.
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - |
+              U=$(printf '${PREFIX}%04d' $((JOB_COMPLETION_INDEX + 1)))
+              echo "bot $U -> meridian-${REALM}-authd:7100 / worldd:7200 for ${DURATION}s"
+              exec /usr/local/bin/meridian-bot \
+                --authd meridian-${REALM}-authd:7100 \
+                --worldd meridian-${REALM}-worldd:7200 \
+                --user "$U" --password "${PASSWORD}" --duration ${DURATION}
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { cpu: "500m", memory: 128Mi }

@@ -75,6 +75,13 @@ add_subdirectory(libs/bus)
 add_subdirectory(libs/srp)
 # db: MariaDB access (#75) — synchronous connection + prepared statements.
 add_subdirectory(libs/db)
+# bans: the OPS-02c moderation model (#419) — account/character/IP bans + chat
+# mutes over the auth + characters DBs (parameterized SQL). A socket-free
+# data-access library shared by authd (login refusal), worldd (session refusal +
+# chat-mute enforcement + GM `.ban`/`.mute` issuance), and operator tooling. Ships
+# a pure unit test + a DB-backed integration test that self-SKIPs without
+# MERIDIAN_DB_*.
+add_subdirectory(libs/bans)
 # net: TLS 1.3 listener + IF-1 length framing for authd (#77) — clean-room from
 # SAD §5.1/§2.1; needs OpenSSL (BSD sockets, no Asio at M0).
 add_subdirectory(libs/net)
@@ -84,6 +91,39 @@ add_subdirectory(libs/net)
 # roster. A library the enter-world / character-select flow links; ships a
 # DB-backed integration test that self-SKIPs without MERIDIAN_DB_*.
 add_subdirectory(characters)
+# items: the M1 item system (ITM-01 + ECO-01; #366). Item templates + a read-only
+# datastore seam (placeholder set now, mcc #28 later), server-minted item
+# instances, the server-authoritative inventory/equip container (add/remove/
+# stack/split/merge + equip slot rules), and int64 copper currency ops on the
+# character. Composes meridian::db over the characters DB item_instance /
+# character_inventory / character.money (SAD §4.2/§4.7). The foundation loot
+# (#369) + vendors (#370) build on; ships a DB-free unit test (pure inventory +
+# currency logic) and a DB-backed integration test that self-SKIPs without
+# MERIDIAN_DB_*.
+add_subdirectory(items)
+# loot: the M1 loot system (ITM-02; #369). Loot tables (weighted groups + quantity
+# ranges + money) with a read-only datastore seam (placeholder set now, mcc #28
+# later), the deterministic seeded loot roll, and the corpse loot-session window
+# (ownership / in-range / not-already-looted / quest-gated validation + transfer
+# into a player inventory via meridian::items #366). worldd's map tick rolls a
+# creature's loot table into a session on its corpse at kill time; ships a DB-free
+# unit test (seeded determinism, statistical drop rates, session validation).
+add_subdirectory(loot)
+# vendor: server-authoritative vendor transactions (ECO-01; #370). buy / sell /
+# buyback over meridian::items — the vendor catalog seam (placeholder set now, mcc
+# #28 later), the per-session buyback queue, and pure + DB-backed transaction logic
+# (int64 copper, no client-trusted prices). Ships a DB-free unit test (the economy
+# rules) and a DB-backed integration test that self-SKIPs without MERIDIAN_DB_*.
+add_subdirectory(vendor)
+# npc: the M1 NPC interaction system (NPC-01/02; #372). Server-authoritative gossip
+# menus (options gated by quest state via a QuestStateView seam + vendor/trainer
+# role flags) and trainers (learn an ability for copper, gated by class + level),
+# with a read-only NPC datastore seam (placeholder set now, mcc #28 later). Builds
+# on meridian::items for the ECO-01 copper debit on `character.money`; the "vendor"
+# gossip option is a role FLAG (no dependency on meridian::vendor). Ships a DB-free
+# unit test (gossip state options, trainer plan) and a DB-backed integration test
+# (copper debit) that self-SKIPs without MERIDIAN_DB_*.
+add_subdirectory(npc)
 
 # --- Daemons (server/README.md process table; SAD §2.1 / §2.5). --------------
 add_subdirectory(authd)
@@ -101,6 +141,12 @@ add_subdirectory(telemetryd)
 # meridian-srp (make_verifier) + meridian-db (prepared-statement INSERT) to
 # register an account into the auth DB `account` table (SAD §2.1, §4.1).
 add_subdirectory(tools/meridian-account)
+
+# meridian-character: character-creation CLI for test provisioning / the
+# concurrency-harness load driver. Resolves an account_id from the auth DB by
+# username, then creates a character through the existing characters CRUD
+# (meridian::characters, server/characters/src/characters.h, CHR-01 stub / D-11).
+add_subdirectory(tools/meridian-character)
 
 # worldd now consumes world.fbs for real via world-dispatch (#82/#83), which
 # links meridian::proto (+ meridian::net) itself (worldd/CMakeLists.txt) — so no

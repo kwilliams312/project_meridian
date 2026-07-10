@@ -1,0 +1,19 @@
+schema: meridian/npc@1
+id: itm1:npc.marshal_bren
+name: Marshal Bren
+subtitle: Wardens' Quartermaster
+level: { min: 8, max: 8 }
+creature_type: humanoid
+faction: friendly
+stats:
+  health: 700
+  armor: 180
+  damage: { min: 12, max: 18 }
+  attack_speed_ms: 2000
+interaction:
+  gossip_text: >-
+    The pack has grown bold on the north road. Thin them, bring me their pelts,
+    and I will see you kitted out.
+  vendor: itm1:vendor.bren_supplies
+visual:
+  model: itm1:art.char.human.male.warden

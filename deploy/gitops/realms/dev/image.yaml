@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# MACHINE-MANAGED by .github/workflows/cd.yml — do NOT edit by hand.
+# Immutable image pin for the Dev realm (issue #380): the just-built
+# <short-sha>, committed back on every push to dev so ArgoCD sees a
+# manifest diff and drives the rollout declaratively. Overrides the
+# moving :dev tag from realms/dev/values.yaml (loaded before this file).
+image:
+  tag: "b715a8a"
+mariadb:
+  image:
+    tag: "b715a8a"
+seed:
+  accountImage:
+    tag: "b715a8a"

@@ -126,8 +126,14 @@ Bytes encode_entity_enter(const EntityEnter& in) {
     // attrs empty at M0 — created so the table shape is complete for the verifier
     // (mirrors worldd's encode_entity_enter_payload).
     auto attrs = b.CreateVector(std::vector<fb::Offset<mn::AttrDelta>>{});
+    // name (#430): the character/creature display name for the unit frame. Empty
+    // string round-trips as an empty name (worldd sends "" for the D-11 placeholder).
+    auto name = b.CreateString(in.name);
     auto e = mn::CreateEntityEnter(b, in.entity_guid, in.type_id, in.x, in.y, in.z,
-                                   in.orientation, attrs, in.char_class);
+                                   in.orientation, attrs, in.char_class, in.health,
+                                   in.max_health, in.power, in.max_power,
+                                   static_cast<mn::PowerType>(in.power_type), in.level,
+                                   name);
     b.Finish(e);
     return to_bytes(b);
 }
@@ -143,6 +149,39 @@ std::optional<EntityEnter> decode_entity_enter(const Bytes& buf) {
     out.z = t->z();
     out.orientation = t->orientation();
     out.char_class = t->char_class();  // #328: class id for the client capsule color
+    // Vitals (#430 HUD contract): additive fields — a pre-#430 producer defaults them.
+    out.health = t->health();
+    out.max_health = t->max_health();
+    out.power = t->power();
+    out.max_power = t->max_power();
+    out.power_type = static_cast<std::uint8_t>(t->power_type());
+    out.level = t->level();
+    out.name = t->name() ? t->name()->str() : std::string();
+    return out;
+}
+
+// ---- IF-2 VitalsUpdate (#430/#431 HUD delta) -------------------------------
+
+Bytes encode_vitals_update(const VitalsUpdate& in) {
+    fb::FlatBufferBuilder b;
+    auto v = mn::CreateVitalsUpdate(b, in.entity_guid, in.health, in.max_health,
+                                    in.power, in.max_power,
+                                    static_cast<mn::PowerType>(in.power_type), in.level);
+    b.Finish(v);
+    return to_bytes(b);
+}
+
+std::optional<VitalsUpdate> decode_vitals_update(const Bytes& buf) {
+    const mn::VitalsUpdate* t = verify_and_get<mn::VitalsUpdate>(buf);
+    if (t == nullptr) return std::nullopt;
+    VitalsUpdate out;
+    out.entity_guid = t->entity_guid();
+    out.health = t->health();
+    out.max_health = t->max_health();
+    out.power = t->power();
+    out.max_power = t->max_power();
+    out.power_type = static_cast<std::uint8_t>(t->power_type());
+    out.level = t->level();
     return out;
 }
 
@@ -197,6 +236,601 @@ std::optional<EntityLeave> decode_entity_leave(const Bytes& buf) {
     EntityLeave out;
     out.entity_guid = t->entity_guid();
     out.reason = static_cast<std::uint16_t>(t->reason());
+    return out;
+}
+
+// ---- IF-2 character management (D-35 / #286) -------------------------------
+
+Bytes encode_char_list_request() {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateCharListRequest(b));
+    return to_bytes(b);
+}
+
+std::optional<CharListResponse> decode_char_list_response(const Bytes& buf) {
+    const mn::CharListResponse* t = verify_and_get<mn::CharListResponse>(buf);
+    if (t == nullptr) return std::nullopt;
+    CharListResponse out;
+    if (t->characters() != nullptr) {
+        out.characters.reserve(t->characters()->size());
+        for (const auto* e : *t->characters()) {
+            if (e == nullptr) continue;
+            CharSummary c;
+            c.character_id = e->character_id();
+            if (e->name() != nullptr) c.name = e->name()->str();
+            c.race = e->race();
+            c.char_class = e->char_class();
+            c.level = e->level();
+            out.characters.push_back(std::move(c));
+        }
+    }
+    return out;
+}
+
+Bytes encode_char_create_request(const CharCreateRequest& in) {
+    fb::FlatBufferBuilder b;
+    auto name = b.CreateString(in.name);
+    b.Finish(mn::CreateCharCreateRequest(b, name, in.race, in.char_class));
+    return to_bytes(b);
+}
+
+std::optional<CharCreateResponse> decode_char_create_response(const Bytes& buf) {
+    const mn::CharCreateResponse* t = verify_and_get<mn::CharCreateResponse>(buf);
+    if (t == nullptr) return std::nullopt;
+    CharCreateResponse out;
+    out.status = static_cast<std::uint16_t>(t->status());
+    out.character_id = t->character_id();
+    return out;
+}
+
+Bytes encode_char_delete_request(std::uint64_t character_id) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateCharDeleteRequest(b, character_id));
+    return to_bytes(b);
+}
+
+std::optional<CharDeleteResponse> decode_char_delete_response(const Bytes& buf) {
+    const mn::CharDeleteResponse* t = verify_and_get<mn::CharDeleteResponse>(buf);
+    if (t == nullptr) return std::nullopt;
+    CharDeleteResponse out;
+    out.status = static_cast<std::uint16_t>(t->status());
+    return out;
+}
+
+// ---- IF-2 server-authoritative enter-world (D-35 / #341) -------------------
+
+Bytes encode_enter_world_request(std::uint64_t character_id) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateEnterWorldRequest(b, character_id));
+    return to_bytes(b);
+}
+
+std::optional<EnterWorldResponse> decode_enter_world_response(const Bytes& buf) {
+    const mn::EnterWorldResponse* t = verify_and_get<mn::EnterWorldResponse>(buf);
+    if (t == nullptr) return std::nullopt;
+    EnterWorldResponse out;
+    out.status = static_cast<std::uint16_t>(t->status());
+    return out;
+}
+
+// ---- S→C response encoders (test/mock symmetry — client never sends these) ---
+
+Bytes encode_char_list_response(const CharListResponse& in) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::CharListEntry>> rows;
+    rows.reserve(in.characters.size());
+    for (const auto& c : in.characters) {
+        auto n = b.CreateString(c.name);
+        rows.push_back(mn::CreateCharListEntry(b, c.character_id, n, c.race,
+                                               c.char_class, c.level));
+    }
+    b.Finish(mn::CreateCharListResponse(b, b.CreateVector(rows)));
+    return to_bytes(b);
+}
+
+Bytes encode_char_create_response(const CharCreateResponse& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateCharCreateResponse(
+        b, static_cast<mn::CharCreateStatus>(in.status), in.character_id));
+    return to_bytes(b);
+}
+
+Bytes encode_char_delete_response(const CharDeleteResponse& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateCharDeleteResponse(
+        b, static_cast<mn::CharDeleteStatus>(in.status)));
+    return to_bytes(b);
+}
+
+Bytes encode_enter_world_response(const EnterWorldResponse& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateEnterWorldResponse(
+        b, static_cast<mn::EnterWorldStatus>(in.status)));
+    return to_bytes(b);
+}
+
+// ---- IF-2 GOSSIP (0x52xx — NPC-01/02, #372/#433) ---------------------------
+
+Bytes encode_gossip_hello(const GossipHello& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateGossipHello(b, in.npc_guid));
+    return to_bytes(b);
+}
+
+std::optional<GossipHello> decode_gossip_hello(const Bytes& buf) {
+    const mn::GossipHello* t = verify_and_get<mn::GossipHello>(buf);
+    if (t == nullptr) return std::nullopt;
+    GossipHello out;
+    out.npc_guid = t->npc_guid();
+    return out;
+}
+
+Bytes encode_gossip_menu(const GossipMenu& in) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::GossipOption>> rows;
+    rows.reserve(in.options.size());
+    for (const auto& o : in.options) {
+        rows.push_back(mn::CreateGossipOption(
+            b, static_cast<mn::GossipOptionKind>(o.kind), o.target_id));
+    }
+    b.Finish(mn::CreateGossipMenu(b, in.npc_guid, b.CreateVector(rows)));
+    return to_bytes(b);
+}
+
+std::optional<GossipMenu> decode_gossip_menu(const Bytes& buf) {
+    const mn::GossipMenu* t = verify_and_get<mn::GossipMenu>(buf);
+    if (t == nullptr) return std::nullopt;
+    GossipMenu out;
+    out.npc_guid = t->npc_guid();
+    if (t->options() != nullptr) {
+        out.options.reserve(t->options()->size());
+        for (const auto* o : *t->options()) {
+            if (o == nullptr) continue;
+            out.options.push_back(
+                GossipOption{static_cast<std::uint16_t>(o->kind()), o->target_id()});
+        }
+    }
+    return out;
+}
+
+// ---- IF-2 QUEST (0x40xx — QST-01, #371/#433) -------------------------------
+
+Bytes encode_quest_accept(const QuestAccept& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateQuestAccept(b, in.quest_id, in.giver_guid));
+    return to_bytes(b);
+}
+
+std::optional<QuestAccept> decode_quest_accept(const Bytes& buf) {
+    const mn::QuestAccept* t = verify_and_get<mn::QuestAccept>(buf);
+    if (t == nullptr) return std::nullopt;
+    QuestAccept out;
+    out.quest_id = t->quest_id();
+    out.giver_guid = t->giver_guid();
+    return out;
+}
+
+Bytes encode_quest_accept_result(const QuestAcceptResult& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateQuestAcceptResult(
+        b, in.quest_id, static_cast<mn::QuestAcceptStatus>(in.status)));
+    return to_bytes(b);
+}
+
+std::optional<QuestAcceptResult> decode_quest_accept_result(const Bytes& buf) {
+    const mn::QuestAcceptResult* t = verify_and_get<mn::QuestAcceptResult>(buf);
+    if (t == nullptr) return std::nullopt;
+    QuestAcceptResult out;
+    out.quest_id = t->quest_id();
+    out.status = static_cast<std::uint16_t>(t->status());
+    return out;
+}
+
+Bytes encode_quest_progress(const QuestProgress& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateQuestProgress(
+        b, in.quest_id, in.objective_index,
+        static_cast<mn::QuestObjectiveType>(in.type), in.have, in.need, in.complete));
+    return to_bytes(b);
+}
+
+std::optional<QuestProgress> decode_quest_progress(const Bytes& buf) {
+    const mn::QuestProgress* t = verify_and_get<mn::QuestProgress>(buf);
+    if (t == nullptr) return std::nullopt;
+    QuestProgress out;
+    out.quest_id = t->quest_id();
+    out.objective_index = t->objective_index();
+    out.type = static_cast<std::uint16_t>(t->type());
+    out.have = t->have();
+    out.need = t->need();
+    out.complete = t->complete();
+    return out;
+}
+
+Bytes encode_quest_turn_in(const QuestTurnIn& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateQuestTurnIn(b, in.quest_id, in.turn_in_guid, in.choice_index));
+    return to_bytes(b);
+}
+
+std::optional<QuestTurnIn> decode_quest_turn_in(const Bytes& buf) {
+    const mn::QuestTurnIn* t = verify_and_get<mn::QuestTurnIn>(buf);
+    if (t == nullptr) return std::nullopt;
+    QuestTurnIn out;
+    out.quest_id = t->quest_id();
+    out.turn_in_guid = t->turn_in_guid();
+    out.choice_index = t->choice_index();
+    return out;
+}
+
+Bytes encode_quest_turn_in_result(const QuestTurnInResult& in) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::QuestRewardItem>> items;
+    items.reserve(in.reward_items.size());
+    for (const auto& it : in.reward_items) {
+        items.push_back(mn::CreateQuestRewardItem(b, it.item_id, it.count));
+    }
+    b.Finish(mn::CreateQuestTurnInResult(
+        b, in.quest_id, static_cast<mn::QuestTurnInStatus>(in.status), in.reward_xp,
+        in.reward_money, b.CreateVector(items), in.new_level));
+    return to_bytes(b);
+}
+
+std::optional<QuestTurnInResult> decode_quest_turn_in_result(const Bytes& buf) {
+    const mn::QuestTurnInResult* t = verify_and_get<mn::QuestTurnInResult>(buf);
+    if (t == nullptr) return std::nullopt;
+    QuestTurnInResult out;
+    out.quest_id = t->quest_id();
+    out.status = static_cast<std::uint16_t>(t->status());
+    out.reward_xp = t->reward_xp();
+    out.reward_money = t->reward_money();
+    out.new_level = t->new_level();
+    if (t->reward_items() != nullptr) {
+        out.reward_items.reserve(t->reward_items()->size());
+        for (const auto* it : *t->reward_items()) {
+            if (it == nullptr) continue;
+            out.reward_items.push_back(QuestRewardItem{it->item_id(), it->count()});
+        }
+    }
+    return out;
+}
+
+Bytes encode_quest_log(const QuestLog& in) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::QuestLogEntry>> entries;
+    entries.reserve(in.quests.size());
+    for (const auto& q : in.quests) {
+        std::vector<fb::Offset<mn::QuestObjectiveState>> objs;
+        objs.reserve(q.objectives.size());
+        for (const auto& o : q.objectives) {
+            objs.push_back(mn::CreateQuestObjectiveState(
+                b, static_cast<mn::QuestObjectiveType>(o.type), o.target_id, o.have,
+                o.need, o.complete));
+        }
+        entries.push_back(mn::CreateQuestLogEntry(b, q.quest_id, q.level, q.complete,
+                                                  b.CreateVector(objs)));
+    }
+    b.Finish(mn::CreateQuestLog(b, b.CreateVector(entries)));
+    return to_bytes(b);
+}
+
+std::optional<QuestLog> decode_quest_log(const Bytes& buf) {
+    const mn::QuestLog* t = verify_and_get<mn::QuestLog>(buf);
+    if (t == nullptr) return std::nullopt;
+    QuestLog out;
+    if (t->quests() != nullptr) {
+        out.quests.reserve(t->quests()->size());
+        for (const auto* q : *t->quests()) {
+            if (q == nullptr) continue;
+            QuestLogEntry entry;
+            entry.quest_id = q->quest_id();
+            entry.level = q->level();
+            entry.complete = q->complete();
+            if (q->objectives() != nullptr) {
+                entry.objectives.reserve(q->objectives()->size());
+                for (const auto* o : *q->objectives()) {
+                    if (o == nullptr) continue;
+                    entry.objectives.push_back(QuestObjectiveState{
+                        static_cast<std::uint16_t>(o->type()), o->target_id(), o->have(),
+                        o->need(), o->complete()});
+                }
+            }
+            out.quests.push_back(std::move(entry));
+        }
+    }
+    return out;
+}
+
+// ---- IF-2 LOOT (0x5001..0x5006 — ITM-02, #369/#441) ------------------------
+
+Bytes encode_loot_request(const LootRequest& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateLootRequest(b, in.corpse_guid));
+    return to_bytes(b);
+}
+
+std::optional<LootRequest> decode_loot_request(const Bytes& buf) {
+    const mn::LootRequest* t = verify_and_get<mn::LootRequest>(buf);
+    if (t == nullptr) return std::nullopt;
+    LootRequest out;
+    out.corpse_guid = t->corpse_guid();
+    return out;
+}
+
+Bytes encode_loot_response(const LootResponse& in) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::LootItem>> items;
+    items.reserve(in.items.size());
+    for (const auto& it : in.items) {
+        items.push_back(mn::CreateLootItem(b, it.slot, it.item_template_id, it.count,
+                                           it.quality, it.quest_item));
+    }
+    b.Finish(mn::CreateLootResponse(b, in.corpse_guid,
+                                    static_cast<mn::LootStatus>(in.status), in.copper,
+                                    b.CreateVector(items)));
+    return to_bytes(b);
+}
+
+std::optional<LootResponse> decode_loot_response(const Bytes& buf) {
+    const mn::LootResponse* t = verify_and_get<mn::LootResponse>(buf);
+    if (t == nullptr) return std::nullopt;
+    LootResponse out;
+    out.corpse_guid = t->corpse_guid();
+    out.status = static_cast<std::uint16_t>(t->status());
+    out.copper = t->copper();
+    if (t->items() != nullptr) {
+        out.items.reserve(t->items()->size());
+        for (const auto* it : *t->items()) {
+            if (it == nullptr) continue;
+            out.items.push_back(LootItem{it->slot(), it->item_template_id(), it->count(),
+                                         it->quality(), it->quest_item()});
+        }
+    }
+    return out;
+}
+
+Bytes encode_loot_take(const LootTake& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateLootTake(b, in.corpse_guid, in.slot, in.money));
+    return to_bytes(b);
+}
+
+std::optional<LootTake> decode_loot_take(const Bytes& buf) {
+    const mn::LootTake* t = verify_and_get<mn::LootTake>(buf);
+    if (t == nullptr) return std::nullopt;
+    LootTake out;
+    out.corpse_guid = t->corpse_guid();
+    out.slot = t->slot();
+    out.money = t->money();
+    return out;
+}
+
+Bytes encode_loot_result(const LootResult& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateLootResult(b, in.corpse_guid, in.slot,
+                                  static_cast<mn::LootTakeStatus>(in.status),
+                                  in.item_template_id, in.count, in.copper));
+    return to_bytes(b);
+}
+
+std::optional<LootResult> decode_loot_result(const Bytes& buf) {
+    const mn::LootResult* t = verify_and_get<mn::LootResult>(buf);
+    if (t == nullptr) return std::nullopt;
+    LootResult out;
+    out.corpse_guid = t->corpse_guid();
+    out.slot = t->slot();
+    out.status = static_cast<std::uint16_t>(t->status());
+    out.item_template_id = t->item_template_id();
+    out.count = t->count();
+    out.copper = t->copper();
+    return out;
+}
+
+Bytes encode_loot_release(const LootRelease& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateLootRelease(b, in.corpse_guid));
+    return to_bytes(b);
+}
+
+std::optional<LootRelease> decode_loot_release(const Bytes& buf) {
+    const mn::LootRelease* t = verify_and_get<mn::LootRelease>(buf);
+    if (t == nullptr) return std::nullopt;
+    LootRelease out;
+    out.corpse_guid = t->corpse_guid();
+    return out;
+}
+
+Bytes encode_loot_closed(const LootClosed& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateLootClosed(b, in.corpse_guid));
+    return to_bytes(b);
+}
+
+std::optional<LootClosed> decode_loot_closed(const Bytes& buf) {
+    const mn::LootClosed* t = verify_and_get<mn::LootClosed>(buf);
+    if (t == nullptr) return std::nullopt;
+    LootClosed out;
+    out.corpse_guid = t->corpse_guid();
+    return out;
+}
+
+// ---- IF-2 VENDOR (0x5101..0x5106 — ECO-01, #370/#441) ----------------------
+
+Bytes encode_vendor_buy_request(const VendorBuyRequest& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateVendorBuyRequest(b, in.vendor_id, in.item_template_id, in.quantity));
+    return to_bytes(b);
+}
+
+std::optional<VendorBuyRequest> decode_vendor_buy_request(const Bytes& buf) {
+    const mn::VendorBuyRequest* t = verify_and_get<mn::VendorBuyRequest>(buf);
+    if (t == nullptr) return std::nullopt;
+    VendorBuyRequest out;
+    out.vendor_id = t->vendor_id();
+    out.item_template_id = t->item_template_id();
+    out.quantity = t->quantity();
+    return out;
+}
+
+Bytes encode_vendor_buy_result(const VendorBuyResult& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateVendorBuyResult(b, static_cast<mn::VendorBuyStatus>(in.status),
+                                       in.vendor_id, in.item_template_id, in.quantity,
+                                       in.item_guid, in.total_price, in.balance));
+    return to_bytes(b);
+}
+
+std::optional<VendorBuyResult> decode_vendor_buy_result(const Bytes& buf) {
+    const mn::VendorBuyResult* t = verify_and_get<mn::VendorBuyResult>(buf);
+    if (t == nullptr) return std::nullopt;
+    VendorBuyResult out;
+    out.status = static_cast<std::uint16_t>(t->status());
+    out.vendor_id = t->vendor_id();
+    out.item_template_id = t->item_template_id();
+    out.quantity = t->quantity();
+    out.item_guid = t->item_guid();
+    out.total_price = t->total_price();
+    out.balance = t->balance();
+    return out;
+}
+
+Bytes encode_vendor_sell_request(const VendorSellRequest& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateVendorSellRequest(b, in.vendor_id, in.backpack_slot, in.quantity));
+    return to_bytes(b);
+}
+
+std::optional<VendorSellRequest> decode_vendor_sell_request(const Bytes& buf) {
+    const mn::VendorSellRequest* t = verify_and_get<mn::VendorSellRequest>(buf);
+    if (t == nullptr) return std::nullopt;
+    VendorSellRequest out;
+    out.vendor_id = t->vendor_id();
+    out.backpack_slot = t->backpack_slot();
+    out.quantity = t->quantity();
+    return out;
+}
+
+Bytes encode_vendor_sell_result(const VendorSellResult& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateVendorSellResult(b, static_cast<mn::VendorSellStatus>(in.status),
+                                        in.backpack_slot, in.item_template_id, in.quantity,
+                                        in.total_credit, in.balance, in.buyback_slot));
+    return to_bytes(b);
+}
+
+std::optional<VendorSellResult> decode_vendor_sell_result(const Bytes& buf) {
+    const mn::VendorSellResult* t = verify_and_get<mn::VendorSellResult>(buf);
+    if (t == nullptr) return std::nullopt;
+    VendorSellResult out;
+    out.status = static_cast<std::uint16_t>(t->status());
+    out.backpack_slot = t->backpack_slot();
+    out.item_template_id = t->item_template_id();
+    out.quantity = t->quantity();
+    out.total_credit = t->total_credit();
+    out.balance = t->balance();
+    out.buyback_slot = t->buyback_slot();
+    return out;
+}
+
+Bytes encode_vendor_buyback_request(const VendorBuybackRequest& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateVendorBuybackRequest(b, in.buyback_slot));
+    return to_bytes(b);
+}
+
+std::optional<VendorBuybackRequest> decode_vendor_buyback_request(const Bytes& buf) {
+    const mn::VendorBuybackRequest* t = verify_and_get<mn::VendorBuybackRequest>(buf);
+    if (t == nullptr) return std::nullopt;
+    VendorBuybackRequest out;
+    out.buyback_slot = t->buyback_slot();
+    return out;
+}
+
+Bytes encode_vendor_buyback_result(const VendorBuybackResult& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateVendorBuybackResult(
+        b, static_cast<mn::VendorBuybackStatus>(in.status), in.item_template_id,
+        in.quantity, in.item_guid, in.price, in.balance));
+    return to_bytes(b);
+}
+
+std::optional<VendorBuybackResult> decode_vendor_buyback_result(const Bytes& buf) {
+    const mn::VendorBuybackResult* t = verify_and_get<mn::VendorBuybackResult>(buf);
+    if (t == nullptr) return std::nullopt;
+    VendorBuybackResult out;
+    out.status = static_cast<std::uint16_t>(t->status());
+    out.item_template_id = t->item_template_id();
+    out.quantity = t->quantity();
+    out.item_guid = t->item_guid();
+    out.price = t->price();
+    out.balance = t->balance();
+    return out;
+}
+
+// ---- IF-2 TRAINER (0x5203..0x5205 — NPC-02, #372/#441) ---------------------
+
+Bytes encode_trainer_list(const TrainerList& in) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::TrainerListEntry>> entries;
+    entries.reserve(in.entries.size());
+    for (const auto& e : in.entries) {
+        entries.push_back(mn::CreateTrainerListEntry(
+            b, e.ability_id, e.cost, e.required_class, e.required_level,
+            static_cast<mn::TrainableState>(e.state)));
+    }
+    b.Finish(mn::CreateTrainerList(b, in.npc_guid, b.CreateVector(entries)));
+    return to_bytes(b);
+}
+
+std::optional<TrainerList> decode_trainer_list(const Bytes& buf) {
+    const mn::TrainerList* t = verify_and_get<mn::TrainerList>(buf);
+    if (t == nullptr) return std::nullopt;
+    TrainerList out;
+    out.npc_guid = t->npc_guid();
+    if (t->entries() != nullptr) {
+        out.entries.reserve(t->entries()->size());
+        for (const auto* e : *t->entries()) {
+            if (e == nullptr) continue;
+            out.entries.push_back(TrainerListEntry{
+                e->ability_id(), e->cost(), e->required_class(), e->required_level(),
+                static_cast<std::uint16_t>(e->state())});
+        }
+    }
+    return out;
+}
+
+Bytes encode_trainer_learn(const TrainerLearn& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateTrainerLearn(b, in.npc_guid, in.ability_id));
+    return to_bytes(b);
+}
+
+std::optional<TrainerLearn> decode_trainer_learn(const Bytes& buf) {
+    const mn::TrainerLearn* t = verify_and_get<mn::TrainerLearn>(buf);
+    if (t == nullptr) return std::nullopt;
+    TrainerLearn out;
+    out.npc_guid = t->npc_guid();
+    out.ability_id = t->ability_id();
+    return out;
+}
+
+Bytes encode_trainer_learn_result(const TrainerLearnResult& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateTrainerLearnResult(
+        b, in.npc_guid, in.ability_id,
+        static_cast<mn::TrainerLearnStatus>(in.status), in.cost, in.new_balance));
+    return to_bytes(b);
+}
+
+std::optional<TrainerLearnResult> decode_trainer_learn_result(const Bytes& buf) {
+    const mn::TrainerLearnResult* t = verify_and_get<mn::TrainerLearnResult>(buf);
+    if (t == nullptr) return std::nullopt;
+    TrainerLearnResult out;
+    out.npc_guid = t->npc_guid();
+    out.ability_id = t->ability_id();
+    out.status = static_cast<std::uint16_t>(t->status());
+    out.cost = t->cost();
+    out.new_balance = t->new_balance();
     return out;
 }
 

@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# Bulk-provision ${COUNT} SRP accounts (${PREFIX}0001..) for a load run. Idempotent.
+# Rendered by scripts/dev/loadtest.sh via envsubst. Not GitOps-synced.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: meridian-${REALM}-add-users
+  namespace: meridian-${REALM}
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: add-users
+          image: ghcr.io/kwilliams312/project_meridian/meridian-account:${TAG}
+          imagePullPolicy: Always   # moving ${TAG}: always pull the latest digest
+          env:
+            - { name: MERIDIAN_DB_HOST, value: "meridian-${REALM}-mariadb" }
+            - { name: MERIDIAN_DB_PORT, value: "3306" }
+            - { name: MERIDIAN_DB_USER, value: "meridian" }
+            - { name: MERIDIAN_DB_PASS, value: "meridian" }
+            - { name: MERIDIAN_DB_NAME, value: "meridian_auth" }
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              i=1
+              while [ $i -le ${COUNT} ]; do
+                u=$(printf '${PREFIX}%04d' $i)
+                /usr/local/bin/meridian-account create --username "$u" --password "${PASSWORD}" || [ $? -eq 3 ]
+                i=$((i+1))
+              done
+              echo "add-users done (${COUNT})"

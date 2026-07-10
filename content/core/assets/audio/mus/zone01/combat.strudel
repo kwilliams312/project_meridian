@@ -1,0 +1,9 @@
+// Zone-01 COMBAT stem — adaptive layer L4 (driving).
+// Pure synthesis only (no sample banks): deterministic, source_tier original.
+// D dorian, 96 bpm, 4/4. Self-contained one-bar loop; the renderer repeats it
+// across the sidecar's declared 96 bars and wraps a seamless tail.
+stack(
+  note("d2*4").s("sawtooth").gain(0.34),         // pounding low pulse
+  note("d3 f3 a3 c4").s("square").gain(0.24),    // aggressive arpeggio
+  note("<a2 c3>").s("triangle").gain(0.2)        // alternating bass accent, one/bar
+)

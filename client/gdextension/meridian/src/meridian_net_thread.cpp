@@ -13,6 +13,7 @@
 
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/object.hpp>  // MethodInfo / ADD_SIGNAL
+#include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/vector3.hpp>
 
@@ -86,6 +87,47 @@ void MeridianNetThread::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("build_movement_intent_frame", "intent"),
 	                     &MeridianNetThread::build_movement_intent_frame);
 
+	ClassDB::bind_method(D_METHOD("build_char_list_request_frame"),
+	                     &MeridianNetThread::build_char_list_request_frame);
+	ClassDB::bind_method(
+	    D_METHOD("build_char_create_request_frame", "name", "race", "char_class"),
+	    &MeridianNetThread::build_char_create_request_frame);
+	ClassDB::bind_method(D_METHOD("build_char_delete_request_frame", "character_id"),
+	                     &MeridianNetThread::build_char_delete_request_frame);
+	ClassDB::bind_method(D_METHOD("build_enter_world_request_frame", "character_id"),
+	                     &MeridianNetThread::build_enter_world_request_frame);
+
+	ClassDB::bind_method(D_METHOD("build_gossip_hello_frame", "npc_guid"),
+	                     &MeridianNetThread::build_gossip_hello_frame);
+	ClassDB::bind_method(D_METHOD("build_quest_accept_frame", "quest_id", "giver_guid"),
+	                     &MeridianNetThread::build_quest_accept_frame);
+	ClassDB::bind_method(
+	    D_METHOD("build_quest_turn_in_frame", "quest_id", "turn_in_guid", "choice_index"),
+	    &MeridianNetThread::build_quest_turn_in_frame);
+	ClassDB::bind_method(D_METHOD("build_quest_log_request_frame"),
+	                     &MeridianNetThread::build_quest_log_request_frame);
+	ClassDB::bind_method(D_METHOD("decode_quest_frame", "opcode", "payload"),
+	                     &MeridianNetThread::decode_quest_frame);
+
+	ClassDB::bind_method(D_METHOD("build_loot_request_frame", "corpse_guid"),
+	                     &MeridianNetThread::build_loot_request_frame);
+	ClassDB::bind_method(D_METHOD("build_loot_take_frame", "corpse_guid", "slot", "money"),
+	                     &MeridianNetThread::build_loot_take_frame);
+	ClassDB::bind_method(D_METHOD("build_loot_release_frame", "corpse_guid"),
+	                     &MeridianNetThread::build_loot_release_frame);
+	ClassDB::bind_method(
+	    D_METHOD("build_vendor_buy_frame", "vendor_id", "item_template_id", "quantity"),
+	    &MeridianNetThread::build_vendor_buy_frame);
+	ClassDB::bind_method(
+	    D_METHOD("build_vendor_sell_frame", "vendor_id", "backpack_slot", "quantity"),
+	    &MeridianNetThread::build_vendor_sell_frame);
+	ClassDB::bind_method(D_METHOD("build_vendor_buyback_frame", "buyback_slot"),
+	                     &MeridianNetThread::build_vendor_buyback_frame);
+	ClassDB::bind_method(D_METHOD("build_trainer_learn_frame", "npc_guid", "ability_id"),
+	                     &MeridianNetThread::build_trainer_learn_frame);
+	ClassDB::bind_method(D_METHOD("decode_econ_frame", "opcode", "payload"),
+	                     &MeridianNetThread::decode_econ_frame);
+
 	ClassDB::bind_method(D_METHOD("frames_sent"), &MeridianNetThread::frames_sent);
 	ClassDB::bind_method(D_METHOD("frames_received"), &MeridianNetThread::frames_received);
 	ClassDB::bind_method(D_METHOD("inbound_dropped"), &MeridianNetThread::inbound_dropped);
@@ -106,6 +148,16 @@ void MeridianNetThread::_bind_methods() {
 	                      PropertyInfo(Variant::STRING, "message")));
 	ADD_SIGNAL(MethodInfo("transport_closed", PropertyInfo(Variant::STRING, "detail")));
 	ADD_SIGNAL(MethodInfo("connect_failed", PropertyInfo(Variant::STRING, "detail")));
+
+	// Character-select round-trips (D-35 / #286 / #341), re-emitted from pump().
+	// char_list carries an Array of Dictionaries {id,name,race,char_class,level}.
+	ADD_SIGNAL(MethodInfo("char_list", PropertyInfo(Variant::ARRAY, "characters")));
+	ADD_SIGNAL(MethodInfo("char_create_result", PropertyInfo(Variant::INT, "status"),
+	                      PropertyInfo(Variant::INT, "character_id")));
+	ADD_SIGNAL(MethodInfo("char_delete_result", PropertyInfo(Variant::INT, "status")));
+	// enter_world_result: EnterWorldStatus (0=OK spawned, 1=NOT_FOUND, 2=NO_CHARACTER,
+	// 3=INTERNAL). The scene switches to the world scene only on OK.
+	ADD_SIGNAL(MethodInfo("enter_world_result", PropertyInfo(Variant::INT, "status")));
 }
 
 bool MeridianNetThread::connect_to_world(const String &host, int port,
@@ -187,6 +239,33 @@ int MeridianNetThread::pump() {
 			case net::InboundKind::kConnectFailed:
 				emit_signal("connect_failed", String(msg.detail.c_str()));
 				break;
+			case net::InboundKind::kCharList: {
+				Array chars;
+				for (const auto &c : msg.roster.characters) {
+					Dictionary row;
+					row["id"] = static_cast<int64_t>(c.character_id);
+					row["name"] = String(c.name.c_str());
+					row["race"] = static_cast<int64_t>(c.race);
+					row["class"] = static_cast<int64_t>(c.char_class);
+					row["level"] = static_cast<int64_t>(c.level);
+					chars.push_back(row);
+				}
+				emit_signal("char_list", chars);
+				break;
+			}
+			case net::InboundKind::kCharCreate:
+				emit_signal("char_create_result",
+				            static_cast<int64_t>(msg.char_create.status),
+				            static_cast<int64_t>(msg.char_create.character_id));
+				break;
+			case net::InboundKind::kCharDelete:
+				emit_signal("char_delete_result",
+				            static_cast<int64_t>(msg.char_delete.status));
+				break;
+			case net::InboundKind::kEnterWorld:
+				emit_signal("enter_world_result",
+				            static_cast<int64_t>(msg.enter_world.status));
+				break;
 		}
 	}
 	return drained;
@@ -230,6 +309,30 @@ Dictionary MeridianNetThread::decode_entity_frame(int opcode,
 		d["has_position"] = true;
 		d["position"] = to_godot(e->x, e->y, e->z);
 		d["orientation"] = e->orientation;
+		// Vitals (#430/#431 HUD contract): the unit-frame block the event bus routes
+		// to the player/target frames (UI-01). Server-authoritative — display only.
+		d["health"] = static_cast<int64_t>(e->health);
+		d["max_health"] = static_cast<int64_t>(e->max_health);
+		d["power"] = static_cast<int64_t>(e->power);
+		d["max_power"] = static_cast<int64_t>(e->max_power);
+		d["power_type"] = static_cast<int64_t>(e->power_type);
+		d["level"] = static_cast<int64_t>(e->level);
+		d["name"] = String(e->name.c_str());
+	} else if (opcode == cn::kOpVitalsUpdate) {
+		// VITALS_UPDATE (#430/#431): the HUD health/power/level delta. Forwarded raw
+		// by the net thread (net_thread_core's default S→C path), decoded here into a
+		// scene-ready Dictionary the event bus publishes to the unit frames.
+		auto v = cn::codec::decode_vitals_update(buf);
+		if (!v) return d;
+		d["kind"] = String("vitals");
+		d["guid"] = static_cast<int64_t>(v->entity_guid);
+		d["has_position"] = false;
+		d["health"] = static_cast<int64_t>(v->health);
+		d["max_health"] = static_cast<int64_t>(v->max_health);
+		d["power"] = static_cast<int64_t>(v->power);
+		d["max_power"] = static_cast<int64_t>(v->max_power);
+		d["power_type"] = static_cast<int64_t>(v->power_type);
+		d["level"] = static_cast<int64_t>(v->level);
 	} else if (opcode == cn::kOpEntityUpdate) {
 		auto u = cn::codec::decode_entity_update(buf);
 		if (!u) return d;
@@ -273,6 +376,322 @@ PackedByteArray MeridianNetThread::build_movement_intent_frame(
 	net::Bytes payload = cn::codec::encode_movement_intent(mi);
 	net::Bytes frame = cn::encode_world_frame(cn::kOpMovementIntent, mi.seq, payload);
 	return to_pba(frame);
+}
+
+// ── Character-select frame builders (D-35 / #286 / #341) ─────────────────────
+// Seq is a per-message counter the server echoes; it is not correlated by the
+// client (responses are matched by opcode/signal), so a fixed non-zero seq is fine.
+
+PackedByteArray MeridianNetThread::build_char_list_request_frame() const {
+	net::Bytes payload = cn::codec::encode_char_list_request();
+	return to_pba(cn::encode_world_frame(cn::kOpCharListReq, /*seq=*/1, payload));
+}
+
+PackedByteArray MeridianNetThread::build_char_create_request_frame(
+		const String &name, int race, int char_class) const {
+	cn::codec::CharCreateRequest req;
+	req.name = to_std(name);
+	req.race = static_cast<std::uint8_t>(race);
+	req.char_class = static_cast<std::uint8_t>(char_class);
+	net::Bytes payload = cn::codec::encode_char_create_request(req);
+	return to_pba(cn::encode_world_frame(cn::kOpCharCreateReq, /*seq=*/1, payload));
+}
+
+PackedByteArray MeridianNetThread::build_char_delete_request_frame(
+		int64_t character_id) const {
+	net::Bytes payload = cn::codec::encode_char_delete_request(
+	    static_cast<std::uint64_t>(character_id));
+	return to_pba(cn::encode_world_frame(cn::kOpCharDeleteReq, /*seq=*/1, payload));
+}
+
+PackedByteArray MeridianNetThread::build_enter_world_request_frame(
+		int64_t character_id) const {
+	net::Bytes payload = cn::codec::encode_enter_world_request(
+	    static_cast<std::uint64_t>(character_id));
+	return to_pba(cn::encode_world_frame(cn::kOpEnterWorldReq, /*seq=*/1, payload));
+}
+
+// ── Quest / gossip frame builders (QST-01 / NPC-01/02, #371/#372/#433) ───────
+// Client → server intents. Seq is a per-message counter the server echoes; the client
+// matches replies by opcode (decode_quest_frame), so a fixed non-zero seq is fine
+// (mirrors the char-select builders above).
+
+PackedByteArray MeridianNetThread::build_gossip_hello_frame(int64_t npc_guid) const {
+	cn::codec::GossipHello in;
+	in.npc_guid = static_cast<std::uint64_t>(npc_guid);
+	net::Bytes payload = cn::codec::encode_gossip_hello(in);
+	return to_pba(cn::encode_world_frame(cn::kOpGossipHello, /*seq=*/1, payload));
+}
+
+PackedByteArray MeridianNetThread::build_quest_accept_frame(int quest_id,
+		int64_t giver_guid) const {
+	cn::codec::QuestAccept in;
+	in.quest_id = static_cast<std::uint32_t>(quest_id);
+	in.giver_guid = static_cast<std::uint64_t>(giver_guid);
+	net::Bytes payload = cn::codec::encode_quest_accept(in);
+	return to_pba(cn::encode_world_frame(cn::kOpQuestAccept, /*seq=*/1, payload));
+}
+
+PackedByteArray MeridianNetThread::build_quest_turn_in_frame(int quest_id,
+		int64_t turn_in_guid, int choice_index) const {
+	cn::codec::QuestTurnIn in;
+	in.quest_id = static_cast<std::uint32_t>(quest_id);
+	in.turn_in_guid = static_cast<std::uint64_t>(turn_in_guid);
+	in.choice_index = static_cast<std::int32_t>(choice_index);
+	net::Bytes payload = cn::codec::encode_quest_turn_in(in);
+	return to_pba(cn::encode_world_frame(cn::kOpQuestTurnIn, /*seq=*/1, payload));
+}
+
+PackedByteArray MeridianNetThread::build_quest_log_request_frame() const {
+	// The C→S request is an EMPTY QuestLog table body (world.fbs QuestLog "sent on …
+	// resync"); worldd replies with the populated snapshot under the same opcode.
+	net::Bytes payload = cn::codec::encode_quest_log(cn::codec::QuestLog{});
+	return to_pba(cn::encode_world_frame(cn::kOpQuestLog, /*seq=*/1, payload));
+}
+
+Dictionary MeridianNetThread::decode_quest_frame(int opcode,
+		const PackedByteArray &payload) const {
+	Dictionary d;
+	d["kind"] = String("");
+	const net::Bytes buf = to_bytes(payload);
+
+	if (opcode == cn::kOpGossipMenu) {
+		auto m = cn::codec::decode_gossip_menu(buf);
+		if (!m) return d;
+		d["kind"] = String("gossip_menu");
+		d["npc_guid"] = static_cast<int64_t>(m->npc_guid);
+		Array options;
+		for (const auto &o : m->options) {
+			Dictionary row;
+			row["kind"] = static_cast<int64_t>(o.kind);            // GossipOptionKind
+			row["target_id"] = static_cast<int64_t>(o.target_id);  // quest id (quest kinds)
+			options.push_back(row);
+		}
+		d["options"] = options;
+	} else if (opcode == cn::kOpQuestAcceptResult) {
+		auto r = cn::codec::decode_quest_accept_result(buf);
+		if (!r) return d;
+		d["kind"] = String("quest_accept_result");
+		d["quest_id"] = static_cast<int64_t>(r->quest_id);
+		d["status"] = static_cast<int64_t>(r->status);  // QuestAcceptStatus
+	} else if (opcode == cn::kOpQuestProgress) {
+		auto p = cn::codec::decode_quest_progress(buf);
+		if (!p) return d;
+		d["kind"] = String("quest_progress");
+		d["quest_id"] = static_cast<int64_t>(p->quest_id);
+		d["objective_index"] = static_cast<int64_t>(p->objective_index);
+		d["type"] = static_cast<int64_t>(p->type);  // QuestObjectiveType
+		d["have"] = static_cast<int64_t>(p->have);
+		d["need"] = static_cast<int64_t>(p->need);
+		d["complete"] = p->complete;
+	} else if (opcode == cn::kOpQuestTurnInResult) {
+		auto r = cn::codec::decode_quest_turn_in_result(buf);
+		if (!r) return d;
+		d["kind"] = String("quest_turn_in_result");
+		d["quest_id"] = static_cast<int64_t>(r->quest_id);
+		d["status"] = static_cast<int64_t>(r->status);  // QuestTurnInStatus
+		d["reward_xp"] = static_cast<int64_t>(r->reward_xp);
+		d["reward_money"] = static_cast<int64_t>(r->reward_money);
+		d["new_level"] = static_cast<int64_t>(r->new_level);
+		Array items;
+		for (const auto &it : r->reward_items) {
+			Dictionary row;
+			row["item_id"] = static_cast<int64_t>(it.item_id);
+			row["count"] = static_cast<int64_t>(it.count);
+			items.push_back(row);
+		}
+		d["reward_items"] = items;
+	} else if (opcode == cn::kOpQuestLog) {
+		auto log = cn::codec::decode_quest_log(buf);
+		if (!log) return d;
+		d["kind"] = String("quest_log");
+		Array quests;
+		for (const auto &q : log->quests) {
+			Dictionary qd;
+			qd["quest_id"] = static_cast<int64_t>(q.quest_id);
+			qd["level"] = static_cast<int64_t>(q.level);
+			qd["complete"] = q.complete;
+			Array objs;
+			for (const auto &o : q.objectives) {
+				Dictionary od;
+				od["type"] = static_cast<int64_t>(o.type);
+				od["target_id"] = static_cast<int64_t>(o.target_id);
+				od["have"] = static_cast<int64_t>(o.have);
+				od["need"] = static_cast<int64_t>(o.need);
+				od["complete"] = o.complete;
+				objs.push_back(od);
+			}
+			qd["objectives"] = objs;
+			quests.push_back(qd);
+		}
+		d["quests"] = quests;
+	}
+	return d;  // kind stays "" for a non-quest/gossip opcode / undecodable payload
+}
+
+// ── Loot / vendor / trainer frame builders (ITM-02/ECO-01/NPC-02, #369/370/372/441) ─
+// Client → server intents. Seq is a per-message counter the server echoes; the client
+// matches replies by opcode (decode_econ_frame), so a fixed non-zero seq is fine
+// (mirrors the quest/gossip + char-select builders above).
+
+PackedByteArray MeridianNetThread::build_loot_request_frame(int64_t corpse_guid) const {
+	cn::codec::LootRequest in;
+	in.corpse_guid = static_cast<std::uint64_t>(corpse_guid);
+	net::Bytes payload = cn::codec::encode_loot_request(in);
+	return to_pba(cn::encode_world_frame(cn::kOpLootRequest, /*seq=*/1, payload));
+}
+
+PackedByteArray MeridianNetThread::build_loot_take_frame(int64_t corpse_guid, int slot,
+		bool money) const {
+	cn::codec::LootTake in;
+	in.corpse_guid = static_cast<std::uint64_t>(corpse_guid);
+	in.slot = static_cast<std::uint32_t>(slot);
+	in.money = money;
+	net::Bytes payload = cn::codec::encode_loot_take(in);
+	return to_pba(cn::encode_world_frame(cn::kOpLootTake, /*seq=*/1, payload));
+}
+
+PackedByteArray MeridianNetThread::build_loot_release_frame(int64_t corpse_guid) const {
+	cn::codec::LootRelease in;
+	in.corpse_guid = static_cast<std::uint64_t>(corpse_guid);
+	net::Bytes payload = cn::codec::encode_loot_release(in);
+	return to_pba(cn::encode_world_frame(cn::kOpLootRelease, /*seq=*/1, payload));
+}
+
+PackedByteArray MeridianNetThread::build_vendor_buy_frame(int vendor_id,
+		int item_template_id, int quantity) const {
+	cn::codec::VendorBuyRequest in;
+	in.vendor_id = static_cast<std::uint32_t>(vendor_id);
+	in.item_template_id = static_cast<std::uint32_t>(item_template_id);
+	in.quantity = static_cast<std::uint32_t>(quantity);
+	net::Bytes payload = cn::codec::encode_vendor_buy_request(in);
+	return to_pba(cn::encode_world_frame(cn::kOpVendorBuyReq, /*seq=*/1, payload));
+}
+
+PackedByteArray MeridianNetThread::build_vendor_sell_frame(int vendor_id,
+		int backpack_slot, int quantity) const {
+	cn::codec::VendorSellRequest in;
+	in.vendor_id = static_cast<std::uint32_t>(vendor_id);
+	in.backpack_slot = static_cast<std::uint16_t>(backpack_slot);
+	in.quantity = static_cast<std::uint32_t>(quantity);
+	net::Bytes payload = cn::codec::encode_vendor_sell_request(in);
+	return to_pba(cn::encode_world_frame(cn::kOpVendorSellReq, /*seq=*/1, payload));
+}
+
+PackedByteArray MeridianNetThread::build_vendor_buyback_frame(int buyback_slot) const {
+	cn::codec::VendorBuybackRequest in;
+	in.buyback_slot = static_cast<std::uint16_t>(buyback_slot);
+	net::Bytes payload = cn::codec::encode_vendor_buyback_request(in);
+	return to_pba(cn::encode_world_frame(cn::kOpVendorBuybackReq, /*seq=*/1, payload));
+}
+
+PackedByteArray MeridianNetThread::build_trainer_learn_frame(int64_t npc_guid,
+		int ability_id) const {
+	cn::codec::TrainerLearn in;
+	in.npc_guid = static_cast<std::uint64_t>(npc_guid);
+	in.ability_id = static_cast<std::uint32_t>(ability_id);
+	net::Bytes payload = cn::codec::encode_trainer_learn(in);
+	return to_pba(cn::encode_world_frame(cn::kOpTrainerLearn, /*seq=*/1, payload));
+}
+
+Dictionary MeridianNetThread::decode_econ_frame(int opcode,
+		const PackedByteArray &payload) const {
+	Dictionary d;
+	d["kind"] = String("");
+	const net::Bytes buf = to_bytes(payload);
+
+	if (opcode == cn::kOpLootResponse) {
+		auto r = cn::codec::decode_loot_response(buf);
+		if (!r) return d;
+		d["kind"] = String("loot_response");
+		d["corpse_guid"] = static_cast<int64_t>(r->corpse_guid);
+		d["status"] = static_cast<int64_t>(r->status);  // LootStatus
+		d["copper"] = static_cast<int64_t>(r->copper);
+		Array items;
+		for (const auto &it : r->items) {
+			Dictionary row;
+			row["slot"] = static_cast<int64_t>(it.slot);
+			row["item_template_id"] = static_cast<int64_t>(it.item_template_id);
+			row["count"] = static_cast<int64_t>(it.count);
+			row["quality"] = static_cast<int64_t>(it.quality);
+			row["quest_item"] = it.quest_item;
+			items.push_back(row);
+		}
+		d["items"] = items;
+	} else if (opcode == cn::kOpLootResult) {
+		auto r = cn::codec::decode_loot_result(buf);
+		if (!r) return d;
+		d["kind"] = String("loot_result");
+		d["corpse_guid"] = static_cast<int64_t>(r->corpse_guid);
+		d["slot"] = static_cast<int64_t>(r->slot);
+		d["status"] = static_cast<int64_t>(r->status);  // LootTakeStatus
+		d["item_template_id"] = static_cast<int64_t>(r->item_template_id);
+		d["count"] = static_cast<int64_t>(r->count);
+		d["copper"] = static_cast<int64_t>(r->copper);
+	} else if (opcode == cn::kOpLootClosed) {
+		auto r = cn::codec::decode_loot_closed(buf);
+		if (!r) return d;
+		d["kind"] = String("loot_closed");
+		d["corpse_guid"] = static_cast<int64_t>(r->corpse_guid);
+	} else if (opcode == cn::kOpVendorBuyResult) {
+		auto r = cn::codec::decode_vendor_buy_result(buf);
+		if (!r) return d;
+		d["kind"] = String("vendor_buy_result");
+		d["status"] = static_cast<int64_t>(r->status);  // VendorBuyStatus
+		d["vendor_id"] = static_cast<int64_t>(r->vendor_id);
+		d["item_template_id"] = static_cast<int64_t>(r->item_template_id);
+		d["quantity"] = static_cast<int64_t>(r->quantity);
+		d["item_guid"] = static_cast<int64_t>(r->item_guid);
+		d["total_price"] = static_cast<int64_t>(r->total_price);
+		d["balance"] = static_cast<int64_t>(r->balance);
+	} else if (opcode == cn::kOpVendorSellResult) {
+		auto r = cn::codec::decode_vendor_sell_result(buf);
+		if (!r) return d;
+		d["kind"] = String("vendor_sell_result");
+		d["status"] = static_cast<int64_t>(r->status);  // VendorSellStatus
+		d["backpack_slot"] = static_cast<int64_t>(r->backpack_slot);
+		d["item_template_id"] = static_cast<int64_t>(r->item_template_id);
+		d["quantity"] = static_cast<int64_t>(r->quantity);
+		d["total_credit"] = static_cast<int64_t>(r->total_credit);
+		d["balance"] = static_cast<int64_t>(r->balance);
+		d["buyback_slot"] = static_cast<int64_t>(r->buyback_slot);
+	} else if (opcode == cn::kOpVendorBuybackResult) {
+		auto r = cn::codec::decode_vendor_buyback_result(buf);
+		if (!r) return d;
+		d["kind"] = String("vendor_buyback_result");
+		d["status"] = static_cast<int64_t>(r->status);  // VendorBuybackStatus
+		d["item_template_id"] = static_cast<int64_t>(r->item_template_id);
+		d["quantity"] = static_cast<int64_t>(r->quantity);
+		d["item_guid"] = static_cast<int64_t>(r->item_guid);
+		d["price"] = static_cast<int64_t>(r->price);
+		d["balance"] = static_cast<int64_t>(r->balance);
+	} else if (opcode == cn::kOpTrainerList) {
+		auto r = cn::codec::decode_trainer_list(buf);
+		if (!r) return d;
+		d["kind"] = String("trainer_list");
+		d["npc_guid"] = static_cast<int64_t>(r->npc_guid);
+		Array entries;
+		for (const auto &e : r->entries) {
+			Dictionary row;
+			row["ability_id"] = static_cast<int64_t>(e.ability_id);
+			row["cost"] = static_cast<int64_t>(e.cost);
+			row["required_class"] = static_cast<int64_t>(e.required_class);
+			row["required_level"] = static_cast<int64_t>(e.required_level);
+			row["state"] = static_cast<int64_t>(e.state);  // TrainableState
+			entries.push_back(row);
+		}
+		d["entries"] = entries;
+	} else if (opcode == cn::kOpTrainerLearnResult) {
+		auto r = cn::codec::decode_trainer_learn_result(buf);
+		if (!r) return d;
+		d["kind"] = String("trainer_learn_result");
+		d["npc_guid"] = static_cast<int64_t>(r->npc_guid);
+		d["ability_id"] = static_cast<int64_t>(r->ability_id);
+		d["status"] = static_cast<int64_t>(r->status);  // TrainerLearnStatus
+		d["cost"] = static_cast<int64_t>(r->cost);
+		d["new_balance"] = static_cast<int64_t>(r->new_balance);
+	}
+	return d;  // kind stays "" for a non-econ opcode / undecodable payload
 }
 
 int64_t MeridianNetThread::frames_sent() const {

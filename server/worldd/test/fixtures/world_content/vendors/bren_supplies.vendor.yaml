@@ -1,0 +1,10 @@
+schema: meridian/vendor@1
+id: itm1:vendor.bren_supplies
+items:
+  - item: itm1:item.healing_draught
+  - item: itm1:item.travelers_boots
+    price_override: 500
+buys:
+  - consumable
+  - armor
+  - trade_good

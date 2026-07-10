@@ -8,8 +8,14 @@
 # realm list (the realm DB row) — external real clients need that; tracked in #339.
 # The in-cluster load harness reaches the daemons by ClusterIP name regardless.
 image:
-  tag: "dev"                # moving per-branch tag, published multi-arch by cd.yml
-  pullPolicy: Always
+  # tag is pinned to the immutable <short-sha> by cd.yml write-back — see the
+  # machine-managed realms/dev/image.yaml overlay (issue #380). The "dev" here is
+  # just the pre-first-build fallback; image.yaml (loaded after this file)
+  # overrides it. IfNotPresent is correct for an immutable tag: a unique SHA tag
+  # is pulled exactly once per node, with no needless registry round-trip on
+  # every pod start (and no moving-tag cache-staleness).
+  tag: "dev"
+  pullPolicy: IfNotPresent
 
 authd:
   replicaCount: 1
@@ -34,6 +40,13 @@ worldd:
   db:
     enabled: true
     name: meridian_auth
+  # Server-authoritative characters (D-35/#341): worldd loads the REAL character
+  # from meridian_characters on ENTER_WORLD to validate ownership + spawn. Without
+  # this, every ENTER_WORLD returns INTERNAL and the realm is unenterable (the
+  # placeholder fabrication is gone). Renders all five MERIDIAN_CHARDB_* vars.
+  chardb:
+    enabled: true
+    name: meridian_characters
 
 tls:
   mode: selfSignedInit

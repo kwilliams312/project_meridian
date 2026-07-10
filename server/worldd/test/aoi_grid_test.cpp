@@ -197,6 +197,35 @@ int main() {
               has(a_sees, B) && has(a_sees, C) && a_sees.size() == 2);
     }
 
+    // ===== G. WITHIN_RADIUS (chat say/yell visitor; SOC-01 #367) ============
+    // The one-shot radius query (no hysteresis): a candidate is in iff its
+    // distance ≤ the requested radius, whatever that radius is (a tight say, a
+    // wide yell), and self is never included.
+    {
+        AoiGrid g;
+        g.upsert(A, at(64.0f, 64.0f));
+        g.upsert(B, at(70.0f, 64.0f));   //  6 m from A
+        g.upsert(C, at(64.0f, 94.0f));   // 30 m from A
+
+        // Say radius 25 m: B (6 m) is in, C (30 m) is out.
+        auto say = g.within_radius(A, kChatSayRadiusM);
+        check("G: say radius — near B in", has(say, B));
+        check("G: say radius — far C out", !has(say, C));
+        check("G: say radius — self excluded", !has(say, A));
+        check("G: say radius — exactly one in range", say.size() == 1);
+
+        // Yell radius 90 m (spans > 1 cell): both B and C are in — the wider block
+        // scan reaches beyond the 3×3 the interest-set query uses.
+        auto yell = g.within_radius(A, kChatYellRadiusM);
+        check("G: yell radius — near B in", has(yell, B));
+        check("G: yell radius — far C now in (wider than say)", has(yell, C));
+        check("G: yell radius — both in range", yell.size() == 2);
+
+        // A zero/negative radius is a no-op empty set; an untracked id too.
+        check("G: zero radius — empty", g.within_radius(A, 0.0f).empty());
+        check("G: untracked self — empty", g.within_radius(9999, kChatYellRadiusM).empty());
+    }
+
     std::printf(g_fail == 0 ? "\nALL WORLDD AOI GRID TESTS PASSED\n"
                             : "\n%d WORLDD AOI GRID TEST(S) FAILED\n", g_fail);
     return g_fail == 0 ? 0 : 1;

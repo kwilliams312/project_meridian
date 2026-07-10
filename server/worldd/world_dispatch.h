@@ -49,8 +49,21 @@
 
 #include <memory>
 
+#include "ability_store.h"
 #include "active_sessions.h"
+#include "buyback.h"  // vendor::BuybackQueue — per-session buyback state (ECO-01, #370)
+#include "combat_resolver.h"
+#include "item_template.h"   // items::TemplateStore (content-store install seam, #390)
+#include "loot_registry.h"  // shared corpse loot registry (ITM-02 wire; #388)
+#include "loot_table.h"      // loot::LootTableStore (WorldServer::set_loot_tables, #390)
+#include "map_tick.h"        // TickEvent — route_tick_events kill-credit routing (#396)
 #include "movement_validation.h"
+#include "npc_def.h"         // npc::NpcStore (content-store install seam, #390)
+#include "quest_credit.h"  // MapTick→session quest-kill credit registry (QST-01 event-bus, #396)
+#include "quest_log.h"  // QuestLog — per-session quest state machine (QST-01 #371)
+#include "rate_class.h"  // OPS-03b per-opcode rate classes + per-session gate (#421)
+#include "trainer.h"    // npc::LearnedAbilitySet — per-session learned abilities (NPC-02 #372)
+#include "vendor_catalog.h"  // vendor::VendorCatalog (content-store install seam, #390)
 #include "world_generated.h"
 #include "world_metrics.h"
 #include "world_session.h"
@@ -59,6 +72,17 @@
 namespace meridian::worldd {
 
 using net::Bytes;
+
+// Install world-DB-backed content stores behind the M1 seams the QUEST/GOSSIP/VENDOR
+// dispatch handlers read (item templates, vendor catalog, quest defs, npc defs),
+// replacing the placeholder set (#390). Call ONCE at boot (main()) AFTER the IF-4
+// manifest check, before serving; the referenced stores must outlive every served
+// connection (main() owns them for the process lifetime). A nullptr leaves that seam
+// on its placeholder default. Not thread-safe — a boot-time, single-threaded set.
+void install_content_stores(const items::TemplateStore* item_store,
+                            const vendor::VendorCatalog* vendor,
+                            const QuestStore* quests,
+                            const npc::NpcStore* npcs);
 
 // IF-2 in-frame header size: u16 opcode + u64 seq, little-endian, ahead of the
 // FlatBuffer payload (see the transport note above).
@@ -138,10 +162,28 @@ enum class DispatchOutcome {
 //     world thread (keyed by session id, drained from the inbound queue) is the
 //     WorldServer scaffold's queue; #87's AoI relay consumes `movement` from
 //     there. At M0 it lives here, next to the WorldSession it is scoped to.
+// Two-phase in-world session (server-authoritative characters, D-35 / #341).
+// A valid WORLD_HELLO authenticates the session and leaves it at kCharSelect —
+// it may list/create/delete its characters and ENTER_WORLD, but it is NOT
+// spawned (no entity, no movement). An explicit ENTER_WORLD_REQUEST naming a
+// character the account OWNS promotes it to kInWorld (spawned, AoI-registered,
+// movement-enabled, holding the account's single in-world slot #326). The server
+// never fabricates a character, so there is no implicit spawn at handshake.
+enum class SessionPhase {
+    kConnected,   // pre-handshake (no valid WORLD_HELLO yet)
+    kCharSelect,  // authenticated, at character select — NOT spawned
+    kInWorld,     // spawned via an ENTER_WORLD_RESPONSE(OK)
+};
+
 struct ConnCtx {
     db::Connection* db = nullptr;        // auth DB (session_grant) — may be null in tests
-    db::Connection* char_db = nullptr;   // characters DB — nullable (placeholder fallback)
+    db::Connection* char_db = nullptr;   // characters DB — nullable (ENTER_WORLD -> INTERNAL when null)
     std::uint32_t realm_id = 0;          // realm this worldd serves (0 = accept any)
+
+    // Two-phase session state (D-35 / #341). Advances kConnected -> kCharSelect
+    // (valid WORLD_HELLO) -> kInWorld (ENTER_WORLD OK). Movement + entity relay
+    // are legal only at kInWorld; the ENTER_WORLD handler refuses a double-enter.
+    SessionPhase phase = SessionPhase::kConnected;
 
     // OPS-05 session-flow traces (#166). When set, the WORLD_HELLO handler emits a
     // "worldd.enter_world" span (grant validate → session establish → HandshakeOk)
@@ -162,6 +204,80 @@ struct ConnCtx {
 
     std::optional<SessionMovementState> movement;  // authoritative movement (#86), post-auth
     MovementIntake intake;                          // ≤ 10/s intent-rate gate (#86)
+    ChatIntake chat_intake;                         // chat rate class (OPS-03; #367)
+
+    // OPS-03b per-opcode RATE CLASSES (#421). The connection-wide anti-flood gate
+    // the dispatcher runs at the dispatch entry: every client opcode is assigned a
+    // rate class (rate_class_for) with a per-session sliding-window ceiling. A frame
+    // over its class ceiling is DROPPED (not disconnected) + flagged on the anti-
+    // cheat audit stream (kRateLimited). Single-threaded on this connection's IO
+    // worker (like `intake`/`chat_intake`), so it needs no locking. This is the
+    // COARSE flood backstop above the finer per-feature caps (MovementIntake/
+    // ChatIntake), which remain the authority for their own opcode (see rate_class.h).
+    RateLimiter rate;
+
+    // Vendors (ECO-01, #370). `char_id` is this session's spawned character
+    // (== character.id, the currency/inventory key), captured at ENTER_WORLD; the
+    // vendor buy/sell/buyback handlers act on it against ctx.char_db (server-
+    // authoritative — never a client-supplied character). `buyback` is THIS
+    // session's per-connection buyback queue (recently-sold items repurchasable
+    // for a bounded window; single-threaded, like `chat_intake`/`combat`). Both
+    // are inert until kInWorld — char_id is 0 pre-spawn and the handlers reject.
+    std::uint64_t char_id = 0;
+    vendor::BuybackQueue buyback;
+
+    // The spawned character's class + level (roster.h ids), captured at ENTER_WORLD
+    // from the loaded owned character. The trainer path (NPC-02, #372) gates a learn
+    // on class + level; the quest path (QST-01, #371) gates an accept on level. Both
+    // are server-authoritative — read from the DB-loaded character, never a client
+    // field. 0 / 1 pre-spawn (the handlers reject before kInWorld).
+    std::uint8_t char_class = 0;
+    std::uint16_t char_level = 1;
+
+    // QUEST state (QST-01, #371). This session's quest state machine — accept /
+    // objective progress / turn-in — a pure, in-memory per-character log (like the
+    // combat/movement state above; single-threaded per connection). Emplaced at
+    // ENTER_WORLD over the shared placeholder QuestStore; std::nullopt until spawned.
+    // At M1 quest progress is NOT persisted (the durable character_quest store is a
+    // later story / mcc #28); reward ITEMS + copper granted at turn-in ARE durable
+    // (minted/credited to char_db). The reward XP is reported but not persisted
+    // (CHR-03 leveling is in-memory in MapTick).
+    std::optional<QuestLog> quests;
+
+    // QUEST-KILL credit bus (QST-01 event-bus, #396). `quest_credit` is the SHARED,
+    // thread-safe MapTick→session kill registry (set by serve_connection; null in
+    // the DB-less smoke path). At ENTER_WORLD this session REGISTERS its entity guid
+    // (`credit_guid`, saved so the serve loop can unregister on teardown); the world
+    // thread PUSHES creature-kill credits keyed by that guid, and this session DRAINS
+    // + applies them on its own IO worker (poll_quest_credits) — keeping ctx.quests
+    // single-threaded (the world thread never touches it). `credit_guid` is 0 until
+    // registered.
+    QuestCreditRegistry* quest_credit = nullptr;
+    ObjectGuid credit_guid = 0;
+    QuestCreditToken credit_token = 0;  // this registration's holder id (ABA guard on unregister)
+
+    // LOOT (ITM-02, #369/#388). `loot` is the SHARED, thread-safe corpse-loot
+    // registry (set by serve_connection from the WorldServer; may be null in the
+    // DB-less smoke path). `open_corpse` is THIS session's currently-open loot
+    // window (the corpse guid), set on a LOOT_REQUEST(OK) and cleared on
+    // LOOT_RELEASE / when the corpse is fully looted — the per-connection "open loot
+    // session" state (mirrors the vendor buyback queue's per-session scope).
+    LootRegistry* loot = nullptr;
+    std::optional<std::uint64_t> open_corpse;
+
+    // TRAINER (NPC-02, #372). This session's IN-MEMORY learned-ability set. At M1
+    // there is no durable character_ability table (trainer.h file header) — the
+    // COPPER debit IS durable (character.money via char_db); the learned row is
+    // per-session. std::nullopt-free (empty until a first learn), like `buyback`.
+    npc::LearnedAbilitySet learned;
+
+    // Combat (CMB-01, #344/#345). `abilities` is the shared, read-only ability
+    // template store (#343), set by serve_connection from the WorldServer; the
+    // CAST_REQUEST handler looks the used ability up here. `combat` is THIS
+    // session's per-connection GCD + cast lifecycle state (single-threaded, like
+    // `movement`); the resolver reads/mutates it on each ability use.
+    const AbilityStore* abilities = nullptr;
+    CombatSession combat;
 
     // AoI relay (#87). `world` is the shared world-thread-owned session registry
     // + grid (set by serve_connection; may be null in the DB-less dispatch smoke
@@ -174,6 +290,14 @@ struct ConnCtx {
     std::shared_ptr<SessionEgress> egress;
     SessionSlot slot = 0;
     bool entered = false;
+
+    // GM `.summon` target mailbox (OPS-02b, #418). Created at ENTER_WORLD and
+    // registered with WorldState (set_session_control) so a summoning GM on ANOTHER
+    // thread can post this session's forced destination; THIS session's own IO
+    // worker drains it (drain_forced_move — top of MOVEMENT_INTENT + post-frame) and
+    // applies force_correction, keeping ctx.movement single-threaded. Null until
+    // spawned / on the DB-less smoke path (un-summonable).
+    std::shared_ptr<ForcedMoveMailbox> forced_move;
 
     // OPS-05: true once this session bumped the CCU / active-session gauges on a
     // valid WORLD_HELLO, so the serve loop decrements them EXACTLY once on close
@@ -188,6 +312,14 @@ struct ConnCtx {
     // that never entered emits no leave audit).
     std::uint64_t account_id = 0;
     std::uint64_t grant_id = 0;
+
+    // GM permission level for this session's account (OPS-02a, #417). Captured on
+    // a valid WORLD_HELLO from the grant-consume JOIN to account.gm_level (D-16
+    // ladder: 0 player < 1 helper < 2 GM < 3 admin), so it is authoritative for
+    // the whole session — the GM command framework (gm_command.h) gates every
+    // `.`-command at the chat path on this value. 0 (player) until authenticated;
+    // a plain player never clears any command's threshold.
+    std::uint8_t gm_level = 0;
 
     // Single active session per account (#326). `active_sessions` is the shared,
     // account-keyed registry (set by serve_connection; null in the DB-less
@@ -293,6 +425,14 @@ struct WorldEvent {
     Bytes payload;  // owned copy — the frame buffer is gone by drain time
 };
 
+// Route one map tick's events to the quest-kill credit bus (QST-01 event-bus, #396):
+// for each TickEventKind::kCreatureKill delta, push the credit (killer guid + victim
+// template id) to `reg`, which retains it only for a registered in-world session. The
+// world thread calls this each tick after MapTick::advance(); the integration test
+// calls it with a real MapTick's deltas to exercise the exact same routing. Non-kill
+// deltas are ignored here (they are the AoI/flush stream, handled elsewhere).
+void route_tick_events(const std::vector<TickEvent>& deltas, QuestCreditRegistry& reg);
+
 struct WorldServerConfig {
     // Map/IO worker pool size. Defaults to a small pool; main() can size it from
     // hardware_concurrency. The SAD's "M ≈ cores − 3" sizing is a later concern —
@@ -376,6 +516,24 @@ public:
     // it (kick-old on collision) so an account holds at most one in-world session.
     // Exposed for tests that assert active_count()/is_active().
     ActiveSessionRegistry& active_sessions();
+
+    // The shared corpse-loot registry (ITM-02 wire; #388). One per server, keyed by
+    // corpse guid; the LOOT_* dispatch handlers open/take/release against it. The
+    // world-thread creature-death hook (#369) seeds it; a test seeds it directly to
+    // drive the loot wire path. Exposed so tests can insert a corpse's loot session.
+    LootRegistry& loot_registry();
+
+    // The shared MapTick→session quest-kill credit registry (QST-01 event-bus, #396).
+    // One per server: the world thread pushes creature-kill credits (route_tick_events)
+    // keyed by killer guid; each in-world session registers its guid + drains its own
+    // credits. Exposed so a test can register a guid / push a kill / assert isolation.
+    QuestCreditRegistry& quest_credit();
+
+    // Install a world-DB-backed loot-table store on the per-map tick (#390),
+    // replacing the placeholder loot tables the tick rolls on creature death. The
+    // store must outlive the WorldServer (main() owns the WorldContent bundle). Call
+    // at boot before start(); not thread-safe.
+    void set_loot_tables(const loot::LootTableStore& store);
 
 private:
     void world_thread_main();

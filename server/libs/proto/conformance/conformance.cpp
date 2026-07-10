@@ -565,11 +565,11 @@ std::vector<Message> build_corpus() {
                         "if2_movement_state.server_time_ms");
                }});
 
-  // EntityEnter with a full attribute set (vector of AttrDelta tables) and a
-  // class id (#328) — char_class=2 (Runcaller) exercises the additive field the
-  // client colors the placeholder capsule from.
+  // EntityEnter with a full attribute set (vector of AttrDelta tables), a class id
+  // (#328), and the #430 vitals block (health/power/level/name for the HUD).
+  // char_class=2 (Runcaller) + power_type=MANA exercises the additive fields.
   c.push_back({"if2_entity_enter", "IF-2", "ENTITY_ENTER (0x2001)",
-               "S->C full state on AoI entry: guid, type, pos, 2 attrs, class",
+               "S->C full state on AoI entry: guid, type, pos, 2 attrs, class, vitals",
                [] {
                  fb::FlatBufferBuilder b;
                  std::vector<fb::Offset<mn::AttrDelta>> attrs;
@@ -578,11 +578,14 @@ std::vector<Message> build_corpus() {
                  attrs.push_back(mn::CreateAttrDelta(b, /*key=*/2u,
                                                      /*value=*/-7));
                  auto av = b.CreateVector(attrs);
+                 auto name = b.CreateString("Aldric");
                  b.Finish(mn::CreateEntityEnter(
                      b, /*entity_guid=*/0x0000000012345678ULL,
                      /*type_id=*/0x00000101u, /*x=*/10.0f, /*y=*/20.0f,
                      /*z=*/0.5f, /*orientation=*/0.0f, av,
-                     /*char_class=*/2u));
+                     /*char_class=*/2u, /*health=*/175u, /*max_health=*/200u,
+                     /*power=*/80u, /*max_power=*/100u, mn::PowerType::MANA,
+                     /*level=*/7u, name));
                  return finish_to_bytes(b);
                },
                [](const Bytes& buf) {
@@ -599,6 +602,15 @@ std::vector<Message> build_corpus() {
                  expect(m->y() == 20.0f, "if2_entity_enter.y");
                  expect(m->z() == 0.5f, "if2_entity_enter.z");
                  expect(m->char_class() == 2u, "if2_entity_enter.char_class");
+                 expect(m->health() == 175u, "if2_entity_enter.health");
+                 expect(m->max_health() == 200u, "if2_entity_enter.max_health");
+                 expect(m->power() == 80u, "if2_entity_enter.power");
+                 expect(m->max_power() == 100u, "if2_entity_enter.max_power");
+                 expect(m->power_type() == mn::PowerType::MANA,
+                        "if2_entity_enter.power_type");
+                 expect(m->level() == 7u, "if2_entity_enter.level");
+                 expect(m->name() && m->name()->str() == "Aldric",
+                        "if2_entity_enter.name");
                  const auto* attrs = m->attrs();
                  if (!expect(attrs != nullptr && attrs->size() == 2,
                              "if2_entity_enter has 2 attrs"))
@@ -672,6 +684,36 @@ std::vector<Message> build_corpus() {
                         "if2_entity_leave.entity_guid");
                  expect(m->reason() == mn::LeaveReason::DESPAWNED,
                         "if2_entity_leave.reason");
+               }});
+
+  // VitalsUpdate (#430, UI-01) — S->C HUD delta: a unit's health/power/level after
+  // a combat/heal/level change. power_type=RAGE (a Vanguard) exercises the enum;
+  // the canonical instance is a unit at 120/200 HP with 45/100 rage, level 8.
+  c.push_back({"if2_vitals_update", "IF-2", "VITALS_UPDATE (0x2004)",
+               "S->C vitals delta: guid, health/max, power/max, power_type, level",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateVitalsUpdate(
+                     b, /*entity_guid=*/0x0000000012345678ULL,
+                     /*health=*/120u, /*max_health=*/200u, /*power=*/45u,
+                     /*max_power=*/100u, mn::PowerType::RAGE, /*level=*/8u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::VitalsUpdate>(nullptr),
+                             "if2_vitals_update verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::VitalsUpdate>(buf.data());
+                 expect(m->entity_guid() == 0x0000000012345678ULL,
+                        "if2_vitals_update.entity_guid");
+                 expect(m->health() == 120u, "if2_vitals_update.health");
+                 expect(m->max_health() == 200u, "if2_vitals_update.max_health");
+                 expect(m->power() == 45u, "if2_vitals_update.power");
+                 expect(m->max_power() == 100u, "if2_vitals_update.max_power");
+                 expect(m->power_type() == mn::PowerType::RAGE,
+                        "if2_vitals_update.power_type");
+                 expect(m->level() == 8u, "if2_vitals_update.level");
                }});
 
   // ---- character management (0x0010..0x0015; #286 / D-35) ------------------
@@ -885,6 +927,1028 @@ std::vector<Message> build_corpus() {
                  const auto* m = fb::GetRoot<mn::CharDeleteResponse>(buf.data());
                  expect(m->status() == mn::CharDeleteStatus::OK,
                         "if2_char_delete_response.status");
+               }});
+
+  // EnterWorldRequest — the owned character to spawn as (server-minted id).
+  c.push_back({"if2_enter_world_request", "IF-2", "ENTER_WORLD_REQUEST (0x0016)",
+               "C->S enter the world as an owned character by id",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateEnterWorldRequest(
+                     b, /*character_id=*/0x0000000100000003ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::EnterWorldRequest>(nullptr),
+                             "if2_enter_world_request verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::EnterWorldRequest>(buf.data());
+                 expect(m->character_id() == 0x0000000100000003ULL,
+                        "if2_enter_world_request.character_id");
+               }});
+
+  // EnterWorldResponse — canonical is the OK variant (spawn authorized).
+  c.push_back({"if2_enter_world_response", "IF-2", "ENTER_WORLD_RESPONSE (0x0017)",
+               "S->C enter result: status=OK (spawned)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateEnterWorldResponse(b, mn::EnterWorldStatus::OK));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::EnterWorldResponse>(nullptr),
+                             "if2_enter_world_response verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::EnterWorldResponse>(buf.data());
+                 expect(m->status() == mn::EnterWorldStatus::OK,
+                        "if2_enter_world_response.status");
+               }});
+
+  // ---- 0x3xxx combat (CMB-01 #344/#345, D-10) --------------------------------
+
+  // CastRequest — C->S ability use (id + target + client clock).
+  c.push_back({"if2_cast_request", "IF-2", "CAST_REQUEST (0x3001)",
+               "C->S use ability against a target",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateCastRequest(b, /*ability_id=*/0xF0000001u,
+                                                /*target_guid=*/0x0000000200000005ULL,
+                                                /*client_time_ms=*/0x0123456789ABCDEFULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::CastRequest>(nullptr),
+                             "if2_cast_request verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::CastRequest>(buf.data());
+                 expect(m->ability_id() == 0xF0000001u, "if2_cast_request.ability_id");
+                 expect(m->target_guid() == 0x0000000200000005ULL,
+                        "if2_cast_request.target_guid");
+                 expect(m->client_time_ms() == 0x0123456789ABCDEFULL,
+                        "if2_cast_request.client_time_ms");
+               }});
+
+  // CastStart — S->C ACCEPT (cast/GCD started; cast_ms > 0 = cast-time).
+  c.push_back({"if2_cast_start", "IF-2", "CAST_START (0x3002)",
+               "S->C accept: cast started (cast_ms=1500)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateCastStart(b, /*ability_id=*/0xF0000002u,
+                                              /*cast_ms=*/1500u,
+                                              /*server_time_ms=*/0x1122334455667788ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::CastStart>(nullptr),
+                             "if2_cast_start verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::CastStart>(buf.data());
+                 expect(m->ability_id() == 0xF0000002u, "if2_cast_start.ability_id");
+                 expect(m->cast_ms() == 1500u, "if2_cast_start.cast_ms");
+                 expect(m->server_time_ms() == 0x1122334455667788ULL,
+                        "if2_cast_start.server_time_ms");
+               }});
+
+  // CastFailed — S->C REJECT (reason + gcd_remaining_ms for the D-10 rollback).
+  c.push_back({"if2_cast_failed", "IF-2", "CAST_FAILED (0x3003)",
+               "S->C reject: reason=ON_GCD, gcd_remaining_ms=1200",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateCastFailed(b, /*ability_id=*/0xF0000003u,
+                                               mn::CastFailReason::ON_GCD,
+                                               /*gcd_remaining_ms=*/1200u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::CastFailed>(nullptr),
+                             "if2_cast_failed verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::CastFailed>(buf.data());
+                 expect(m->ability_id() == 0xF0000003u, "if2_cast_failed.ability_id");
+                 expect(m->reason() == mn::CastFailReason::ON_GCD,
+                        "if2_cast_failed.reason");
+                 expect(m->gcd_remaining_ms() == 1200u, "if2_cast_failed.gcd_remaining_ms");
+               }});
+
+  // CastResult — S->C server-authoritative resolution outcome (a crit).
+  c.push_back({"if2_cast_result", "IF-2", "CAST_RESULT (0x3004)",
+               "S->C resolution: CRIT for 99 damage",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateCastResult(b, /*ability_id=*/0xF0000001u,
+                                               /*caster_guid=*/0x00000000AABBCCDDULL,
+                                               /*target_guid=*/0x0000000011223344ULL,
+                                               mn::AttackOutcome::CRIT,
+                                               /*amount=*/99u, /*is_heal=*/false,
+                                               /*target_health=*/250u,
+                                               /*target_dead=*/false,
+                                               /*server_time_ms=*/0x0000000000009999ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::CastResult>(nullptr),
+                             "if2_cast_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::CastResult>(buf.data());
+                 expect(m->ability_id() == 0xF0000001u, "if2_cast_result.ability_id");
+                 expect(m->caster_guid() == 0x00000000AABBCCDDULL,
+                        "if2_cast_result.caster_guid");
+                 expect(m->target_guid() == 0x0000000011223344ULL,
+                        "if2_cast_result.target_guid");
+                 expect(m->outcome() == mn::AttackOutcome::CRIT, "if2_cast_result.outcome");
+                 expect(m->amount() == 99u, "if2_cast_result.amount");
+                 expect(m->is_heal() == false, "if2_cast_result.is_heal");
+                 expect(m->target_health() == 250u, "if2_cast_result.target_health");
+                 expect(m->target_dead() == false, "if2_cast_result.target_dead");
+                 expect(m->server_time_ms() == 0x0000000000009999ULL,
+                        "if2_cast_result.server_time_ms");
+               }});
+
+  // ==== IF-2 death / resurrect (world.fbs; CMB-03 #359) =====================
+
+  // DeathState — S->C you died: corpse guid + auto-release countdown.
+  c.push_back({"if2_death_state", "IF-2", "DEATH_STATE (0x3010)",
+               "S->C you died: corpse spawned, 6s release timer",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateDeathState(
+                     b, /*victim_guid=*/0x00000000AABBCCDDULL,
+                     /*killer_guid=*/0x0000000011223344ULL,
+                     /*corpse_guid=*/0xD000000000000001ULL,
+                     /*corpse_x=*/10.5f, /*corpse_y=*/-20.25f, /*corpse_z=*/0.0f,
+                     /*auto_release_ms=*/6000u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::DeathState>(nullptr),
+                             "if2_death_state verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::DeathState>(buf.data());
+                 expect(m->victim_guid() == 0x00000000AABBCCDDULL, "if2_death_state.victim_guid");
+                 expect(m->killer_guid() == 0x0000000011223344ULL, "if2_death_state.killer_guid");
+                 expect(m->corpse_guid() == 0xD000000000000001ULL, "if2_death_state.corpse_guid");
+                 expect(m->corpse_x() == 10.5f, "if2_death_state.corpse_x");
+                 expect(m->corpse_y() == -20.25f, "if2_death_state.corpse_y");
+                 expect(m->corpse_z() == 0.0f, "if2_death_state.corpse_z");
+                 expect(m->auto_release_ms() == 6000u, "if2_death_state.auto_release_ms");
+               }});
+
+  // ReleaseRequest — C->S request early graveyard release (empty table).
+  c.push_back({"if2_release_request", "IF-2", "RELEASE_REQUEST (0x3011)",
+               "C->S request early graveyard release (empty)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateReleaseRequest(b));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 expect(v.VerifyBuffer<mn::ReleaseRequest>(nullptr),
+                        "if2_release_request verifies");
+               }});
+
+  // GhostState — S->C released: now a ghost at the graveyard.
+  c.push_back({"if2_ghost_state", "IF-2", "GHOST_STATE (0x3012)",
+               "S->C released: ghost at the graveyard",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateGhostState(
+                     b, /*player_guid=*/0x00000000AABBCCDDULL,
+                     /*graveyard_x=*/100.0f, /*graveyard_y=*/50.0f, /*graveyard_z=*/0.0f,
+                     /*corpse_guid=*/0xD000000000000001ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::GhostState>(nullptr),
+                             "if2_ghost_state verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::GhostState>(buf.data());
+                 expect(m->player_guid() == 0x00000000AABBCCDDULL, "if2_ghost_state.player_guid");
+                 expect(m->graveyard_x() == 100.0f, "if2_ghost_state.graveyard_x");
+                 expect(m->graveyard_y() == 50.0f, "if2_ghost_state.graveyard_y");
+                 expect(m->graveyard_z() == 0.0f, "if2_ghost_state.graveyard_z");
+                 expect(m->corpse_guid() == 0xD000000000000001ULL, "if2_ghost_state.corpse_guid");
+               }});
+
+  // ResurrectRequest — C->S resurrect at your corpse (empty table).
+  c.push_back({"if2_resurrect_request", "IF-2", "RESURRECT_REQUEST (0x3013)",
+               "C->S resurrect at your corpse (empty)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateResurrectRequest(b));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 expect(v.VerifyBuffer<mn::ResurrectRequest>(nullptr),
+                        "if2_resurrect_request verifies");
+               }});
+
+  // ResurrectResult — S->C resurrection outcome (OK: alive with restored health).
+  c.push_back({"if2_resurrect_result", "IF-2", "RESURRECT_RESULT (0x3014)",
+               "S->C resurrected: OK, health 100/200",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateResurrectResult(
+                     b, /*player_guid=*/0x00000000AABBCCDDULL, mn::ResurrectStatus::OK,
+                     /*health=*/100u, /*max_health=*/200u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::ResurrectResult>(nullptr),
+                             "if2_resurrect_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::ResurrectResult>(buf.data());
+                 expect(m->player_guid() == 0x00000000AABBCCDDULL,
+                        "if2_resurrect_result.player_guid");
+                 expect(m->status() == mn::ResurrectStatus::OK, "if2_resurrect_result.status");
+                 expect(m->health() == 100u, "if2_resurrect_result.health");
+                 expect(m->max_health() == 200u, "if2_resurrect_result.max_health");
+               }});
+
+  // ==== IF-2 character progression (world.fbs; CHR-03 #360) =================
+
+  // XpGained — S->C XP award + progress toward the next level.
+  c.push_back({"if2_xp_gained", "IF-2", "XP_GAINED (0x0020)",
+               "S->C +25 XP: level 1, 25/50 to next",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateXpGained(b, /*player_guid=*/0x00000000AABBCCDDULL,
+                                             /*xp_gained=*/25u, /*level=*/1u,
+                                             /*xp_total=*/25u, /*xp_to_next=*/50u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::XpGained>(nullptr), "if2_xp_gained verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::XpGained>(buf.data());
+                 expect(m->player_guid() == 0x00000000AABBCCDDULL, "if2_xp_gained.player_guid");
+                 expect(m->xp_gained() == 25u, "if2_xp_gained.xp_gained");
+                 expect(m->level() == 1u, "if2_xp_gained.level");
+                 expect(m->xp_total() == 25u, "if2_xp_gained.xp_total");
+                 expect(m->xp_to_next() == 50u, "if2_xp_gained.xp_to_next");
+               }});
+
+  // LevelUp — S->C level increased + the stat growth applied.
+  c.push_back({"if2_level_up", "IF-2", "LEVEL_UP (0x0021)",
+               "S->C level 4->5: hp 200, resource 100",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateLevelUp(b, /*player_guid=*/0x00000000AABBCCDDULL,
+                                            /*old_level=*/4u, /*new_level=*/5u,
+                                            /*max_health=*/200u, /*max_resource=*/100u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::LevelUp>(nullptr), "if2_level_up verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::LevelUp>(buf.data());
+                 expect(m->player_guid() == 0x00000000AABBCCDDULL, "if2_level_up.player_guid");
+                 expect(m->old_level() == 4u, "if2_level_up.old_level");
+                 expect(m->new_level() == 5u, "if2_level_up.new_level");
+                 expect(m->max_health() == 200u, "if2_level_up.max_health");
+                 expect(m->max_resource() == 100u, "if2_level_up.max_resource");
+               }});
+
+  // ---- world / area triggers (0x9xxx; #368 WLD-01/03, epic #20) -------------
+  // POI discovery is the one client-facing area-trigger message: the server marks
+  // a point of interest discovered on the character and notifies the client.
+  // Freezes the trigger_id / area_id / name_id wire shape.
+  c.push_back({"if2_poi_discovered", "IF-2", "POI_DISCOVERED (0x9001)",
+               "S->C character discovered a POI: trigger_id, area_id, name_id",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreatePoiDiscovered(b, /*trigger_id=*/0x00000101u,
+                                                  /*area_id=*/0x00000005u,
+                                                  /*name_id=*/0x00000007u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::PoiDiscovered>(nullptr),
+                             "if2_poi_discovered verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::PoiDiscovered>(buf.data());
+                 expect(m->trigger_id() == 0x00000101u,
+                        "if2_poi_discovered.trigger_id");
+                 expect(m->area_id() == 0x00000005u, "if2_poi_discovered.area_id");
+                 expect(m->name_id() == 0x00000007u, "if2_poi_discovered.name_id");
+               }});
+
+  // ==== IF-2 chat / social (world.fbs; SOC-01 #367) =========================
+
+  // ChatMessage — C->S a WHISPER (the channel that carries a target name), so the
+  // golden pins BOTH string fields (target + text) and the channel enum.
+  c.push_back({"if2_chat_message", "IF-2", "CHAT_MESSAGE (0x6001)",
+               "C->S whisper to \"Brynn\": target + text + channel",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 auto target = b.CreateString("Brynn");
+                 auto text = b.CreateString("meet me at the gate");
+                 b.Finish(mn::CreateChatMessage(b, mn::ChatChannel::WHISPER, target, text));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::ChatMessage>(nullptr),
+                             "if2_chat_message verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::ChatMessage>(buf.data());
+                 expect(m->channel() == mn::ChatChannel::WHISPER, "if2_chat_message.channel");
+                 expect(m->target() && m->target()->str() == "Brynn",
+                        "if2_chat_message.target");
+                 expect(m->text() && m->text()->str() == "meet me at the gate",
+                        "if2_chat_message.text");
+               }});
+
+  // ChatDeliver — S->C a SAY line delivered with the author's guid + name.
+  c.push_back({"if2_chat_deliver", "IF-2", "CHAT_DELIVER (0x6002)",
+               "S->C say from Aldric: channel + sender guid/name + text",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 auto name = b.CreateString("Aldric");
+                 auto text = b.CreateString("hail, travellers");
+                 b.Finish(mn::CreateChatDeliver(b, mn::ChatChannel::SAY,
+                                                /*sender_guid=*/0x00000000AABBCCDDULL,
+                                                name, text));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::ChatDeliver>(nullptr),
+                             "if2_chat_deliver verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::ChatDeliver>(buf.data());
+                 expect(m->channel() == mn::ChatChannel::SAY, "if2_chat_deliver.channel");
+                 expect(m->sender_guid() == 0x00000000AABBCCDDULL,
+                        "if2_chat_deliver.sender_guid");
+                 expect(m->sender_name() && m->sender_name()->str() == "Aldric",
+                        "if2_chat_deliver.sender_name");
+                 expect(m->text() && m->text()->str() == "hail, travellers",
+                        "if2_chat_deliver.text");
+               }});
+
+  // ChatRejected — S->C a WHISPER refused because the target is offline.
+  c.push_back({"if2_chat_rejected", "IF-2", "CHAT_REJECTED (0x6003)",
+               "S->C whisper refused: TARGET_OFFLINE, echoes target",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 auto target = b.CreateString("Brynn");
+                 b.Finish(mn::CreateChatRejected(b, mn::ChatChannel::WHISPER,
+                                                 mn::ChatRejectReason::TARGET_OFFLINE,
+                                                 target));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::ChatRejected>(nullptr),
+                             "if2_chat_rejected verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::ChatRejected>(buf.data());
+                 expect(m->channel() == mn::ChatChannel::WHISPER, "if2_chat_rejected.channel");
+                 expect(m->reason() == mn::ChatRejectReason::TARGET_OFFLINE,
+                        "if2_chat_rejected.reason");
+                 expect(m->target() && m->target()->str() == "Brynn",
+                        "if2_chat_rejected.target");
+               }});
+
+  // ==== IF-2 quest state (world.fbs; QST-01 #371) ==========================
+  // The quest flow contract: accept (C->S) + typed result (S->C), objective
+  // progress (S->C), turn-in (C->S) + typed result with the reward bundle (S->C),
+  // and the active quest-log snapshot (S->C). Canonical instances mirror the M1
+  // placeholder chain (Q1 "Culling the Kobolds": kill 3 kobolds → 50 XP + 120c +
+  // 2 potions).
+
+  // QuestAccept — C->S accept a quest from a targeted giver NPC.
+  c.push_back({"if2_quest_accept", "IF-2", "QUEST_ACCEPT (0x4001)",
+               "C->S accept quest 800001 from a giver entity",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateQuestAccept(b, /*quest_id=*/800001u,
+                                                /*giver_guid=*/0x00000000AABB0001ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::QuestAccept>(nullptr),
+                             "if2_quest_accept verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::QuestAccept>(buf.data());
+                 expect(m->quest_id() == 800001u, "if2_quest_accept.quest_id");
+                 expect(m->giver_guid() == 0x00000000AABB0001ULL,
+                        "if2_quest_accept.giver_guid");
+               }});
+
+  // QuestAcceptResult — S->C typed accept outcome (OK).
+  c.push_back({"if2_quest_accept_result", "IF-2", "QUEST_ACCEPT_RESULT (0x4002)",
+               "S->C accept outcome: status=OK for quest 800001",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateQuestAcceptResult(b, /*quest_id=*/800001u,
+                                                      mn::QuestAcceptStatus::OK));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::QuestAcceptResult>(nullptr),
+                             "if2_quest_accept_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::QuestAcceptResult>(buf.data());
+                 expect(m->quest_id() == 800001u, "if2_quest_accept_result.quest_id");
+                 expect(m->status() == mn::QuestAcceptStatus::OK,
+                        "if2_quest_accept_result.status");
+               }});
+
+  // QuestProgress — S->C an objective advanced (kill 2/3).
+  c.push_back({"if2_quest_progress", "IF-2", "QUEST_PROGRESS (0x4003)",
+               "S->C objective 0 (KILL) advanced to 2/3",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateQuestProgress(b, /*quest_id=*/800001u,
+                                                  /*objective_index=*/0u,
+                                                  mn::QuestObjectiveType::KILL,
+                                                  /*have=*/2u, /*need=*/3u,
+                                                  /*complete=*/false));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::QuestProgress>(nullptr),
+                             "if2_quest_progress verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::QuestProgress>(buf.data());
+                 expect(m->quest_id() == 800001u, "if2_quest_progress.quest_id");
+                 expect(m->objective_index() == 0u, "if2_quest_progress.objective_index");
+                 expect(m->type() == mn::QuestObjectiveType::KILL,
+                        "if2_quest_progress.type");
+                 expect(m->have() == 2u, "if2_quest_progress.have");
+                 expect(m->need() == 3u, "if2_quest_progress.need");
+                 expect(m->complete() == false, "if2_quest_progress.complete");
+               }});
+
+  // QuestTurnIn — C->S turn a completed quest in (with a reward choice).
+  c.push_back({"if2_quest_turn_in", "IF-2", "QUEST_TURN_IN (0x4004)",
+               "C->S turn in quest 800002 at a turn-in entity, choice 0",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateQuestTurnIn(b, /*quest_id=*/800002u,
+                                                /*turn_in_guid=*/0x00000000AABB0002ULL,
+                                                /*choice_index=*/0));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::QuestTurnIn>(nullptr),
+                             "if2_quest_turn_in verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::QuestTurnIn>(buf.data());
+                 expect(m->quest_id() == 800002u, "if2_quest_turn_in.quest_id");
+                 expect(m->turn_in_guid() == 0x00000000AABB0002ULL,
+                        "if2_quest_turn_in.turn_in_guid");
+                 expect(m->choice_index() == 0, "if2_quest_turn_in.choice_index");
+               }});
+
+  // QuestTurnInResult — S->C turn-in outcome + the reward bundle (vector of items).
+  c.push_back({"if2_quest_turn_in_result", "IF-2", "QUEST_TURN_IN_RESULT (0x4005)",
+               "S->C turn-in OK: 50 XP, 120 copper, 2x item 900007, new level 2",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::QuestRewardItem>> items;
+                 items.push_back(mn::CreateQuestRewardItem(b, /*item_id=*/900007u,
+                                                           /*count=*/2u));
+                 auto iv = b.CreateVector(items);
+                 b.Finish(mn::CreateQuestTurnInResult(
+                     b, /*quest_id=*/800001u, mn::QuestTurnInStatus::OK,
+                     /*reward_xp=*/50u, /*reward_money=*/120, iv, /*new_level=*/2u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::QuestTurnInResult>(nullptr),
+                             "if2_quest_turn_in_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::QuestTurnInResult>(buf.data());
+                 expect(m->quest_id() == 800001u, "if2_quest_turn_in_result.quest_id");
+                 expect(m->status() == mn::QuestTurnInStatus::OK,
+                        "if2_quest_turn_in_result.status");
+                 expect(m->reward_xp() == 50u, "if2_quest_turn_in_result.reward_xp");
+                 expect(m->reward_money() == 120, "if2_quest_turn_in_result.reward_money");
+                 expect(m->new_level() == 2u, "if2_quest_turn_in_result.new_level");
+                 const auto* items = m->reward_items();
+                 if (!expect(items != nullptr && items->size() == 1,
+                             "if2_quest_turn_in_result has 1 reward item"))
+                   return;
+                 expect(items->Get(0)->item_id() == 900007u,
+                        "if2_quest_turn_in_result.reward_items[0].item_id");
+                 expect(items->Get(0)->count() == 2u,
+                        "if2_quest_turn_in_result.reward_items[0].count");
+               }});
+
+  // QuestLog — S->C the active quest-log snapshot (entry + its objectives; nested
+  // vectors of tables, the richest quest wire shape).
+  c.push_back({"if2_quest_log", "IF-2", "QUEST_LOG (0x4006)",
+               "S->C log snapshot: quest 800001 with a KILL objective (1/3)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::QuestObjectiveState>> objs;
+                 objs.push_back(mn::CreateQuestObjectiveState(
+                     b, mn::QuestObjectiveType::KILL, /*target_id=*/700010u,
+                     /*have=*/1u, /*need=*/3u, /*complete=*/false));
+                 auto ov = b.CreateVector(objs);
+                 std::vector<fb::Offset<mn::QuestLogEntry>> entries;
+                 entries.push_back(mn::CreateQuestLogEntry(
+                     b, /*quest_id=*/800001u, /*level=*/2u, /*complete=*/false, ov));
+                 auto ev = b.CreateVector(entries);
+                 b.Finish(mn::CreateQuestLog(b, ev));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::QuestLog>(nullptr),
+                             "if2_quest_log verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::QuestLog>(buf.data());
+                 const auto* quests = m->quests();
+                 if (!expect(quests != nullptr && quests->size() == 1,
+                             "if2_quest_log has 1 quest"))
+                   return;
+                 const auto* e0 = quests->Get(0);
+                 expect(e0->quest_id() == 800001u, "if2_quest_log[0].quest_id");
+                 expect(e0->level() == 2u, "if2_quest_log[0].level");
+                 expect(e0->complete() == false, "if2_quest_log[0].complete");
+                 const auto* objs = e0->objectives();
+                 if (!expect(objs != nullptr && objs->size() == 1,
+                             "if2_quest_log[0] has 1 objective"))
+                   return;
+                 expect(objs->Get(0)->type() == mn::QuestObjectiveType::KILL,
+                        "if2_quest_log[0].objectives[0].type");
+                 expect(objs->Get(0)->target_id() == 700010u,
+                        "if2_quest_log[0].objectives[0].target_id");
+                 expect(objs->Get(0)->have() == 1u,
+                        "if2_quest_log[0].objectives[0].have");
+                 expect(objs->Get(0)->need() == 3u,
+                        "if2_quest_log[0].objectives[0].need");
+               }});
+
+  // ==== IF-2 inventory / loot (world.fbs; ITM-02 #369) ======================
+  // Server-authoritative corpse looting. The roll + the four validation gates
+  // (ownership / in-range / not-already-looted / quest) live in the server loot
+  // session; these messages are its wire projection. The goldens freeze the loot
+  // window shape (incl. the vector-of-LootItem) + the take result.
+
+  // LootRequest — C->S open the loot window on a corpse.
+  c.push_back({"if2_loot_request", "IF-2", "LOOT_REQUEST (0x5001)",
+               "C->S open the loot window on a corpse",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateLootRequest(b, /*corpse_guid=*/0xC0FFEE0000000042ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::LootRequest>(nullptr),
+                             "if2_loot_request verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::LootRequest>(buf.data());
+                 expect(m->corpse_guid() == 0xC0FFEE0000000042ULL,
+                        "if2_loot_request.corpse_guid");
+               }});
+
+  // LootResponse — S->C the loot window: money + two slots (a common item and a
+  // quest item) — exercises the vector-of-LootItem + the quest_item / quality flags.
+  c.push_back({"if2_loot_response", "IF-2", "LOOT_RESPONSE (0x5002)",
+               "S->C loot window: 45 copper + a common item + a quest item",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::LootItem>> items;
+                 items.push_back(mn::CreateLootItem(b, /*slot=*/0u,
+                                                    /*item_template_id=*/900007u,
+                                                    /*count=*/3u, /*quality=*/1u,
+                                                    /*quest_item=*/false));
+                 items.push_back(mn::CreateLootItem(b, /*slot=*/1u,
+                                                    /*item_template_id=*/900009u,
+                                                    /*count=*/1u, /*quality=*/0u,
+                                                    /*quest_item=*/true));
+                 auto iv = b.CreateVector(items);
+                 b.Finish(mn::CreateLootResponse(b, /*corpse_guid=*/0xC0FFEE0000000042ULL,
+                                                 mn::LootStatus::OK, /*copper=*/45,
+                                                 iv));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::LootResponse>(nullptr),
+                             "if2_loot_response verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::LootResponse>(buf.data());
+                 expect(m->corpse_guid() == 0xC0FFEE0000000042ULL,
+                        "if2_loot_response.corpse_guid");
+                 expect(m->status() == mn::LootStatus::OK, "if2_loot_response.status");
+                 expect(m->copper() == 45, "if2_loot_response.copper");
+                 const auto* items = m->items();
+                 if (!expect(items != nullptr && items->size() == 2,
+                             "if2_loot_response has 2 items"))
+                   return;
+                 const auto* i0 = items->Get(0);
+                 expect(i0->slot() == 0u && i0->item_template_id() == 900007u &&
+                            i0->count() == 3u && i0->quality() == 1u &&
+                            i0->quest_item() == false,
+                        "if2_loot_response.items[0] (common)");
+                 const auto* i1 = items->Get(1);
+                 expect(i1->slot() == 1u && i1->item_template_id() == 900009u &&
+                            i1->count() == 1u && i1->quest_item() == true,
+                        "if2_loot_response.items[1] (quest)");
+               }});
+
+  // LootTake — C->S take one slot (an item take: money = false).
+  c.push_back({"if2_loot_take", "IF-2", "LOOT_TAKE (0x5003)",
+               "C->S take slot 1 (an item, not the money)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateLootTake(b, /*corpse_guid=*/0xC0FFEE0000000042ULL,
+                                             /*slot=*/1u, /*money=*/false));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::LootTake>(nullptr),
+                             "if2_loot_take verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::LootTake>(buf.data());
+                 expect(m->corpse_guid() == 0xC0FFEE0000000042ULL,
+                        "if2_loot_take.corpse_guid");
+                 expect(m->slot() == 1u, "if2_loot_take.slot");
+                 expect(m->money() == false, "if2_loot_take.money");
+               }});
+
+  // LootResult — S->C an item take succeeded (item_template_id + count moved).
+  c.push_back({"if2_loot_result", "IF-2", "LOOT_RESULT (0x5004)",
+               "S->C take OK: item 900009 x1 moved to inventory",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateLootResult(b, /*corpse_guid=*/0xC0FFEE0000000042ULL,
+                                               /*slot=*/1u, mn::LootTakeStatus::OK,
+                                               /*item_template_id=*/900009u,
+                                               /*count=*/1u, /*copper=*/0));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::LootResult>(nullptr),
+                             "if2_loot_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::LootResult>(buf.data());
+                 expect(m->corpse_guid() == 0xC0FFEE0000000042ULL,
+                        "if2_loot_result.corpse_guid");
+                 expect(m->slot() == 1u, "if2_loot_result.slot");
+                 expect(m->status() == mn::LootTakeStatus::OK, "if2_loot_result.status");
+                 expect(m->item_template_id() == 900009u,
+                        "if2_loot_result.item_template_id");
+                 expect(m->count() == 1u, "if2_loot_result.count");
+                 expect(m->copper() == 0, "if2_loot_result.copper");
+               }});
+
+  // LootRelease — C->S close the loot window.
+  c.push_back({"if2_loot_release", "IF-2", "LOOT_RELEASE (0x5005)",
+               "C->S close the loot window",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateLootRelease(b, /*corpse_guid=*/0xC0FFEE0000000042ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::LootRelease>(nullptr),
+                             "if2_loot_release verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::LootRelease>(buf.data());
+                 expect(m->corpse_guid() == 0xC0FFEE0000000042ULL,
+                        "if2_loot_release.corpse_guid");
+               }});
+
+  // LootClosed — S->C the loot window closed.
+  c.push_back({"if2_loot_closed", "IF-2", "LOOT_CLOSED (0x5006)",
+               "S->C the loot window closed (released / looted-out)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateLootClosed(b, /*corpse_guid=*/0xC0FFEE0000000042ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::LootClosed>(nullptr),
+                             "if2_loot_closed verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::LootClosed>(buf.data());
+                 expect(m->corpse_guid() == 0xC0FFEE0000000042ULL,
+                        "if2_loot_closed.corpse_guid");
+               }});
+
+  // ==== IF-2 inventory / economy: vendors (world.fbs; ECO-01 #370) ==========
+  // Server-authoritative buy/sell/buyback. All prices + balances are int64
+  // copper the SERVER owns — the requests carry no client price. Each canonical
+  // instance is the OK/happy-path shape; the goldens pin the wire layout of the
+  // vendor id / template / quantity / int64-copper fields the client reads.
+
+  // VendorBuyRequest — C->S buy 3 of a template from a vendor (no price field).
+  c.push_back({"if2_vendor_buy_request", "IF-2", "VENDOR_BUY_REQUEST (0x5101)",
+               "C->S buy 3 units of a template from a vendor",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateVendorBuyRequest(b, /*vendor_id=*/990001u,
+                                                     /*item_template_id=*/900001u,
+                                                     /*quantity=*/3u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::VendorBuyRequest>(nullptr),
+                             "if2_vendor_buy_request verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::VendorBuyRequest>(buf.data());
+                 expect(m->vendor_id() == 990001u, "if2_vendor_buy_request.vendor_id");
+                 expect(m->item_template_id() == 900001u,
+                        "if2_vendor_buy_request.item_template_id");
+                 expect(m->quantity() == 3u, "if2_vendor_buy_request.quantity");
+               }});
+
+  // VendorBuyResult — S->C OK: minted item + 300 copper debited, balance 700.
+  c.push_back({"if2_vendor_buy_result", "IF-2", "VENDOR_BUY_RESULT (0x5102)",
+               "S->C buy OK: minted guid, total_price 300, balance 700",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateVendorBuyResult(
+                     b, mn::VendorBuyStatus::OK, /*vendor_id=*/990001u,
+                     /*item_template_id=*/900001u, /*quantity=*/3u,
+                     /*item_guid=*/0x00A1000000000001ULL, /*total_price=*/300,
+                     /*balance=*/700));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::VendorBuyResult>(nullptr),
+                             "if2_vendor_buy_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::VendorBuyResult>(buf.data());
+                 expect(m->status() == mn::VendorBuyStatus::OK,
+                        "if2_vendor_buy_result.status");
+                 expect(m->vendor_id() == 990001u, "if2_vendor_buy_result.vendor_id");
+                 expect(m->item_template_id() == 900001u,
+                        "if2_vendor_buy_result.item_template_id");
+                 expect(m->quantity() == 3u, "if2_vendor_buy_result.quantity");
+                 expect(m->item_guid() == 0x00A1000000000001ULL,
+                        "if2_vendor_buy_result.item_guid");
+                 expect(m->total_price() == 300, "if2_vendor_buy_result.total_price");
+                 expect(m->balance() == 700, "if2_vendor_buy_result.balance");
+               }});
+
+  // VendorSellRequest — C->S sell 2 units from a backpack slot to a vendor.
+  c.push_back({"if2_vendor_sell_request", "IF-2", "VENDOR_SELL_REQUEST (0x5103)",
+               "C->S sell 2 units from backpack slot 4",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateVendorSellRequest(b, /*vendor_id=*/990001u,
+                                                      /*backpack_slot=*/4u,
+                                                      /*quantity=*/2u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::VendorSellRequest>(nullptr),
+                             "if2_vendor_sell_request verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::VendorSellRequest>(buf.data());
+                 expect(m->vendor_id() == 990001u, "if2_vendor_sell_request.vendor_id");
+                 expect(m->backpack_slot() == 4u,
+                        "if2_vendor_sell_request.backpack_slot");
+                 expect(m->quantity() == 2u, "if2_vendor_sell_request.quantity");
+               }});
+
+  // VendorSellResult — S->C OK: 2 credited, balance 702, buyback slot 0.
+  c.push_back({"if2_vendor_sell_result", "IF-2", "VENDOR_SELL_RESULT (0x5104)",
+               "S->C sell OK: total_credit 2, balance 702, buyback slot 0",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateVendorSellResult(
+                     b, mn::VendorSellStatus::OK, /*backpack_slot=*/4u,
+                     /*item_template_id=*/900007u, /*quantity=*/2u,
+                     /*total_credit=*/2, /*balance=*/702, /*buyback_slot=*/0u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::VendorSellResult>(nullptr),
+                             "if2_vendor_sell_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::VendorSellResult>(buf.data());
+                 expect(m->status() == mn::VendorSellStatus::OK,
+                        "if2_vendor_sell_result.status");
+                 expect(m->backpack_slot() == 4u,
+                        "if2_vendor_sell_result.backpack_slot");
+                 expect(m->item_template_id() == 900007u,
+                        "if2_vendor_sell_result.item_template_id");
+                 expect(m->quantity() == 2u, "if2_vendor_sell_result.quantity");
+                 expect(m->total_credit() == 2, "if2_vendor_sell_result.total_credit");
+                 expect(m->balance() == 702, "if2_vendor_sell_result.balance");
+                 expect(m->buyback_slot() == 0u,
+                        "if2_vendor_sell_result.buyback_slot");
+               }});
+
+  // VendorBuybackRequest — C->S repurchase the buyback entry at slot 0.
+  c.push_back({"if2_vendor_buyback_request", "IF-2",
+               "VENDOR_BUYBACK_REQUEST (0x5105)",
+               "C->S repurchase buyback slot 0",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateVendorBuybackRequest(b, /*buyback_slot=*/0u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::VendorBuybackRequest>(nullptr),
+                             "if2_vendor_buyback_request verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::VendorBuybackRequest>(buf.data());
+                 expect(m->buyback_slot() == 0u,
+                        "if2_vendor_buyback_request.buyback_slot");
+               }});
+
+  // VendorBuybackResult — S->C OK: re-minted item, 2 re-debited, balance 700.
+  c.push_back({"if2_vendor_buyback_result", "IF-2",
+               "VENDOR_BUYBACK_RESULT (0x5106)",
+               "S->C buyback OK: re-minted guid, price 2, balance 700",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateVendorBuybackResult(
+                     b, mn::VendorBuybackStatus::OK, /*item_template_id=*/900007u,
+                     /*quantity=*/2u, /*item_guid=*/0x00A1000000000002ULL,
+                     /*price=*/2, /*balance=*/700));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::VendorBuybackResult>(nullptr),
+                             "if2_vendor_buyback_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::VendorBuybackResult>(buf.data());
+                 expect(m->status() == mn::VendorBuybackStatus::OK,
+                        "if2_vendor_buyback_result.status");
+                 expect(m->item_template_id() == 900007u,
+                        "if2_vendor_buyback_result.item_template_id");
+                 expect(m->quantity() == 2u, "if2_vendor_buyback_result.quantity");
+                 expect(m->item_guid() == 0x00A1000000000002ULL,
+                        "if2_vendor_buyback_result.item_guid");
+                 expect(m->price() == 2, "if2_vendor_buyback_result.price");
+                 expect(m->balance() == 700, "if2_vendor_buyback_result.balance");
+               }});
+
+  // ---- 0x52xx NPC interaction (gossip + trainers; NPC-01/02 #372) -----------
+  // Canonical NPC entity guid shared across the gossip/trainer messages.
+
+  // GossipHello — C->S open gossip on a targeted NPC.
+  c.push_back({"if2_gossip_hello", "IF-2", "GOSSIP_HELLO (0x5201)",
+               "C->S open gossip on an NPC entity",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateGossipHello(b, /*npc_guid=*/0x00000000AABB0001ULL));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::GossipHello>(nullptr),
+                             "if2_gossip_hello verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::GossipHello>(buf.data());
+                 expect(m->npc_guid() == 0x00000000AABB0001ULL,
+                        "if2_gossip_hello.npc_guid");
+               }});
+
+  // GossipMenu — S->C two options: an available quest + the trainer role option.
+  c.push_back({"if2_gossip_menu", "IF-2", "GOSSIP_MENU (0x5202)",
+               "S->C menu: quest 800001 available + a trainer option",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::GossipOption>> opts;
+                 opts.push_back(mn::CreateGossipOption(
+                     b, mn::GossipOptionKind::QUEST_AVAILABLE, /*target_id=*/800001u));
+                 opts.push_back(mn::CreateGossipOption(
+                     b, mn::GossipOptionKind::TRAINER, /*target_id=*/0u));
+                 auto ov = b.CreateVector(opts);
+                 b.Finish(mn::CreateGossipMenu(b, /*npc_guid=*/0x00000000AABB0001ULL, ov));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::GossipMenu>(nullptr),
+                             "if2_gossip_menu verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::GossipMenu>(buf.data());
+                 expect(m->npc_guid() == 0x00000000AABB0001ULL, "if2_gossip_menu.npc_guid");
+                 const auto* opts = m->options();
+                 if (!expect(opts != nullptr && opts->size() == 2,
+                             "if2_gossip_menu has 2 options"))
+                   return;
+                 expect(opts->Get(0)->kind() == mn::GossipOptionKind::QUEST_AVAILABLE &&
+                            opts->Get(0)->target_id() == 800001u,
+                        "if2_gossip_menu.options[0] (quest available)");
+                 expect(opts->Get(1)->kind() == mn::GossipOptionKind::TRAINER &&
+                            opts->Get(1)->target_id() == 0u,
+                        "if2_gossip_menu.options[1] (trainer)");
+               }});
+
+  // TrainerList — S->C two entries: a learnable Vanguard strike + an unaffordable heal.
+  c.push_back({"if2_trainer_list", "IF-2", "TRAINER_LIST (0x5203)",
+               "S->C trainer list: strike (learnable) + heal (can't afford)",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::TrainerListEntry>> entries;
+                 entries.push_back(mn::CreateTrainerListEntry(
+                     b, /*ability_id=*/0xF0000001u, /*cost=*/50, /*required_class=*/1u,
+                     /*required_level=*/2u, mn::TrainableState::LEARNABLE));
+                 entries.push_back(mn::CreateTrainerListEntry(
+                     b, /*ability_id=*/0xF0000003u, /*cost=*/120, /*required_class=*/0u,
+                     /*required_level=*/5u, mn::TrainableState::CANT_AFFORD));
+                 auto ev = b.CreateVector(entries);
+                 b.Finish(mn::CreateTrainerList(b, /*npc_guid=*/0x00000000AABB0001ULL, ev));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::TrainerList>(nullptr),
+                             "if2_trainer_list verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::TrainerList>(buf.data());
+                 expect(m->npc_guid() == 0x00000000AABB0001ULL, "if2_trainer_list.npc_guid");
+                 const auto* e = m->entries();
+                 if (!expect(e != nullptr && e->size() == 2,
+                             "if2_trainer_list has 2 entries"))
+                   return;
+                 const auto* e0 = e->Get(0);
+                 expect(e0->ability_id() == 0xF0000001u && e0->cost() == 50 &&
+                            e0->required_class() == 1u && e0->required_level() == 2u &&
+                            e0->state() == mn::TrainableState::LEARNABLE,
+                        "if2_trainer_list.entries[0] (learnable strike)");
+                 const auto* e1 = e->Get(1);
+                 expect(e1->ability_id() == 0xF0000003u && e1->cost() == 120 &&
+                            e1->required_class() == 0u && e1->required_level() == 5u &&
+                            e1->state() == mn::TrainableState::CANT_AFFORD,
+                        "if2_trainer_list.entries[1] (unaffordable heal)");
+               }});
+
+  // TrainerLearn — C->S learn one ability (no cost field — server owns the price).
+  c.push_back({"if2_trainer_learn", "IF-2", "TRAINER_LEARN (0x5204)",
+               "C->S learn ability 0xF0000001 from an NPC",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateTrainerLearn(b, /*npc_guid=*/0x00000000AABB0001ULL,
+                                                 /*ability_id=*/0xF0000001u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::TrainerLearn>(nullptr),
+                             "if2_trainer_learn verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::TrainerLearn>(buf.data());
+                 expect(m->npc_guid() == 0x00000000AABB0001ULL, "if2_trainer_learn.npc_guid");
+                 expect(m->ability_id() == 0xF0000001u, "if2_trainer_learn.ability_id");
+               }});
+
+  // TrainerLearnResult — S->C learn OK: 50 copper debited, 150 left.
+  c.push_back({"if2_trainer_learn_result", "IF-2", "TRAINER_LEARN_RESULT (0x5205)",
+               "S->C learn OK: 50 copper debited, new balance 150",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateTrainerLearnResult(
+                     b, /*npc_guid=*/0x00000000AABB0001ULL, /*ability_id=*/0xF0000001u,
+                     mn::TrainerLearnStatus::OK, /*cost=*/50, /*new_balance=*/150));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::TrainerLearnResult>(nullptr),
+                             "if2_trainer_learn_result verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::TrainerLearnResult>(buf.data());
+                 expect(m->npc_guid() == 0x00000000AABB0001ULL,
+                        "if2_trainer_learn_result.npc_guid");
+                 expect(m->ability_id() == 0xF0000001u,
+                        "if2_trainer_learn_result.ability_id");
+                 expect(m->status() == mn::TrainerLearnStatus::OK,
+                        "if2_trainer_learn_result.status");
+                 expect(m->cost() == 50, "if2_trainer_learn_result.cost");
+                 expect(m->new_balance() == 150, "if2_trainer_learn_result.new_balance");
                }});
 
   return c;

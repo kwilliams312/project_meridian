@@ -133,16 +133,18 @@ export CMAKE_PREFIX_PATH="/opt/homebrew/opt/openssl@3:${CMAKE_PREFIX_PATH:-}"
 SRV_BUILD="${REPO_ROOT}/.dev-run/${IT_TAG}-server-build"
 CLI_BUILD="${REPO_ROOT}/.dev-run/${IT_TAG}-client-build"
 
-log "building authd + worldd + meridian-account (server tree)"
+log "building authd + worldd + meridian-account + meridian-character (server tree)"
 cmake -S "${REPO_ROOT}/server" -B "${SRV_BUILD}" >/dev/null
-cmake --build "${SRV_BUILD}" --target authd worldd meridian-account -j >/dev/null
+cmake --build "${SRV_BUILD}" --target authd worldd meridian-account meridian-character -j >/dev/null
 AUTHD_BIN="$(find "${SRV_BUILD}" -name authd -type f -perm -u+x | head -1)"
 WORLDD_BIN="$(find "${SRV_BUILD}" -name worldd -type f -perm -u+x | head -1)"
 ACCOUNT_BIN="$(find "${SRV_BUILD}" -name meridian-account -type f -perm -u+x | head -1)"
+CHARACTER_BIN="$(find "${SRV_BUILD}" -name meridian-character -type f -perm -u+x | head -1)"
 [ -x "${AUTHD_BIN}" ] || { err "authd not built"; exit 1; }
 [ -x "${WORLDD_BIN}" ] || { err "worldd not built"; exit 1; }
 [ -x "${ACCOUNT_BIN}" ] || { err "meridian-account not built"; exit 1; }
-ok "built authd + worldd + meridian-account"
+[ -x "${CHARACTER_BIN}" ] || { err "meridian-character not built"; exit 1; }
+ok "built authd + worldd + meridian-account + meridian-character"
 
 log "building the two-bot AoI driver (client tree)"
 cmake -S "${REPO_ROOT}/client" -B "${CLI_BUILD}" -DMERIDIAN_BOT=ON >/dev/null
@@ -166,6 +168,20 @@ ACCOUNT_B_ID="$(_dbc -N "${AUTH_DB_NAME}" -e "SELECT id FROM account WHERE usern
 [ -n "${ACCOUNT_A_ID}" ] || { err "account A not created"; exit 1; }
 [ -n "${ACCOUNT_B_ID}" ] || { err "account B not created"; exit 1; }
 ok "accounts created (A id ${ACCOUNT_A_ID}, B id ${ACCOUNT_B_ID})"
+
+# Pre-create ONE character per account (server-authoritative characters, D-35/#341),
+# mirroring the production harness's add-characters step (which runs BEFORE the bots).
+# The bots find these via CharList and ENTER_WORLD as them — no concurrent self-create
+# (two bots creating simultaneously can deadlock the one-per-account cap transaction;
+# the real harness always pre-creates, so the bot's CharCreate-if-empty is a fallback).
+# meridian-character resolves account_id via meridian_auth.account (cross-DB) and
+# inserts into meridian_characters, so point its DB NAME at the characters schema.
+log "pre-creating one character per account (meridian-character)"
+env MERIDIAN_DB_NAME="${CHAR_DB_NAME}" "${CHARACTER_BIN}" create --username "${ACCOUNT_A}" >/dev/null \
+  || { err "character create for A failed"; exit 1; }
+env MERIDIAN_DB_NAME="${CHAR_DB_NAME}" "${CHARACTER_BIN}" create --username "${ACCOUNT_B}" >/dev/null \
+  || { err "character create for B failed"; exit 1; }
+ok "characters pre-created for ${ACCOUNT_A} and ${ACCOUNT_B}"
 
 log "seeding realm '${REALM_NAME}' (address 127.0.0.1:${WORLDD_PORT})"
 _dbc "${AUTH_DB_NAME}" -e \

@@ -106,6 +106,44 @@ void NetThreadCore::handle_inbound_frame(const Bytes& frame_payload) {
             publish(std::move(msg));
             break;
         }
+        // Character-select round-trips (D-35 / #286 / #341). Decoded here off the
+        // main thread; an undecodable body is dropped (never GetRoot unverified).
+        case cn::kOpCharListResp: {
+            auto r = cn::codec::decode_char_list_response(f->payload);
+            if (!r) return;
+            msg.kind = InboundKind::kCharList;
+            msg.roster = std::move(*r);
+            publish(std::move(msg));
+            break;
+        }
+        case cn::kOpCharCreateResp: {
+            auto r = cn::codec::decode_char_create_response(f->payload);
+            if (!r) return;
+            msg.kind = InboundKind::kCharCreate;
+            msg.char_create = *r;
+            publish(std::move(msg));
+            break;
+        }
+        case cn::kOpCharDeleteResp: {
+            auto r = cn::codec::decode_char_delete_response(f->payload);
+            if (!r) return;
+            msg.kind = InboundKind::kCharDelete;
+            msg.char_delete = *r;
+            publish(std::move(msg));
+            break;
+        }
+        case cn::kOpEnterWorldResp: {
+            auto r = cn::codec::decode_enter_world_response(f->payload);
+            if (!r) return;
+            msg.kind = InboundKind::kEnterWorld;
+            msg.enter_world = *r;
+            // NOTE: entered_world_ tracks "handshake completed" (set on HandshakeOk =
+            // char-select reached). TRUE in-world entry is signalled by this kEnterWorld
+            // message (status OK) — the scene keys the world transition off that, not
+            // off this quick-check flag, so we do not overload it here.
+            publish(std::move(msg));
+            break;
+        }
         default: {
             // EntityEnter/Update/Leave, ClockSync, and any other S->C opcode not
             // specially decoded here are forwarded RAW (opcode/seq/payload) for the

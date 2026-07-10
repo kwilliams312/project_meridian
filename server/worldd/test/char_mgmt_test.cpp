@@ -230,6 +230,11 @@ Bytes enc_char_delete_request(std::uint64_t character_id) {
     b.Finish(mn::CreateCharDeleteRequest(b, character_id));
     return bytes_of(b);
 }
+Bytes enc_enter_world_request(std::uint64_t character_id) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateEnterWorldRequest(b, character_id));
+    return bytes_of(b);
+}
 
 template <typename T>
 const T* decode(const Bytes& buf) {
@@ -486,6 +491,21 @@ int main() {
             check("1: got a CharListResponse", false);
         }
 
+        // 1a. ENTER_WORLD on a fresh account (zero characters) -> NO_CHARACTER,
+        // no spawn. Server-authoritative: you cannot enter until you own a
+        // character (D-35 / #341). The id used is another account's character —
+        // still NO_CHARACTER because THIS account owns none.
+        if (std::optional<Bytes> pl = round_trip(
+                c, mn::Opcode::ENTER_WORLD_REQUEST,
+                enc_enter_world_request(other_char_id),
+                mn::Opcode::ENTER_WORLD_RESPONSE, seq++)) {
+            const auto* m = decode<mn::EnterWorldResponse>(*pl);
+            check("1a: ENTER_WORLD with no character -> NO_CHARACTER",
+                  m != nullptr && m->status() == mn::EnterWorldStatus::NO_CHARACTER);
+        } else {
+            check("1a: got an EnterWorldResponse", false);
+        }
+
         // 1b. duplicate name -> DUPLICATE_NAME. name_other is owned by
         // account_other (seeded in setup); uq_character_name is GLOBAL, so the
         // session account cannot reuse it. Tested here while the session account
@@ -541,6 +561,46 @@ int main() {
             }
         } else {
             check("2: got a CharListResponse after create", false);
+        }
+
+        // 2a. ENTER_WORLD with ANOTHER account's character id -> NOT_FOUND, no
+        // spawn. Ownership is the WHERE predicate; this account now owns its own
+        // character, so the miss is NOT_FOUND (not NO_CHARACTER). The session
+        // stays alive at character-select.
+        if (std::optional<Bytes> pl = round_trip(
+                c, mn::Opcode::ENTER_WORLD_REQUEST,
+                enc_enter_world_request(other_char_id),
+                mn::Opcode::ENTER_WORLD_RESPONSE, seq++)) {
+            const auto* m = decode<mn::EnterWorldResponse>(*pl);
+            check("2a: ENTER_WORLD with a foreign character -> NOT_FOUND",
+                  m != nullptr && m->status() == mn::EnterWorldStatus::NOT_FOUND);
+        } else {
+            check("2a: got an EnterWorldResponse (foreign)", false);
+        }
+
+        // 2b. ENTER_WORLD with a nonexistent id -> NOT_FOUND, no spawn.
+        if (std::optional<Bytes> pl = round_trip(
+                c, mn::Opcode::ENTER_WORLD_REQUEST,
+                enc_enter_world_request(0xDEADBEEFULL),
+                mn::Opcode::ENTER_WORLD_RESPONSE, seq++)) {
+            const auto* m = decode<mn::EnterWorldResponse>(*pl);
+            check("2b: ENTER_WORLD with a nonexistent id -> NOT_FOUND",
+                  m != nullptr && m->status() == mn::EnterWorldStatus::NOT_FOUND);
+        } else {
+            check("2b: got an EnterWorldResponse (nonexistent)", false);
+        }
+
+        // 2c. ENTER_WORLD with the account's OWN character -> OK (spawned as that
+        // real character — server-authoritative entry succeeds only for an owned id).
+        if (std::optional<Bytes> pl = round_trip(
+                c, mn::Opcode::ENTER_WORLD_REQUEST,
+                enc_enter_world_request(minted),
+                mn::Opcode::ENTER_WORLD_RESPONSE, seq++)) {
+            const auto* m = decode<mn::EnterWorldResponse>(*pl);
+            check("2c: ENTER_WORLD with the owned character -> OK",
+                  m != nullptr && m->status() == mn::EnterWorldStatus::OK);
+        } else {
+            check("2c: got an EnterWorldResponse (owned)", false);
         }
 
         // 3. second create for the SAME account -> LIMIT_REACHED (#329). The

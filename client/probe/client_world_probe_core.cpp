@@ -15,8 +15,11 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <memory>
+#include <string>
 #include <thread>
+#include <utility>
 
 #include "login_core.h"
 #include "login_transport.h"
@@ -88,6 +91,18 @@ bool apply_entity_frame(remote::RemoteInterpolator& interp, ProbeResult& res,
     if (opcode == cn::kOpEntityEnter) {
         auto e = cn::codec::decode_entity_enter(payload);
         if (!e) return false;
+        // UI-01 (#431) live evidence: log the vitals the client decodes off worldd's
+        // EntityEnter — the HUD contract (#430). run_client_sees_bot_it.sh surfaces
+        // this so the health/power/level/name reaching the GUI net path from a REAL
+        // server are visible, not just asserted in a unit test.
+        std::fprintf(stderr,
+                     "[probe] peer ENTER guid=%llu name=\"%s\" class=%u level=%u "
+                     "hp=%u/%u power=%u/%u ptype=%u\n",
+                     static_cast<unsigned long long>(e->entity_guid), e->name.c_str(),
+                     static_cast<unsigned>(e->char_class), static_cast<unsigned>(e->level),
+                     static_cast<unsigned>(e->health), static_cast<unsigned>(e->max_health),
+                     static_cast<unsigned>(e->power), static_cast<unsigned>(e->max_power),
+                     static_cast<unsigned>(e->power_type));
         interp.on_enter(e->entity_guid, to_render(e->x, e->y, e->z), e->orientation,
                         recv_server_ms);
         EntitySighting s;
@@ -133,6 +148,92 @@ bool apply_entity_frame(remote::RemoteInterpolator& interp, ProbeResult& res,
         return true;
     }
     return false;  // not an entity-relay opcode (e.g. ClockSync)
+}
+
+// -----------------------------------------------------------------------------
+// EnterWorldSequencer — the character-select → ENTER_WORLD state machine (D-35/#341).
+// Socket-free: each on_* is driven by one decoded inbound message and returns the next
+// request frame to send. Mirrors client/bot/bot_core.cpp's request/response chain.
+// -----------------------------------------------------------------------------
+EnterWorldSequencer::EnterWorldSequencer(std::uint64_t forced_character_id,
+                                         bool auto_create, std::string character_name)
+    : forced_id_(forced_character_id),
+      auto_create_(auto_create),
+      character_name_(std::move(character_name)) {}
+
+EnterStep EnterWorldSequencer::fail_(std::string why) {
+    phase_ = EnterPhase::kFailed;
+    EnterStep step;
+    step.failed = true;
+    step.detail = std::move(why);
+    return step;
+}
+
+EnterStep EnterWorldSequencer::send_enter_() {
+    phase_ = EnterPhase::kEntering;
+    EnterStep step;
+    step.frame = cn::encode_world_frame(
+        cn::kOpEnterWorldReq, /*seq=*/3,
+        cn::codec::encode_enter_world_request(character_id_));
+    return step;
+}
+
+EnterStep EnterWorldSequencer::on_handshake_ok() {
+    // Character-select reached. A forced id enters directly (no roster round-trip, the
+    // deterministic test hook); otherwise ask worldd for THIS account's roster.
+    if (forced_id_ != 0) {
+        character_id_ = forced_id_;
+        return send_enter_();
+    }
+    phase_ = EnterPhase::kListing;
+    EnterStep step;
+    step.frame = cn::encode_world_frame(cn::kOpCharListReq, /*seq=*/1,
+                                        cn::codec::encode_char_list_request());
+    return step;
+}
+
+EnterStep EnterWorldSequencer::on_char_list(
+    const clientnet::codec::CharListResponse& roster) {
+    if (!roster.characters.empty()) {
+        character_id_ = roster.characters.front().character_id;
+        return send_enter_();
+    }
+    if (!auto_create_) {
+        return fail_("character-select roster is empty and auto_create is off");
+    }
+    // Roster empty -> self-provision one (M0 roster: race/class 1/1), then ENTER on the
+    // mint. Same fallback the bot uses so a fresh account can still see a peer.
+    phase_ = EnterPhase::kCreating;
+    clientnet::codec::CharCreateRequest req;
+    req.name = character_name_.empty() ? std::string("probe") : character_name_;
+    req.race = 1;
+    req.char_class = 1;
+    EnterStep step;
+    step.frame = cn::encode_world_frame(cn::kOpCharCreateReq, /*seq=*/2,
+                                        cn::codec::encode_char_create_request(req));
+    return step;
+}
+
+EnterStep EnterWorldSequencer::on_char_create(
+    const clientnet::codec::CharCreateResponse& resp) {
+    if (resp.status != 0 /*CharCreateStatus::OK*/ || resp.character_id == 0) {
+        return fail_("CharCreate rejected (status=" + std::to_string(resp.status) + ")");
+    }
+    character_id_ = resp.character_id;
+    return send_enter_();
+}
+
+EnterStep EnterWorldSequencer::on_enter_world(
+    const clientnet::codec::EnterWorldResponse& resp) {
+    last_enter_status_ = resp.status;
+    if (resp.status != 0 /*EnterWorldStatus::OK*/) {
+        return fail_("ENTER_WORLD rejected (status=" + std::to_string(resp.status) + ")");
+    }
+    phase_ = EnterPhase::kSpawned;
+    EnterStep step;
+    step.spawned = true;
+    step.detail = "entered world (ENTER_WORLD OK)";
+    return step;
 }
 
 ProbeResult run_probe(const ProbeConfig& cfg) {
@@ -208,6 +309,26 @@ ProbeResult run_probe(const ProbeConfig& cfg) {
         static_cast<std::uint32_t>(std::lround(leg_metres / per_tick_m));
     if (ticks_per_leg == 0) ticks_per_leg = 1;
 
+    // Character-select → ENTER_WORLD sequencer (D-35/#341): after HandshakeOk the
+    // session is NOT spawned; we must ENTER_WORLD an owned character and only then does
+    // worldd spawn us + relay the AoI peer frames. Mirrors the bot's contract.
+    EnterWorldSequencer enter_seq(cfg.character_id, cfg.auto_create, cfg.character_name);
+
+    // Apply one sequencer step: send the next request frame (if any) and fold spawn /
+    // failure state into the result.
+    auto apply_enter_step = [&](const EnterStep& step) {
+        if (!step.frame.empty()) core.send(step.frame, net::SendPriority::kControl);
+        if (step.spawned) {
+            res.spawned = true;
+            res.character_id = enter_seq.character_id();
+            res.enter_world_status = enter_seq.last_enter_status();
+            res.detail = step.detail;
+        } else if (step.failed) {
+            res.enter_world_status = enter_seq.last_enter_status();
+            res.detail = step.detail;
+        }
+    };
+
     // Drain every inbound event currently on the ring. Returns false if the session
     // ended (Disconnect / transport closed / connect failed).
     auto pump = [&](std::uint64_t recv_ms) -> bool {
@@ -216,9 +337,22 @@ ProbeResult run_probe(const ProbeConfig& cfg) {
         while (core.try_pop_inbound(msg)) {
             switch (msg.kind) {
                 case net::InboundKind::kHandshakeOk:
+                    // Reached CHARACTER-SELECT (not spawned) — kick off ENTER_WORLD.
                     res.entered_world = true;
-                    if (res.detail.empty()) res.detail = "entered world (HandshakeOk)";
+                    if (res.detail.empty()) res.detail = "reached character-select (HandshakeOk)";
+                    apply_enter_step(enter_seq.on_handshake_ok());
                     break;
+                case net::InboundKind::kCharList:
+                    apply_enter_step(enter_seq.on_char_list(msg.roster));
+                    break;
+                case net::InboundKind::kCharCreate:
+                    apply_enter_step(enter_seq.on_char_create(msg.char_create));
+                    break;
+                case net::InboundKind::kEnterWorld:
+                    apply_enter_step(enter_seq.on_enter_world(msg.enter_world));
+                    break;
+                case net::InboundKind::kCharDelete:
+                    break;  // the probe never deletes; ignore any stray response
                 case net::InboundKind::kMovementState: {
                     ++res.movement_states;
                     // Reconcile our own authoritative state (Y-UP frame from wire).
@@ -265,7 +399,9 @@ ProbeResult run_probe(const ProbeConfig& cfg) {
         alive = pump(recv_ms);
         if (!alive) break;
 
-        if (res.entered_world && cfg.walk) {
+        // Only a SPAWNED session (ENTER_WORLD OK) may move — worldd rejects a
+        // MovementIntent sent at character-select (ctx.movement is emplaced on spawn).
+        if (res.spawned && cfg.walk) {
             const std::uint64_t client_time_ms = t0 + tick * mv::kTickMillis;
             mv::MovementInput in = input_for_tick(tick, ticks_per_leg);
             mv::MovementIntentOut intent = reconciler.predict(in, client_time_ms);

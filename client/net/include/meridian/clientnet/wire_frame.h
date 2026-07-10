@@ -31,11 +31,56 @@ inline constexpr std::uint16_t kOpWorldHello     = 0x0001;  // C→S
 inline constexpr std::uint16_t kOpHandshakeOk    = 0x0002;  // S→C
 inline constexpr std::uint16_t kOpDisconnect     = 0x0003;  // S→C
 inline constexpr std::uint16_t kOpClockSync      = 0x0004;  // C↔S
+// Character management (D-35 / #286) over the authenticated world session.
+inline constexpr std::uint16_t kOpCharListReq    = 0x0010;  // C→S
+inline constexpr std::uint16_t kOpCharListResp   = 0x0011;  // S→C
+inline constexpr std::uint16_t kOpCharCreateReq  = 0x0012;  // C→S
+inline constexpr std::uint16_t kOpCharCreateResp = 0x0013;  // S→C
+inline constexpr std::uint16_t kOpCharDeleteReq  = 0x0014;  // C→S
+inline constexpr std::uint16_t kOpCharDeleteResp = 0x0015;  // S→C
+// Server-authoritative enter-world (D-35 / #341): spawn as an OWNED character.
+inline constexpr std::uint16_t kOpEnterWorldReq  = 0x0016;  // C→S
+inline constexpr std::uint16_t kOpEnterWorldResp = 0x0017;  // S→C
 inline constexpr std::uint16_t kOpMovementIntent = 0x1001;  // C→S
 inline constexpr std::uint16_t kOpMovementState  = 0x1002;  // S→C
 inline constexpr std::uint16_t kOpEntityEnter    = 0x2001;  // S→C
 inline constexpr std::uint16_t kOpEntityUpdate   = 0x2002;  // S→C
 inline constexpr std::uint16_t kOpEntityLeave    = 0x2003;  // S→C
+inline constexpr std::uint16_t kOpVitalsUpdate   = 0x2004;  // S→C  HUD delta (#430/#431)
+// Quest state (M1 — QST-01, #371/#433). QUEST_LOG is bidirectional: C→S it REQUESTS
+// the log (an empty QuestLog table body); S→C it CARRIES the log snapshot. The others
+// are one C→S request paired with a typed S→C result; QUEST_PROGRESS is S→C only.
+inline constexpr std::uint16_t kOpQuestAccept       = 0x4001;  // C→S
+inline constexpr std::uint16_t kOpQuestAcceptResult = 0x4002;  // S→C
+inline constexpr std::uint16_t kOpQuestProgress     = 0x4003;  // S→C
+inline constexpr std::uint16_t kOpQuestTurnIn       = 0x4004;  // C→S
+inline constexpr std::uint16_t kOpQuestTurnInResult = 0x4005;  // S→C
+inline constexpr std::uint16_t kOpQuestLog          = 0x4006;  // C↔S (request / snapshot)
+// NPC gossip (M1 — NPC-01/02, #372/#433). GOSSIP_HELLO opens gossip on an NPC guid;
+// GOSSIP_MENU is the server-computed, state-gated option list.
+inline constexpr std::uint16_t kOpGossipHello    = 0x5201;  // C→S
+inline constexpr std::uint16_t kOpGossipMenu     = 0x5202;  // S→C
+// Corpse looting (M1 — ITM-02, #369/#441). Open (LOOT_REQUEST → LOOT_RESPONSE), take a
+// slot / the money (LOOT_TAKE → LOOT_RESULT), close (LOOT_RELEASE → LOOT_CLOSED).
+inline constexpr std::uint16_t kOpLootRequest    = 0x5001;  // C→S
+inline constexpr std::uint16_t kOpLootResponse   = 0x5002;  // S→C
+inline constexpr std::uint16_t kOpLootTake       = 0x5003;  // C→S
+inline constexpr std::uint16_t kOpLootResult     = 0x5004;  // S→C
+inline constexpr std::uint16_t kOpLootRelease    = 0x5005;  // C→S
+inline constexpr std::uint16_t kOpLootClosed     = 0x5006;  // S→C
+// Vendor transactions (M1 — ECO-01, #370/#441). buy / sell / buyback each ride ONE
+// C→S request paired with a typed S→C result; all prices/balances server-computed.
+inline constexpr std::uint16_t kOpVendorBuyReq      = 0x5101;  // C→S
+inline constexpr std::uint16_t kOpVendorBuyResult   = 0x5102;  // S→C
+inline constexpr std::uint16_t kOpVendorSellReq     = 0x5103;  // C→S
+inline constexpr std::uint16_t kOpVendorSellResult  = 0x5104;  // S→C
+inline constexpr std::uint16_t kOpVendorBuybackReq  = 0x5105;  // C→S
+inline constexpr std::uint16_t kOpVendorBuybackResult = 0x5106;  // S→C
+// Trainer (M1 — NPC-02, #372/#441). TRAINER_LIST is pushed S→C alongside GOSSIP_MENU
+// when the player opens gossip on a trainer NPC; TRAINER_LEARN → TRAINER_LEARN_RESULT.
+inline constexpr std::uint16_t kOpTrainerList        = 0x5203;  // S→C
+inline constexpr std::uint16_t kOpTrainerLearn       = 0x5204;  // C→S
+inline constexpr std::uint16_t kOpTrainerLearnResult = 0x5205;  // S→C
 
 // IF-2 in-frame header size: u16 opcode + u64 seq (world_dispatch.h
 // kFrameHeaderBytes). A frame body shorter than this is malformed.

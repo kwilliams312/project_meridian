@@ -7,7 +7,9 @@
 
 #include <mysql.h>
 
+#include <charconv>
 #include <cstring>
+#include <string>
 
 namespace meridian::db {
 
@@ -19,6 +21,18 @@ namespace {
 
 [[noreturn]] void throw_stmt(MYSQL_STMT* s) {
     throw DbError(mysql_stmt_errno(s), mysql_stmt_error(s));
+}
+
+// Shortest round-trippable text for a FLOAT/DOUBLE result column. libmariadb's
+// binary protocol ships these as raw IEEE bytes; converting them into a
+// zero-length probe string buffer reports length 0 and yields an empty cell
+// (#393), so we bind the native numeric type and format the value here. Default
+// std::to_chars gives the shortest string that parses back to the same value.
+template <class T>
+std::string num_to_string(T v) {
+    char buf[64];
+    auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), v);
+    return std::string(buf, ptr);
 }
 
 }  // namespace
@@ -147,17 +161,38 @@ Result Connection::execute(std::string_view sql, const std::vector<Param>& param
     for (unsigned i = 0; i < ncols; ++i)
         result.columns.emplace_back(fields[i].name, fields[i].name_length);
 
-    // Bind outputs with zero-length buffers to learn each cell's length, then
-    // fetch each column into a right-sized buffer (handles arbitrary widths).
+    // Bind outputs. Most columns use a zero-length probe buffer to learn the
+    // cell's length, then re-fetch into a right-sized buffer (handles arbitrary
+    // widths). FLOAT/DOUBLE are the exception: the server sends them as raw IEEE
+    // bytes and libmariadb reports length 0 when converting them into a
+    // zero-length string buffer — the value would come back empty (#393). So we
+    // bind those columns to their native numeric C type and format the value to
+    // text ourselves. (DECIMAL/NEWDECIMAL already arrive as text and work.)
     std::vector<MYSQL_BIND> out(ncols);
     std::vector<unsigned long> out_len(ncols, 0);
     std::vector<my_bool> out_null(ncols, 0);
     std::vector<my_bool> out_err(ncols, 0);
+    std::vector<double> out_dbl(ncols, 0.0);  // storage for DOUBLE columns
+    std::vector<float> out_flt(ncols, 0.0f);  // storage for FLOAT columns
     std::memset(out.data(), 0, out.size() * sizeof(MYSQL_BIND));
     for (unsigned i = 0; i < ncols; ++i) {
-        out[i].buffer_type = MYSQL_TYPE_STRING;
-        out[i].buffer = nullptr;
-        out[i].buffer_length = 0;
+        switch (fields[i].type) {
+            case MYSQL_TYPE_FLOAT:
+                out[i].buffer_type = MYSQL_TYPE_FLOAT;
+                out[i].buffer = &out_flt[i];
+                out[i].buffer_length = sizeof(float);
+                break;
+            case MYSQL_TYPE_DOUBLE:
+                out[i].buffer_type = MYSQL_TYPE_DOUBLE;
+                out[i].buffer = &out_dbl[i];
+                out[i].buffer_length = sizeof(double);
+                break;
+            default:
+                out[i].buffer_type = MYSQL_TYPE_STRING;
+                out[i].buffer = nullptr;
+                out[i].buffer_length = 0;
+                break;
+        }
         out[i].length = &out_len[i];
         out[i].is_null = &out_null[i];
         out[i].error = &out_err[i];
@@ -174,6 +209,16 @@ Result Connection::execute(std::string_view sql, const std::vector<Param>& param
         for (unsigned i = 0; i < ncols; ++i) {
             if (out_null[i]) {
                 row.cols[i] = std::nullopt;
+                continue;
+            }
+            // FLOAT/DOUBLE fetched directly into native storage above; format
+            // the value to text rather than re-fetching an empty string (#393).
+            if (fields[i].type == MYSQL_TYPE_FLOAT) {
+                row.cols[i] = num_to_string(out_flt[i]);
+                continue;
+            }
+            if (fields[i].type == MYSQL_TYPE_DOUBLE) {
+                row.cols[i] = num_to_string(out_dbl[i]);
                 continue;
             }
             std::string cell(out_len[i], '\0');
