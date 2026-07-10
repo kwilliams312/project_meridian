@@ -81,8 +81,20 @@ spec:
             - sh
             - -c
             - |
-              set -eu
-              [ -f "$SQL_PATH" ] || { echo "content DML $SQL_PATH missing from image"; exit 1; }
+              set -u
+              # Guard (#492): a content-seed hiccup must NEVER wedge the ArgoCD
+              # realm sync. Any non-zero exit below is downgraded to a logged
+              # WARNING + exit 0, so this PostSync hook always succeeds, the sync
+              # completes, and the daemons/bots roll out. worldd (#485) then runs
+              # degraded on empty/stale content; the idempotent hash-gate reseeds
+              # on the next sync that carries a content-baked meridian-db image.
+              # Self-heals, no deadlock.
+              trap 'rc=$?; [ "$rc" -eq 0 ] || echo "WARNING: world content seed exited rc=$rc — skipped to keep the realm sync unblocked (#492); reseeds on the next content-baked sync"; exit 0' EXIT
+              set -e
+              # If the pinned meridian-db image predates the content-bake stage
+              # (#492), the baked content DML is absent — SKIP (do not fail), so
+              # the sync is not deadlocked waiting on this hook.
+              [ -f "$SQL_PATH" ] || { echo "WARNING: content DML $SQL_PATH missing from image — skipping world content seed (#492); realm runs degraded until a content-baked image seeds it"; exit 0; }
               mysql() { mariadb -h"$DB_HOST" -u"$DB_USER" "$@"; }
               # Baked content hash: the sole 64-hex token in the world_manifest INSERT.
               BAKED=$(grep -A4 'INSERT INTO world_manifest' "$SQL_PATH" \
