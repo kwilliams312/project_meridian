@@ -354,6 +354,7 @@ constexpr const char* kCharacterDdl =
     "  name VARCHAR(32) NOT NULL,"
     "  race TINYINT UNSIGNED NOT NULL,"
     "  class TINYINT UNSIGNED NOT NULL,"
+    "  appearance JSON NULL,"  // 0003 (§5.2): opaque visual record
     "  level SMALLINT UNSIGNED NOT NULL DEFAULT 1,"
     "  xp INT UNSIGNED NOT NULL DEFAULT 0,"
     "  money BIGINT UNSIGNED NOT NULL DEFAULT 0,"
