@@ -43,6 +43,7 @@ func _initialize() -> void:
 	print("meridian ACTION BAR + ABILITY CAST + GCD RUNTIME verify (#432)")
 
 	_verify_ability_set()
+	_verify_known_abilities_wire()
 	_verify_event_bus_gcd_rollback()
 	_verify_event_bus_cast_bar()
 	await _verify_action_bar()
@@ -62,6 +63,54 @@ func _verify_ability_set() -> void:
 	_check("slot 1 is the real Pickaxe Slam (id 2)", int(a[0]["ability_id"]) == 2)
 	_check("slot 2 is the real Minor Healing (id 1)", int(a[1]["ability_id"]) == 1)
 	_check("hotkeys are 1..N in order", int(a[0]["hotkey"]) == 1 and int(a[1]["hotkey"]) == 2)
+	# The fixture now mirrors the wire metadata shape (#457): Pickaxe triggers the GCD,
+	# Minor Healing is off-GCD, Firebolt is a cast-time spell.
+	_check("Pickaxe Slam triggers the GCD", bool(a[0]["triggers_gcd"]))
+	_check("Minor Healing is off-GCD", not bool(a[1]["triggers_gcd"]))
+	_check("Firebolt is a cast-time spell (cast_ms>0)", int(a[2]["cast_ms"]) > 0)
+
+
+# --- KNOWN_ABILITIES wire path (publish_known_abilities + the #456 GCD fix) ----
+
+func _verify_known_abilities_wire() -> void:
+	print("[known_abilities]")
+	var bus = EventBus.new()
+	var sets: Array = []
+	bus.ability_set_changed.connect(func(a): sets.append(a))
+
+	# A KNOWN_ABILITIES push (as decode_cast_frame emits it): an off-GCD instant strike +
+	# a GCD cast-time spell. The bus normalizes the wire rows into canonical bar entries.
+	bus.publish_known_abilities([
+		{"ability_id": 2, "cast_ms": 0, "triggers_gcd": false, "resource_type": 0,
+			"resource_cost": 0, "range_m": 5.0},
+		{"ability_id": 1001, "cast_ms": 1500, "triggers_gcd": true, "resource_type": 1,
+			"resource_cost": 20, "range_m": 30.0},
+	])
+	var bar := bus.abilities()
+	_check("known-abilities seeded 2 slots", bar.size() == 2)
+	_check("hotkeys derived from slot order", int(bar[0]["hotkey"]) == 1 and int(bar[1]["hotkey"]) == 2)
+	_check("ability metadata carried (cast_ms/triggers_gcd)",
+		int(bar[0]["cast_ms"]) == 0 and not bool(bar[0]["triggers_gcd"]) and
+		int(bar[1]["cast_ms"]) == 1500 and bool(bar[1]["triggers_gcd"]))
+	_check("ability_set_changed emitted on publish", sets.size() == 1)
+
+	# THE #456 FIX: pressing the OFF-GCD ability (id 2) issues the cast but starts NO GCD —
+	# it no longer over-predicts a 1.5 s cooldown for an ability the server doesn't gate.
+	var intents: Array = []
+	bus.cast_requested.connect(func(aid, _t, _ms): intents.append(aid))
+	var fired_offgcd: bool = bus.request_cast(2, 1000)
+	_check("off-GCD press fired", fired_offgcd)
+	_check("off-GCD press started NO GCD", bus.gcd_duration_ms() == 0 and bus.gcd_remaining_ms(1000) == 0)
+	# And it is NOT dropped even while a GCD from another ability is live.
+	var fired_gcd: bool = bus.request_cast(1001, 1001)
+	_check("GCD ability press started the GCD", fired_gcd and bus.gcd_remaining_ms(1001) == EventBus.GCD_MS)
+	var fired_offgcd_during: bool = bus.request_cast(2, 1100)
+	_check("off-GCD ability usable DURING a live GCD", fired_offgcd_during)
+	_check("all three intents reached the wire", intents.size() == 3)
+
+	# An EMPTY set (a freshly-created character knows nothing) clears the bar.
+	bus.publish_known_abilities([])
+	_check("empty KNOWN_ABILITIES clears the bar", bus.abilities().is_empty())
 
 
 # --- Event bus: optimistic GCD + rollback / resync ----------------------------
@@ -216,6 +265,9 @@ func _verify_net_bridge() -> void:
 	# kind "" for a non-combat opcode.
 	var bad: Dictionary = net.decode_cast_frame(0x3002, PackedByteArray([0xFF, 0xFF, 0xFF, 0xFF]))
 	_check("garbage CAST_START → kind ''", String(bad.get("kind", "x")) == "")
+	# KNOWN_ABILITIES (0x3005) rides the same combat decode seam; a garbage body is safe.
+	var bad_ka: Dictionary = net.decode_cast_frame(0x3005, PackedByteArray([0xFF, 0xFF, 0xFF, 0xFF]))
+	_check("garbage KNOWN_ABILITIES → kind ''", String(bad_ka.get("kind", "x")) == "")
 	var other: Dictionary = net.decode_cast_frame(0x2001, PackedByteArray())
 	_check("non-combat opcode → kind ''", String(other.get("kind", "x")) == "")
 

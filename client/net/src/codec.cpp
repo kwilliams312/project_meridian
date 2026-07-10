@@ -262,6 +262,38 @@ std::optional<CastResult> decode_cast_result(const Bytes& buf) {
     return out;
 }
 
+// ---- IF-2 KNOWN_ABILITIES (0x3005 — CMB-01, #457/#456) ---------------------
+
+Bytes encode_known_abilities(const KnownAbilities& in) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::KnownAbility>> abl;
+    abl.reserve(in.abilities.size());
+    for (const auto& a : in.abilities) {
+        abl.push_back(mn::CreateKnownAbility(
+            b, a.ability_id, a.cast_ms, a.triggers_gcd,
+            static_cast<mn::AbilityResource>(a.resource_type), a.resource_cost, a.range_m));
+    }
+    b.Finish(mn::CreateKnownAbilities(b, b.CreateVector(abl)));
+    return to_bytes(b);
+}
+
+std::optional<KnownAbilities> decode_known_abilities(const Bytes& buf) {
+    const mn::KnownAbilities* t = verify_and_get<mn::KnownAbilities>(buf);
+    if (t == nullptr) return std::nullopt;
+    KnownAbilities out;
+    if (t->abilities() != nullptr) {
+        out.abilities.reserve(t->abilities()->size());
+        for (const auto* a : *t->abilities()) {
+            if (a == nullptr) continue;
+            out.abilities.push_back(KnownAbility{
+                a->ability_id(), a->cast_ms(), a->triggers_gcd(),
+                static_cast<std::uint8_t>(a->resource_type()), a->resource_cost(),
+                a->range_m()});
+        }
+    }
+    return out;
+}
+
 // ---- IF-2 EntityUpdate (#87 AoI relay) -------------------------------------
 
 Bytes encode_entity_update(const EntityUpdate& in) {
@@ -584,8 +616,19 @@ Bytes encode_quest_log(const QuestLog& in) {
                 b, static_cast<mn::QuestObjectiveType>(o.type), o.target_id, o.have,
                 o.need, o.complete));
         }
-        entries.push_back(mn::CreateQuestLogEntry(b, q.quest_id, q.level, q.complete,
-                                                  b.CreateVector(objs)));
+        std::vector<fb::Offset<mn::QuestRewardItem>> rewards;
+        rewards.reserve(q.reward_items.size());
+        for (const auto& r : q.reward_items) {
+            rewards.push_back(mn::CreateQuestRewardItem(b, r.item_id, r.count));
+        }
+        std::vector<fb::Offset<mn::QuestRewardItem>> choices;
+        choices.reserve(q.choice_items.size());
+        for (const auto& c : q.choice_items) {
+            choices.push_back(mn::CreateQuestRewardItem(b, c.item_id, c.count));
+        }
+        entries.push_back(mn::CreateQuestLogEntry(
+            b, q.quest_id, q.level, q.complete, b.CreateVector(objs), q.reward_xp,
+            q.reward_money, b.CreateVector(rewards), b.CreateVector(choices)));
     }
     b.Finish(mn::CreateQuestLog(b, b.CreateVector(entries)));
     return to_bytes(b);
@@ -610,6 +653,22 @@ std::optional<QuestLog> decode_quest_log(const Bytes& buf) {
                     entry.objectives.push_back(QuestObjectiveState{
                         static_cast<std::uint16_t>(o->type()), o->target_id(), o->have(),
                         o->need(), o->complete()});
+                }
+            }
+            entry.reward_xp = q->reward_xp();
+            entry.reward_money = q->reward_money();
+            if (q->reward_items() != nullptr) {
+                entry.reward_items.reserve(q->reward_items()->size());
+                for (const auto* r : *q->reward_items()) {
+                    if (r == nullptr) continue;
+                    entry.reward_items.push_back(QuestRewardItem{r->item_id(), r->count()});
+                }
+            }
+            if (q->choice_items() != nullptr) {
+                entry.choice_items.reserve(q->choice_items()->size());
+                for (const auto* c : *q->choice_items()) {
+                    if (c == nullptr) continue;
+                    entry.choice_items.push_back(QuestRewardItem{c->item_id(), c->count()});
                 }
             }
             out.quests.push_back(std::move(entry));

@@ -521,6 +521,49 @@ void test_cast_codec() {
 }
 
 // ---------------------------------------------------------------------------
+// KNOWN_ABILITIES codec (0x3005 — CMB-01, #457/#456). The client DECODES the S→C
+// spellbook the server pushes at ENTER_WORLD (and re-pushes after a growing
+// TRAINER_LEARN) so the action bar seeds from the REAL learned set + per-ability
+// cast/GCD/resource/range metadata (no greybox guess). Proves the POD decode agrees
+// with worldd's KnownAbilities table and rejects garbage (verify-before-GetRoot).
+// ---------------------------------------------------------------------------
+void test_known_abilities_codec() {
+    std::puts("[known_abilities] spellbook round-trip + wrap + verifier (#457)");
+
+    // A free no-GCD instant strike + a mana cast-time heal — the two shapes that fix the
+    // #456 over-prediction (triggers_gcd=false must not start a GCD; cast_ms>0 shows a bar).
+    codec::KnownAbilities ka;
+    ka.abilities.push_back({/*ability_id=*/2, /*cast_ms=*/0, /*triggers_gcd=*/false,
+                            /*resource_type=NONE*/ 0, /*resource_cost=*/0, /*range_m=*/5.0f});
+    ka.abilities.push_back({/*ability_id=*/1, /*cast_ms=*/2000, /*triggers_gcd=*/true,
+                            /*resource_type=MANA*/ 1, /*resource_cost=*/25, /*range_m=*/40.0f});
+    auto ka_out = codec::decode_known_abilities(codec::encode_known_abilities(ka));
+    CHECK(ka_out.has_value() && ka_out->abilities.size() == 2);
+    CHECK(ka_out->abilities[0].ability_id == 2 && ka_out->abilities[0].cast_ms == 0 &&
+          !ka_out->abilities[0].triggers_gcd && ka_out->abilities[0].resource_type == 0 &&
+          ka_out->abilities[0].resource_cost == 0 && ka_out->abilities[0].range_m == 5.0f);
+    CHECK(ka_out->abilities[1].ability_id == 1 && ka_out->abilities[1].cast_ms == 2000 &&
+          ka_out->abilities[1].triggers_gcd && ka_out->abilities[1].resource_type == 1 &&
+          ka_out->abilities[1].resource_cost == 25 && ka_out->abilities[1].range_m == 40.0f);
+
+    // An EMPTY set (a freshly-created character knows nothing) decodes to zero abilities.
+    auto empty_out = codec::decode_known_abilities(codec::encode_known_abilities(codec::KnownAbilities{}));
+    CHECK(empty_out.has_value() && empty_out->abilities.empty());
+
+    // It wraps under KNOWN_ABILITIES (0x3005).
+    {
+        Bytes frame = encode_world_frame(kOpKnownAbilities, 3, codec::encode_known_abilities(ka));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x3005 && f->opcode == kOpKnownAbilities);
+    }
+
+    // Verify-before-GetRoot: garbage + empty rejected.
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_known_abilities(garbage).has_value());
+    CHECK(!codec::decode_known_abilities(Bytes{}).has_value());
+}
+
+// ---------------------------------------------------------------------------
 // 4b. Character management + enter-world codec (D-35 / #286 / #341)
 //
 // The codec's public API is deliberately POD-in/POD-out and keeps the generated
@@ -1101,11 +1144,21 @@ void test_quest_codec() {
     e0.complete = false;
     e0.objectives.push_back({/*type=KILL*/ 0, /*target_id=*/26, /*have=*/5, /*need=*/8, false});
     e0.objectives.push_back({/*type=COLLECT*/ 1, /*target_id=*/50, /*have=*/6, /*need=*/6, true});
+    // Reward preview (#443): flat XP + copper, an always-granted item, and a 2-option choice.
+    e0.reward_xp = 250;
+    e0.reward_money = 1200;
+    e0.reward_items.push_back({/*item_id=*/700, /*count=*/1});
+    e0.choice_items.push_back({/*item_id=*/801, /*count=*/1});
+    e0.choice_items.push_back({/*item_id=*/802, /*count=*/2});
     codec::QuestLogEntry e1;
     e1.quest_id = 29;
     e1.level = 5;
     e1.complete = true;
     e1.objectives.push_back({/*type=DELIVER*/ 2, /*target_id=*/27, /*have=*/1, /*need=*/1, true});
+    // A non-choice quest: flat rewards only, empty choice_items (no picker).
+    e1.reward_xp = 420;
+    e1.reward_money = 500;
+    e1.reward_items.push_back({/*item_id=*/900, /*count=*/3});
     log.quests.push_back(e0);
     log.quests.push_back(e1);
     auto log_out = codec::decode_quest_log(codec::encode_quest_log(log));
@@ -1115,8 +1168,22 @@ void test_quest_codec() {
     CHECK(log_out->quests[0].objectives[0].type == 0 && log_out->quests[0].objectives[0].have == 5 &&
           log_out->quests[0].objectives[0].need == 8 && !log_out->quests[0].objectives[0].complete);
     CHECK(log_out->quests[0].objectives[1].type == 1 && log_out->quests[0].objectives[1].complete);
+    // Reward preview round-trips: XP/copper + the always-granted item + the 2 choice options.
+    CHECK(log_out->quests[0].reward_xp == 250 && log_out->quests[0].reward_money == 1200);
+    CHECK(log_out->quests[0].reward_items.size() == 1 &&
+          log_out->quests[0].reward_items[0].item_id == 700 &&
+          log_out->quests[0].reward_items[0].count == 1);
+    CHECK(log_out->quests[0].choice_items.size() == 2 &&
+          log_out->quests[0].choice_items[0].item_id == 801 &&
+          log_out->quests[0].choice_items[1].item_id == 802 &&
+          log_out->quests[0].choice_items[1].count == 2);
     CHECK(log_out->quests[1].quest_id == 29 && log_out->quests[1].complete);
     CHECK(log_out->quests[1].objectives.size() == 1 && log_out->quests[1].objectives[0].type == 2);
+    // The non-choice quest carries flat rewards but an EMPTY choice list (no picker).
+    CHECK(log_out->quests[1].reward_xp == 420 && log_out->quests[1].reward_money == 500);
+    CHECK(log_out->quests[1].reward_items.size() == 1 &&
+          log_out->quests[1].reward_items[0].count == 3);
+    CHECK(log_out->quests[1].choice_items.empty());
 
     // Verify-before-GetRoot: garbage + empty are rejected on every S→C decoder.
     Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
@@ -1411,7 +1478,8 @@ std::optional<Bytes> read_golden(const char* name) {
 // SERVER track froze from meridian-proto's flatc (conformance.cpp build_corpus). If the
 // two tracks ever drift, this fails — the client analogue of the server conformance gate.
 void test_golden_cross_decode() {
-    std::puts("[golden] cross-decode server conformance corpus (INVENTORY_SNAPSHOT + VENDOR_LIST)");
+    std::puts("[golden] cross-decode server conformance corpus (INVENTORY_SNAPSHOT + VENDOR_LIST + "
+              "KNOWN_ABILITIES + QUEST_LOG)");
 
     auto inv_bytes = read_golden("if2_inventory_snapshot.bin");
     if (!inv_bytes.has_value()) {
@@ -1449,6 +1517,42 @@ void test_golden_cross_decode() {
                                    : std::nullopt;
     CHECK(bb.has_value() && bb->status == 0 && bb->item_template_id == 900007 &&
           bb->quantity == 2 && bb->price == 2 && bb->balance == 700 && bb->buyback_slot == 1);
+
+    // if2_known_abilities.bin (#457) — the CLIENT action bar decodes the server-frozen
+    // KNOWN_ABILITIES: a free no-GCD instant (id 0xF0000001, cast 0, no GCD, NONE, range 5)
+    // + a mana cast-time heal (id 0xF0000003, cast 2000, GCD, MANA/25, range 40). Direct
+    // wire-compat proof that the client seeds real abilities + the metadata that fixes #456.
+    auto ka_bytes = read_golden("if2_known_abilities.bin");
+    auto ka = ka_bytes.has_value() ? codec::decode_known_abilities(*ka_bytes) : std::nullopt;
+    CHECK(ka.has_value() && ka->abilities.size() == 2);
+    if (ka.has_value() && ka->abilities.size() == 2) {
+        CHECK(ka->abilities[0].ability_id == 0xF0000001u && ka->abilities[0].cast_ms == 0 &&
+              !ka->abilities[0].triggers_gcd && ka->abilities[0].resource_type == 0 &&
+              ka->abilities[0].resource_cost == 0 && ka->abilities[0].range_m == 5.0f);
+        CHECK(ka->abilities[1].ability_id == 0xF0000003u && ka->abilities[1].cast_ms == 2000 &&
+              ka->abilities[1].triggers_gcd && ka->abilities[1].resource_type == 1 &&
+              ka->abilities[1].resource_cost == 25 && ka->abilities[1].range_m == 40.0f);
+    }
+
+    // if2_quest_log.bin (#443) — the CLIENT quest turn-in decodes the server-frozen
+    // QuestLog reward PREVIEW: quest 800002 with reward_xp 40 + reward_money 75, one
+    // always-granted item {900007,2}, and a 2-option choice {900001,900002}. Proves the
+    // choice picker + preview read straight from the log (the #442 choice_index fix source).
+    auto ql_bytes = read_golden("if2_quest_log.bin");
+    auto ql = ql_bytes.has_value() ? codec::decode_quest_log(*ql_bytes) : std::nullopt;
+    CHECK(ql.has_value() && ql->quests.size() == 1);
+    if (ql.has_value() && ql->quests.size() == 1) {
+        const auto& q = ql->quests[0];
+        CHECK(q.quest_id == 800002u && q.level == 2 && !q.complete);
+        CHECK(q.objectives.size() == 1 && q.objectives[0].type == 0 /*KILL*/ &&
+              q.objectives[0].target_id == 700010u && q.objectives[0].have == 1 &&
+              q.objectives[0].need == 3);
+        CHECK(q.reward_xp == 40 && q.reward_money == 75);
+        CHECK(q.reward_items.size() == 1 && q.reward_items[0].item_id == 900007u &&
+              q.reward_items[0].count == 2);
+        CHECK(q.choice_items.size() == 2 && q.choice_items[0].item_id == 900001u &&
+              q.choice_items[1].item_id == 900002u);
+    }
 }
 
 }  // namespace
@@ -1462,6 +1566,7 @@ int main() {
     test_entity_codec();
     test_vitals_codec();
     test_cast_codec();
+    test_known_abilities_codec();
     test_char_enter_codec();
     test_gossip_codec();
     test_quest_codec();

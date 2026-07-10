@@ -88,6 +88,21 @@ func _verify_event_bus() -> void:
 	_check("delta preserved name", String(v["name"]) == "Bot-7")
 	_check("delta bumped level", int(v["level"]) == 6)
 
+	# LEVEL-UP (#437/#472): worldd's MapTick bridge pushes a VITALS_UPDATE when the player
+	# dings — the SAME already-decoded delta, now carrying the higher level AND the raised
+	# max health/power. The frame updates level + the new maxes LIVE (no re-enter needed).
+	var lvlup: Dictionary = {"last": {}}
+	bus.entity_vitals_changed.connect(func(_g, rec): lvlup["last"] = rec)
+	bus.publish_vitals_update(0x2A, {
+		"health": 1400, "max_health": 1400,
+		"power": 130, "max_power": 130, "power_type": PowerColors.ENERGY, "level": 7,
+	})
+	v = bus.get_vitals(0x2A)
+	_check("level-up raised the level (6→7)", int(v["level"]) == 7)
+	_check("level-up raised max health live", int(v["max_health"]) == 1400 and int(v["health"]) == 1400)
+	_check("level-up raised max power live", int(v["max_power"]) == 130 and int(v["power"]) == 130)
+	_check("level-up re-emitted the record", int((lvlup["last"] as Dictionary).get("level", 0)) == 7)
+
 	# get_vitals for an unknown guid returns a safe all-zero record (no has()-guards).
 	var empty: Dictionary = bus.get_vitals(0x999)
 	_check("unknown guid → zero record", int(empty["health"]) == 0 and String(empty["name"]) == "")
