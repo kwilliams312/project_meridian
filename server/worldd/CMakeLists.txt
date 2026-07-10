@@ -273,6 +273,24 @@ target_link_libraries(worldd-chat-test
 set_target_properties(worldd-chat-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-chat COMMAND worldd-chat-test)
 
+# --- Unit VITALS broadcast UNIT test (UI-01 HUD contract; #430). --------------
+# PURE (no DB, no socket, no session): drives WorldState directly with CAPTURING
+# egress sinks, so it asserts the exact EntityEnter vitals block + VITALS_UPDATE
+# deltas the relay emits without standing up a TLS session. Proves the story's
+# acceptance: an entity entering AoI carries correct health/power/level/name; a
+# damage/heal moves health and emits the delta (to self + AoI observers); a dead
+# unit reports health 0; a level-up updates level + max_health/max_power. Always
+# runs in the plain server ctest (no MERIDIAN_DB_* needed).
+add_executable(worldd-vitals-test
+  test/world_vitals_test.cpp
+)
+target_link_libraries(worldd-vitals-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-vitals-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-vitals COMMAND worldd-vitals-test)
+
 # --- GM COMMAND FRAMEWORK UNIT test (OPS-02a; #417). --------------------------
 # PURE (no DB, no socket, no session): drives the gm_command framework directly
 # with CAPTURING reply + audit sinks (both std::function seams), so it asserts the

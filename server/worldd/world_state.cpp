@@ -93,17 +93,49 @@ void SessionEgress::mark_closed() {
 // Egress payload builders (world.fbs tables)
 // ---------------------------------------------------------------------------
 
+// Project the server unit model's ResourceType (combat_unit.h) onto the wire
+// PowerType (world.fbs). The two enums MIRROR each other 1:1 (kNone/kMana/kEnergy/
+// kRage == NONE/MANA/ENERGY/RAGE), so this is a straight value map — kept explicit
+// (not a raw cast) so a future divergence fails loudly at the switch.
+mn::PowerType wire_power_type(ResourceType rt) {
+    switch (rt) {
+        case ResourceType::kMana: return mn::PowerType::MANA;
+        case ResourceType::kEnergy: return mn::PowerType::ENERGY;
+        case ResourceType::kRage: return mn::PowerType::RAGE;
+        case ResourceType::kNone: break;
+    }
+    return mn::PowerType::NONE;
+}
+
 std::vector<std::uint8_t> encode_entity_enter_payload(const EntityIdentity& subject,
-                                                      const Position& pos) {
+                                                      const Unit& unit) {
     fb::FlatBufferBuilder b;
+    const Position& pos = unit.position();
     // attrs empty at M0 (D-11 placeholder carries no wire attributes yet); the
     // vector is created so the table shape is complete for the client verifier.
     auto attrs = b.CreateVector(std::vector<fb::Offset<mn::AttrDelta>>{});
+    // name (#430): the character/creature display name for the client unit frame.
+    // Empty for the D-11 placeholder (no characters DB).
+    auto name = b.CreateString(subject.name);
     // char_class (#328): the mover's M0-frozen class id, so every client renders the
     // placeholder capsule in a class-derived color. Authoritative here on the server.
+    // vitals (#430): health/max, power/max + type, level — the HUD contract, read
+    // straight from the authoritative Unit (SAD §2.5). Server-authoritative.
     auto e = mn::CreateEntityEnter(b, subject.entity_guid, subject.type_id, pos.x, pos.y,
-                                   pos.z, pos.orientation, attrs, subject.char_class);
+                                   pos.z, pos.orientation, attrs, subject.char_class,
+                                   unit.health(), unit.max_health(), unit.resource(),
+                                   unit.max_resource(), wire_power_type(unit.resource_type()),
+                                   unit.level(), name);
     b.Finish(e);
+    return std::vector<std::uint8_t>(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+std::vector<std::uint8_t> encode_vitals_update_payload(AoiId subject_guid, const Unit& unit) {
+    fb::FlatBufferBuilder b;
+    auto v = mn::CreateVitalsUpdate(b, subject_guid, unit.health(), unit.max_health(),
+                                    unit.resource(), unit.max_resource(),
+                                    wire_power_type(unit.resource_type()), unit.level());
+    b.Finish(v);
     return std::vector<std::uint8_t>(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
 }
 
@@ -180,7 +212,7 @@ std::optional<SessionSlot> WorldState::slot_of_guid(AoiId guid) const {
 void WorldState::send_enter(SessionRec& to, const SessionRec& subject) {
     if (!to.egress) return;
     to.egress(mn::Opcode::ENTITY_ENTER,
-              encode_entity_enter_payload(subject.identity, subject.unit.position()));
+              encode_entity_enter_payload(subject.identity, subject.unit));
 }
 
 void WorldState::send_update(SessionRec& to, const SessionRec& subject,
@@ -522,6 +554,41 @@ bool WorldState::set_unit_level(SessionSlot slot, std::uint16_t level) {
     if (sit == sessions_.end()) return false;  // not entered
     sit->second.unit.set_level(level);
     return true;
+}
+
+std::size_t WorldState::broadcast_vitals(AoiId guid) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    const std::optional<SessionSlot> subject = slot_of_guid(guid);
+    if (!subject) return 0;  // no such in-world unit
+    auto sit = sessions_.find(*subject);
+    if (sit == sessions_.end()) return 0;
+
+    // Read the vitals straight off the authoritative Unit (SAD §2.5 — the unit owns
+    // its combat state) and project them to a VITALS_UPDATE payload once; the same
+    // bytes go to every recipient.
+    const std::vector<std::uint8_t> payload =
+        encode_vitals_update_payload(guid, sit->second.unit);
+
+    std::size_t recipients = 0;
+    // (1) The subject's OWN client — its player unit frame (a session always sees
+    // its own vitals, even when no other session is in AoI).
+    if (sit->second.egress) {
+        sit->second.egress(mn::Opcode::VITALS_UPDATE, payload);
+        ++recipients;
+    }
+    // (2) Every OTHER session that currently SEES the subject (has it in its AoI
+    // interest set) — their target/nameplate frame for this unit. Driven off each
+    // observer's own `visible` set so it exactly matches who was sent the EntityEnter.
+    for (auto& [slot, rec] : sessions_) {
+        if (slot == *subject) continue;
+        if (rec.visible.find(*subject) == rec.visible.end()) continue;
+        if (!rec.egress) continue;
+        rec.egress(mn::Opcode::VITALS_UPDATE, payload);
+        ++recipients;
+    }
+    log::debug(kCat, "vitals broadcast guid=" + std::to_string(guid) + " -> " +
+                         std::to_string(recipients) + " recipient(s)");
+    return recipients;
 }
 
 std::size_t WorldState::session_count() const {
