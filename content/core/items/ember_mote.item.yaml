@@ -1,4 +1,4 @@
-schema: meridian/item@1
+schema: meridian/item@2
 id: core:item.ember_mote
 name: Ember Mote
 flavor_text: A fleck of the mountain's slow fire. It never quite goes cold.

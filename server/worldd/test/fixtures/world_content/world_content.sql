@@ -8,7 +8,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 INSERT INTO world_manifest
   (pack_namespace, pack_version, id_band, content_hash, schema_version, mcc_version, built_at)
 VALUES
-  ('itm1', '0.1.0', 0, 'f68e8a4638322fe85387f84cd3a93030a5e8de86ac477652ce8167fd68d13e6d', 1, '0.0.0', '2026-07-09 00:00:00');
+  ('itm1', '0.1.0', 0, 'fb081b22c33ddbd84a0a9e183f507dff70259f545e7bed020b1433000d055615', 1, '0.0.0', '2026-07-09 00:00:00');
 
 -- npc_template (2 rows)
 INSERT INTO npc_template (id, name, subtitle, level_min, level_max, creature_type, `rank`, faction, stat_health, stat_mana, stat_armor, stat_damage_min, stat_damage_max, stat_attack_speed_ms, ai_behavior, ai_aggro_radius_m, ai_leash_radius_m, ai_call_for_help_radius_m, ai_flee_at_health_pct, move_walk_speed_mps, move_run_speed_mps, vendor_ref_id, loot_table_ref_id, loot_money_min, loot_money_max, visual_model_id, visual_scale, visual_sound_set_id) VALUES

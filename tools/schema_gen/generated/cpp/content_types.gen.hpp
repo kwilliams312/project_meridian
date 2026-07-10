@@ -122,6 +122,33 @@ enum class AssetSfxAttenuation {
     Ui2d,
 };
 
+enum class AttachSocket {
+    MainHand,
+    OffHand,
+    Ranged,
+    Back,
+    HipL,
+    HipR,
+    Shield,
+};
+
+enum class DyeChannel {
+    Primary,
+    Secondary,
+    Accent,
+};
+
+enum class GeosetRegion {
+    Head,
+    Hands,
+    Forearms,
+    Torso,
+    Waist,
+    HipsLegs,
+    LowerLegs,
+    Feet,
+};
+
 enum class ItemBinding {
     None_,
     OnPickup,
@@ -164,6 +191,11 @@ enum class ItemSlot {
     TwoHand,
     Ranged,
     Bag,
+};
+
+enum class ItemVisualWornModelMirror {
+    None_,
+    X,
 };
 
 enum class NpcAiBehavior {
@@ -345,9 +377,31 @@ struct ItemPrice {
     std::optional<std::int64_t> buy;  // Default vendor purchase price; vendors may override.
 };
 
+struct ItemVisualWornModel {
+    ArtRef model;
+    std::optional<ItemVisualWornModelMirror> mirror;  // optional
+};
+
+struct ItemVisualWornAttach {
+    AttachSocket socket;
+    std::optional<AttachSocket> sheath_socket;  // optional
+};
+
+struct ItemVisualWornRaceOverrides {
+};
+
+struct ItemVisualWorn {
+    std::vector<ItemVisualWornModel> models;
+    std::vector<GeosetRegion> hides;  // optional
+    std::optional<ItemVisualWornAttach> attach;  // optional
+    std::vector<DyeChannel> dye_channels;  // optional
+    std::optional<ItemVisualWornRaceOverrides> race_overrides;  // optional
+};
+
 struct ItemVisual {
     ArtRef icon;
     std::optional<ArtRef> model;  // optional
+    std::optional<ItemVisualWorn> worn;  // optional
 };
 
 struct Item {

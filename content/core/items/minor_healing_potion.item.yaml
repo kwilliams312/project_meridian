@@ -1,4 +1,4 @@
-schema: meridian/item@1
+schema: meridian/item@2
 id: core:item.minor_healing_potion
 name: Minor Healing Potion
 item_class: consumable

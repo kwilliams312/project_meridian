@@ -128,6 +128,36 @@ public enum AssetSfxAttenuation
     Ui2d,
 }
 
+public enum AttachSocket
+{
+    MainHand,
+    OffHand,
+    Ranged,
+    Back,
+    HipL,
+    HipR,
+    Shield,
+}
+
+public enum DyeChannel
+{
+    Primary,
+    Secondary,
+    Accent,
+}
+
+public enum GeosetRegion
+{
+    Head,
+    Hands,
+    Forearms,
+    Torso,
+    Waist,
+    HipsLegs,
+    LowerLegs,
+    Feet,
+}
+
 public enum ItemBinding
 {
     None,
@@ -174,6 +204,12 @@ public enum ItemSlot
     TwoHand,
     Ranged,
     Bag,
+}
+
+public enum ItemVisualWornModelMirror
+{
+    None,
+    X,
 }
 
 public enum NpcAiBehavior
@@ -401,10 +437,36 @@ public sealed record ItemPrice
     public long? Buy { get; init; }
 }
 
+public sealed record ItemVisualWornModel
+{
+    public required ArtRef Model { get; init; }
+    public ItemVisualWornModelMirror? Mirror { get; init; }
+}
+
+public sealed record ItemVisualWornAttach
+{
+    public required AttachSocket Socket { get; init; }
+    public AttachSocket? SheathSocket { get; init; }
+}
+
+public sealed record ItemVisualWornRaceOverrides
+{
+}
+
+public sealed record ItemVisualWorn
+{
+    public required IReadOnlyList<ItemVisualWornModel> Models { get; init; }
+    public IReadOnlyList<GeosetRegion>? Hides { get; init; }
+    public ItemVisualWornAttach? Attach { get; init; }
+    public IReadOnlyList<DyeChannel>? DyeChannels { get; init; }
+    public ItemVisualWornRaceOverrides? RaceOverrides { get; init; }
+}
+
 public sealed record ItemVisual
 {
     public required ArtRef Icon { get; init; }
     public ArtRef? Model { get; init; }
+    public ItemVisualWorn? Worn { get; init; }
 }
 
 public sealed record Item

@@ -1,4 +1,4 @@
-schema: meridian/item@1
+schema: meridian/item@2
 id: core:item.kobold_ear
 name: Kobold Ear
 flavor_text: Proof of a culling. Bren doesn't ask how you got it.

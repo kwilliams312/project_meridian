@@ -115,6 +115,9 @@ properties:
           loot table (decision D-25) — both ranges are rolled and summed.
         $ref: "#/$defs/intRange"
 
+  # RESERVED (contract ① §7): visual becomes a oneOf in @2 — monolithic `model`
+  # OR assemble-like-a-player {appearance, worn_items}. Do not design against
+  # "NPC visual is always one mesh".
   visual:
     type: object
     additionalProperties: false

@@ -26,6 +26,7 @@ map:                         # append-only; local index (SAD §2.4)
   core:art.icon.item.potion_red_small: 11
   core:art.icon.item.signet_bronze: 12
   core:art.icon.item.warden_crest: 48
+  core:art.item.weapon.emberforged_pick: 76
   core:art.item.weapon.pickaxe_rusty: 13
   core:art.vfx.heal.sparkle_small: 14
   core:art.vfx.impact.dust_small: 15

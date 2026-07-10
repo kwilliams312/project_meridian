@@ -1,4 +1,4 @@
-schema: meridian/item@1
+schema: meridian/item@2
 id: core:item.deep_survey_scrap
 name: Deep Survey Scrap
 flavor_text: Foreman Dain's charcoal map of the sunken galleries, torn but legible.
