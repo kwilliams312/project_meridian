@@ -93,7 +93,11 @@ bool discover(const std::string& content_dir, model::ContentModel& model) {
         // #410), not content entities — skip them, mirroring validate_content.py's
         // discovery (which excludes `*.render.yaml` from its rglob). Keeps the
         // mcc-parity file_count identical to the reference validator.
-        if (p.filename().string().ends_with(".render.yaml")) continue;
+        // *.prompts.yaml are the Meshy intake CLI's AI-provenance companions
+        // (spec ④ §7.2, story #505) — same auxiliary shape, same exclusion.
+        const std::string fname = p.filename().string();
+        if (fname.ends_with(".render.yaml")) continue;
+        if (fname.ends_with(".prompts.yaml")) continue;
 
         model::DiscoveredFile df;
         df.abs_path = p.generic_string();
