@@ -29,6 +29,7 @@
 #include "auth_generated.h"
 #include "meridian/bans/bans.h"
 #include "meridian/core/audit.hpp"
+#include "meridian/core/log.hpp"  // #510 realm-list wire-path instrumentation
 #include "meridian/metrics/catalog.h"
 #include "meridian/trace/session_flow.h"
 #include "meridian/trace/span.h"
@@ -507,6 +508,18 @@ LoginResult run_login(net::Session& sess, db::Connection& db,
     frame = sess.read_frame();
     const mn::RealmListRequest* rlr = decode<mn::RealmListRequest>(frame);
     if (rlr == nullptr) {
+        // #510 observability: this path was effectively silent (only surfaced as a
+        // generic kProtocolError detail on the main login log). Log it explicitly,
+        // WITH the received byte length, so a live-network framing/misalignment bug
+        // that corrupts the RealmListRequest is diagnosable from the authd logs —
+        // the client sees only "empty realm list" and cannot tell us this happened.
+        core::log::warn(
+            "authd", "malformed RealmListRequest — sending Error(INTERNAL)",
+            {core::log::field("account_id",
+                              static_cast<std::int64_t>(account_id)),
+             core::log::field("peer", sess.peer()),
+             core::log::field("frame_bytes",
+                              static_cast<std::int64_t>(frame.size()))});
         sess.write_frame(encode_error(mn::AuthErrorCode::INTERNAL,
                                       "malformed RealmListRequest"));
         result.outcome = LoginOutcome::kProtocolError;
@@ -539,7 +552,21 @@ LoginResult run_login(net::Session& sess, db::Connection& db,
         auto vec = b.CreateVector(rows);
         auto list = mn::CreateRealmList(b, vec);
         b.Finish(list);
-        sess.write_frame(finish(b));
+        Bytes realm_list_frame = finish(b);
+        // #510 instrumentation: the DB row count served AND the RealmList frame
+        // byte length sent. The live symptom is a client "empty realm list" while
+        // the realm table has a row — this line pins whether authd read the row and
+        // how many bytes it put on the wire, distinguishing candidate (a) "authd
+        // sent 0 rows" from (b) "client mis-read a non-empty RealmList".
+        core::log::debug(
+            "authd", "serving RealmList",
+            {core::log::field("account_id",
+                              static_cast<std::int64_t>(account_id)),
+             core::log::field("realm_rows",
+                              static_cast<std::int64_t>(realms.rows.size())),
+             core::log::field("realmlist_frame_bytes",
+                              static_cast<std::int64_t>(realm_list_frame.size()))});
+        sess.write_frame(realm_list_frame);
     }
 
     // ---- 5. RealmSelect{realm_id} -> SessionGrant | Error -------------------
