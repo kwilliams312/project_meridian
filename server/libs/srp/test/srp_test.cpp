@@ -158,6 +158,25 @@ int main() {
         if (pm2) check("2048/SHA-256 M2 matches", *pm2 == pcp.expected_M2);
     }
 
+    // ---- Regression: stored verifier is fixed-width (account ctest flake) -
+    // v = g^x mod N is an integer in [0, N); its minimal big-endian encoding is
+    // a byte short whenever the most-significant byte happens to be zero (~1 in
+    // 256 for a 2048-bit N). make_verifier must left-pad v to the group's byte
+    // width (256 B for the 2048-bit group) so the credential the auth DB stores
+    // is a deterministic width — otherwise the account test's "== 256 bytes"
+    // assertion is statistically flaky. This salt is a brute-forced leading-zero
+    // case: unpadded the verifier is 255 bytes with a 0x2B top byte.
+    std::printf("verifier width is deterministic (leading-zero case):\n");
+    {
+        Parameters pp{Group::Rfc5054_2048, Hash::Sha256};
+        Bytes salt(32, 0);
+        salt[0] = 0x31;  // "1\0\0..." — yields a v whose MSB is zero
+        Verifier zv = make_verifier("flake_probe", "correct horse battery staple", pp, salt);
+        check("verifier left-padded to 256 bytes (2048-bit group)", zv.verifier.size() == 256);
+        check("leading pad byte present (v MSB was zero)",
+              zv.verifier.size() == 256 && zv.verifier[0] == 0x00);
+    }
+
     std::printf(g_fail == 0 ? "\nALL SRP TESTS PASSED\n" : "\n%d SRP TEST(S) FAILED\n", g_fail);
     return g_fail == 0 ? 0 : 1;
 }
