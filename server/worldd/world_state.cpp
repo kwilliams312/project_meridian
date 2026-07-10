@@ -230,6 +230,77 @@ void WorldState::send_leave(SessionRec& to, const SessionRec& subject,
               encode_entity_leave_payload(subject.identity.entity_guid, reason));
 }
 
+// --- static world entity relay (content spawns, #486) ------------------------
+
+void WorldState::send_enter_entity(SessionRec& to, const WorldEntityRec& subject) {
+    if (!to.egress) return;
+    // Full spawn state (position + #430 vitals + name), read from the entity's
+    // authoritative Unit — the SAME EntityEnter shape a session presents, so the
+    // client renders a spawned NPC/creature exactly like a remote player.
+    to.egress(mn::Opcode::ENTITY_ENTER,
+              encode_entity_enter_payload(subject.identity, subject.unit));
+}
+
+void WorldState::send_leave_entity(SessionRec& to, const WorldEntityRec& subject,
+                                   net::LeaveReason reason) {
+    if (!to.egress) return;
+    to.egress(mn::Opcode::ENTITY_LEAVE,
+              encode_entity_leave_payload(subject.identity.entity_guid, reason));
+}
+
+void WorldState::relay_visible_entities(SessionRec& self,
+                                        const std::unordered_set<AoiId>& now_guids) {
+    // ENTERS: entity guids now in `self`'s interest set it did not already see. (A
+    // guid in now_guids is EITHER a session or an entity; entities_ discriminates.)
+    for (AoiId g : now_guids) {
+        auto eit = entities_.find(g);
+        if (eit == entities_.end()) continue;             // a session, handled elsewhere
+        if (self.visible_entities.count(g) != 0) continue;  // already visible
+        send_enter_entity(self, eit->second);
+        self.visible_entities.insert(g);
+    }
+    // LEAVES: entity guids `self` used to see but no longer does.
+    std::vector<AoiId> gone;
+    for (AoiId g : self.visible_entities) {
+        if (now_guids.find(g) == now_guids.end()) gone.push_back(g);
+    }
+    for (AoiId g : gone) {
+        self.visible_entities.erase(g);
+        auto eit = entities_.find(g);
+        if (eit == entities_.end()) continue;  // entity dropped (not at M1) — defensive
+        send_leave_entity(self, eit->second, net::LeaveReason::OUT_OF_RANGE);
+    }
+}
+
+AoiId WorldState::add_world_entity(const EntityIdentity& identity, const UnitStats& stats,
+                                   std::uint32_t npc_template_id, const Position& pos) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    // The authoritative Unit (spawned alive at full health by the Unit ctor). It owns
+    // the entity's position; the grid mirrors it. Faction/level/health come from the
+    // resolved spawn stats (npc_template) so the #430 vitals on EntityEnter are real.
+    // Aggregate-initialized (Creature has no default ctor), then moved into the map.
+    WorldEntityRec rec{identity, Creature(identity.entity_guid, pos, stats, npc_template_id),
+                       npc_template_id};
+    entities_.emplace(identity.entity_guid, std::move(rec));
+    grid_.upsert(identity.entity_guid, pos);
+    log::info(kCat, "world entity spawned guid=" + std::to_string(identity.entity_guid) +
+                        " npc=" + std::to_string(npc_template_id) + " at (" +
+                        std::to_string(pos.x) + "," + std::to_string(pos.y) + ")");
+    return identity.entity_guid;
+}
+
+std::optional<std::uint32_t> WorldState::npc_template_for_guid(AoiId guid) const {
+    std::lock_guard<std::mutex> lk(mtx_);
+    auto it = entities_.find(guid);
+    if (it == entities_.end()) return std::nullopt;
+    return it->second.npc_template_id;
+}
+
+std::size_t WorldState::world_entity_count() const {
+    std::lock_guard<std::mutex> lk(mtx_);
+    return entities_.size();
+}
+
 // ---------------------------------------------------------------------------
 // Area triggers + POI discovery (#368; WLD-01/03). Evaluated against the mover's
 // authoritative position (the map tick's movement phase; SAD §2.5).
@@ -338,6 +409,11 @@ EnterResult WorldState::enter(const EntityIdentity& identity, const Position& sp
         send_enter(other_rec, self);
         other_rec.visible.insert(slot);
     }
+
+    // Static world entities (#486): the newcomer also sees any content spawn
+    // (creature / NPC) already in range — send it an EntityEnter for each. One-way
+    // (an entity has no egress), so there is no reciprocal enter.
+    relay_visible_entities(self, visible_guids);
 
     // Area triggers (#368): evaluate the spawn position so a character that logs
     // in already standing inside a volume fires its enter/discovery immediately
@@ -449,6 +525,11 @@ std::vector<TriggerEvent> WorldState::move_session_locked(SessionSlot slot,
         send_leave(other, self, net::LeaveReason::OUT_OF_RANGE);
         other.visible.erase(slot);
     }
+
+    // Static world entities (#486): relay EntityEnter/Leave for content spawns the
+    // mover came into / out of range of this move (entities never move, so they are
+    // never EntityUpdate — only the observer's crossing of their range matters).
+    relay_visible_entities(self, now_guids);
 
     log::debug(kCat, "movement slot=" + std::to_string(slot) + " ack=" +
                          std::to_string(ack_seq) + " now sees " +
@@ -613,19 +694,26 @@ const Unit* WorldState::unit_for_slot(SessionSlot slot) const {
 Unit* WorldState::unit_for_guid(AoiId guid) {
     std::lock_guard<std::mutex> lk(mtx_);
     auto sit = slot_by_guid_.find(guid);
-    if (sit == slot_by_guid_.end()) return nullptr;
-    auto it = sessions_.find(sit->second);
-    if (it == sessions_.end()) return nullptr;
-    return &it->second.unit;
+    if (sit != slot_by_guid_.end()) {
+        auto it = sessions_.find(sit->second);
+        if (it != sessions_.end()) return &it->second.unit;
+    }
+    // A content spawn (#486): the client targets it by guid, so combat reaches it here.
+    auto eit = entities_.find(guid);
+    if (eit != entities_.end()) return &eit->second.unit;
+    return nullptr;
 }
 
 const Unit* WorldState::unit_for_guid(AoiId guid) const {
     std::lock_guard<std::mutex> lk(mtx_);
     auto sit = slot_by_guid_.find(guid);
-    if (sit == slot_by_guid_.end()) return nullptr;
-    auto it = sessions_.find(sit->second);
-    if (it == sessions_.end()) return nullptr;
-    return &it->second.unit;
+    if (sit != slot_by_guid_.end()) {
+        auto it = sessions_.find(sit->second);
+        if (it != sessions_.end()) return &it->second.unit;
+    }
+    auto eit = entities_.find(guid);
+    if (eit != entities_.end()) return &eit->second.unit;
+    return nullptr;
 }
 
 // ---------------------------------------------------------------------------

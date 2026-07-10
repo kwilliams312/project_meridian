@@ -43,6 +43,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -50,6 +52,7 @@
 
 #include "ability_store.h"    // meridian::worldd::AbilityStore — DB-loaded ability catalog (#481)
 #include "area_triggers.h"    // meridian::worldd::TriggerVolume — DB-loaded POI volumes (#398)
+#include "combat_unit.h"      // meridian::worldd::UnitStats / Faction / Position (spawn stats, #486)
 #include "item_template.h"    // meridian::items::TemplateStore / ItemTemplate
 #include "loot_table.h"       // meridian::loot::LootTableStore / LootTable
 #include "npc_def.h"          // meridian::npc::NpcStore / NpcDef
@@ -153,6 +156,37 @@ private:
 // loaded once at boot.
 std::vector<TriggerVolume> load_area_trigger_volumes(db::Connection& world_db);
 
+// --- DB-backed spawn placements (NPC-01 spawn seam, #486) --------------------
+// One authored `spawn_point` row RESOLVED against its `npc_template`: the placed
+// creature/NPC the world spawns into the live map at boot (previously the deferred
+// "#28 content spawns" seam — DbNpcStore #390 loaded the TEMPLATES but nothing read
+// spawn_point, so no live entity existed). Carries everything MapTick::add_creature
+// (existence/AI/kill) AND the AoI relay (ENTITY_ENTER with #430 vitals + name) need:
+// the resolved combat stats/faction/level (from npc_template), the position (from
+// spawn_point), and the display name. Respawn timing / wander are carried for the
+// minimal M1 AI (respawn is #346-#348; the point is the entity EXISTS + is visible +
+// interactable). `stats.faction` distinguishes a friendly/quest-giver NPC (targetable
+// + GOSSIP_HELLO) from a hostile creature (a kill objective).
+struct SpawnPlacement {
+    std::uint32_t npc_id = 0;          // spawn_point.npc_id == npc_template.id (the target of GOSSIP_HELLO)
+    Position pos;                      // spawn_point.pos_{x,y,z} (zone-local m); AoI position + spawn_home
+    float orientation_deg = 0.0f;      // spawn_point.orientation_deg [0,360)
+    UnitStats stats;                   // resolved from npc_template: level, max_health, resource, faction
+    std::string name;                  // npc_template.name (the #430 vitals + nameplate name)
+    std::uint32_t respawn_min = 0;     // spawn_point.respawn_min (seconds)
+    std::uint32_t respawn_max = 0;     // spawn_point.respawn_max (seconds)
+    std::optional<float> wander_radius_m;  // spawn_point.wander_radius_m (NULL when it patrols instead)
+};
+
+// Load every `spawn_point` row, resolving each against its `npc_template` (name +
+// stats + faction + level), into a placement the boot path spawns into the live
+// world (#486). Parameterized SQL; the npc_template columns are only touched when at
+// least one spawn_point row exists, so a world DB with an EMPTY spawn_point table
+// (the DB-content unit tests) loads zero spawns without requiring the extended
+// npc_template columns. Throws meridian::db::DbError on a query failure (fail-fast,
+// same policy as the other loaders).
+std::vector<SpawnPlacement> load_spawn_points(db::Connection& world_db);
+
 // --- The loaded world content bundle -----------------------------------------
 // Owns one of each DB-backed store, loaded from the world DB at boot. Held for the
 // process lifetime (main() owns it) so the pointers install_content_stores() /
@@ -173,6 +207,12 @@ struct WorldContent {
     // WorldServer::set_abilities() so a client casting an authored id (minor_healing=1)
     // resolves against real content instead of the placeholder store's synthetic ids.
     std::unique_ptr<AbilityStore>     abilities;
+    // The authored spawn placements (spawn_point rows resolved against npc_template,
+    // #486). Spawned into the live world at boot via WorldServer::install_spawns() so
+    // the seeded quest-givers/creatures EXIST, are AoI-visible (ENTITY_ENTER), and are
+    // interactable (GOSSIP_HELLO / kill objectives). Empty when the world DB has no
+    // spawn_point rows.
+    std::vector<SpawnPlacement>       spawns;
 };
 
 // Load the authored ability catalog (ability + ability_effect + ability_effect_stat_mod)

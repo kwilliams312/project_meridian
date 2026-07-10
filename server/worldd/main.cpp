@@ -489,6 +489,20 @@ int main(int argc, char** argv) {
     // null) — the cast path keeps the M1 placeholder store for DB-free dispatch tests.
     if (content.abilities) world.set_abilities(std::move(*content.abilities));
 
+    // Spawn the authored content placements into the live world (NPC-01 spawn seam,
+    // #486): read from spawn_point at boot, each becomes a live creature in the map
+    // tick AND an AoI-visible entity (ENTITY_ENTER with #430 vitals + name), so the
+    // seeded quest-givers/creatures EXIST, are visible, and are interactable (gossip /
+    // kill objectives) instead of a player entering to "see 0 other(s)". No-op when no
+    // world DB is wired (content.spawns empty) — the DB-less smoke path stays empty.
+    if (!content.spawns.empty()) {
+        world.install_spawns(content.spawns);
+        meridian::core::log::info(
+            kDaemonName,
+            "content spawns installed into the live world: " +
+                std::to_string(content.spawns.size()) + " placement(s)");
+    }
+
     try {
         meridian::net::TlsListener listener(lc);
         world.start();  // spin up the world/update thread
