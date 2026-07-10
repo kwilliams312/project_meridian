@@ -89,14 +89,15 @@ public:
     MockAuthdTransport(std::string account, std::string password,
                        std::vector<Realm> realms, std::uint16_t proto_ver = 1,
                        std::uint64_t grant_id = 0xDEADBEEFCAFEF00Dull,
-                       bool forge_m2 = false)
+                       bool forge_m2 = false, bool realm_list_error = false)
         : account_(std::move(account)),
           verifier_(srp::make_verifier(account_, password, params_)),
           srp_(account_, verifier_.salt, verifier_.verifier, params_),
           realms_(std::move(realms)),
           proto_ver_(proto_ver),
           grant_id_(grant_id),
-          forge_m2_(forge_m2) {
+          forge_m2_(forge_m2),
+          realm_list_error_(realm_list_error) {
         session_key_.assign(32, 0);
         for (int i = 0; i < 32; ++i) session_key_[i] = static_cast<std::uint8_t>(0x40 + i);
     }
@@ -151,6 +152,17 @@ public:
             }
             case St::kRealmList: {
                 if (decode<mn::RealmListRequest>(payload) == nullptr) return false;
+                if (realm_list_error_) {
+                    // #510 candidate (a): authd could not decode the client's
+                    // RealmListRequest and replies with an Error frame IN PLACE OF a
+                    // RealmList. login_core must surface THIS, not "empty realm list".
+                    fb::FlatBufferBuilder b;
+                    auto msg = b.CreateString("malformed RealmListRequest");
+                    b.Finish(mn::CreateError(b, mn::AuthErrorCode::INTERNAL, msg));
+                    queue_.push_back(finish(b));
+                    state_ = St::kDone;
+                    return true;
+                }
                 fb::FlatBufferBuilder b;
                 std::vector<fb::Offset<mn::RealmRow>> rows;
                 for (const Realm& r : realms_) {
@@ -211,6 +223,7 @@ private:
     std::uint16_t proto_ver_;
     std::uint64_t grant_id_;
     bool forge_m2_;
+    bool realm_list_error_ = false;
     Bytes session_key_;
     std::deque<Bytes> queue_;
     St state_ = St::kHello;
@@ -337,6 +350,55 @@ void test_world_hello() {
     check("E: frame opcode == WORLD_HELLO(0x0001)", op == 0x0001);
 }
 
+void test_realm_list_error_frame() {
+    std::printf("G. ERROR FRAME in place of RealmList -> reported as error, NOT "
+                "empty realm list (#510)\n");
+    login::LoginConfig cfg;
+    cfg.client_build = 1000;
+    // The mock clears SRP (M2 verifies) but then replies to RealmListRequest with an
+    // Error(INTERNAL) frame instead of a RealmList — exactly authd's candidate-(a)
+    // behaviour. The OLD login_core blind-cast that Error as a RealmList and reported
+    // kRealmUnavailable "empty realm list", hiding the real cause. The fix must
+    // surface the server Error code + message.
+    MockAuthdTransport t("alice", "pw", {{7u, "Reference", 0u, 100000u}},
+                         /*proto_ver=*/1, /*grant_id=*/0xABCDull,
+                         /*forge_m2=*/false, /*realm_list_error=*/true);
+    std::vector<login::RealmInfo> realms;
+    login::LoginResult r =
+        login::run_login(t, cfg, "alice", "pw", nullptr, &realms);
+    // INTERNAL maps through status_from_error's default -> kProtocolError.
+    check("G: status is NOT kRealmUnavailable (the old mislabel)",
+          r.status != login::LoginStatus::kRealmUnavailable);
+    check("G: status == kProtocolError (INTERNAL error frame)",
+          r.status == login::LoginStatus::kProtocolError);
+    check("G: server error code surfaced (INTERNAL)",
+          r.server_error_code ==
+              static_cast<std::uint16_t>(mn::AuthErrorCode::INTERNAL));
+    check("G: detail names the authd Error, not 'empty realm list'",
+          r.detail.find("authd sent Error in place of RealmList") != std::string::npos);
+    check("G: no grant issued", r.grant_id == 0);
+}
+
+void test_realm_list_genuinely_empty() {
+    std::printf("H. GENUINELY EMPTY RealmList -> kRealmUnavailable with 0-realm "
+                "detail (#510)\n");
+    login::LoginConfig cfg;
+    cfg.client_build = 1000;
+    // An empty realm table: the mock returns a well-formed RealmList with zero rows.
+    // This is the ONE case that should still be reported as an empty realm list —
+    // distinct from the Error-frame case above.
+    MockAuthdTransport t("alice", "pw", /*realms=*/{});
+    std::vector<login::RealmInfo> realms;
+    login::LoginResult r =
+        login::run_login(t, cfg, "alice", "pw", nullptr, &realms);
+    check("H: status == kRealmUnavailable", r.status == login::LoginStatus::kRealmUnavailable);
+    check("H: realms surfaced as empty", realms.empty());
+    check("H: detail reports an empty realm list",
+          r.detail.find("empty realm list") != std::string::npos);
+    check("H: no server error code (genuinely empty, not an Error frame)",
+          r.server_error_code == 0);
+}
+
 void test_srp_client_core() {
     std::printf("F. SRP CLIENT CORE key agreement (random ephemeral)\n");
     srp::Parameters params{};  // {Rfc5054_2048, Sha256}
@@ -375,6 +437,8 @@ int main() {
     test_proto_mismatch();
     test_forged_server_proof();
     test_realm_selection();
+    test_realm_list_error_frame();
+    test_realm_list_genuinely_empty();
     test_world_hello();
     test_srp_client_core();
     std::printf(g_fail == 0 ? "\nALL CLIENT LOGIN CORE TESTS PASSED\n"

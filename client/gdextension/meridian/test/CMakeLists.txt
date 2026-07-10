@@ -418,6 +418,35 @@ if(OpenSSL_FOUND AND DEFINED MERIDIAN_FLATC)
     target_compile_options(authd-login-it PRIVATE -Wall -Wextra)
   endif()
   add_test(NAME authd-login-it COMMAND authd-login-it)  # no args -> SKIP
+
+  # --- #510 realm-list SOAK integration test ---
+  # A many-account/many-session soak over the SAME real client core + TLS transport
+  # as authd-login-it, driven by run_authd_realm_list_soak_it.sh. It exists because
+  # the single-shot IT above passes on loopback while the live dev realm sees an
+  # intermittent, per-account "empty realm list" at the RealmListRequest->RealmList
+  # step (#510). Inert (SKIP) with no args; the harness passes --host/--port +
+  # --soak-prefix/--soak-count so CI would catch a re-introduced intermittent
+  # realm-list regression.
+  add_executable(authd-realm-list-soak-it
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../test/authd_realm_list_soak_it.cpp"
+    "${SRC}/login_core.cpp"
+    "${SRC}/srp_client_core.cpp"
+    "${SRC}/login_transport.cpp"
+    "${SRC}/version_compat.cpp"  # #98 schema-version compat (login_core dep)
+  )
+  add_dependencies(authd-realm-list-soak-it login-core-codegen)
+  target_include_directories(authd-realm-list-soak-it PRIVATE
+    "${SRC}" "${MERIDIAN_LOGIN_GEN_DIR}")
+  if(TARGET flatbuffers::flatbuffers)
+    target_link_libraries(authd-realm-list-soak-it PRIVATE flatbuffers::flatbuffers)
+  endif()
+  target_link_libraries(authd-realm-list-soak-it PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+  set_target_properties(authd-realm-list-soak-it PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+  if(NOT MSVC)
+    target_compile_options(authd-realm-list-soak-it PRIVATE -Wall -Wextra)
+  endif()
+  add_test(NAME authd-realm-list-soak-it COMMAND authd-realm-list-soak-it)  # no args -> SKIP
 else()
   message(STATUS
     "login-core-test SKIPPED: needs OpenSSL + flatc (OpenSSL_FOUND=${OpenSSL_FOUND}).")

@@ -242,8 +242,41 @@ LoginResult run_login(
         return transport_closed("RealmListRequest send");
     frame = transport.recv_frame();
     if (!frame) return transport_closed("RealmList");
+
+    // #510: authd may reply to RealmListRequest with EITHER a RealmList OR — if it
+    // could not decode our request (candidate (a)) — an Error frame. The old code
+    // blind-cast the reply as a RealmList; an Error frame then yielded zero realms,
+    // which was reported as "empty realm list" (kRealmUnavailable), hiding the real
+    // server error entirely.
+    //
+    // Discriminator: a genuine RealmList ALWAYS verifies as a RealmList (authd emits
+    // the `realms` vector unconditionally, even when it has zero rows — an EMPTY
+    // realm table is still a well-formed, verifiable RealmList). So a successful
+    // decode<RealmList> is authoritative: trust it, empty or not. Only when the
+    // frame does NOT verify as a RealmList do we ask whether authd sent an Error
+    // frame instead. This avoids the trap that an empty RealmList and an Error can
+    // cross-"decode" as one another (both are tiny FlatBuffer tables). The frame
+    // byte length is carried into every detail string as wire instrumentation.
+    const std::size_t realm_frame_bytes = frame->size();
     const mn::RealmList* rl = decode<mn::RealmList>(*frame);
-    if (rl == nullptr) return protocol_error("undecodable RealmList");
+
+    if (rl == nullptr) {
+        // Not a RealmList. Did authd send an Error frame in its place (candidate a)?
+        if (const mn::Error* err = decode<mn::Error>(*frame)) {
+            result.status = status_from_error(err->code());
+            result.server_error_code = static_cast<std::uint16_t>(err->code());
+            result.detail =
+                std::string("authd sent Error in place of RealmList: ") +
+                (err->message() ? err->message()->str() : "unspecified") +
+                " (" + std::to_string(realm_frame_bytes) + " B frame)";
+            return result;
+        }
+        // Neither a RealmList nor an Error verified — a corrupt/misframed reply.
+        result.status = LoginStatus::kProtocolError;
+        result.detail = "undecodable RealmList (" +
+                        std::to_string(realm_frame_bytes) + " B frame)";
+        return result;
+    }
 
     std::vector<RealmInfo> realms;
     if (rl->realms() != nullptr) {
@@ -264,8 +297,11 @@ LoginResult run_login(
     if (realms_out != nullptr) *realms_out = realms;
 
     if (realms.empty()) {
+        // A genuine, well-formed RealmList that carried zero realms (authd's realm
+        // table returned no rows) — distinct from the Error-frame case above.
         result.status = LoginStatus::kRealmUnavailable;
-        result.detail = "server returned an empty realm list";
+        result.detail = "server returned an empty realm list (" +
+                        std::to_string(realm_frame_bytes) + " B frame, 0 realms)";
         return result;
     }
 
