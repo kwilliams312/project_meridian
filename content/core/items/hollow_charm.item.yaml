@@ -1,4 +1,4 @@
-schema: meridian/item@1
+schema: meridian/item@2
 id: core:item.hollow_charm
 name: Charm of the Hollow
 flavor_text: Braided ash-reed and river-glass. The wardens give them to those who come back.

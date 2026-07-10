@@ -1,11 +1,15 @@
-# meridian/item@1 — items (ITM-01). Stat-budget lint vs item_level lands with ITM-03 (M2).
+# meridian/item@2 — items (ITM-01). @2 adds visual.worn, the modular-gear render
+# contract (character/equipment/appearance design 2026-07-09, contract ①): how an
+# equipped item attaches to / skins onto a character. Server never reads visuals
+# (spec §8) — worn ships in the client pck only. Stat-budget lint vs item_level
+# lands with ITM-03 (M2).
 $schema: "https://json-schema.org/draft/2020-12/schema"
 $id: "meridian://schema/content/item.schema.yaml"
 type: object
 additionalProperties: false
 required: [schema, id, name, item_class, rarity, visual]
 properties:
-  schema: { const: "meridian/item@1" }
+  schema: { const: "meridian/item@2" }
   id: { $ref: "#/$defs/contentId" }
   name: { $ref: "#/$defs/displayName" }
   flavor_text: { type: string, maxLength: 500 }
@@ -81,7 +85,69 @@ properties:
     required: [icon]
     properties:
       icon: { $ref: "#/$defs/artRef" }
+      # Legacy monolithic model ref (pre-worn). Retained for non-modular items
+      # (e.g. dropped-in-world mesh); `worn` is the modular-gear render contract.
       model: { $ref: "#/$defs/artRef" }
+      # worn — how this item renders on an equipped character (contract ① §4/§9).
+      # Presence is gated by lints L080 (weapon/visible-armor require it; invisible
+      # slots + non-equippables forbid it) and L081 (weapon→attach, armor→skinned;
+      # attach XOR hides). Skeleton vocabulary ($defs geosetRegion/attachSocket/
+      # dyeChannel/raceName) is the meridian/skeleton@1 contract (T1).
+      worn:
+        type: object
+        additionalProperties: false
+        required: [models]
+        properties:
+          models:
+            type: array
+            minItems: 1
+            items:
+              type: object
+              additionalProperties: false
+              required: [model]
+              properties:
+                model: { $ref: "#/$defs/artRef" }
+                mirror: { enum: [none, x], default: none }
+          hides:
+            type: array
+            uniqueItems: true
+            items: { $ref: "#/$defs/geosetRegion" }
+          attach:
+            type: object
+            additionalProperties: false
+            required: [socket]
+            properties:
+              socket: { $ref: "#/$defs/attachSocket" }
+              sheath_socket: { $ref: "#/$defs/attachSocket" }
+          dye_channels:
+            type: array
+            uniqueItems: true
+            maxItems: 3
+            items: { $ref: "#/$defs/dyeChannel" }
+          race_overrides:
+            type: object
+            additionalProperties: false
+            propertyNames: { $ref: "#/$defs/raceName" }
+            patternProperties:
+              "^[a-z][a-z0-9_]*$":
+                type: object
+                additionalProperties: false
+                required: [models]
+                properties:
+                  models:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [model]
+                      properties:
+                        model: { $ref: "#/$defs/artRef" }
+                        mirror: { enum: [none, x], default: none }
+                  hides:
+                    type: array
+                    uniqueItems: true
+                    items: { $ref: "#/$defs/geosetRegion" }
 
 allOf:
   - if:

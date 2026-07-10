@@ -96,11 +96,11 @@ void write_corpus(const fs::path& root) {
                "name: Goblin\n"
                "level: 3\n");
     write_file(root / "t" / "ear.item.yaml",
-               "schema: meridian/item@1\n"
+               "schema: meridian/item@2\n"
                "id: t:item.ear\n"
                "name: Goblin Ear\n");
     write_file(root / "t" / "sword.item.yaml",
-               "schema: meridian/item@1\n"
+               "schema: meridian/item@2\n"
                "id: t:item.sword\n"
                "name: Sword\n");
     // Quest: giver -> npc.goblin, objective collect -> item.ear (x1 path),

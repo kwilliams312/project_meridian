@@ -123,7 +123,7 @@ int main() {
     std::cout << "[a] valid file -> no diagnostics, exit 0\n";
     {
         const fs::path f = content_root / "widget.item.yaml";
-        write_file(f, "schema: meridian/item@1\nid: core:item.widget\nname: Widget\n");
+        write_file(f, "schema: meridian/item@2\nid: core:item.widget\nname: Widget\n");
         std::ostringstream out, err;
         int rc = mcc::stages::check_file(f.string(), content_root.string(),
                                          DiagFormat::Json, out, err);
@@ -131,6 +131,35 @@ int main() {
         report(rc == 0, "valid file: exit 0", "rc=" + std::to_string(rc));
         report(json_field(js, "ok") == "true", "valid file: ok=true", js);
         report(json_field(js, "error_count") == "0", "valid file: 0 errors", js);
+    }
+
+    // --- (a2) item@2 with a visual.worn block: accepted (contract ①/T6) ------
+    // mcc parses generic YAML->doc, so the worn block flows through untouched; the
+    // envelope check must accept meridian/item@2 (no back-compat for @1). Before
+    // the expected_envelope() bump this file was rejected L001 (expected item@1).
+    std::cout << "[a2] item@2 + visual.worn -> accepted (envelope + worn passthrough)\n";
+    {
+        const fs::path f = content_root / "sword.item.yaml";
+        write_file(f,
+                   "schema: meridian/item@2\n"
+                   "id: core:item.sword\n"
+                   "name: Sword\n"
+                   "item_class: weapon\n"
+                   "slot: main_hand\n"
+                   "rarity: common\n"
+                   "weapon: { damage: { min: 1, max: 2 }, speed_ms: 2000 }\n"
+                   "visual:\n"
+                   "  icon: core:art.icon.item.sword\n"
+                   "  worn:\n"
+                   "    models: [{ model: core:art.item.weapon.sword, mirror: none }]\n"
+                   "    attach: { socket: main_hand, sheath_socket: back }\n");
+        std::ostringstream out, err;
+        int rc = mcc::stages::check_file(f.string(), content_root.string(),
+                                         DiagFormat::Json, out, err);
+        const std::string js = out.str();
+        report(rc == 0, "item@2+worn: exit 0", "rc=" + std::to_string(rc) + " " + js);
+        report(json_field(js, "ok") == "true", "item@2+worn: ok=true", js);
+        report(json_field(js, "error_count") == "0", "item@2+worn: 0 errors", js);
     }
 
     // --- (b) structure-invalid file -> right rule id + error severity -------

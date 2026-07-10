@@ -1,4 +1,4 @@
-schema: meridian/item@1
+schema: meridian/item@2
 id: core:item.charred_totem
 name: Charred Totem
 flavor_text: A firecaller's fetish, scorched black. It hums when the deep stirs.

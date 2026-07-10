@@ -233,14 +233,14 @@ int main() {
         // Collection style: a block leaf map STAYS block (author intent kept);
         // a flow leaf seq stays flow with canonical spacing.
         const std::string src =
-            "schema: meridian/item@1\n"
+            "schema: meridian/item@2\n"
             "id: core:item.x\n"
             "price:\n"
             "  buy: 10\n"
             "  sell: 5\n"
             "tags: [a,b,c]\n";
         const std::string want =
-            "schema: meridian/item@1\n"
+            "schema: meridian/item@2\n"
             "id: core:item.x\n"
             "price:\n"
             "  buy: 10\n"

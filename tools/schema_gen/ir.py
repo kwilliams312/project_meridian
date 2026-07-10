@@ -175,12 +175,26 @@ def enum_member_ident(value: str) -> str:
 
 
 def load_common_defs(schema_dir: Path) -> dict[str, Any]:
-    """Return the shared `$defs` map (common.defs.yaml), per the schema README:
-    validators/generators must merge these into each type schema before use."""
-    common = yaml.safe_load(
-        (schema_dir / "common.defs.yaml").read_text(encoding="utf-8")
+    """Return the merged shared `$defs` map, per the schema README: validators and
+    generators must merge these into each type schema before use.
+
+    Two shared def files are merged, exactly as tools/validate_content.py's
+    load_schemas() does: common.defs.yaml (the base vocabulary) and
+    skeleton.defs.yaml (meridian/skeleton@1 character vocabulary — geosetRegion,
+    attachSocket, dyeChannel, raceName; contract ①/T1). item@2's visual.worn refs
+    the skeleton enums, so the generator must resolve them too."""
+    defs: dict[str, Any] = {}
+    defs.update(
+        yaml.safe_load((schema_dir / "common.defs.yaml").read_text(encoding="utf-8"))[
+            "$defs"
+        ]
     )
-    return common["$defs"]
+    # skeleton.defs.yaml is optional (isolated generator-fixture schema dirs omit it);
+    # the real /schema/content always ships it.
+    skeleton = schema_dir / "skeleton.defs.yaml"
+    if skeleton.exists():
+        defs.update(yaml.safe_load(skeleton.read_text(encoding="utf-8"))["$defs"])
+    return defs
 
 
 # The common.defs ref names that resolve to typed id references, and the id
@@ -210,7 +224,17 @@ _SCALAR_DEFS = {
     "pct": "number",
     "displayName": "string",
 }
-_ENUM_DEFS = {"statKey", "school", "itemClass"}
+# Enum-valued shared $defs. Includes the meridian/skeleton@1 vocabulary enums
+# (geosetRegion/attachSocket/dyeChannel/raceName) referenced by item@2 visual.worn.
+_ENUM_DEFS = {
+    "statKey",
+    "school",
+    "itemClass",
+    "geosetRegion",
+    "attachSocket",
+    "dyeChannel",
+    "raceName",
+}
 
 
 class _Lowerer:

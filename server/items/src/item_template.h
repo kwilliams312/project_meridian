@@ -6,7 +6,7 @@
 // Provenance / clean-room basis (CONTRIBUTING.md — no GPL/AGPL/CMaNGOS/
 // TrinityCore/leaked source consulted):
 //   * The template FIELD SET mirrors OUR content schema (schema/content/
-//     item.schema.yaml, `meridian/item@1`) and its compiled world-DB shape
+//     item.schema.yaml, `meridian/item@2`) and its compiled world-DB shape
 //     (schema/sql/world/20_item.sql `item_template` / `item_stat`). Those two
 //     files are the authoritative item model; this struct is the server-side
 //     in-memory view of one compiled row.

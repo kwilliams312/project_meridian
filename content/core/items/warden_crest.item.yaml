@@ -1,4 +1,4 @@
-schema: meridian/item@1
+schema: meridian/item@2
 id: core:item.warden_crest
 name: Warden's Crest
 flavor_text: Sela's own crest, pressed into your hand. It opens doors in Emberfall.

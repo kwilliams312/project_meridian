@@ -1,4 +1,4 @@
-schema: meridian/item@1
+schema: meridian/item@2
 id: itm1:item.travelers_boots
 name: Traveler's Boots
 item_class: armor

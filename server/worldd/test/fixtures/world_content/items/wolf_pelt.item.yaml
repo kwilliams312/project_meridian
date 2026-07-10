@@ -1,4 +1,4 @@
-schema: meridian/item@1
+schema: meridian/item@2
 id: itm1:item.wolf_pelt
 name: Coarse Wolf Pelt
 item_class: trade_good

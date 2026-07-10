@@ -32,6 +32,12 @@ Validates every YAML file under /content against the JSON Schemas in
          occluder policy, and committed .import drift. Delegated to
          validate_imports.py; severity via --imports (error [default] | warn |
          ignore). See that module's header for the full I-rule table.
+  L080   visual.worn presence gate (contract ① §4/§9): REQUIRED for weapons and
+         visible-slot armor; FORBIDDEN for invisible slots (neck/finger/trinket/bag)
+         and non-equippables (item_class not in {weapon, armor}) — always a hard error
+  L081   visual.worn attach-vs-skinned rule (contract ① §4/§9): weapon.worn REQUIRES
+         attach and FORBIDS hides (attach XOR skinned); armor.worn FORBIDS attach —
+         always a hard error
   L034   explore objectives reference a POI defined in the zone manifest
   L035   quest giver / turn-in / deliver NPCs have a spawn point (warn)
   L052   loot-table nesting exceeds one level (Tools PRD §4.4)
@@ -65,6 +71,21 @@ import validate_imports
 
 CONTENT_TYPES = ("npc", "item", "quest", "ability", "loot", "vendor", "spawn", "zone")
 ASSET_PREFIXES = ("art", "mus", "sfx", "amb")
+
+# Per-type envelope schema version. Every type is @1 except those bumped here.
+# `item` went to @2 with the visual.worn modular-gear contract (contract ①/T2).
+# Keep this the single source so a future bump is a one-line change (mirrored in
+# tools/mcc/src/stages/validate.cpp's expected_envelope helper for cross-tool parity).
+SCHEMA_VERSIONS: dict[str, int] = {"item": 2}
+
+# Armor slots whose gear is not rendered on the body (jewelry/held accessories):
+# items in these slots carry no visual.worn (contract ① §4). Weapons never use them.
+INVISIBLE_SLOTS = frozenset({"neck", "finger", "trinket", "bag"})
+
+
+def expected_envelope(ftype: str) -> str:
+    """The `schema:` envelope string a file of this type must declare (L001)."""
+    return f"meridian/{ftype}@{SCHEMA_VERSIONS.get(ftype, 1)}"
 
 # --- Provenance / license policy (TD-09; Art PRD §3, Art SAD §3.2) ------------
 # License allowlist: original art is CC-BY-4.0, third-party must be CC0 or CC-BY.
@@ -363,6 +384,75 @@ def check_stem_manifest(doc: dict, path: Path, rel_path: Path) -> list[str]:
     return errors
 
 
+def check_worn(doc: dict, rel_path: Path) -> list[str]:
+    """L080/L081 — the visual.worn presence + attach-vs-skinned rules (contract ①).
+
+    Runs on item docs that already passed schema validation, so the worn block's
+    internal shape (models/hides/attach/dye_channels/race_overrides, enum members)
+    is trusted here; this layer adds the presence policy the schema cannot express
+    (worn required/forbidden by item_class × slot) and the weapon/armor split.
+
+    L080 — visual.worn is REQUIRED when item_class == weapon, or item_class == armor
+      and slot is a visible (non-jewelry) slot; FORBIDDEN when the slot is invisible
+      (neck/finger/trinket/bag) or the item is not equippable (item_class not in
+      {weapon, armor}).
+    L081 — a weapon's worn REQUIRES attach and FORBIDS hides (a weapon mounts to a
+      bone socket; it never skins/hides body geosets — attach XOR skinned); an
+      armor's worn FORBIDS attach (armor skins onto the body).
+    """
+    errors: list[str] = []
+    item_class = doc.get("item_class")
+    slot = doc.get("slot")
+    visual = doc.get("visual") or {}
+    worn = visual.get("worn")
+
+    equippable = item_class in ("weapon", "armor")
+    invisible = slot in INVISIBLE_SLOTS
+    # A weapon always renders worn gear; visible-slot armor does too.
+    requires = item_class == "weapon" or (item_class == "armor" and not invisible)
+    forbidden = invisible or not equippable
+
+    if requires and worn is None:
+        errors.append(
+            f"L080 {rel_path}: item_class '{item_class}'"
+            + (f" slot '{slot}'" if slot else "")
+            + " requires a visual.worn block (contract ① §4)"
+        )
+    if forbidden and worn is not None:
+        reason = (
+            f"slot '{slot}' is an invisible (jewelry/held) slot"
+            if invisible
+            else f"item_class '{item_class}' is not equippable"
+        )
+        errors.append(
+            f"L080 {rel_path}: {reason} — it must not declare visual.worn (contract ① §4)"
+        )
+
+    if worn is None:
+        return errors
+
+    attach = worn.get("attach")
+    hides = worn.get("hides")
+    if item_class == "weapon":
+        if attach is None:
+            errors.append(
+                f"L081 {rel_path}: weapon visual.worn requires an attach block "
+                f"(weapons mount to a bone socket, contract ① §4)"
+            )
+        if hides is not None:
+            errors.append(
+                f"L081 {rel_path}: weapon visual.worn must not declare hides "
+                f"(attach XOR skinned — weapons never hide body geosets, contract ① §9)"
+            )
+    elif item_class == "armor" and attach is not None:
+        errors.append(
+            f"L081 {rel_path}: armor visual.worn must not declare attach "
+            f"(armor skins onto the body, contract ① §4)"
+        )
+
+    return errors
+
+
 def validate(
     content_dir: Path,
     schema_dir: Path,
@@ -419,9 +509,10 @@ def validate(
             res.errors.append(f"PARSE {rel(path)}: document is not a YAML mapping")
             continue
         declared = doc.get("schema", "")
-        if declared != f"meridian/{ftype}@1":
+        expected = expected_envelope(ftype)
+        if declared != expected:
             res.errors.append(
-                f"L001 {rel(path)}: declares '{declared}', expected 'meridian/{ftype}@1'"
+                f"L001 {rel(path)}: declares '{declared}', expected '{expected}'"
             )
             continue
         schema_errors = sorted(
@@ -554,6 +645,10 @@ def validate(
         namespace = doc_id.split(":", 1)[0]
         dtype = doc_id.split(":", 1)[1].split(".", 1)[0]
         path = ids[doc_id]
+
+        if dtype == "item":
+            # L080/L081 — visual.worn presence + attach-vs-skinned rules.
+            res.errors.extend(check_worn(doc, rel(path)))
 
         if dtype == "quest":
             # L034 — explore objectives must name a POI the zone manifest defines.

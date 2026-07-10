@@ -1,4 +1,4 @@
-schema: meridian/item@1
+schema: meridian/item@2
 id: core:item.emberforged_pick
 name: Emberforged Pick
 flavor_text: Reforged in the vent-heat of Cinderdeep. It bites where rust only bruised.
@@ -19,3 +19,6 @@ price:
   sell: 720
 visual:
   icon: core:art.icon.item.emberforged_pick
+  worn:
+    models: [{ model: core:art.item.weapon.emberforged_pick, mirror: none }]
+    attach: { socket: main_hand, sheath_socket: back }

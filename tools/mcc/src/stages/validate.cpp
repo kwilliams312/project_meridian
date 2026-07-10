@@ -66,6 +66,17 @@ bool is_asset_prefix(const std::string& t) {
     return t == "art" || t == "mus" || t == "sfx" || t == "amb";
 }
 
+// The `schema:` envelope a file of this type must declare (L001). Per-type version:
+// `item` is @2 (visual.worn contract ①/T2); every other type is @1. Mirrors
+// validate_content.py's SCHEMA_VERSIONS / expected_envelope() so the two tools agree
+// on the envelope verdict; single source so a future bump is a one-line change, used
+// by BOTH validate() and validate_single_file(). No back-compat: item@1 is rejected
+// (the nightly world DB is rebuilt wholesale — no migration window).
+std::string expected_envelope(const std::string& file_type) {
+    const int version = (file_type == "item") ? 2 : 1;
+    return "meridian/" + file_type + "@" + std::to_string(version);
+}
+
 // True if `descendant` is `ancestor` or lies beneath it (path-prefix test on
 // normalized generic paths). Both are absolute forward-slash directory strings.
 bool is_under(const std::string& descendant, const std::string& ancestor_dir) {
@@ -104,7 +115,7 @@ void validate(model::ContentModel& model, diag::Diagnostics& diags) {
         if (!pf.parsed) continue;
 
         // L001b — declared envelope type must match the filename's type token.
-        const std::string expected = "meridian/" + f.file_type + "@1";
+        const std::string expected = expected_envelope(f.file_type);
         if (pf.schema != expected) {
             diags.error("L001", f.rel_path, "",
                         "declares '" + pf.schema + "', expected '" + expected + "'");
@@ -232,7 +243,7 @@ void validate_single_file(const model::ParsedFile& pf, diag::Diagnostics& diags)
     if (!pf.parsed) return;
 
     // L001b — declared envelope type must match the filename's type token.
-    const std::string expected = "meridian/" + f.file_type + "@1";
+    const std::string expected = expected_envelope(f.file_type);
     if (pf.schema != expected) {
         diags.error("L001", f.rel_path, "",
                     "declares '" + pf.schema + "', expected '" + expected + "'");

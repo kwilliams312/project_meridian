@@ -1,4 +1,4 @@
-schema: meridian/item@1
+schema: meridian/item@2
 id: core:item.rusty_pickaxe
 name: Rusty Pickaxe
 flavor_text: Generations of kobold thumbs have worn the haft smooth.
@@ -20,3 +20,6 @@ price:
 visual:
   icon: core:art.icon.item.pickaxe_rusty
   model: core:art.item.weapon.pickaxe_rusty
+  worn:
+    models: [{ model: core:art.item.weapon.pickaxe_rusty, mirror: none }]
+    attach: { socket: main_hand, sheath_socket: back }

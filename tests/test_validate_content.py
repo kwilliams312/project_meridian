@@ -319,7 +319,7 @@ class TestSemantics:
 
     def test_l062_vendor_item_without_price(self, tmp_path):
         item = """\
-        schema: meridian/item@1
+        schema: meridian/item@2
         id: tp:item.thing
         name: Thing
         item_class: trade_good
@@ -339,7 +339,7 @@ class TestSemantics:
 
     def test_l062_price_override_suffices(self, tmp_path):
         item = """\
-        schema: meridian/item@1
+        schema: meridian/item@2
         id: tp:item.thing
         name: Thing
         item_class: trade_good
@@ -652,6 +652,155 @@ class TestStemManifestLint:
             },
         )
         assert "L001" not in codes(res.errors)
+
+
+@pytest.mark.unit
+class TestItem2Worn:
+    """meridian/item@2 — visual.worn modular-gear contract + L080/L081 (contract ①/T2).
+
+    One valid weapon fixture; each negative case copies it and mutates one field,
+    per the one-negative-fixture-per-lint convention (Tools PRD §11.1)."""
+
+    # A fully-valid item@2 weapon: worn with a single model + attach (no hides —
+    # attach XOR skinned). visual.icon retained. assets_mode defaults to ignore so
+    # the art refs need no sidecar in these unit fixtures.
+    WORN_OK_WEAPON = """\
+    schema: meridian/item@2
+    id: tp:item.sword
+    name: Sword
+    item_class: weapon
+    slot: main_hand
+    rarity: common
+    weapon: { damage: { min: 1, max: 2 }, speed_ms: 2000 }
+    visual:
+      icon: art.ui.icon.sword
+      worn:
+        models: [{ model: art.weapon.tp.sword, mirror: none }]
+        attach: { socket: main_hand, sheath_socket: hip_l }
+    """
+
+    # A valid item@2 visible-slot armor: worn with skinned models + hides, NO attach.
+    WORN_OK_ARMOR = """\
+    schema: meridian/item@2
+    id: tp:item.hauberk
+    name: Hauberk
+    item_class: armor
+    slot: chest
+    rarity: common
+    visual:
+      icon: art.ui.icon.hauberk
+      worn:
+        models: [{ model: art.armor.tp.hauberk, mirror: none }]
+        hides: [torso, forearms]
+        dye_channels: [primary, secondary]
+    """
+
+    def test_item2_weapon_with_attach_passes(self, tmp_path):
+        res = run(tmp_path, {"tp/items/sword.item.yaml": self.WORN_OK_WEAPON})
+        assert res.errors == []
+
+    def test_item2_visible_armor_with_worn_passes(self, tmp_path):
+        res = run(tmp_path, {"tp/items/hauberk.item.yaml": self.WORN_OK_ARMOR})
+        assert res.errors == []
+
+    def test_item2_armor_visible_slot_without_worn_fails_L080(self, tmp_path):
+        # Drop the worn block entirely from a visible-slot armor.
+        armor = (
+            "schema: meridian/item@2\n"
+            "id: tp:item.hauberk\n"
+            "name: Hauberk\n"
+            "item_class: armor\n"
+            "slot: chest\n"
+            "rarity: common\n"
+            "visual:\n"
+            "  icon: art.ui.icon.hauberk\n"
+        )
+        res = run(tmp_path, {"tp/items/hauberk.item.yaml": armor})
+        assert "L080" in codes(res.errors)
+
+    def test_item2_ring_with_worn_fails_L080(self, tmp_path):
+        # Invisible slot (finger) must NOT declare worn.
+        ring = self.WORN_OK_ARMOR.replace("slot: chest", "slot: finger").replace(
+            "        hides: [torso, forearms]\n", ""
+        )
+        res = run(tmp_path, {"tp/items/ring.item.yaml": ring})
+        assert "L080" in codes(res.errors)
+
+    def test_item2_weapon_without_attach_fails_L081(self, tmp_path):
+        # Weapon worn without attach → L081 (attach REQUIRED for weapons).
+        weapon = self.WORN_OK_WEAPON.replace(
+            "        attach: { socket: main_hand, sheath_socket: hip_l }\n", ""
+        )
+        res = run(tmp_path, {"tp/items/sword.item.yaml": weapon})
+        assert "L081" in codes(res.errors)
+
+    def test_item2_weapon_with_hides_fails_L081(self, tmp_path):
+        # Weapon worn with hides → L081 (attach XOR skinned; weapons never hide geosets).
+        weapon = self.WORN_OK_WEAPON.replace(
+            "        attach: { socket: main_hand, sheath_socket: hip_l }\n",
+            "        hides: [torso]\n"
+            "        attach: { socket: main_hand, sheath_socket: hip_l }\n",
+        )
+        res = run(tmp_path, {"tp/items/sword.item.yaml": weapon})
+        assert "L081" in codes(res.errors)
+
+    def test_item2_armor_with_attach_fails_L081(self, tmp_path):
+        # Armor worn with attach → L081 (attach FORBIDDEN for armor).
+        armor = self.WORN_OK_ARMOR.replace(
+            "        hides: [torso, forearms]\n",
+            "        attach: { socket: back }\n",
+        )
+        res = run(tmp_path, {"tp/items/hauberk.item.yaml": armor})
+        assert "L081" in codes(res.errors)
+
+    def test_item2_non_equippable_with_worn_fails_L080(self, tmp_path):
+        # A non-weapon/armor item (quest) must not carry worn.
+        quest_item = (
+            "schema: meridian/item@2\n"
+            "id: tp:item.totem\n"
+            "name: Totem\n"
+            "item_class: quest\n"
+            "rarity: common\n"
+            "visual:\n"
+            "  icon: art.ui.icon.totem\n"
+            "  worn:\n"
+            "    models: [{ model: art.weapon.tp.totem }]\n"
+        )
+        res = run(tmp_path, {"tp/items/totem.item.yaml": quest_item})
+        assert "L080" in codes(res.errors)
+
+    def test_item2_unknown_geoset_region_fails_schema(self, tmp_path):
+        # hides enum comes from skeleton.defs geosetRegion via $ref.
+        armor = self.WORN_OK_ARMOR.replace(
+            "        hides: [torso, forearms]\n", "        hides: [elbow]\n"
+        )
+        res = run(tmp_path, {"tp/items/hauberk.item.yaml": armor})
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_item2_race_override_unknown_race_fails_schema(self, tmp_path):
+        # race_overrides keys are constrained to skeleton.defs raceName via propertyNames.
+        armor = self.WORN_OK_ARMOR.replace(
+            "        dye_channels: [primary, secondary]\n",
+            "        race_overrides:\n"
+            "          klingon:\n"
+            "            models: [{ model: art.armor.tp.hauberk_klingon }]\n",
+        )
+        res = run(tmp_path, {"tp/items/hauberk.item.yaml": armor})
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_item1_envelope_now_rejected(self, tmp_path):
+        # No back-compat window: an item@1 file is a hard L001 (expected item@2).
+        legacy = (
+            "schema: meridian/item@1\n"
+            "id: tp:item.old\n"
+            "name: Old\n"
+            "item_class: quest\n"
+            "rarity: common\n"
+            "visual:\n"
+            "  icon: art.ui.icon.old\n"
+        )
+        res = run(tmp_path, {"tp/items/old.item.yaml": legacy})
+        assert "L001" in codes(res.errors)
 
 
 @pytest.mark.integration

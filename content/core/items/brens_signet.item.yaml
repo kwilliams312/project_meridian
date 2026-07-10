@@ -1,4 +1,4 @@
-schema: meridian/item@1
+schema: meridian/item@2
 id: core:item.brens_signet
 name: Bren's Signet
 flavor_text: The quartermaster's seal, good for a discount he'll deny offering.
