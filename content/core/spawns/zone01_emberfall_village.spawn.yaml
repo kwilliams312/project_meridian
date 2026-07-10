@@ -1,14 +1,24 @@
 # Emberfall Village — friendly NPCs. Quest givers/turn-ins must spawn somewhere (lint L035);
 # normally exported by Forge's spawn gizmos (TLS-02), hand-authored here like the kobold camp.
+#
+# M1 GREYBOX PLACEMENT (#498): positions are authored in the bootstrap play area
+# around the player spawn so the starter slice is PLAYABLE. The player enters at
+# server-planar (64,64) on the D-19 flat 128 m map (kZoneMaxXY*0.5); the AoI enter
+# radius is 40 m (aoi_grid.h). Coordinates are Godot Y-up (schema common.defs: the
+# horizontal plane is (x, z); y is height) and worldd converts them to its Z-up
+# planar grid on load (db_content_store.cpp #498), so server-planar = (x, z). Bren +
+# Sela therefore sit a few metres from the spawn — the player sees and can talk to
+# the quartermaster the instant they enter. (The village's full Zone-01 coordinates
+# arrive with the real zone terrain; this is the greybox hub.)
 schema: meridian/spawn@1
 id: core:spawn.zone01_emberfall_village
 zone: zone.zone01
 spawns:
   - npc: npc.quartermaster_bren
-    position: { x: 126.0, y: 8.5, z: -244.0 }
+    position: { x: 66.0, y: 0.0, z: 62.0 }
     orientation_deg: 200
     respawn_seconds: { min: 60, max: 60 }
   - npc: npc.warden_sela
-    position: { x: 110.0, y: 8.5, z: -230.0 }
+    position: { x: 60.0, y: 0.0, z: 68.0 }
     orientation_deg: 315
     respawn_seconds: { min: 60, max: 60 }
