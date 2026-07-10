@@ -1070,6 +1070,55 @@ std::vector<Message> build_corpus() {
                         "if2_cast_result.server_time_ms");
                }});
 
+  // ==== IF-2 spellbook / known abilities (world.fbs; CMB-01 #457) ===========
+  // The character's KNOWN ability set, pushed at enter-world + on TrainerLearn. A
+  // pure DISPLAY projection the action bar (#456) seeds from. The golden pins the
+  // per-ability {id, cast_ms, triggers_gcd, resource_type, resource_cost, range_m}
+  // row layout — including a triggers_gcd:false + NONE-resource ability (the case the
+  // action bar must NOT predict a GCD or a cost for) and a mana cast-time ability.
+
+  // KnownAbilities — S->C two known abilities: a free instant no-GCD strike + a mana heal.
+  c.push_back({"if2_known_abilities", "IF-2", "KNOWN_ABILITIES (0x3005)",
+               "S->C spellbook: a free no-GCD instant + a mana cast-time heal",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::KnownAbility>> abl;
+                 abl.push_back(mn::CreateKnownAbility(b, /*ability_id=*/0xF0000001u,
+                                                      /*cast_ms=*/0u, /*triggers_gcd=*/false,
+                                                      mn::AbilityResource::NONE,
+                                                      /*resource_cost=*/0u, /*range_m=*/5.0f));
+                 abl.push_back(mn::CreateKnownAbility(b, /*ability_id=*/0xF0000003u,
+                                                      /*cast_ms=*/2000u, /*triggers_gcd=*/true,
+                                                      mn::AbilityResource::MANA,
+                                                      /*resource_cost=*/25u, /*range_m=*/40.0f));
+                 auto av = b.CreateVector(abl);
+                 b.Finish(mn::CreateKnownAbilities(b, av));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::KnownAbilities>(nullptr),
+                             "if2_known_abilities verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::KnownAbilities>(buf.data());
+                 const auto* abl = m->abilities();
+                 if (!expect(abl != nullptr && abl->size() == 2,
+                             "if2_known_abilities has 2 abilities"))
+                   return;
+                 const auto* a0 = abl->Get(0);
+                 expect(a0->ability_id() == 0xF0000001u && a0->cast_ms() == 0u &&
+                            a0->triggers_gcd() == false &&
+                            a0->resource_type() == mn::AbilityResource::NONE &&
+                            a0->resource_cost() == 0u && a0->range_m() == 5.0f,
+                        "if2_known_abilities.abilities[0] (free no-GCD instant)");
+                 const auto* a1 = abl->Get(1);
+                 expect(a1->ability_id() == 0xF0000003u && a1->cast_ms() == 2000u &&
+                            a1->triggers_gcd() == true &&
+                            a1->resource_type() == mn::AbilityResource::MANA &&
+                            a1->resource_cost() == 25u && a1->range_m() == 40.0f,
+                        "if2_known_abilities.abilities[1] (mana cast-time heal)");
+               }});
+
   // ==== IF-2 death / resurrect (world.fbs; CMB-03 #359) =====================
 
   // DeathState — S->C you died: corpse guid + auto-release countdown.

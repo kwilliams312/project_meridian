@@ -289,6 +289,7 @@ bool recv_movement_state(Client& c, float& x, float& y, float& z, std::uint32_t&
         if (rf && rf->opcode == mn::Opcode::VITALS_UPDATE) continue;
 
         if (rf && rf->opcode == mn::Opcode::INVENTORY_SNAPSHOT) continue;  // #453 unsolicited bags snapshot
+        if (rf && rf->opcode == mn::Opcode::KNOWN_ABILITIES) continue;     // #457 unsolicited spellbook
         break;
     }
     if (!rf || rf->opcode != mn::Opcode::MOVEMENT_STATE) return false;

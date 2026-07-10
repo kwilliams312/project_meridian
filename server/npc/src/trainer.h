@@ -32,6 +32,7 @@
 
 #include <cstdint>
 #include <unordered_set>
+#include <vector>
 
 #include "item_template.h"            // meridian::items::Copper
 #include "meridian/db/connection.h"   // db::Connection (DB apply path)
@@ -87,6 +88,13 @@ public:
     // reaching here).
     bool learn(std::uint32_t ability_id) { return known_.insert(ability_id).second; }
     std::size_t size() const { return known_.size(); }
+
+    // The learned ability ids (M1 in-memory set). Order is UNSPECIFIED (a hash set);
+    // a caller that needs a stable wire order sorts. Used by the KNOWN_ABILITIES
+    // projection (world.fbs, #457) to build the character's spellbook push.
+    std::vector<std::uint32_t> ids() const {
+        return std::vector<std::uint32_t>(known_.begin(), known_.end());
+    }
 
 private:
     std::unordered_set<std::uint32_t> known_;

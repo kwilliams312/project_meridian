@@ -287,6 +287,7 @@ std::optional<RxFrame> recv_decoded(Client& c) {
         if (rf->opcode == mn::Opcode::VITALS_UPDATE) continue;
 
         if (rf->opcode == mn::Opcode::INVENTORY_SNAPSHOT) continue;  // #453 unsolicited bags snapshot
+        if (rf->opcode == mn::Opcode::KNOWN_ABILITIES) continue;     // #457 unsolicited spellbook
         return RxFrame{rf->opcode, Bytes(rf->payload, rf->payload + rf->payload_len)};
     }
 }
