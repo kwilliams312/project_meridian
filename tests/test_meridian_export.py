@@ -25,6 +25,7 @@ sys.path.insert(0, str(ADDON_DIR))
 sys.path.insert(0, str(REPO / "tools"))
 
 import sidecar  # noqa: E402  (the pure module — no bpy)
+import rig_checks  # noqa: E402  (the pure module — no bpy)
 from validate_content import (  # noqa: E402
     check_budget as ci_check_budget,
     check_provenance as ci_check_provenance,
@@ -306,3 +307,77 @@ def test_addon_imports_with_bpy_mocked(monkeypatch):
     assert mod.bl_info["name"] == "meridian_export"
     assert hasattr(mod, "register") and hasattr(mod, "unregister")
     assert mod.MERIDIAN_OT_export_asset.bl_idname == "meridian.export_asset"
+
+
+# --- rig_checks: E-rule band (rig/geoset conformance, spec ④ §3/§4) ------------
+
+
+def _rig_data(**over) -> rig_checks.RigData:
+    """A conforming character_model RigData — one geoset mesh per region at lod0."""
+    defaults = dict(
+        asset_class="character_model",
+        bone_names=list(rig_checks.CANONICAL_BONE_NAMES),
+        socket_names=list(rig_checks.SOCKET_NAMES),
+        mesh_names=[f"geo_{region}_lod0" for region in rig_checks.GEOSET_REGIONS],
+        max_influences=4,
+        weights_normalized=True,
+    )
+    defaults.update(over)
+    return rig_checks.RigData(**defaults)
+
+
+def test_conforming_rig_has_no_errors():
+    assert rig_checks.check_rig(_rig_data()) == []
+
+
+def test_unknown_bone_name_flagged_e100():
+    data = _rig_data(bone_names=list(rig_checks.CANONICAL_BONE_NAMES) + ["Tail01"])
+    errors = rig_checks.check_rig(data)
+    assert any(e.startswith("E100") and "Tail01" in e for e in errors), errors
+
+
+def test_missing_socket_back_flagged_e101():
+    data = _rig_data(
+        socket_names=[n for n in rig_checks.SOCKET_NAMES if n != "socket_back"]
+    )
+    errors = rig_checks.check_rig(data)
+    assert any(e.startswith("E101") and "socket_back" in e for e in errors), errors
+
+
+def test_body_missing_geo_waist_lod0_flagged_e102():
+    data = _rig_data(
+        mesh_names=[
+            f"geo_{region}_lod0"
+            for region in rig_checks.GEOSET_REGIONS
+            if region != "waist"
+        ]
+    )
+    errors = rig_checks.check_rig(data)
+    assert any(e.startswith("E102") and "waist" in e for e in errors), errors
+
+
+def test_five_influences_flagged_e103():
+    data = _rig_data(max_influences=5)
+    errors = rig_checks.check_rig(data)
+    assert any(e.startswith("E103") for e in errors), errors
+
+
+def test_unnormalized_weights_flagged_e103():
+    data = _rig_data(weights_normalized=False)
+    errors = rig_checks.check_rig(data)
+    assert any(e.startswith("E103") for e in errors), errors
+
+
+def test_unknown_geoset_region_flagged_e104():
+    data = _rig_data(mesh_names=[*_rig_data().mesh_names, "geo_tail_lod0"])
+    errors = rig_checks.check_rig(data)
+    assert any(e.startswith("E104") and "geo_tail_lod0" in e for e in errors), errors
+
+
+def test_armor_mesh_with_geoset_name_flagged_e104():
+    data = _rig_data(
+        asset_class="armor_model",
+        mesh_names=["geo_torso_lod0"],
+    )
+    errors = rig_checks.check_rig(data)
+    assert any(e.startswith("E104") and "geo_torso_lod0" in e for e in errors), errors
