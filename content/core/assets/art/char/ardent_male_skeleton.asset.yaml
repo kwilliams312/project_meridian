@@ -1,0 +1,11 @@
+# IF-8 sidecar (meridian/asset@1). Meridian reference rig — the ardent_male
+# skeleton .glb (armature only, no meshes/animations) generated deterministically
+# from tools/blender/meridian_rig/bones.py by generate_rig.py (spec ④ §2).
+schema: meridian/asset@1
+id: core:art.char.ardent.male.skeleton
+class: character_model
+source: assets/art/char/sk_ardent_male_skeleton.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: original
+  authors: [Project Meridian contributors]

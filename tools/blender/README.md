@@ -1,4 +1,38 @@
-# `meridian_export` — Blender art pipeline addon
+# Blender tooling
+
+## `meridian_rig` — reference rig table + generator (spec ④ §2)
+
+```
+meridian_rig/
+  bones.py         PURE Python (no bpy). Canonical 63-bone table (56 Godot
+                   SkeletonProfileHumanoid bones + 7 Meridian gear sockets).
+  generate_rig.py  Deterministic rig generator. Builds the armature from
+                   bones.py and exports the skeleton-only .glb. Arg parsing /
+                   path helpers are pure module-level functions (pytest covers
+                   them without Blender); bpy is only touched inside main().
+```
+
+**Blender version pin:** `Blender 5.0.0` (build date 2025-11-18, hash
+`a37564c4df7a`) — the exact `--version` output of the binary used to generate
+the committed rig. Regenerate with the same version to keep the artifact
+byte-identical (the export is deterministic: same table + same Blender ⇒ same
+SHA-256).
+
+**Regeneration command** (from the repo root; adjust the binary path to your
+install — on macOS the binary is not on PATH):
+
+```bash
+/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup -noaudio \
+  --python tools/blender/meridian_rig/generate_rig.py -- \
+  --profile ardent_male --out content/core/assets/art/char/sk_ardent_male_skeleton.glb
+```
+
+The committed artifact (`content/core/assets/art/char/sk_ardent_male_skeleton.glb`,
+Git LFS) is validated structurally by `tests/test_meridian_rig.py` — bone
+names + hierarchy are read back with pygltflib, so CI needs no Blender. On
+checkouts without LFS smudge (CI), those tests skip via a pointer-file guard.
+
+## `meridian_export` — Blender art pipeline addon
 
 The only sanctioned glTF export path (wraps the stock exporter). For the selected
 object(s) it exports a `.glb` to the pack-local asset path **and** writes a matching
