@@ -464,7 +464,16 @@ func _on_net_handshake_ok() -> void:
 
 # The account's roster arrived — cache it and render. Enter/Delete need a selection;
 # an empty roster prompts creation.
-func _on_net_char_list(characters: Array) -> void:
+# status: world.fbs CharListStatus — 0 OK, 1 INTERNAL. INTERNAL means the server
+# could NOT read the roster (DB fault, #479): an empty `characters` here is a LOAD
+# FAILURE, not "you own zero characters". Render a retry/error state and DON'T
+# clobber the cached roster — otherwise a transient DB fault would make the player's
+# existing characters appear to vanish (the exact #479 symptom the client masked).
+func _on_net_char_list(characters: Array, status: int = 0) -> void:
+	if status != 0:
+		print("[charselect] CharList: load FAILED (status=%d)" % status)
+		_set_status("Couldn't load your characters — server error. Retry.")
+		return
 	print("[charselect] CharList: %d character(s)" % characters.size())
 	_roster = characters
 	_refresh_list()

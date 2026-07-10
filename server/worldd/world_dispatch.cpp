@@ -224,8 +224,12 @@ Bytes encode_movement_state(std::uint64_t entity_guid, const MoveDecision& d,
 // ---- character-management encoders (S→C, world.fbs; #286 / D-35) ------------
 
 // Build a CharListResponse payload from the account's roster (each row is the
-// character-select shape: id, name, race, class, level).
-Bytes encode_char_list(const std::vector<chr::CharacterSummary>& roster) {
+// character-select shape: id, name, race, class, level) plus a typed status.
+// status=INTERNAL (with an empty roster) means the roster could NOT be read — a
+// DB fault, NOT an empty account (#479): the client must render a load-error
+// state rather than "you have no characters".
+Bytes encode_char_list(const std::vector<chr::CharacterSummary>& roster,
+                       mn::CharListStatus status) {
     fb::FlatBufferBuilder b;
     std::vector<fb::Offset<mn::CharListEntry>> rows;
     rows.reserve(roster.size());
@@ -240,7 +244,7 @@ Bytes encode_char_list(const std::vector<chr::CharacterSummary>& roster) {
                                                c.level, appearance));
     }
     auto vec = b.CreateVector(rows);
-    b.Finish(mn::CreateCharListResponse(b, vec));
+    b.Finish(mn::CreateCharListResponse(b, vec, status));
     return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
 }
 
@@ -1713,27 +1717,35 @@ void Dispatcher::register_m0_stubs() {
            if (!require_authenticated(ctx, "CHAR_LIST_REQUEST")) return;
 
            std::vector<chr::CharacterSummary> roster;
+           // OK only if the roster was actually READ. A DB fault (or no char_db)
+           // must surface as INTERNAL, NOT a silent empty roster (#479): an empty
+           // roster under OK means "zero characters", which contradicts a create
+           // that still counts the existing rows and refuses with the limit.
+           mn::CharListStatus status = mn::CharListStatus::OK;
            if (ctx.char_db != nullptr) {
                try {
                    roster = chr::list_characters(*ctx.char_db, ctx.account_id);
                } catch (const db::DbError& e) {
-                   // No error channel on CharListResponse — degrade to an empty
-                   // roster and log (the client sees "no characters"; the DB fault
-                   // is server-side observable). Production always has char_db.
-                   log::warn(kCat, "CHAR_LIST_REQUEST DB error — empty roster",
+                   // Typed error channel (world.fbs CharListStatus): report the DB
+                   // fault to the client so char-select renders a load-error state
+                   // instead of "no characters". Production always has char_db.
+                   status = mn::CharListStatus::INTERNAL;
+                   log::warn(kCat, "CHAR_LIST_REQUEST DB error — INTERNAL status",
                              {log::field("account_id",
                                          static_cast<std::int64_t>(ctx.account_id)),
                               log::field("error", e.what())});
                }
            } else {
-               log::warn(kCat, "CHAR_LIST_REQUEST with no characters DB — empty roster");
+               status = mn::CharListStatus::INTERNAL;
+               log::warn(kCat, "CHAR_LIST_REQUEST with no characters DB — INTERNAL status");
            }
            log::debug(kCat, "CHAR_LIST_REQUEST -> " + std::to_string(roster.size()) +
-                                " character(s) for account " +
-                                std::to_string(ctx.account_id));
+                                " character(s) (status=" +
+                                std::to_string(static_cast<std::uint16_t>(status)) +
+                                ") for account " + std::to_string(ctx.account_id));
            send_s2c(sess, ctx,
                     encode_frame(net::Opcode::CHAR_LIST_RESPONSE, f.seq,
-                                 encode_char_list(roster)));
+                                 encode_char_list(roster, status)));
        });
 
     // CHAR_CREATE_REQUEST: create a character (name + race + class, D-11). Maps

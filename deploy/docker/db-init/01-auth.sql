@@ -8,6 +8,10 @@
 -- wrapper creates the DB, selects it, and SOURCEs the UP migrations in order.
 -- Only *.up.sql is applied — the *.down.sql rollbacks are deliberately skipped.
 -- The migration dir is mounted read-only at /schemas/auth (see docker-compose.yml).
+--
+-- ⛔ Adding a migration? SOURCE it here too — this list is hand-maintained and a
+-- missed file half-seeds the DB (the #479 class of bug). CI gate:
+-- tests/test_db_init_migration_coverage.py enforces full coverage.
 CREATE DATABASE IF NOT EXISTS meridian_auth
   CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE meridian_auth;

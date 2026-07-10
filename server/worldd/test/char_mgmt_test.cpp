@@ -680,6 +680,57 @@ int main() {
                   victim.size() == 1 && victim[0].id == other_char_id);
         }
 
+        // ===== 6b. #479 REGRESSION — deploy drift: the deployed `character`
+        // table is missing the appearance column (the docker db-init never SOURCEd
+        // migration 0003). `list_characters` SELECTs `appearance`, so the read
+        // throws db::DbError. The CHAR_LIST handler MUST surface a TYPED error
+        // (CharListStatus INTERNAL), NOT a silent empty-OK roster: an empty-OK
+        // roster is indistinguishable from "this account owns zero characters",
+        // yet create's COUNT(*) still sees the row and refuses with LIMIT_REACHED
+        // — the exact contradiction users reported (0 characters shown, but create
+        // blocked with "you already have a character"). Before the fix, this
+        // returned OK+empty (the silent lie); now it is a visible load failure.
+        // The account still owns `minted` (created in step 2, not yet deleted).
+        {
+            db.execute("ALTER TABLE `character` DROP COLUMN appearance");
+
+            if (std::optional<Bytes> pl = round_trip(c, mn::Opcode::CHAR_LIST_REQUEST,
+                                                     enc_char_list_request(),
+                                                     mn::Opcode::CHAR_LIST_RESPONSE, seq++)) {
+                const auto* m = decode<mn::CharListResponse>(*pl);
+                check("6b: CHAR_LIST on a missing column is typed INTERNAL "
+                      "(not a silent empty-OK roster)",
+                      m != nullptr && m->status() == mn::CharListStatus::INTERNAL);
+                check("6b: the failed CHAR_LIST carries no rows",
+                      m != nullptr && (m->characters() == nullptr ||
+                                       m->characters()->size() == 0));
+            } else {
+                check("6b: got a CharListResponse under the DB fault", false);
+            }
+
+            // The contradictory half: create STILL refuses with the account limit,
+            // because the COUNT(*) FOR UPDATE precedes the appearance-referencing
+            // INSERT — so the client is told "you already have a character" while
+            // the roster it was just handed is (apparently) empty.
+            if (std::optional<Bytes> pl = round_trip(
+                    c, mn::Opcode::CHAR_CREATE_REQUEST,
+                    enc_char_create_request("Cm_" + std::to_string(salt) + "_479",
+                                            static_cast<std::uint8_t>(chr::Race::kArdent),
+                                            static_cast<std::uint8_t>(chr::Class::kVanguard)),
+                    mn::Opcode::CHAR_CREATE_RESPONSE, seq++)) {
+                const auto* m = decode<mn::CharCreateResponse>(*pl);
+                check("6b: create is still refused with LIMIT_REACHED under the fault",
+                      m != nullptr &&
+                          m->status() == mn::CharCreateStatus::LIMIT_REACHED);
+            } else {
+                check("6b: got a CharCreateResponse under the DB fault", false);
+            }
+
+            // Restore the column so step 7 (list after delete) + cleanup succeed.
+            db.execute("ALTER TABLE `character` "
+                       "ADD COLUMN appearance JSON NULL AFTER `class`");
+        }
+
         // 7. delete your OWN character -> OK; list is empty again.
         if (std::optional<Bytes> pl = round_trip(c, mn::Opcode::CHAR_DELETE_REQUEST,
                                                  enc_char_delete_request(minted),
