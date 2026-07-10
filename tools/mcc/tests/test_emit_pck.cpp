@@ -96,7 +96,7 @@ fs::path make_fixture() {
                "  - kind: damage\n"
                "    amount: { min: 10, max: 20 }\n");
     write_file(core / "items" / "wand.item.yaml",
-               "schema: meridian/item@1\n"
+               "schema: meridian/item@2\n"
                "id: core:item.wand\n"
                "name: Wand of Zapping\n"
                "item_class: consumable\n"
