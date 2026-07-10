@@ -278,6 +278,30 @@ Dictionary MeridianNetThread::decode_entity_frame(int opcode,
 		d["has_position"] = true;
 		d["position"] = to_godot(e->x, e->y, e->z);
 		d["orientation"] = e->orientation;
+		// Vitals (#430/#431 HUD contract): the unit-frame block the event bus routes
+		// to the player/target frames (UI-01). Server-authoritative — display only.
+		d["health"] = static_cast<int64_t>(e->health);
+		d["max_health"] = static_cast<int64_t>(e->max_health);
+		d["power"] = static_cast<int64_t>(e->power);
+		d["max_power"] = static_cast<int64_t>(e->max_power);
+		d["power_type"] = static_cast<int64_t>(e->power_type);
+		d["level"] = static_cast<int64_t>(e->level);
+		d["name"] = String(e->name.c_str());
+	} else if (opcode == cn::kOpVitalsUpdate) {
+		// VITALS_UPDATE (#430/#431): the HUD health/power/level delta. Forwarded raw
+		// by the net thread (net_thread_core's default S→C path), decoded here into a
+		// scene-ready Dictionary the event bus publishes to the unit frames.
+		auto v = cn::codec::decode_vitals_update(buf);
+		if (!v) return d;
+		d["kind"] = String("vitals");
+		d["guid"] = static_cast<int64_t>(v->entity_guid);
+		d["has_position"] = false;
+		d["health"] = static_cast<int64_t>(v->health);
+		d["max_health"] = static_cast<int64_t>(v->max_health);
+		d["power"] = static_cast<int64_t>(v->power);
+		d["max_power"] = static_cast<int64_t>(v->max_power);
+		d["power_type"] = static_cast<int64_t>(v->power_type);
+		d["level"] = static_cast<int64_t>(v->level);
 	} else if (opcode == cn::kOpEntityUpdate) {
 		auto u = cn::codec::decode_entity_update(buf);
 		if (!u) return d;

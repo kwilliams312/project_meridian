@@ -126,8 +126,14 @@ Bytes encode_entity_enter(const EntityEnter& in) {
     // attrs empty at M0 — created so the table shape is complete for the verifier
     // (mirrors worldd's encode_entity_enter_payload).
     auto attrs = b.CreateVector(std::vector<fb::Offset<mn::AttrDelta>>{});
+    // name (#430): the character/creature display name for the unit frame. Empty
+    // string round-trips as an empty name (worldd sends "" for the D-11 placeholder).
+    auto name = b.CreateString(in.name);
     auto e = mn::CreateEntityEnter(b, in.entity_guid, in.type_id, in.x, in.y, in.z,
-                                   in.orientation, attrs, in.char_class);
+                                   in.orientation, attrs, in.char_class, in.health,
+                                   in.max_health, in.power, in.max_power,
+                                   static_cast<mn::PowerType>(in.power_type), in.level,
+                                   name);
     b.Finish(e);
     return to_bytes(b);
 }
@@ -143,6 +149,39 @@ std::optional<EntityEnter> decode_entity_enter(const Bytes& buf) {
     out.z = t->z();
     out.orientation = t->orientation();
     out.char_class = t->char_class();  // #328: class id for the client capsule color
+    // Vitals (#430 HUD contract): additive fields — a pre-#430 producer defaults them.
+    out.health = t->health();
+    out.max_health = t->max_health();
+    out.power = t->power();
+    out.max_power = t->max_power();
+    out.power_type = static_cast<std::uint8_t>(t->power_type());
+    out.level = t->level();
+    out.name = t->name() ? t->name()->str() : std::string();
+    return out;
+}
+
+// ---- IF-2 VitalsUpdate (#430/#431 HUD delta) -------------------------------
+
+Bytes encode_vitals_update(const VitalsUpdate& in) {
+    fb::FlatBufferBuilder b;
+    auto v = mn::CreateVitalsUpdate(b, in.entity_guid, in.health, in.max_health,
+                                    in.power, in.max_power,
+                                    static_cast<mn::PowerType>(in.power_type), in.level);
+    b.Finish(v);
+    return to_bytes(b);
+}
+
+std::optional<VitalsUpdate> decode_vitals_update(const Bytes& buf) {
+    const mn::VitalsUpdate* t = verify_and_get<mn::VitalsUpdate>(buf);
+    if (t == nullptr) return std::nullopt;
+    VitalsUpdate out;
+    out.entity_guid = t->entity_guid();
+    out.health = t->health();
+    out.max_health = t->max_health();
+    out.power = t->power();
+    out.max_power = t->max_power();
+    out.power_type = static_cast<std::uint8_t>(t->power_type());
+    out.level = t->level();
     return out;
 }
 

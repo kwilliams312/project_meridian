@@ -323,6 +323,14 @@ void test_entity_codec() {
     en.z = 0.5f;
     en.orientation = 1.25f;
     en.char_class = 3;  // #328: Warden — round-trips so the client can color by class
+    // Vitals (#430/#431 HUD contract): health/power/level/name for the unit frame.
+    en.health = 850;
+    en.max_health = 1000;
+    en.power = 60;
+    en.max_power = 100;
+    en.power_type = 2;  // ENERGY (Warden)
+    en.level = 12;
+    en.name = "Aelric";
     auto en_buf = codec::encode_entity_enter(en);
     auto en_out = codec::decode_entity_enter(en_buf);
     CHECK(en_out.has_value());
@@ -330,14 +338,22 @@ void test_entity_codec() {
     CHECK(en_out->x == 64.0f && en_out->y == 65.0f && en_out->z == 0.5f);
     CHECK(std::fabs(en_out->orientation - 1.25f) < 1e-6f);
     CHECK(en_out->char_class == 3);
+    CHECK(en_out->health == 850 && en_out->max_health == 1000);
+    CHECK(en_out->power == 60 && en_out->max_power == 100);
+    CHECK(en_out->power_type == 2 && en_out->level == 12);
+    CHECK(en_out->name == "Aelric");
 
-    // #328: char_class defaults to 0 (unset/unknown) when a producer omits it —
-    // the additive field is backward-compatible (a pre-#328 EntityEnter decodes to 0).
+    // #328/#430: char_class + vitals default to 0 / empty when a producer omits them —
+    // additive fields are backward-compatible (a pre-#430 EntityEnter decodes to 0).
     codec::EntityEnter en_noclass;
     en_noclass.entity_guid = 0x99ull;
     auto en_nc_out = codec::decode_entity_enter(codec::encode_entity_enter(en_noclass));
     CHECK(en_nc_out.has_value());
     CHECK(en_nc_out->char_class == 0);
+    CHECK(en_nc_out->health == 0 && en_nc_out->max_health == 0);
+    CHECK(en_nc_out->power == 0 && en_nc_out->max_power == 0);
+    CHECK(en_nc_out->power_type == 0 && en_nc_out->level == 0);
+    CHECK(en_nc_out->name.empty());
 
     // EntityUpdate — a movement delta (all position fields present, as worldd sends).
     codec::EntityUpdate up;
@@ -367,6 +383,45 @@ void test_entity_codec() {
     CHECK(!codec::decode_entity_enter(garbage).has_value());
     CHECK(!codec::decode_entity_update(garbage).has_value());
     CHECK(!codec::decode_entity_leave(garbage).has_value());
+}
+
+// ---------------------------------------------------------------------------
+// 4c. VitalsUpdate codec (#430/#431 — the HUD health/power/level delta, UI-01)
+// ---------------------------------------------------------------------------
+void test_vitals_codec() {
+    std::puts("[codec] VitalsUpdate round-trip + verifier");
+
+    // A full vitals delta — every field distinct so a mis-wired field is caught.
+    codec::VitalsUpdate v;
+    v.entity_guid = 0xCAFEBABEull;
+    v.health = 420;
+    v.max_health = 1000;
+    v.power = 75;
+    v.max_power = 100;
+    v.power_type = 1;  // MANA (Runcaller / Mender)
+    v.level = 8;
+    auto v_out = codec::decode_vitals_update(codec::encode_vitals_update(v));
+    CHECK(v_out.has_value());
+    CHECK(v_out->entity_guid == 0xCAFEBABEull);
+    CHECK(v_out->health == 420 && v_out->max_health == 1000);
+    CHECK(v_out->power == 75 && v_out->max_power == 100);
+    CHECK(v_out->power_type == 1 && v_out->level == 8);
+
+    // A death delta: health 0, no secondary pool (power_type NONE) — the frame reads
+    // "dead" from health==0 and hides the power bar from power_type==0.
+    codec::VitalsUpdate dead;
+    dead.entity_guid = 0x1ull;
+    dead.max_health = 500;  // health stays 0
+    auto dead_out = codec::decode_vitals_update(codec::encode_vitals_update(dead));
+    CHECK(dead_out.has_value());
+    CHECK(dead_out->health == 0 && dead_out->max_health == 500);
+    CHECK(dead_out->power_type == 0);
+
+    // Garbage is rejected by the verifier (never GetRoot on unverified bytes).
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_vitals_update(garbage).has_value());
+    Bytes empty;
+    CHECK(!codec::decode_vitals_update(empty).has_value());
 }
 
 // ---------------------------------------------------------------------------
@@ -821,6 +876,7 @@ int main() {
     test_world_session();
     test_codec();
     test_entity_codec();
+    test_vitals_codec();
     test_char_enter_codec();
     test_full_stack();
     test_transport_links();

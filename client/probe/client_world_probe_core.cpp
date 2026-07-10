@@ -15,6 +15,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <thread>
@@ -90,6 +91,18 @@ bool apply_entity_frame(remote::RemoteInterpolator& interp, ProbeResult& res,
     if (opcode == cn::kOpEntityEnter) {
         auto e = cn::codec::decode_entity_enter(payload);
         if (!e) return false;
+        // UI-01 (#431) live evidence: log the vitals the client decodes off worldd's
+        // EntityEnter — the HUD contract (#430). run_client_sees_bot_it.sh surfaces
+        // this so the health/power/level/name reaching the GUI net path from a REAL
+        // server are visible, not just asserted in a unit test.
+        std::fprintf(stderr,
+                     "[probe] peer ENTER guid=%llu name=\"%s\" class=%u level=%u "
+                     "hp=%u/%u power=%u/%u ptype=%u\n",
+                     static_cast<unsigned long long>(e->entity_guid), e->name.c_str(),
+                     static_cast<unsigned>(e->char_class), static_cast<unsigned>(e->level),
+                     static_cast<unsigned>(e->health), static_cast<unsigned>(e->max_health),
+                     static_cast<unsigned>(e->power), static_cast<unsigned>(e->max_power),
+                     static_cast<unsigned>(e->power_type));
         interp.on_enter(e->entity_guid, to_render(e->x, e->y, e->z), e->orientation,
                         recv_server_ms);
         EntitySighting s;

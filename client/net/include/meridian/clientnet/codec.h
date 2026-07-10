@@ -96,7 +96,9 @@ std::optional<Disconnect> decode_disconnect(const Bytes& buf);
 // height. The consumer maps to the render frame (the interpolator / Godot node).
 
 // EntityEnter (world.fbs): a full spawn/enter snapshot. attrs are ignored at M0
-// (D-11 placeholder carries none); only guid + type + pose are decoded for render.
+// (D-11 placeholder carries none); guid + type + pose drive render, and the vitals
+// block (#430/#431 HUD contract, UI-01) drives the unit frame. Vitals are additive
+// FlatBuffers fields — a pre-#430 EntityEnter decodes them to 0 / empty.
 struct EntityEnter {
     std::uint64_t entity_guid = 0;
     std::uint32_t type_id = 0;
@@ -105,10 +107,36 @@ struct EntityEnter {
     std::uint8_t char_class = 0;  // M0-frozen class id (roster.h Class; #328) — the
                                   // client colors the placeholder capsule by class.
                                   // 0 = unset/unknown.
+    // Vitals (#430 HUD contract): server-authoritative; the client DISPLAYS them.
+    std::uint32_t health = 0;      // current health at entry
+    std::uint32_t max_health = 0;  // health cap
+    std::uint32_t power = 0;       // current secondary power at entry
+    std::uint32_t max_power = 0;   // secondary-power cap (0 when power_type = NONE)
+    std::uint8_t power_type = 0;   // world.fbs PowerType (0=NONE,1=MANA,2=ENERGY,3=RAGE)
+    std::uint16_t level = 0;       // unit level (0 = unset/unknown)
+    std::string name;              // display name for the unit frame (empty = unnamed)
 };
 
 Bytes encode_entity_enter(const EntityEnter& in);
 std::optional<EntityEnter> decode_entity_enter(const Bytes& buf);
+
+// VitalsUpdate (world.fbs, #430/#431): a unit's vitals changed — the HUD delta the
+// server pushes to the subject's own client + every observer whenever combat / heal
+// / death / level-up moves health/power/level (no full re-enter). `name` is NOT here
+// (it does not change in-life; it rides EntityEnter). Server-authoritative — the
+// client DISPLAYS these, never predicts them (Principle 1).
+struct VitalsUpdate {
+    std::uint64_t entity_guid = 0;
+    std::uint32_t health = 0;      // current health after the change (0 = dead)
+    std::uint32_t max_health = 0;  // health cap (may change on level-up)
+    std::uint32_t power = 0;       // current secondary power after the change
+    std::uint32_t max_power = 0;   // secondary-power cap (0 when power_type = NONE)
+    std::uint8_t power_type = 0;   // world.fbs PowerType (0=NONE,1=MANA,2=ENERGY,3=RAGE)
+    std::uint16_t level = 0;       // unit level after the change (level-up)
+};
+
+Bytes encode_vitals_update(const VitalsUpdate& in);
+std::optional<VitalsUpdate> decode_vitals_update(const Bytes& buf);
 
 // EntityUpdate (world.fbs): a delta. Position fields are OPTIONAL (a move delta
 // carries them; an attribute-only delta would not), so each is flagged present.

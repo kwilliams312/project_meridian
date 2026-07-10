@@ -48,6 +48,12 @@ const CHAR_SELECT_SCENE := "res://scenes/charselect/char_select.tscn"
 # remote coloring can never drift — every client renders a class the same way.
 const PlayerClassColors := preload("res://scenes/world/player_class_colors.gd")
 
+# HUD foundation (UI-01, #431): the MVVM event bus + the unit-frame HUD. world.gd
+# owns the ONE event bus for this world session and publishes every decoded server
+# unit event into it; the HUD subscribes to the bus and never touches the net thread.
+const MeridianEventBusScript := preload("res://hud/event_bus.gd")
+const MeridianHudScript := preload("res://hud/hud.gd")
+
 var _session: Dictionary = {}
 var _character: Dictionary = {}
 
@@ -73,6 +79,10 @@ var _hud_state: Label
 var _hud_guid: Label
 var _hud_remotes: Label
 var _hud_tick: Label
+
+# UI-01 HUD foundation (#431): the server-state registry + the unit-frame HUD view.
+var _bus: MeridianEventBus
+var _hud: MeridianHud
 
 var _my_guid: int = 0
 var _last_server_tick: int = 0
@@ -112,6 +122,15 @@ func _ready() -> void:
 	_remotes.name = "Remotes"
 	add_child(_remotes)
 	_build_hud()
+
+	# UI-01 (#431): stand up the event bus + unit-frame HUD BEFORE wiring the net
+	# signals, so the very first drained EntityEnter/VITALS_UPDATE can publish into a
+	# live bus. The HUD subscribes to the bus; it never sees the net thread.
+	_bus = MeridianEventBusScript.new()
+	_hud = MeridianHudScript.new()
+	_hud.name = "UnitFrameHud"
+	add_child(_hud)
+	_hud.setup(_bus)
 
 	_interp = MeridianRemoteInterpolator.new()
 	_mover = MeridianMovementController.new()
@@ -307,7 +326,17 @@ func _on_handshake_ok() -> void:
 
 func _on_movement_state(state: Dictionary) -> void:
 	# Our own authoritative state: learn our guid + reconcile the local prediction.
-	_my_guid = int(state.get("entity_guid", _my_guid))
+	var new_guid := int(state.get("entity_guid", _my_guid))
+	if new_guid != 0 and new_guid != _my_guid:
+		_my_guid = new_guid
+		# UI-01 (#431): identify the local player to the event bus so the player frame
+		# binds to it. worldd sends the local session no self EntityEnter at spawn, so
+		# seed name/level/class from character-select; health/power fill in on the
+		# first self VITALS_UPDATE (a combat/heal delta).
+		if _bus != null:
+			_bus.seed_identity(_my_guid, String(_character.get("name", "")),
+				int(_character.get("level", 0)), int(_character.get("class", 0)))
+			_bus.set_local_player(_my_guid)
 	_last_server_tick = int(state.get("server_time_ms", _last_server_tick))
 	if _mover != null:
 		# Wire (Z-UP) -> Godot (Y-UP): y = height (wire z), z = ground (wire y).
@@ -325,6 +354,21 @@ func _on_entity_frame(opcode: int, _seq: int, payload: PackedByteArray) -> void:
 	if kind.is_empty():
 		return  # non-entity opcode (e.g. ClockSync) or undecodable
 	var guid := int(d.get("guid", 0))
+
+	# UI-01 (#431): route ALL server unit state through the event bus first — including
+	# our OWN (the HUD reads the local player from the bus). This runs BEFORE the
+	# "don't render self as a remote" guard below, so self vitals still reach the frame.
+	if _bus != null:
+		match kind:
+			"enter":
+				_bus.publish_entity_enter(guid, d)
+			"vitals":
+				_bus.publish_vitals_update(guid, d)
+			"leave":
+				_bus.publish_entity_leave(guid)
+	if kind == "vitals":
+		return  # a vitals delta only updates the HUD — it never spawns/moves a node
+
 	if guid == _my_guid and _my_guid != 0:
 		return  # never render ourselves as a remote
 	_last_server_tick = _client_ms
@@ -451,6 +495,41 @@ func _despawn_remote(guid: int) -> void:
 		node.queue_free()
 	_remote_nodes.erase(guid)
 	print("[world] remote LEAVE guid=%d (%d remotes)" % [guid, _remote_nodes.size()])
+
+
+# --- Targeting stub (UI-01, #431) --------------------------------------------
+# A MINIMAL tab-target so the target unit frame is demonstrable: TAB cycles through
+# the remote entities nearest-first, and the choice flows through the event bus
+# (set_target) exactly like real targeting will. Full click/tab targeting + friend/
+# foe + range/LoS is the combat-presentation epic (#23) — this is only the seam that
+# proves the target frame binds to and renders a server unit's vitals from the bus.
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo \
+			and (event as InputEventKey).physical_keycode == KEY_TAB:
+		_cycle_target()
+		get_viewport().set_input_as_handled()  # TAB targets, does not move UI focus
+
+
+func _cycle_target() -> void:
+	if _bus == null:
+		return
+	var guids: Array = _remote_nodes.keys()
+	if guids.is_empty():
+		_bus.set_target(0)  # nothing to target — clear the frame
+		return
+	var ppos: Vector3 = _player.position if _player != null else SPAWN
+	guids.sort_custom(func(a, b): return _dist2_to(int(a), ppos) < _dist2_to(int(b), ppos))
+	var cur := _bus.target_guid()
+	var idx := guids.find(cur)
+	# Cycle to the next-nearest after the current target; else pick the nearest.
+	var next_guid := int(guids[(idx + 1) % guids.size()]) if idx != -1 else int(guids[0])
+	_bus.set_target(next_guid)
+	print("[world] target -> guid=%d (%d candidates)" % [next_guid, guids.size()])
+
+
+func _dist2_to(guid: int, ppos: Vector3) -> float:
+	var n: Node3D = _remote_nodes.get(guid)
+	return ppos.distance_squared_to(n.position) if n != null else INF
 
 
 # --- Scene construction (built in code, like camera_demo.gd) -----------------
