@@ -212,6 +212,11 @@ void emit_login_audit(const std::string& peer,
 // touches, so it never races another connection.
 void handle_connection(meridian::net::Session sess, meridian::db::ConnectParams db_params,
                        meridian::authd::LoginConfig login) {
+    // libmariadb thread-init/-end for this worker thread (#510). MUST bracket all
+    // DB use on this thread; without it, concurrent connections race on
+    // libmariadb's thread-local state and intermittently return EMPTY result sets
+    // (spurious "unknown user" / "empty realm list").
+    meridian::db::ThreadGuard db_thread_guard;
     const std::string peer = sess.peer();
     try {
         meridian::db::Connection db(db_params);
@@ -364,6 +369,12 @@ int main(int argc, char** argv) {
                      kDaemonName);
         return 2;
     }
+
+    // libmariadb one-time library init on the MAIN thread, before any worker
+    // thread opens a connection (#510). Each per-connection worker additionally
+    // runs mysql_thread_init via db::ThreadGuard; doing the global init here
+    // guarantees it never first happens concurrently on a worker's first connect.
+    meridian::db::global_init();
 
     // Fail fast if the DB is unreachable at boot — better than accepting logins
     // we cannot serve.

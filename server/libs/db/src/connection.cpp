@@ -9,11 +9,26 @@
 
 #include <charconv>
 #include <cstring>
+#include <mutex>
 #include <string>
 
 namespace meridian::db {
 
 namespace {
+
+// One-time libmariadb library init (#510). std::call_once serialises the global
+// mysql_library_init() so it can never run concurrently on two worker threads'
+// first connect. If mysql_library_init() fails the callable throws and the flag
+// stays un-set, so a later call retries rather than silently proceeding on an
+// uninitialised library.
+std::once_flag g_library_init_flag;
+
+void ensure_library_init() {
+    std::call_once(g_library_init_flag, [] {
+        if (mysql_library_init(0, nullptr, nullptr) != 0)
+            throw DbError(0, "mysql_library_init failed");
+    });
+}
 
 [[noreturn]] void throw_mysql(MYSQL* c) {
     throw DbError(mysql_errno(c), mysql_error(c));
@@ -37,11 +52,28 @@ std::string num_to_string(T v) {
 
 }  // namespace
 
+void global_init() { ensure_library_init(); }
+
+void global_end() { mysql_library_end(); }
+
+ThreadGuard::ThreadGuard() {
+    // Guarantee the library is initialised before this thread initialises its
+    // own libmariadb thread-local state (correct even if main() forgot the
+    // explicit global_init()).
+    ensure_library_init();
+    mysql_thread_init();
+}
+
+ThreadGuard::~ThreadGuard() { mysql_thread_end(); }
+
 struct Connection::Impl {
     MYSQL* conn = nullptr;
 };
 
 Connection::Connection(const ConnectParams& p) {
+    // libmariadb's global init must precede any mysql_init(); call_once makes
+    // this safe under concurrent first-use across worker threads (#510).
+    ensure_library_init();
     impl_ = new Impl();
     impl_->conn = mysql_init(nullptr);
     if (!impl_->conn) throw DbError(0, "mysql_init failed");
