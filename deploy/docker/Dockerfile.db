@@ -7,6 +7,33 @@
 # from /schemas/{auth,characters,world}. Baking the schema into the image keeps
 # it source-of-truth in-repo (server/db/*, schema/sql/world) while letting both
 # compose and the Helm chart consume one seeded image. Build context = repo root.
+
+# ── Content stage (#482): compile the world/CONTENT DB DML from /content ─────
+# The world schema is baked as EMPTY template tables (03-world.sql). worldd,
+# however, needs the mcc-emitted CONTENT rows (npc/quest/loot/vendor/item +
+# abilities — the #390 DB stores + #483 DbAbilityStore) or the realm serves zero
+# content. We compile that DML HERE with the same mcc the golden gate uses
+# (`mcc emit-sql content`, INSERT-only, deterministic; needs only the content
+# tree — no rendered client assets) and bake the result into the image so the
+# content version travels in lockstep with the world schema + the image tag. The
+# Helm content-seed Job (deploy/helm/meridian/templates/world-content-seed.yaml)
+# loads it into meridian_world on deploy.
+FROM debian:bookworm-slim AS content
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake ninja-build g++ git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+# mcc's only external dep is yaml-cpp (system package or a pinned FetchContent
+# fallback fetched over git); the content tree carries the committed idmap.lock
+# emit-sql resolves ids against read-only.
+COPY tools/mcc/ ./tools/mcc/
+COPY content/   ./content/
+RUN cmake -S tools/mcc -B tools/mcc/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build tools/mcc/build --target mcc
+# Emit the world-DB content DML (IF-4 world_manifest + the content INSERTs).
+RUN tools/mcc/build/mcc emit-sql content --out /world-content.sql
+
+# ── Runtime stage: MariaDB 11 with the baked schema + content ────────────────
 FROM mariadb:11
 
 # The first-boot init wrappers (CREATE DATABASE + SOURCE the migrations + grants).
@@ -16,3 +43,9 @@ COPY deploy/docker/db-init/*.sql /docker-entrypoint-initdb.d/
 COPY server/db/auth/migrations/          /schemas/auth/
 COPY server/db/characters/migrations/    /schemas/characters/
 COPY schema/sql/world/                    /schemas/world/
+
+# The mcc-emitted world CONTENT DML (#482) — applied to meridian_world by the
+# Helm content-seed Job on deploy (NOT auto-loaded on first boot, so the same
+# image serves both the ephemeral dev DB and the persistent PTR/Prod DBs; the
+# Job refreshes content idempotently on every deploy/promotion).
+COPY --from=content /world-content.sql /content/world-content.sql

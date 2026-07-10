@@ -1,0 +1,106 @@
+{{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
+{{- /*
+  World CONTENT seed (#482) — the piece that makes a hosted realm serve content.
+
+  The meridian-db image first-boot init creates the world schema as EMPTY
+  template tables (deploy/docker/db-init/03-world.sql); worldd then boots, reads
+  MERIDIAN_WORLDDB_*, and would find an empty world_manifest -> serve zero
+  content (no abilities/quests/npcs/loot/vendors). This post-install +
+  post-upgrade Helm hook Job loads the mcc-emitted content DML (baked into the
+  meridian-db image at .Values.mariadb.contentSeed.sqlPath) into meridian_world.
+
+  Idempotent + versioned by the #89 IF-4 content hash:
+    * reads the baked world_manifest.content_hash from the SQL and the live
+      hash from the DB; if they already match, it does NOTHING (skip); else
+    * TRUNCATEs every meridian_world table (FK checks off) and reloads the
+      INSERT-only DML — a whole-artifact refresh (the world DB is a read-only
+      mcc artifact with NO user data, "replaced wholesale by the build").
+  => ephemeral dev (fresh DB each deploy) reseeds every run; persistent PTR/Prod
+     refresh only when a promotion carries new content.
+
+  Gated on the bundled DB + worldd.worlddb both being enabled (a realm overlay
+  turns both on). Skipped for external-DB installs, where world content is
+  managed out-of-band. NOTE (post-deploy): the hook runs AFTER the release's
+  worldd rolls out, so on a FRESH install worldd may crashloop briefly (empty
+  world_manifest -> IF-4 fail-fast) until this Job populates content, then
+  self-heals on the next restart. Verified live by the orchestrator post-merge.
+*/ -}}
+{{- if and .Values.mariadb.enabled .Values.mariadb.contentSeed.enabled .Values.worldd.worlddb .Values.worldd.worlddb.enabled }}
+{{- $full := include "meridian.fullname" . -}}
+{{- $img := printf "%s/%s:%s" .Values.mariadb.image.registry .Values.mariadb.image.repository .Values.mariadb.image.tag -}}
+{{- $db := .Values.worldd.worlddb.name | default .Values.db.names.world -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $full }}-world-content-seed
+  labels:
+    {{- include "meridian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: world-content-seed
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        {{- include "meridian.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: world-content-seed
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-db
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z {{ include "meridian.db.host" . }} 3306; do echo waiting; sleep 2; done"]
+      containers:
+        # meridian-db image carries both the world DDL and the baked content DML
+        # ({{ .Values.mariadb.contentSeed.sqlPath }}) plus the mariadb client.
+        - name: seed-world-content
+          image: {{ $img | quote }}
+          imagePullPolicy: {{ .Values.mariadb.image.pullPolicy }}
+          env:
+            - name: MYSQL_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "meridian.dbSecretName" . }}
+                  key: {{ include "meridian.dbSecretKey" . }}
+            - name: DB_HOST
+              value: {{ include "meridian.db.host" . | quote }}
+            - name: DB_USER
+              value: {{ .Values.db.user | quote }}
+            - name: DB_NAME
+              value: {{ $db | quote }}
+            - name: SQL_PATH
+              value: {{ .Values.mariadb.contentSeed.sqlPath | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              [ -f "$SQL_PATH" ] || { echo "content DML $SQL_PATH missing from image"; exit 1; }
+              mysql() { mariadb -h"$DB_HOST" -u"$DB_USER" "$@"; }
+              # Baked content hash: the sole 64-hex token in the world_manifest INSERT.
+              BAKED=$(grep -A4 'INSERT INTO world_manifest' "$SQL_PATH" \
+                        | grep -Eo '[0-9a-f]{64}' | head -1 || true)
+              # Live hash (empty when the table is missing/unseeded).
+              CURRENT=$(mysql -N -B "$DB_NAME" \
+                          -e "SELECT content_hash FROM world_manifest LIMIT 1" 2>/dev/null || true)
+              if [ -n "$BAKED" ] && [ "$BAKED" = "$CURRENT" ]; then
+                echo "world content already at $BAKED — nothing to seed"
+                exit 0
+              fi
+              echo "seeding world content: '${CURRENT:-<none>}' -> '${BAKED:-<unknown>}'"
+              # TRUNCATE every world table (whole-artifact refresh), then load DML.
+              TABLES=$(mysql -N -B information_schema \
+                         -e "SELECT table_name FROM tables WHERE table_schema='$DB_NAME'")
+              { echo "SET FOREIGN_KEY_CHECKS=0;"
+                for t in $TABLES; do echo "TRUNCATE TABLE \`$t\`;"; done
+              } | mysql "$DB_NAME"
+              mysql "$DB_NAME" < "$SQL_PATH"
+              echo "world content seeded (${BAKED:-unknown})"
+{{- end }}

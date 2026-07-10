@@ -47,6 +47,14 @@ worldd:
   chardb:
     enabled: true
     name: meridian_characters
+  # World/CONTENT DB (#482): worldd loads the mcc-emitted content stores (#390 npc/
+  # quest/loot/vendor/item + #483 DbAbilityStore) from meridian_world at boot.
+  # Without this, worldd logs "no world DB configured … serving without content"
+  # and the realm has NO abilities/quests/npcs/loot/vendors (casting → UNKNOWN).
+  # Renders all five MERIDIAN_WORLDDB_* vars; content is seeded by mariadb.contentSeed.
+  worlddb:
+    enabled: true
+    name: meridian_world
 
 tls:
   mode: selfSignedInit

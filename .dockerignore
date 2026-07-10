@@ -1,18 +1,24 @@
 # Keep the Docker build context lean (#176). The daemon image build needs
 # schema/ + server/ (deploy/docker/Dockerfile COPY lines); the meridian-db image
-# (deploy/docker/Dockerfile.db) also needs the db-init wrappers, so deploy/ is
-# excluded EXCEPT deploy/docker/db-init. Everything else is excluded so it
+# (deploy/docker/Dockerfile.db) also needs the db-init wrappers (deploy/docker/
+# db-init) AND — for its #482 world-CONTENT emit stage — the mcc compiler source
+# (tools/mcc) plus the content tree (content/). Everything else is excluded so it
 # neither bloats the context nor invalidates the build cache.
 .git
 .github
 client
 !client
 client/godot-cpp
-content
 docs
 tests
-tools
 scripts
+# tools/ is excluded EXCEPT tools/mcc — the meridian-db content stage (#482)
+# builds mcc there to emit the world CONTENT DML. `tools/*` (not `tools`) leaves
+# the tools dir itself un-excluded so `!tools/mcc` can re-include that subtree.
+tools/*
+!tools/mcc
+# content/ IS shipped (the meridian-db content stage compiles it into world DB
+# DML). Daemon images do not COPY it, so it only affects the db-image context.
 deploy
 !deploy/docker/db-init
 *.md
@@ -22,9 +28,12 @@ pyproject.toml
 # Never ship build trees or local certs into an image context.
 **/build/
 server/build/
+tools/mcc/build/
 deploy/docker/certs/*.crt
 deploy/docker/certs/*.key
 deploy/docker/certs/*.pem
+# Rendered audio (gitignored dev artifacts) is not needed by the world-DB emit.
+content/**/*.wav
 
 # Editor / OS noise
 .DS_Store
