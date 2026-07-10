@@ -66,9 +66,16 @@ using Bytes = std::vector<std::uint8_t>;
 
 // M1 placeholder ids the test drives (mirror the server-side placeholder stores).
 constexpr std::uint32_t kQuestGiverNpc = mw::kPlaceholderNpcIdBase + 1;  // gives Q1 (kill)
+constexpr std::uint32_t kSmithNpc      = mw::kPlaceholderNpcIdBase + 2;  // gives Q2 (collect, choice reward)
 constexpr std::uint32_t kTrainerNpc    = npc::kNpcTrainer;               // trainer + gives Q1
 constexpr std::uint32_t kQ1            = mw::kPlaceholderQuestIdBase + 1; // "Culling the Kobolds"
+constexpr std::uint32_t kQ2            = mw::kPlaceholderQuestIdBase + 2; // "Ore for the Smith" (choice reward)
 constexpr std::uint32_t kCopperOre     = items::kPlaceholderIdBase + 8;
+// Q1 reward preview: 50 XP, 120 copper, 2x Minor Health Potion (always-granted).
+constexpr std::uint32_t kMinorHealthPotion = items::kPlaceholderIdBase + 7;
+// Q2 choice preview: Worn Shortsword OR Cracked Buckler (pick one).
+constexpr std::uint32_t kWornShortsword    = items::kPlaceholderIdBase + 1;
+constexpr std::uint32_t kCrackedBuckler    = items::kPlaceholderIdBase + 2;
 constexpr std::uint64_t kCorpse        = 0xC0FFEEULL;      // the seeded (owned) corpse
 constexpr std::uint64_t kCorpseForeign = 0xBADCAFEULL;     // a corpse owned by someone else
 constexpr std::uint64_t kSelfGuid      = 4242ULL;          // this session's synthetic char guid
@@ -417,17 +424,78 @@ int main() {
                 check("got a QuestAcceptResult (wrong giver)", false);
             }
 
-            // --- QUEST_LOG request -> snapshot still lists Q1 ------------------
+            // --- QUEST_LOG request -> snapshot lists Q1 + its reward preview ---
+            // The reward preview (always-granted items + XP + copper) rides on the
+            // QuestLogEntry so the client can render the turn-in offer straight from
+            // its log, without a separate quest-detail round-trip (#443).
             if (auto pl = round_trip(c, mn::Opcode::QUEST_LOG, enc_quest_log_req(),
                                      mn::Opcode::QUEST_LOG, seq++)) {
                 const auto* ql = decode<mn::QuestLog>(*pl);
-                bool has_q1 = false;
+                const mn::QuestLogEntry* q1 = nullptr;
                 if (ql && ql->quests())
                     for (const auto* e : *ql->quests())
-                        if (e->quest_id() == kQ1) has_q1 = true;
-                check("QUEST_LOG request returns a snapshot with Q1", has_q1);
+                        if (e->quest_id() == kQ1) q1 = e;
+                check("QUEST_LOG request returns a snapshot with Q1", q1 != nullptr);
+                if (q1 != nullptr) {
+                    check("Q1 reward preview: reward_xp == 50", q1->reward_xp() == 50u);
+                    check("Q1 reward preview: reward_money == 120",
+                          q1->reward_money() == 120);
+                    const auto* items = q1->reward_items();
+                    check("Q1 reward preview: 1 always-granted item",
+                          items != nullptr && items->size() == 1);
+                    if (items != nullptr && items->size() == 1)
+                        check("Q1 reward preview: 2x Minor Health Potion",
+                              items->Get(0)->item_id() == kMinorHealthPotion &&
+                                  items->Get(0)->count() == 2u);
+                    // Q1 is a flat-reward quest: no choice picker.
+                    const auto* choices = q1->choice_items();
+                    check("Q1 reward preview: no choice_items (flat reward)",
+                          choices == nullptr || choices->size() == 0);
+                }
             } else {
                 check("got a QuestLog (request)", false);
+            }
+
+            // --- QUEST_ACCEPT(Q2) at the smith -> the log exposes its choice_items --
+            // Q2 ("Ore for the Smith") is a CHOICE-reward quest: the client must see
+            // its choice_items[] to render the picker before turn-in (#443).
+            if (auto pl = round_trip(c, mn::Opcode::QUEST_ACCEPT,
+                                     enc_quest_accept(kQ2, kSmithNpc),
+                                     mn::Opcode::QUEST_ACCEPT_RESULT, seq++)) {
+                const auto* m = decode<mn::QuestAcceptResult>(*pl);
+                check("accept Q2 at the smith -> OK",
+                      m && m->quest_id() == kQ2 &&
+                          m->status() == mn::QuestAcceptStatus::OK);
+            } else {
+                check("got a QuestAcceptResult (Q2)", false);
+            }
+            // Drain the QuestLog snapshot that follows the accept and inspect Q2.
+            {
+                std::optional<Bytes> snap = c.recv_frame();
+                std::optional<mw::Frame> rf = snap ? mw::decode_frame(*snap) : std::nullopt;
+                const mn::QuestLogEntry* q2 = nullptr;
+                const mn::QuestLog* ql = nullptr;
+                Bytes pl;
+                if (rf && rf->opcode == mn::Opcode::QUEST_LOG) {
+                    pl.assign(rf->payload, rf->payload + rf->payload_len);
+                    ql = decode<mn::QuestLog>(pl);
+                    if (ql && ql->quests())
+                        for (const auto* e : *ql->quests())
+                            if (e->quest_id() == kQ2) q2 = e;
+                }
+                check("QuestLog after Q2 accept lists Q2", q2 != nullptr);
+                if (q2 != nullptr) {
+                    const auto* choices = q2->choice_items();
+                    check("Q2 reward preview: 2 choice_items",
+                          choices != nullptr && choices->size() == 2);
+                    if (choices != nullptr && choices->size() == 2)
+                        check("Q2 reward preview: Worn Shortsword OR Cracked Buckler",
+                              choices->Get(0)->item_id() == kWornShortsword &&
+                                  choices->Get(1)->item_id() == kCrackedBuckler);
+                    check("Q2 reward preview: reward_xp == 40", q2->reward_xp() == 40u);
+                    check("Q2 reward preview: reward_money == 75",
+                          q2->reward_money() == 75);
+                }
             }
 
             // --- GOSSIP on the quest giver -> menu carries a quest option ------

@@ -1504,10 +1504,13 @@ std::vector<Message> build_corpus() {
                         "if2_quest_turn_in_result.reward_items[0].count");
                }});
 
-  // QuestLog — S->C the active quest-log snapshot (entry + its objectives; nested
-  // vectors of tables, the richest quest wire shape).
+  // QuestLog — S->C the active quest-log snapshot (entry + its objectives + the
+  // reward PREVIEW; nested vectors of tables, the richest quest wire shape). The
+  // preview (flat XP + copper, always-granted reward_items, one-of choice_items)
+  // is what the client renders the turn-in offer + choice picker from (#443).
   c.push_back({"if2_quest_log", "IF-2", "QUEST_LOG (0x4006)",
-               "S->C log snapshot: quest 800001 with a KILL objective (1/3)",
+               "S->C log snapshot: quest 800002 (KILL 1/3) with reward preview + a "
+               "2-option choice",
                [] {
                  fb::FlatBufferBuilder b;
                  std::vector<fb::Offset<mn::QuestObjectiveState>> objs;
@@ -1515,9 +1518,21 @@ std::vector<Message> build_corpus() {
                      b, mn::QuestObjectiveType::KILL, /*target_id=*/700010u,
                      /*have=*/1u, /*need=*/3u, /*complete=*/false));
                  auto ov = b.CreateVector(objs);
+                 // Reward preview: one always-granted item + two one-of choices.
+                 std::vector<fb::Offset<mn::QuestRewardItem>> rewards;
+                 rewards.push_back(mn::CreateQuestRewardItem(b, /*item_id=*/900007u,
+                                                             /*count=*/2u));
+                 auto rv = b.CreateVector(rewards);
+                 std::vector<fb::Offset<mn::QuestRewardItem>> choices;
+                 choices.push_back(mn::CreateQuestRewardItem(b, /*item_id=*/900001u,
+                                                             /*count=*/1u));
+                 choices.push_back(mn::CreateQuestRewardItem(b, /*item_id=*/900002u,
+                                                             /*count=*/1u));
+                 auto cv = b.CreateVector(choices);
                  std::vector<fb::Offset<mn::QuestLogEntry>> entries;
                  entries.push_back(mn::CreateQuestLogEntry(
-                     b, /*quest_id=*/800001u, /*level=*/2u, /*complete=*/false, ov));
+                     b, /*quest_id=*/800002u, /*level=*/2u, /*complete=*/false, ov,
+                     /*reward_xp=*/40u, /*reward_money=*/75, rv, cv));
                  auto ev = b.CreateVector(entries);
                  b.Finish(mn::CreateQuestLog(b, ev));
                  return finish_to_bytes(b);
@@ -1533,7 +1548,7 @@ std::vector<Message> build_corpus() {
                              "if2_quest_log has 1 quest"))
                    return;
                  const auto* e0 = quests->Get(0);
-                 expect(e0->quest_id() == 800001u, "if2_quest_log[0].quest_id");
+                 expect(e0->quest_id() == 800002u, "if2_quest_log[0].quest_id");
                  expect(e0->level() == 2u, "if2_quest_log[0].level");
                  expect(e0->complete() == false, "if2_quest_log[0].complete");
                  const auto* objs = e0->objectives();
@@ -1548,6 +1563,25 @@ std::vector<Message> build_corpus() {
                         "if2_quest_log[0].objectives[0].have");
                  expect(objs->Get(0)->need() == 3u,
                         "if2_quest_log[0].objectives[0].need");
+                 // Reward preview.
+                 expect(e0->reward_xp() == 40u, "if2_quest_log[0].reward_xp");
+                 expect(e0->reward_money() == 75, "if2_quest_log[0].reward_money");
+                 const auto* rewards = e0->reward_items();
+                 if (!expect(rewards != nullptr && rewards->size() == 1,
+                             "if2_quest_log[0] has 1 reward item"))
+                   return;
+                 expect(rewards->Get(0)->item_id() == 900007u,
+                        "if2_quest_log[0].reward_items[0].item_id");
+                 expect(rewards->Get(0)->count() == 2u,
+                        "if2_quest_log[0].reward_items[0].count");
+                 const auto* choices = e0->choice_items();
+                 if (!expect(choices != nullptr && choices->size() == 2,
+                             "if2_quest_log[0] has 2 choice items"))
+                   return;
+                 expect(choices->Get(0)->item_id() == 900001u,
+                        "if2_quest_log[0].choice_items[0].item_id");
+                 expect(choices->Get(1)->item_id() == 900002u,
+                        "if2_quest_log[0].choice_items[1].item_id");
                }});
 
   // ==== IF-2 inventory / loot (world.fbs; ITM-02 #369) ======================
