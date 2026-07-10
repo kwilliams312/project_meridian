@@ -86,6 +86,11 @@ var _hud: MeridianHud
 
 var _my_guid: int = 0
 var _last_server_tick: int = 0
+
+# ITM/ECO (#441): the buyback slot of the most recent VENDOR_BUYBACK_REQUEST. The typed
+# VENDOR_BUYBACK_RESULT does not echo the slot, so the client correlates its own request
+# with the next result to drop the right entry from the local buyback queue.
+var _pending_buyback_slot: int = -1
 var _conn_text: String = "offline"
 var _client_ms: int = 0                     # monotonic client clock for the sim
 
@@ -141,6 +146,19 @@ func _ready() -> void:
 	_bus.quest_turn_in_requested.connect(_on_quest_turn_in_requested)
 	_bus.quest_log_requested.connect(_on_quest_log_requested)
 	_bus.giver_indicator_changed.connect(_on_giver_indicator_changed)
+
+	# ITM/ECO/NPC (#441): the same controller seam for loot/vendor/trainer. The gossip
+	# vendor/trainer entry hooks open the sibling windows; loot/vendor/trainer intents
+	# become outbound frames; the server's typed results are decoded + published back.
+	_bus.vendor_entry_selected.connect(_on_vendor_entry_selected)
+	_bus.trainer_entry_selected.connect(_on_trainer_entry_selected)
+	_bus.loot_request_requested.connect(_on_loot_request_requested)
+	_bus.loot_take_requested.connect(_on_loot_take_requested)
+	_bus.loot_release_requested.connect(_on_loot_release_requested)
+	_bus.vendor_buy_requested.connect(_on_vendor_buy_requested)
+	_bus.vendor_sell_requested.connect(_on_vendor_sell_requested)
+	_bus.vendor_buyback_requested.connect(_on_vendor_buyback_requested)
+	_bus.trainer_learn_requested.connect(_on_trainer_learn_requested)
 
 	_interp = MeridianRemoteInterpolator.new()
 	_mover = MeridianMovementController.new()
@@ -540,6 +558,16 @@ func _input(event: InputEvent) -> void:
 			if _hud != null:
 				_hud.toggle_quest_log()  # toggle the quest log window
 			get_viewport().set_input_as_handled()
+		KEY_B:
+			if _hud != null:
+				_hud.toggle_bags()  # toggle the bags/inventory window (ITM-01, #441)
+			get_viewport().set_input_as_handled()
+		KEY_F:
+			# ITM-02 (#441): open the loot window on the current NPC/corpse. Corpse entities
+			# do not spawn at M1, so the corpse is the current target guid if set, else the
+			# dev default (MERIDIAN_LOOT_CORPSE) so the flow is drivable in the greybox client.
+			_open_loot_on_current_corpse()
+			get_viewport().set_input_as_handled()
 		KEY_ESCAPE:
 			if _bus != null:
 				_bus.close_gossip()  # dismiss the gossip window
@@ -568,6 +596,23 @@ func _open_gossip_on_current_npc() -> void:
 	_bus.request_gossip_hello(npc)
 
 
+# The dev corpse to open loot on when nothing is targeted (overridable with
+# MERIDIAN_LOOT_CORPSE). Corpse entities do not spawn at M1, so this drives the greybox
+# loot flow against a server-side loot session created by a kill.
+func _default_loot_corpse() -> int:
+	var env := OS.get_environment("MERIDIAN_LOOT_CORPSE")
+	return int(env) if env.is_valid_int() and int(env) > 0 else 1
+
+
+func _open_loot_on_current_corpse() -> void:
+	if _bus == null:
+		return
+	var corpse := _bus.target_guid()
+	if corpse == 0:
+		corpse = _default_loot_corpse()
+	_bus.request_loot(corpse)
+
+
 # Decode a raw quest/gossip S→C frame and publish it to the bus (the HUD reads it there).
 func _route_quest_gossip_frame(opcode: int, payload: PackedByteArray) -> void:
 	if _net == null or _bus == null:
@@ -586,7 +631,36 @@ func _route_quest_gossip_frame(opcode: int, payload: PackedByteArray) -> void:
 		"quest_log":
 			_bus.publish_quest_log(q.get("quests", []))
 		_:
-			pass  # not a quest/gossip opcode — ignore (ClockSync etc.)
+			# Not a quest/gossip opcode — try the loot/vendor/trainer decode seam (#441).
+			_route_econ_frame(opcode, payload)
+
+
+# Decode a raw loot/vendor/trainer S→C frame and publish it to the bus (ITM/ECO/NPC, #441).
+func _route_econ_frame(opcode: int, payload: PackedByteArray) -> void:
+	if _net == null or _bus == null:
+		return
+	var e: Dictionary = _net.decode_econ_frame(opcode, payload)
+	match String(e.get("kind", "")):
+		"loot_response":
+			_bus.publish_loot_response(int(e.get("corpse_guid", 0)), int(e.get("status", 0)),
+				int(e.get("copper", 0)), e.get("items", []))
+		"loot_result":
+			_bus.publish_loot_result(e)
+		"loot_closed":
+			_bus.publish_loot_closed(int(e.get("corpse_guid", 0)))
+		"vendor_buy_result":
+			_bus.publish_vendor_buy_result(e)
+		"vendor_sell_result":
+			_bus.publish_vendor_sell_result(e)
+		"vendor_buyback_result":
+			_bus.publish_vendor_buyback_result(e, _pending_buyback_slot)
+			_pending_buyback_slot = -1
+		"trainer_list":
+			_bus.publish_trainer_list(int(e.get("npc_guid", 0)), e.get("entries", []))
+		"trainer_learn_result":
+			_bus.publish_trainer_learn_result(e)
+		_:
+			pass  # not a loot/vendor/trainer opcode — ignore (ClockSync etc.)
 
 
 # --- Bus intent handlers (send the matching outbound frame) -------------------
@@ -648,6 +722,63 @@ func _on_giver_indicator_changed(npc_guid: int, marker: String) -> void:
 		node.add_child(existing)
 	existing.text = marker
 	existing.modulate = Color(1.0, 0.85, 0.2) if marker == "!" else Color(0.55, 0.9, 0.4)
+
+
+# --- Loot / vendor / trainer controller (ITM-02/ECO-01/NPC-02, #441) ----------
+# Gossip vendor/trainer entries open the sibling windows through the bus; loot/vendor/
+# trainer INTENTS become outbound frames (send_bulk). The server's typed results are
+# decoded by _route_econ_frame and published back to the bus.
+
+func _on_vendor_entry_selected(npc_guid: int) -> void:
+	# The vendor catalog is not on the wire (gap), so the greybox uses the gossip NPC guid
+	# as the vendor id — the server validates it (UNKNOWN_VENDOR if it is not a vendor).
+	if _bus != null:
+		_bus.open_vendor(npc_guid)
+
+
+func _on_trainer_entry_selected(npc_guid: int) -> void:
+	# TRAINER_LIST was pushed with the GOSSIP_MENU; this only reveals the window.
+	if _bus != null:
+		_bus.open_trainer(npc_guid)
+
+
+func _on_loot_request_requested(corpse_guid: int) -> void:
+	_send_econ(_net.build_loot_request_frame(corpse_guid) if _net != null else PackedByteArray())
+	print("[world] LOOT_REQUEST -> corpse=%d" % corpse_guid)
+
+
+func _on_loot_take_requested(corpse_guid: int, slot: int, money: bool) -> void:
+	_send_econ(_net.build_loot_take_frame(corpse_guid, slot, money) if _net != null else PackedByteArray())
+
+
+func _on_loot_release_requested(corpse_guid: int) -> void:
+	_send_econ(_net.build_loot_release_frame(corpse_guid) if _net != null else PackedByteArray())
+
+
+func _on_vendor_buy_requested(vendor_id: int, item_template_id: int, quantity: int) -> void:
+	_send_econ(_net.build_vendor_buy_frame(vendor_id, item_template_id, quantity) if _net != null else PackedByteArray())
+	print("[world] VENDOR_BUY -> vendor=%d item=%d x%d" % [vendor_id, item_template_id, quantity])
+
+
+func _on_vendor_sell_requested(vendor_id: int, backpack_slot: int, quantity: int) -> void:
+	_send_econ(_net.build_vendor_sell_frame(vendor_id, backpack_slot, quantity) if _net != null else PackedByteArray())
+	print("[world] VENDOR_SELL -> vendor=%d slot=%d x%d" % [vendor_id, backpack_slot, quantity])
+
+
+func _on_vendor_buyback_requested(buyback_slot: int) -> void:
+	_pending_buyback_slot = buyback_slot  # correlate with the next VENDOR_BUYBACK_RESULT
+	_send_econ(_net.build_vendor_buyback_frame(buyback_slot) if _net != null else PackedByteArray())
+
+
+func _on_trainer_learn_requested(npc_guid: int, ability_id: int) -> void:
+	_send_econ(_net.build_trainer_learn_frame(npc_guid, ability_id) if _net != null else PackedByteArray())
+	print("[world] TRAINER_LEARN -> npc=%d ability=%d" % [npc_guid, ability_id])
+
+
+# Send an already-built econ frame at bulk priority (guards an empty build / offline net).
+func _send_econ(frame: PackedByteArray) -> void:
+	if _net != null and frame.size() > 0:
+		_net.send_bulk(frame)
 
 
 func _cycle_target() -> void:

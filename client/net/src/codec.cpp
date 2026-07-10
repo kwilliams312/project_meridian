@@ -541,4 +541,297 @@ std::optional<QuestLog> decode_quest_log(const Bytes& buf) {
     return out;
 }
 
+// ---- IF-2 LOOT (0x5001..0x5006 — ITM-02, #369/#441) ------------------------
+
+Bytes encode_loot_request(const LootRequest& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateLootRequest(b, in.corpse_guid));
+    return to_bytes(b);
+}
+
+std::optional<LootRequest> decode_loot_request(const Bytes& buf) {
+    const mn::LootRequest* t = verify_and_get<mn::LootRequest>(buf);
+    if (t == nullptr) return std::nullopt;
+    LootRequest out;
+    out.corpse_guid = t->corpse_guid();
+    return out;
+}
+
+Bytes encode_loot_response(const LootResponse& in) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::LootItem>> items;
+    items.reserve(in.items.size());
+    for (const auto& it : in.items) {
+        items.push_back(mn::CreateLootItem(b, it.slot, it.item_template_id, it.count,
+                                           it.quality, it.quest_item));
+    }
+    b.Finish(mn::CreateLootResponse(b, in.corpse_guid,
+                                    static_cast<mn::LootStatus>(in.status), in.copper,
+                                    b.CreateVector(items)));
+    return to_bytes(b);
+}
+
+std::optional<LootResponse> decode_loot_response(const Bytes& buf) {
+    const mn::LootResponse* t = verify_and_get<mn::LootResponse>(buf);
+    if (t == nullptr) return std::nullopt;
+    LootResponse out;
+    out.corpse_guid = t->corpse_guid();
+    out.status = static_cast<std::uint16_t>(t->status());
+    out.copper = t->copper();
+    if (t->items() != nullptr) {
+        out.items.reserve(t->items()->size());
+        for (const auto* it : *t->items()) {
+            if (it == nullptr) continue;
+            out.items.push_back(LootItem{it->slot(), it->item_template_id(), it->count(),
+                                         it->quality(), it->quest_item()});
+        }
+    }
+    return out;
+}
+
+Bytes encode_loot_take(const LootTake& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateLootTake(b, in.corpse_guid, in.slot, in.money));
+    return to_bytes(b);
+}
+
+std::optional<LootTake> decode_loot_take(const Bytes& buf) {
+    const mn::LootTake* t = verify_and_get<mn::LootTake>(buf);
+    if (t == nullptr) return std::nullopt;
+    LootTake out;
+    out.corpse_guid = t->corpse_guid();
+    out.slot = t->slot();
+    out.money = t->money();
+    return out;
+}
+
+Bytes encode_loot_result(const LootResult& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateLootResult(b, in.corpse_guid, in.slot,
+                                  static_cast<mn::LootTakeStatus>(in.status),
+                                  in.item_template_id, in.count, in.copper));
+    return to_bytes(b);
+}
+
+std::optional<LootResult> decode_loot_result(const Bytes& buf) {
+    const mn::LootResult* t = verify_and_get<mn::LootResult>(buf);
+    if (t == nullptr) return std::nullopt;
+    LootResult out;
+    out.corpse_guid = t->corpse_guid();
+    out.slot = t->slot();
+    out.status = static_cast<std::uint16_t>(t->status());
+    out.item_template_id = t->item_template_id();
+    out.count = t->count();
+    out.copper = t->copper();
+    return out;
+}
+
+Bytes encode_loot_release(const LootRelease& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateLootRelease(b, in.corpse_guid));
+    return to_bytes(b);
+}
+
+std::optional<LootRelease> decode_loot_release(const Bytes& buf) {
+    const mn::LootRelease* t = verify_and_get<mn::LootRelease>(buf);
+    if (t == nullptr) return std::nullopt;
+    LootRelease out;
+    out.corpse_guid = t->corpse_guid();
+    return out;
+}
+
+Bytes encode_loot_closed(const LootClosed& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateLootClosed(b, in.corpse_guid));
+    return to_bytes(b);
+}
+
+std::optional<LootClosed> decode_loot_closed(const Bytes& buf) {
+    const mn::LootClosed* t = verify_and_get<mn::LootClosed>(buf);
+    if (t == nullptr) return std::nullopt;
+    LootClosed out;
+    out.corpse_guid = t->corpse_guid();
+    return out;
+}
+
+// ---- IF-2 VENDOR (0x5101..0x5106 — ECO-01, #370/#441) ----------------------
+
+Bytes encode_vendor_buy_request(const VendorBuyRequest& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateVendorBuyRequest(b, in.vendor_id, in.item_template_id, in.quantity));
+    return to_bytes(b);
+}
+
+std::optional<VendorBuyRequest> decode_vendor_buy_request(const Bytes& buf) {
+    const mn::VendorBuyRequest* t = verify_and_get<mn::VendorBuyRequest>(buf);
+    if (t == nullptr) return std::nullopt;
+    VendorBuyRequest out;
+    out.vendor_id = t->vendor_id();
+    out.item_template_id = t->item_template_id();
+    out.quantity = t->quantity();
+    return out;
+}
+
+Bytes encode_vendor_buy_result(const VendorBuyResult& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateVendorBuyResult(b, static_cast<mn::VendorBuyStatus>(in.status),
+                                       in.vendor_id, in.item_template_id, in.quantity,
+                                       in.item_guid, in.total_price, in.balance));
+    return to_bytes(b);
+}
+
+std::optional<VendorBuyResult> decode_vendor_buy_result(const Bytes& buf) {
+    const mn::VendorBuyResult* t = verify_and_get<mn::VendorBuyResult>(buf);
+    if (t == nullptr) return std::nullopt;
+    VendorBuyResult out;
+    out.status = static_cast<std::uint16_t>(t->status());
+    out.vendor_id = t->vendor_id();
+    out.item_template_id = t->item_template_id();
+    out.quantity = t->quantity();
+    out.item_guid = t->item_guid();
+    out.total_price = t->total_price();
+    out.balance = t->balance();
+    return out;
+}
+
+Bytes encode_vendor_sell_request(const VendorSellRequest& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateVendorSellRequest(b, in.vendor_id, in.backpack_slot, in.quantity));
+    return to_bytes(b);
+}
+
+std::optional<VendorSellRequest> decode_vendor_sell_request(const Bytes& buf) {
+    const mn::VendorSellRequest* t = verify_and_get<mn::VendorSellRequest>(buf);
+    if (t == nullptr) return std::nullopt;
+    VendorSellRequest out;
+    out.vendor_id = t->vendor_id();
+    out.backpack_slot = t->backpack_slot();
+    out.quantity = t->quantity();
+    return out;
+}
+
+Bytes encode_vendor_sell_result(const VendorSellResult& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateVendorSellResult(b, static_cast<mn::VendorSellStatus>(in.status),
+                                        in.backpack_slot, in.item_template_id, in.quantity,
+                                        in.total_credit, in.balance, in.buyback_slot));
+    return to_bytes(b);
+}
+
+std::optional<VendorSellResult> decode_vendor_sell_result(const Bytes& buf) {
+    const mn::VendorSellResult* t = verify_and_get<mn::VendorSellResult>(buf);
+    if (t == nullptr) return std::nullopt;
+    VendorSellResult out;
+    out.status = static_cast<std::uint16_t>(t->status());
+    out.backpack_slot = t->backpack_slot();
+    out.item_template_id = t->item_template_id();
+    out.quantity = t->quantity();
+    out.total_credit = t->total_credit();
+    out.balance = t->balance();
+    out.buyback_slot = t->buyback_slot();
+    return out;
+}
+
+Bytes encode_vendor_buyback_request(const VendorBuybackRequest& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateVendorBuybackRequest(b, in.buyback_slot));
+    return to_bytes(b);
+}
+
+std::optional<VendorBuybackRequest> decode_vendor_buyback_request(const Bytes& buf) {
+    const mn::VendorBuybackRequest* t = verify_and_get<mn::VendorBuybackRequest>(buf);
+    if (t == nullptr) return std::nullopt;
+    VendorBuybackRequest out;
+    out.buyback_slot = t->buyback_slot();
+    return out;
+}
+
+Bytes encode_vendor_buyback_result(const VendorBuybackResult& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateVendorBuybackResult(
+        b, static_cast<mn::VendorBuybackStatus>(in.status), in.item_template_id,
+        in.quantity, in.item_guid, in.price, in.balance));
+    return to_bytes(b);
+}
+
+std::optional<VendorBuybackResult> decode_vendor_buyback_result(const Bytes& buf) {
+    const mn::VendorBuybackResult* t = verify_and_get<mn::VendorBuybackResult>(buf);
+    if (t == nullptr) return std::nullopt;
+    VendorBuybackResult out;
+    out.status = static_cast<std::uint16_t>(t->status());
+    out.item_template_id = t->item_template_id();
+    out.quantity = t->quantity();
+    out.item_guid = t->item_guid();
+    out.price = t->price();
+    out.balance = t->balance();
+    return out;
+}
+
+// ---- IF-2 TRAINER (0x5203..0x5205 — NPC-02, #372/#441) ---------------------
+
+Bytes encode_trainer_list(const TrainerList& in) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::TrainerListEntry>> entries;
+    entries.reserve(in.entries.size());
+    for (const auto& e : in.entries) {
+        entries.push_back(mn::CreateTrainerListEntry(
+            b, e.ability_id, e.cost, e.required_class, e.required_level,
+            static_cast<mn::TrainableState>(e.state)));
+    }
+    b.Finish(mn::CreateTrainerList(b, in.npc_guid, b.CreateVector(entries)));
+    return to_bytes(b);
+}
+
+std::optional<TrainerList> decode_trainer_list(const Bytes& buf) {
+    const mn::TrainerList* t = verify_and_get<mn::TrainerList>(buf);
+    if (t == nullptr) return std::nullopt;
+    TrainerList out;
+    out.npc_guid = t->npc_guid();
+    if (t->entries() != nullptr) {
+        out.entries.reserve(t->entries()->size());
+        for (const auto* e : *t->entries()) {
+            if (e == nullptr) continue;
+            out.entries.push_back(TrainerListEntry{
+                e->ability_id(), e->cost(), e->required_class(), e->required_level(),
+                static_cast<std::uint16_t>(e->state())});
+        }
+    }
+    return out;
+}
+
+Bytes encode_trainer_learn(const TrainerLearn& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateTrainerLearn(b, in.npc_guid, in.ability_id));
+    return to_bytes(b);
+}
+
+std::optional<TrainerLearn> decode_trainer_learn(const Bytes& buf) {
+    const mn::TrainerLearn* t = verify_and_get<mn::TrainerLearn>(buf);
+    if (t == nullptr) return std::nullopt;
+    TrainerLearn out;
+    out.npc_guid = t->npc_guid();
+    out.ability_id = t->ability_id();
+    return out;
+}
+
+Bytes encode_trainer_learn_result(const TrainerLearnResult& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateTrainerLearnResult(
+        b, in.npc_guid, in.ability_id,
+        static_cast<mn::TrainerLearnStatus>(in.status), in.cost, in.new_balance));
+    return to_bytes(b);
+}
+
+std::optional<TrainerLearnResult> decode_trainer_learn_result(const Bytes& buf) {
+    const mn::TrainerLearnResult* t = verify_and_get<mn::TrainerLearnResult>(buf);
+    if (t == nullptr) return std::nullopt;
+    TrainerLearnResult out;
+    out.npc_guid = t->npc_guid();
+    out.ability_id = t->ability_id();
+    out.status = static_cast<std::uint16_t>(t->status());
+    out.cost = t->cost();
+    out.new_balance = t->new_balance();
+    return out;
+}
+
 }  // namespace meridian::clientnet::codec
