@@ -179,7 +179,12 @@ Verifier make_verifier(std::string_view username, std::string_view password,
     BN x = from_bytes(compute_x_impl(c, username, password, salt));
     BN v;  // v = g^x mod N
     BN_mod_exp(v.p, c.g, x.p, c.N, c.bnctx);
-    return Verifier{salt, bn_bytes(v.p)};
+    // Left-pad to N's byte width so the stored credential is a deterministic
+    // width. v is an integer in [0, N); its minimal encoding is a byte short
+    // whenever the top byte is zero (~1 in 256 for a 2048-bit N), which made the
+    // account test's fixed-width assertion flaky. Leading zeros are semantically
+    // insignificant — every reader parses the verifier back through from_bytes.
+    return Verifier{salt, pad(v.p, c.width)};
 }
 
 struct ServerSession::Impl {
