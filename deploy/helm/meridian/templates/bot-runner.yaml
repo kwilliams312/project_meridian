@@ -12,9 +12,19 @@
   ordinal guarantees pod-0 is always the same account across restarts.
 
   Each pod:
-    1. init `provision-account`   — meridian-account create <prefix000N>   (idempotent)
-    2. init `provision-character` — meridian-character create --class <1..4> (idempotent,
-       class-rotated so the #328 per-class capsule colors differ)
+    1. sidecar `provision-account`   — a loop that idempotently (re)creates this
+       pod's account <prefix000N> in meridian_auth every reprovisionInterval s.
+    2. sidecar `provision-character` — a loop that idempotently (re)creates this
+       pod's class-rotated (1..4, #328 per-class capsule colours) character every
+       reprovisionInterval s.
+       Both are NATIVE sidecars (initContainers with restartPolicy: Always): they
+       start before the `bot` container AND keep running. When the ephemeral-dev
+       mariadb reseeds (emptyDir, schema-only) and wipes the accounts (#494), the
+       next loop iteration re-creates them and the bot's login-retry loop
+       reconnects — one-shot init containers could not self-heal that. They run
+       their own meridian-account / meridian-character images because the bot
+       image ships only meridian-bot (no libmariadb), so the provisioning tools
+       cannot run inside the bot container itself.
     3. main `bot`                 — a supervise loop that keeps ONE meridian-bot
        session alive against the IN-CLUSTER authd/worldd Services (not the
        external LB), re-entering when a --duration window ends, so the bots
@@ -112,11 +122,17 @@ spec:
               until nc -z {{ $worlddSvc }} {{ $worlddPort }}; do
                 echo "waiting for {{ $worlddSvc }}:{{ $worlddPort }}"; sleep 2;
               done
-        # Provision THIS pod's bot account in meridian_auth. Idempotent:
-        # meridian-account exits 3 on a duplicate username (already provisioned).
+        # Provision THIS pod's bot account in meridian_auth — CONTINUOUSLY, so it
+        # survives an ephemeral-dev mariadb reseed (#494). A native sidecar
+        # (restartPolicy: Always) whose loop re-creates the account every
+        # reprovisionInterval s; the bot's own login-retry loop then reconnects on
+        # its next iteration. Idempotent: meridian-account exits 3 on a duplicate
+        # username (steady state), which the loop treats as a benign skip. Runs the
+        # account image (not the bot image, which ships no libmariadb).
         - name: provision-account
           image: {{ $acctImg | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          restartPolicy: Always
           envFrom:
             - configMapRef:
                 name: {{ include "meridian.configMapName" . }}
@@ -136,18 +152,29 @@ spec:
             - sh
             - -c
             - |
-              set -e
+              set -u
               ORD="${POD_NAME##*-}"                       # StatefulSet ordinal (0-based)
               U="$(printf '{{ $br.prefix }}%04d' "$((ORD + 1))")"
-              echo "provision account $U"
-              /usr/local/bin/meridian-account create --username "$U" --password '{{ $br.password }}' || [ $? -eq 3 ]
-        # Provision THIS pod's character with a ROTATING class (1..4) so the #328
-        # per-class capsule colours differ across the bots. meridian-character
-        # resolves the account_id cross-DB from meridian_auth; name defaults to the
-        # username. Idempotent: exits 3 on a duplicate name / one-per-account cap.
+              echo "provision-account sidecar for $U (re-provision every {{ $br.reprovisionInterval }}s)"
+              while true; do
+                if /usr/local/bin/meridian-account create --username "$U" --password '{{ $br.password }}'; then
+                  :
+                else
+                  rc=$?
+                  [ "$rc" -eq 3 ] || echo "provision-account $U rc=$rc (retrying in {{ $br.reprovisionInterval }}s)"
+                fi
+                sleep {{ $br.reprovisionInterval }}
+              done
+        # Provision THIS pod's character (ROTATING class 1..4 for the #328 per-class
+        # capsule colours) — CONTINUOUSLY, same self-healing native-sidecar shape as
+        # provision-account. meridian-character resolves the account_id cross-DB from
+        # meridian_auth; until provision-account (re)creates the account it exits 4
+        # (unknown account), which the loop tolerates and retries. Idempotent: exit 3
+        # = duplicate name / one-per-account cap = steady-state skip.
         - name: provision-character
           image: {{ $charImg | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          restartPolicy: Always
           envFrom:
             - configMapRef:
                 name: {{ include "meridian.configMapName" . }}
@@ -167,12 +194,20 @@ spec:
             - sh
             - -c
             - |
-              set -e
+              set -u
               ORD="${POD_NAME##*-}"
               U="$(printf '{{ $br.prefix }}%04d' "$((ORD + 1))")"
               CLS="$(( (ORD % 4) + 1 ))"                  # rotate Vanguard/Runcaller/Warden/Mender
-              echo "provision character $U (class $CLS)"
-              /usr/local/bin/meridian-character create --username "$U" --class "$CLS" || [ $? -eq 3 ]
+              echo "provision-character sidecar for $U (class $CLS; re-provision every {{ $br.reprovisionInterval }}s)"
+              while true; do
+                if /usr/local/bin/meridian-character create --username "$U" --class "$CLS"; then
+                  :
+                else
+                  rc=$?
+                  [ "$rc" -eq 3 ] || echo "provision-character $U (class $CLS) rc=$rc (retrying in {{ $br.reprovisionInterval }}s)"
+                fi
+                sleep {{ $br.reprovisionInterval }}
+              done
       containers:
         # Supervise loop: keep ONE persistent meridian-bot session alive. Each
         # --duration window is a login -> enter-world -> move-square episode; when
@@ -180,6 +215,11 @@ spec:
         # ~all day (the #305/#376 persist behaviour). Targets the in-cluster
         # authd/worldd ClusterIP DNS names. --realm is omitted so the bot selects
         # the first realm in the seeded realm list (matches the loadtest Job).
+        # Account/character provisioning is kept alive out-of-band by the
+        # provision-account / provision-character sidecars above (#494): if a
+        # mariadb reseed wipes the account mid-run, a login here fails, the loop
+        # sleeps restartDelaySeconds and retries, and by then the sidecar has
+        # re-created the account — so the session self-heals without a pod restart.
         - name: bot
           image: {{ $botImg | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}

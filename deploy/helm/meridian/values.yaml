@@ -317,6 +317,13 @@ botRunner:
   # Delay between a session ending and the next re-entry (avoids a hot restart
   # loop if worldd is briefly unavailable).
   restartDelaySeconds: 10
+  # How often (seconds) the provisioning sidecars re-assert this pod's account +
+  # character. The dev realm's mariadb is ephemeral (emptyDir) and reseeds
+  # schema-only on restart (#494), wiping the bot accounts; a short interval
+  # re-creates them (idempotent — a duplicate is exit 3 = benign skip) so the
+  # bot's login-retry loop reconnects instead of failing SRP against an empty
+  # account table. One-shot init provisioning could not self-heal that.
+  reprovisionInterval: 30
   resources:
     requests:
       cpu: 50m
