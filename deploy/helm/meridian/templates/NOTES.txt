@@ -10,6 +10,11 @@ Deployed daemons (single-realm M0–M2 topology, D-30 §10):
              Service: {{ include "meridian.fullname" . }}-worldd:{{ .Values.worldd.service.port | default .Values.worldd.port }} ({{ .Values.worldd.service.type | default "ClusterIP" }}{{ if and (eq (.Values.worldd.service.type | default "ClusterIP") "NodePort") .Values.worldd.service.nodePort }}, nodePort {{ .Values.worldd.service.nodePort }}{{ end }})
 {{- end }}
 
+{{- if .Values.botRunner.enabled }}
+  • bot-runner — {{ .Values.botRunner.count }} persistent headless meridian-bot player(s) populating the realm (#487)
+             StatefulSet: {{ include "meridian.fullname" . }}-bot-runner (accounts {{ .Values.botRunner.prefix }}0001..)
+{{- end }}
+
 Database: {{ if .Values.mariadb.enabled }}bundled in-cluster MariaDB{{ else }}external MariaDB{{ end }} at {{ include "meridian.db.host" . }}:{{ .Values.db.port }}
   ({{ if .Values.mariadb.enabled }}chart-managed, {{ if .Values.mariadb.persistence.enabled }}persistent PVC{{ else }}ephemeral emptyDir{{ end }}{{ else }}operator-managed, see README "Database"{{ end }}. auth DB: {{ .Values.db.names.auth }})
 

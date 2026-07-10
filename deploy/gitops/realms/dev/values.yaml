@@ -72,3 +72,11 @@ mariadb:
 # web portal lands (#339). Realm address defaults to .31 (the dev LB IP).
 seed:
   enabled: true
+
+# Persistent bot players (#487): 4 headless meridian-bot sessions login → enter
+# world → walk, class-rotated (1..4) so the #328 capsule colours differ. So a real
+# client entering the dev realm sees other players via AoI. Dev only — PTR/Prod
+# leave botRunner disabled (chart default). Points at the in-cluster worldd Service.
+botRunner:
+  enabled: true
+  count: 4

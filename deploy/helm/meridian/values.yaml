@@ -279,6 +279,56 @@ worldd:
   extraArgs: []
   extraEnv: []
 
+# ── bot-runner — N persistent headless meridian-bot players (#487) ───────────
+# Populates a hosted realm with N headless bots so a real client (or another bot)
+# entering the world SEES other players via the #87 AoI relay — the realm
+# equivalent of the local demo-networked.sh --bots N capsules. Rendered as a
+# StatefulSet (stable per-pod ordinal ⇒ stable bot account, satisfying the #326
+# single-active-session-per-account rule) + a headless governing Service.
+#
+# Each pod provisions its OWN account + a class-rotated character (reusing the
+# meridian-account / meridian-character images, idempotent) then runs a supervise
+# loop that keeps ONE meridian-bot session alive against the IN-CLUSTER worldd
+# Service, re-entering when a session window ends (the #305/#376 persist
+# behaviour). All three images are pulled at the chart's pinned image.tag.
+#
+# OFF by default — enable ONLY on dev with a small N (PTR/Prod leave it disabled).
+botRunner:
+  enabled: false
+  # Number of persistent bot players (StatefulSet replicas). Each is a distinct
+  # account <prefix>0001..<prefix>000N; classes rotate 1..4 across them.
+  count: 4
+  # Account/character username prefix; the ordinal is appended zero-padded (%04d),
+  # e.g. botrunner0001. Must be distinct from the loadtest PREFIX so a load run and
+  # the persistent bots never contend for the same account.
+  prefix: "botrunner"
+  # Shared password for every bot account (dev creds — not secret, like seed).
+  # Provisioning and the bot login use this same value, so they always match.
+  password: "botrunnerpass"
+  # meridian-bot scripted path (square = walk a square at spawn; idle = stand).
+  path: "square"
+  # Client build advertised at login — must fall inside the realm's build range
+  # (the seed realm row uses a wide-open 0..max range).
+  build: 1000
+  # Movement-loop seconds per meridian-bot invocation. The supervise loop
+  # re-enters when a window ends, so the bot persists indefinitely; a large value
+  # means fewer re-login cycles. 3600 = re-login hourly.
+  sessionDuration: 3600
+  # Delay between a session ending and the next re-entry (avoids a hot restart
+  # loop if worldd is briefly unavailable).
+  restartDelaySeconds: 10
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: "500m"
+      memory: 128Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
 # ── Pod security (matches the Dockerfile: non-root uid/gid 10001) ────────────
 # The image already runs as USER 10001:10001 with a read-only-rootfs-friendly
 # daemon (writes only stdout/stderr, reads the ro cert mount). We assert that

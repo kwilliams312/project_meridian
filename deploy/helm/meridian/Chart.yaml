@@ -22,7 +22,10 @@ type: application
 # 0.5.0: worldd.worlddb — MERIDIAN_WORLDDB_* env so worldd loads the world/
 #        CONTENT DB (#390 DB stores + #483 DbAbilityStore), plus the
 #        mariadb.contentSeed hook Job that seeds meridian_world content (#482).
-version: 0.5.0
+# 0.6.0: botRunner — a StatefulSet of N persistent headless meridian-bot players
+#        (login → enter-world → move, class-rotated) that populate a hosted realm
+#        so a real client sees other players via AoI (#487). Off by default.
+version: 0.6.0
 
 # appVersion tracks the daemon image tag the chart defaults to. "latest" matches
 # the compose default (deploy/docker/docker-compose.yml: MERIDIAN_TAG:-latest);
