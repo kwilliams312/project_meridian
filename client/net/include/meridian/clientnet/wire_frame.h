@@ -46,6 +46,7 @@ inline constexpr std::uint16_t kOpMovementState  = 0x1002;  // S→C
 inline constexpr std::uint16_t kOpEntityEnter    = 0x2001;  // S→C
 inline constexpr std::uint16_t kOpEntityUpdate   = 0x2002;  // S→C
 inline constexpr std::uint16_t kOpEntityLeave    = 0x2003;  // S→C
+inline constexpr std::uint16_t kOpVitalsUpdate   = 0x2004;  // S→C  HUD delta (#430/#431)
 
 // IF-2 in-frame header size: u16 opcode + u64 seq (world_dispatch.h
 // kFrameHeaderBytes). A frame body shorter than this is malformed.
