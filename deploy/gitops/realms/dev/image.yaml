@@ -5,10 +5,10 @@
 # manifest diff and drives the rollout declaratively. Overrides the
 # moving :dev tag from realms/dev/values.yaml (loaded before this file).
 image:
-  tag: "79b50c1"
+  tag: "93bf2cb"
 mariadb:
   image:
-    tag: "79b50c1"
+    tag: "93bf2cb"
 seed:
   accountImage:
-    tag: "79b50c1"
+    tag: "93bf2cb"
