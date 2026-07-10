@@ -941,6 +941,12 @@ void poll_completed_cast(net::Session& sess, ConnCtx& ctx, std::uint64_t now_ms)
                                              to_wire_outcome(rr.outcome), rr.amount,
                                              rr.is_heal, rr.target_health, rr.target_died,
                                              now_ms)));
+    // VITALS_UPDATE (#430, UI-01): the resolution moved the TARGET's health (damage
+    // or heal) and the CASTER's power (resource spent at resolution above). Broadcast
+    // both to every client in AoI so the unit frames update without a re-enter — the
+    // server-authoritative HUD delta (the client never predicts these, Principle 1).
+    ctx.world->broadcast_vitals(target_guid);
+    if (caster_guid != target_guid) ctx.world->broadcast_vitals(caster_guid);
     log::debug(kCat, "cast completed ability=" + std::to_string(done->ability_id) +
                          " outcome=" + std::to_string(static_cast<int>(rr.outcome)) +
                          " amount=" + std::to_string(rr.amount));
@@ -2014,6 +2020,12 @@ void Dispatcher::register_m0_stubs() {
                                                      to_wire_outcome(rr.outcome), rr.amount,
                                                      rr.is_heal, rr.target_health,
                                                      rr.target_died, now_ms)));
+            // VITALS_UPDATE (#430, UI-01): an instant resolution moved the TARGET's
+            // health and the CASTER's power — broadcast both to every client in AoI
+            // so the unit frames update without a re-enter (server-authoritative HUD
+            // delta; the client never predicts these, Principle 1).
+            ctx.world->broadcast_vitals(target_guid);
+            if (caster_guid != target_guid) ctx.world->broadcast_vitals(caster_guid);
             log::debug(kCat, "CAST_REQUEST resolved ability=" + std::to_string(ability_id) +
                                  " outcome=" + std::to_string(static_cast<int>(rr.outcome)) +
                                  " amount=" + std::to_string(rr.amount));
@@ -2171,8 +2183,12 @@ void Dispatcher::register_m0_stubs() {
                 }
                 const std::uint16_t lvl = static_cast<std::uint16_t>(level);
                 ctx.char_level = lvl;
-                if (ctx.entered && ctx.world != nullptr)
+                if (ctx.entered && ctx.world != nullptr) {
                     ctx.world->set_unit_level(ctx.slot, lvl);
+                    // VITALS_UPDATE (#430): push the new level to the HUD (self + AoI
+                    // observers), so the unit frames reflect the GM level change.
+                    if (ctx.movement) ctx.world->broadcast_vitals(ctx.movement->entity_guid());
+                }
                 r.status = gm::EffectStatus::kApplied;
                 r.applied_level = lvl;
                 return r;

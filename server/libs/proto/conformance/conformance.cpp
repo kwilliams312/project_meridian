@@ -565,11 +565,11 @@ std::vector<Message> build_corpus() {
                         "if2_movement_state.server_time_ms");
                }});
 
-  // EntityEnter with a full attribute set (vector of AttrDelta tables) and a
-  // class id (#328) — char_class=2 (Runcaller) exercises the additive field the
-  // client colors the placeholder capsule from.
+  // EntityEnter with a full attribute set (vector of AttrDelta tables), a class id
+  // (#328), and the #430 vitals block (health/power/level/name for the HUD).
+  // char_class=2 (Runcaller) + power_type=MANA exercises the additive fields.
   c.push_back({"if2_entity_enter", "IF-2", "ENTITY_ENTER (0x2001)",
-               "S->C full state on AoI entry: guid, type, pos, 2 attrs, class",
+               "S->C full state on AoI entry: guid, type, pos, 2 attrs, class, vitals",
                [] {
                  fb::FlatBufferBuilder b;
                  std::vector<fb::Offset<mn::AttrDelta>> attrs;
@@ -578,11 +578,14 @@ std::vector<Message> build_corpus() {
                  attrs.push_back(mn::CreateAttrDelta(b, /*key=*/2u,
                                                      /*value=*/-7));
                  auto av = b.CreateVector(attrs);
+                 auto name = b.CreateString("Aldric");
                  b.Finish(mn::CreateEntityEnter(
                      b, /*entity_guid=*/0x0000000012345678ULL,
                      /*type_id=*/0x00000101u, /*x=*/10.0f, /*y=*/20.0f,
                      /*z=*/0.5f, /*orientation=*/0.0f, av,
-                     /*char_class=*/2u));
+                     /*char_class=*/2u, /*health=*/175u, /*max_health=*/200u,
+                     /*power=*/80u, /*max_power=*/100u, mn::PowerType::MANA,
+                     /*level=*/7u, name));
                  return finish_to_bytes(b);
                },
                [](const Bytes& buf) {
@@ -599,6 +602,15 @@ std::vector<Message> build_corpus() {
                  expect(m->y() == 20.0f, "if2_entity_enter.y");
                  expect(m->z() == 0.5f, "if2_entity_enter.z");
                  expect(m->char_class() == 2u, "if2_entity_enter.char_class");
+                 expect(m->health() == 175u, "if2_entity_enter.health");
+                 expect(m->max_health() == 200u, "if2_entity_enter.max_health");
+                 expect(m->power() == 80u, "if2_entity_enter.power");
+                 expect(m->max_power() == 100u, "if2_entity_enter.max_power");
+                 expect(m->power_type() == mn::PowerType::MANA,
+                        "if2_entity_enter.power_type");
+                 expect(m->level() == 7u, "if2_entity_enter.level");
+                 expect(m->name() && m->name()->str() == "Aldric",
+                        "if2_entity_enter.name");
                  const auto* attrs = m->attrs();
                  if (!expect(attrs != nullptr && attrs->size() == 2,
                              "if2_entity_enter has 2 attrs"))
@@ -672,6 +684,36 @@ std::vector<Message> build_corpus() {
                         "if2_entity_leave.entity_guid");
                  expect(m->reason() == mn::LeaveReason::DESPAWNED,
                         "if2_entity_leave.reason");
+               }});
+
+  // VitalsUpdate (#430, UI-01) — S->C HUD delta: a unit's health/power/level after
+  // a combat/heal/level change. power_type=RAGE (a Vanguard) exercises the enum;
+  // the canonical instance is a unit at 120/200 HP with 45/100 rage, level 8.
+  c.push_back({"if2_vitals_update", "IF-2", "VITALS_UPDATE (0x2004)",
+               "S->C vitals delta: guid, health/max, power/max, power_type, level",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateVitalsUpdate(
+                     b, /*entity_guid=*/0x0000000012345678ULL,
+                     /*health=*/120u, /*max_health=*/200u, /*power=*/45u,
+                     /*max_power=*/100u, mn::PowerType::RAGE, /*level=*/8u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::VitalsUpdate>(nullptr),
+                             "if2_vitals_update verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::VitalsUpdate>(buf.data());
+                 expect(m->entity_guid() == 0x0000000012345678ULL,
+                        "if2_vitals_update.entity_guid");
+                 expect(m->health() == 120u, "if2_vitals_update.health");
+                 expect(m->max_health() == 200u, "if2_vitals_update.max_health");
+                 expect(m->power() == 45u, "if2_vitals_update.power");
+                 expect(m->max_power() == 100u, "if2_vitals_update.max_power");
+                 expect(m->power_type() == mn::PowerType::RAGE,
+                        "if2_vitals_update.power_type");
+                 expect(m->level() == 8u, "if2_vitals_update.level");
                }});
 
   // ---- character management (0x0010..0x0015; #286 / D-35) ------------------

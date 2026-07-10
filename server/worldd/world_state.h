@@ -356,6 +356,16 @@ public:
     // false) if `slot` is not entered.
     bool set_unit_level(SessionSlot slot, std::uint16_t level);
 
+    // Broadcast a VITALS_UPDATE (#430, UI-01 HUD contract) for the unit with wire
+    // guid `guid` to every client that currently sees it — the subject's OWN client
+    // (its player unit frame) plus every session that has it in AoI (their target /
+    // nameplate frame). Reads the CURRENT vitals straight off the authoritative Unit
+    // (health/max, power/max + type, level), so callers first MUTATE the Unit (a
+    // combat damage/heal, a level-up stat bump) and then call this to push the delta.
+    // Server-authoritative — the client DISPLAYS it, never predicts it (Principle 1).
+    // Returns the recipient count (0 if `guid` is not an entered unit). Thread-safe.
+    std::size_t broadcast_vitals(AoiId guid);
+
     // Test/diagnostic: how many sessions are currently entered.
     std::size_t session_count() const;
 
@@ -523,9 +533,16 @@ private:
 // (the seq coming from the subscriber's WorldSession s2c counter).
 // ---------------------------------------------------------------------------
 
-// EntityEnter payload for `subject` (full spawn state).
+// EntityEnter payload for `subject` (full spawn state) — position + class (#328) +
+// the #430 vitals block (health/power/level/name), read from `unit` (the subject's
+// authoritative Unit) and `subject.name`.
 std::vector<std::uint8_t> encode_entity_enter_payload(const EntityIdentity& subject,
-                                                      const Position& pos);
+                                                      const Unit& unit);
+
+// VitalsUpdate payload (#430) for `subject_guid`, projected from `unit`'s current
+// vitals (health/max, power/max + type, level). The HUD delta the relay broadcasts
+// to AoI observers when combat/heal/death/level-up moves a unit's vitals.
+std::vector<std::uint8_t> encode_vitals_update_payload(AoiId subject_guid, const Unit& unit);
 
 // EntityUpdate payload for `subject_guid` (position delta).
 std::vector<std::uint8_t> encode_entity_update_payload(AoiId subject_guid,

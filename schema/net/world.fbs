@@ -57,10 +57,11 @@ enum Opcode : uint16 {
   MOVEMENT_INTENT = 0x1001,  // C→S  client movement intent (validated OPS-03)
   MOVEMENT_STATE  = 0x1002,  // S→C  authoritative movement state broadcast
 
-  // --- 0x2xxx  entity state  (M0) ---
+  // --- 0x2xxx  entity state  (M0; VITALS_UPDATE M1 — UI-01 HUD contract, #430) ---
   ENTITY_ENTER   = 0x2001,   // S→C  full state — entity enters AoI
   ENTITY_UPDATE  = 0x2002,   // S→C  delta update for an in-AoI entity
   ENTITY_LEAVE   = 0x2003,   // S→C  entity leaves AoI
+  VITALS_UPDATE  = 0x2004,   // S→C  a unit's vitals changed (health/power/level) — HUD delta (#430)
 
   // --- 0x3xxx  combat            (M1 — CMB-01: ability use + GCD/cast, D-10) ---
   CAST_REQUEST = 0x3001,     // C→S  use an ability (id + target + client_time)
@@ -262,7 +263,23 @@ table AttrDelta {
   value:int64;             // scalar value (interpret per key)
 }
 
+/// The secondary power a unit spends on abilities — the M1 set the server unit
+/// model owns (combat_unit.h ResourceType: mana/energy/rage). Values MIRROR that
+/// enum 1:1 so the server projection is a straight cast. NONE = the unit has no
+/// secondary pool (a basic melee creature). The client HUD colors the power bar
+/// by this (UI-01, #430). Append within a major; never renumber.
+enum PowerType : uint8 {
+  NONE   = 0,   // no secondary resource
+  MANA   = 1,   // caster pool (Runcaller / Mender)
+  ENERGY = 2,   // fast-regen pool (Warden)
+  RAGE   = 3,   // combat-generated pool (Vanguard)
+}
+
 /// S→C. Full state snapshot when an entity enters the client's area of interest.
+/// The vitals block (health/power/level/name; #430) is server-authoritative — the
+/// client HUD (UI-01) DISPLAYS it and never predicts it (Principle 1). Vitals are
+/// appended additively (additive-field FlatBuffers evolution within a major); a
+/// pre-#430 decoder still reads the original position/class fields.
 table EntityEnter {
   entity_guid:uint64;
   type_id:uint32;          // entity/template kind
@@ -276,6 +293,13 @@ table EntityEnter {
                            // capsule in a class-derived color. 0 = unset/unknown.
                            // Additive (appended, defaulted) — additive-field FlatBuffers
                            // evolution within a major (README versioning note).
+  health:uint32 = 0;       // current health at entry (#430 HUD contract)
+  max_health:uint32 = 0;   // health cap
+  power:uint32 = 0;        // current secondary power at entry
+  max_power:uint32 = 0;    // secondary-power cap (0 when power_type = NONE)
+  power_type:PowerType = NONE;  // which secondary pool (mana/energy/rage/none)
+  level:uint16 = 0;        // unit level (0 = unset/unknown)
+  name:string;             // display name for the unit frame (empty = unnamed placeholder)
 }
 
 /// S→C. Delta update for an entity already in AoI. Only changed fields are present;
@@ -299,6 +323,26 @@ enum LeaveReason : uint16 {
 table EntityLeave {
   entity_guid:uint64;
   reason:LeaveReason = OUT_OF_RANGE;
+}
+
+/// S→C. A unit's VITALS changed — the HUD delta (UI-01, #430). Emitted to every
+/// client that has `entity_guid` in its area of interest (the subject's own client
+/// + every observer) whenever combat/heal/death/level-up moves the unit's
+/// health/power/level, so the unit frames update WITHOUT a full re-enter. A
+/// dedicated opcode (not an ENTITY_UPDATE extension) because vitals change on a
+/// different axis than movement — combat/death/XP, not position — and the AoI relay
+/// drives ENTITY_UPDATE strictly from movement; this keeps the two deltas cleanly
+/// separated and gives the HUD typed fields instead of the generic AttrDelta vector.
+/// Server-authoritative: the client DISPLAYS these, never predicts them (Principle 1).
+/// `name` is NOT here — it does not change in-life; it rides EntityEnter.
+table VitalsUpdate {
+  entity_guid:uint64;
+  health:uint32;           // current health after the change (0 = dead)
+  max_health:uint32;       // health cap (may change on level-up)
+  power:uint32;            // current secondary power after the change
+  max_power:uint32;        // secondary-power cap (0 when power_type = NONE)
+  power_type:PowerType = NONE;  // which secondary pool (mana/energy/rage/none)
+  level:uint16 = 0;        // unit level after the change (level-up)
 }
 
 // ===========================================================================
