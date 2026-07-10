@@ -118,6 +118,64 @@
             <TextBox   Grid.Row="2" Grid.Column="1" Width="100" HorizontalAlignment="Left" Text="{Binding Armor}" />
           </Grid>
 
+          <TextBlock Classes="section" Text="Worn (equipped render)" />
+          <TextBlock Text="Models" FontWeight="SemiBold" Margin="0,4,0,4" />
+          <ItemsControl ItemsSource="{Binding WornModels}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:ItemWornModelRowViewModel">
+                <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
+                  <TextBox Width="220" Watermark="model art ref" Text="{Binding Model}" />
+                  <ComboBox Width="90"
+                            ItemsSource="{Binding $parent[ItemsControl].((vm:ItemEditorViewModel)DataContext).Mirrors}"
+                            SelectedItem="{Binding Mirror}" />
+                  <Button Content="✕"
+                          Command="{Binding $parent[ItemsControl].((vm:ItemEditorViewModel)DataContext).RemoveWornModelCommand}"
+                          CommandParameter="{Binding}" />
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <Button Content="+ Add worn model" Command="{Binding AddWornModelCommand}" HorizontalAlignment="Left" />
+          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto" Margin="0,8,0,0">
+            <TextBlock Grid.Row="0" Grid.Column="0" Classes="field" Text="Attach / sheath" />
+            <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="8">
+              <ComboBox Width="130" ItemsSource="{Binding AttachSockets}" SelectedItem="{Binding WornAttachSocket}" />
+              <ComboBox Width="130" ItemsSource="{Binding AttachSockets}" SelectedItem="{Binding WornSheathSocket}" />
+            </StackPanel>
+          </Grid>
+          <TextBlock Text="Hides (armor geosets)" FontWeight="SemiBold" Margin="0,8,0,4" />
+          <ItemsControl ItemsSource="{Binding WornHides}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:ItemWornTokenRowViewModel">
+                <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
+                  <ComboBox Width="140"
+                            ItemsSource="{Binding $parent[ItemsControl].((vm:ItemEditorViewModel)DataContext).GeosetRegions}"
+                            SelectedItem="{Binding Token}" />
+                  <Button Content="✕"
+                          Command="{Binding $parent[ItemsControl].((vm:ItemEditorViewModel)DataContext).RemoveWornHideCommand}"
+                          CommandParameter="{Binding}" />
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <Button Content="+ Add hidden geoset" Command="{Binding AddWornHideCommand}" HorizontalAlignment="Left" />
+          <TextBlock Text="Dye channels" FontWeight="SemiBold" Margin="0,8,0,4" />
+          <ItemsControl ItemsSource="{Binding WornDyeChannels}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:ItemWornTokenRowViewModel">
+                <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
+                  <ComboBox Width="140"
+                            ItemsSource="{Binding $parent[ItemsControl].((vm:ItemEditorViewModel)DataContext).DyeChannels}"
+                            SelectedItem="{Binding Token}" />
+                  <Button Content="✕"
+                          Command="{Binding $parent[ItemsControl].((vm:ItemEditorViewModel)DataContext).RemoveWornDyeChannelCommand}"
+                          CommandParameter="{Binding}" />
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <Button Content="+ Add dye channel" Command="{Binding AddWornDyeChannelCommand}" HorizontalAlignment="Left" />
+
           <TextBlock Classes="section" Text="Effects" />
           <Grid ColumnDefinitions="140,*" RowDefinitions="Auto">
             <TextBlock Grid.Row="0" Grid.Column="0" Classes="field" Text="On use (ability)" />

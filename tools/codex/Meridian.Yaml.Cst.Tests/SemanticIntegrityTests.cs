@@ -47,10 +47,12 @@ public class SemanticIntegrityTests
         var doc = YamlDocument.Parse(text);
 
         // Spot-check the envelope: every content file carries `schema:`; entity files also
-        // carry `id:` (the pack root pack.yaml uses `namespace:` instead).
+        // carry `id:` (the pack root pack.yaml uses `namespace:` instead, and *.render.yaml
+        // strudel-render manifests are auxiliary artifacts with no id, issue #410).
         Assert.Equal(CstKind.Mapping, doc.Root.Kind);
         Assert.NotNull(doc.GetValue("schema"));
-        if (!relativePath.EndsWith("pack.yaml", StringComparison.Ordinal))
+        if (!relativePath.EndsWith("pack.yaml", StringComparison.Ordinal)
+            && !relativePath.EndsWith(".render.yaml", StringComparison.Ordinal))
         {
             Assert.NotNull(doc.GetValue("id"));
         }

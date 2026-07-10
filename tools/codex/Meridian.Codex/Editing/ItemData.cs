@@ -24,7 +24,7 @@ public sealed class ItemData
     private readonly Dictionary<string, string> _values = new(System.StringComparer.Ordinal);
 
     /// <summary>The schema const every item file carries.</summary>
-    public const string SchemaTag = "meridian/item@1";
+    public const string SchemaTag = "meridian/item@2";
 
     /// <summary>Present leaf paths and their string values (absent optionals are simply missing).</summary>
     public IReadOnlyDictionary<string, string> Values => _values;
@@ -70,6 +70,23 @@ public sealed class ItemData
         }
     }
 
+    /// <summary>Remove every <c>visual.worn.models[i].*</c> entry (used when the editor rebuilds the list).</summary>
+    public void RemoveWornModels() => RemovePrefix("visual.worn.models[");
+
+    /// <summary>Remove every <c>visual.worn.hides[i]</c> entry (used when the editor rebuilds the list).</summary>
+    public void RemoveWornHides() => RemovePrefix("visual.worn.hides[");
+
+    /// <summary>Remove every <c>visual.worn.dye_channels[i]</c> entry (used when the editor rebuilds the list).</summary>
+    public void RemoveWornDyeChannels() => RemovePrefix("visual.worn.dye_channels[");
+
+    private void RemovePrefix(string prefix)
+    {
+        foreach (var key in _values.Keys.Where(k => k.StartsWith(prefix, System.StringComparison.Ordinal)).ToList())
+        {
+            _values.Remove(key);
+        }
+    }
+
     /// <summary>Number of <c>stats[i]</c> entries currently present (contiguous from 0).</summary>
     public int StatCount
     {
@@ -100,6 +117,26 @@ public sealed class ItemData
         }
     }
 
+    /// <summary>Number of <c>visual.worn.models[i]</c> entries currently present (contiguous from 0).</summary>
+    public int WornModelCount => CountIndexed(i => $"visual.worn.models[{i}].model");
+
+    /// <summary>Number of <c>visual.worn.hides[i]</c> entries currently present (contiguous from 0).</summary>
+    public int WornHideCount => CountIndexed(i => $"visual.worn.hides[{i}]");
+
+    /// <summary>Number of <c>visual.worn.dye_channels[i]</c> entries currently present (contiguous from 0).</summary>
+    public int WornDyeChannelCount => CountIndexed(i => $"visual.worn.dye_channels[{i}]");
+
+    private int CountIndexed(System.Func<int, string> pathAt)
+    {
+        int i = 0;
+        while (_values.ContainsKey(pathAt(i)))
+        {
+            i++;
+        }
+
+        return i;
+    }
+
     /// <summary>The fixed (non-array) scalar leaf paths, in canonical schema order.</summary>
     public static readonly string[] FixedPaths =
     [
@@ -111,6 +148,7 @@ public sealed class ItemData
         "effects.on_use",
         "price.sell", "price.buy",
         "visual.icon", "visual.model",
+        "visual.worn.attach.socket", "visual.worn.attach.sheath_socket",
     ];
 
     /// <summary>The per-stat sub-field leaf names, in canonical schema order.</summary>
@@ -206,6 +244,37 @@ public sealed class ItemData
         d.Set("visual.icon", item.Visual.Icon.Id);
         d.Set("visual.model", item.Visual.Model?.Id);
 
+        if (item.Visual.Worn is { } worn)
+        {
+            for (int i = 0; i < worn.Models.Count; i++)
+            {
+                d.Set($"visual.worn.models[{i}].model", worn.Models[i].Model.Id);
+                d.Set($"visual.worn.models[{i}].mirror", worn.Models[i].Mirror is { } mirror ? EnumToYaml(mirror) : null);
+            }
+
+            if (worn.Hides is { } hides)
+            {
+                for (int i = 0; i < hides.Count; i++)
+                {
+                    d.Set($"visual.worn.hides[{i}]", EnumToYaml(hides[i]));
+                }
+            }
+
+            if (worn.Attach is { } attach)
+            {
+                d.Set("visual.worn.attach.socket", EnumToYaml(attach.Socket));
+                d.Set("visual.worn.attach.sheath_socket", attach.SheathSocket is { } sheath ? EnumToYaml(sheath) : null);
+            }
+
+            if (worn.DyeChannels is { } dyes)
+            {
+                for (int i = 0; i < dyes.Count; i++)
+                {
+                    d.Set($"visual.worn.dye_channels[{i}]", EnumToYaml(dyes[i]));
+                }
+            }
+        }
+
         return d;
     }
 
@@ -290,7 +359,82 @@ public sealed class ItemData
     {
         Icon = new ArtRef(Require("visual.icon")),
         Model = Has("visual.model") ? new ArtRef(Get("visual.model")!) : null,
+        Worn = BuildWorn(),
     };
+
+    // race_overrides is not editable here: its schema shape (patternProperties keyed
+    // by race name) has no counterpart in the generated model, so the editor neither
+    // reads nor writes it. Surgical saves keep any existing block byte-for-byte;
+    // ItemYaml.Save refuses the canonical-emit fallback rather than drop it silently.
+    private ItemVisualWorn? BuildWorn()
+    {
+        int modelCount = WornModelCount;
+        bool any = modelCount > 0 || WornHideCount > 0 || WornDyeChannelCount > 0
+            || Has("visual.worn.attach.socket") || Has("visual.worn.attach.sheath_socket");
+        if (!any)
+        {
+            return null;
+        }
+
+        if (modelCount == 0)
+        {
+            throw new System.FormatException("Field 'visual.worn.models' must have at least one entry.");
+        }
+
+        var models = new List<ItemVisualWornModel>(modelCount);
+        for (int i = 0; i < modelCount; i++)
+        {
+            models.Add(new ItemVisualWornModel
+            {
+                Model = new ArtRef(Require($"visual.worn.models[{i}].model")),
+                Mirror = Has($"visual.worn.models[{i}].mirror")
+                    ? EnumFromYaml<ItemVisualWornModelMirror>(Get($"visual.worn.models[{i}].mirror")!, $"visual.worn.models[{i}].mirror")
+                    : null,
+            });
+        }
+
+        List<GeosetRegion>? hides = null;
+        int hideCount = WornHideCount;
+        if (hideCount > 0)
+        {
+            hides = new List<GeosetRegion>(hideCount);
+            for (int i = 0; i < hideCount; i++)
+            {
+                hides.Add(EnumFromYaml<GeosetRegion>(Require($"visual.worn.hides[{i}]"), $"visual.worn.hides[{i}]"));
+            }
+        }
+
+        ItemVisualWornAttach? attach = null;
+        if (Has("visual.worn.attach.socket") || Has("visual.worn.attach.sheath_socket"))
+        {
+            attach = new ItemVisualWornAttach
+            {
+                Socket = EnumFromYaml<AttachSocket>(Require("visual.worn.attach.socket"), "visual.worn.attach.socket"),
+                SheathSocket = Has("visual.worn.attach.sheath_socket")
+                    ? EnumFromYaml<AttachSocket>(Get("visual.worn.attach.sheath_socket")!, "visual.worn.attach.sheath_socket")
+                    : null,
+            };
+        }
+
+        List<DyeChannel>? dyes = null;
+        int dyeCount = WornDyeChannelCount;
+        if (dyeCount > 0)
+        {
+            dyes = new List<DyeChannel>(dyeCount);
+            for (int i = 0; i < dyeCount; i++)
+            {
+                dyes.Add(EnumFromYaml<DyeChannel>(Require($"visual.worn.dye_channels[{i}]"), $"visual.worn.dye_channels[{i}]"));
+            }
+        }
+
+        return new ItemVisualWorn
+        {
+            Models = models,
+            Hides = hides,
+            Attach = attach,
+            DyeChannels = dyes,
+        };
+    }
 
     // ---- scalar helpers -----------------------------------------------------
 

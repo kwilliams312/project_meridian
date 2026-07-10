@@ -39,11 +39,31 @@ public sealed partial class ItemEditorViewModel : ViewModelBase
 
     public static string[] StatKeys => ["strength", "agility", "stamina", "intellect", "spirit"];
 
+    /// <summary>Worn-contract enum tokens (meridian/skeleton@1 vocabulary, contract ①).</summary>
+    public static string[] AttachSockets =>
+        ["", "main_hand", "off_hand", "ranged", "back", "hip_l", "hip_r", "shield"];
+
+    public static string[] Mirrors => ["", "none", "x"];
+
+    public static string[] GeosetRegions =>
+        ["head", "hands", "forearms", "torso", "waist", "hips_legs", "lower_legs", "feet"];
+
+    public static string[] DyeChannels => ["primary", "secondary", "accent"];
+
     /// <summary>The item's primary-stat rows (ITM-01).</summary>
     public ObservableCollection<ItemStatRowViewModel> Stats { get; } = new();
 
     /// <summary>The on-equip ability rows (CMB-04 proc/effect refs, §4.2).</summary>
     public ObservableCollection<ItemOnEquipRowViewModel> OnEquip { get; } = new();
+
+    /// <summary>The worn model rows (visual.worn.models, item@2 contract ①).</summary>
+    public ObservableCollection<ItemWornModelRowViewModel> WornModels { get; } = new();
+
+    /// <summary>The hidden-geoset rows (visual.worn.hides — armor only, contract ①).</summary>
+    public ObservableCollection<ItemWornTokenRowViewModel> WornHides { get; } = new();
+
+    /// <summary>The dye-channel rows (visual.worn.dye_channels, contract ①).</summary>
+    public ObservableCollection<ItemWornTokenRowViewModel> WornDyeChannels { get; } = new();
 
     [ObservableProperty]
     private string _filePath = string.Empty;
@@ -98,6 +118,20 @@ public sealed partial class ItemEditorViewModel : ViewModelBase
 
     public string VisualIcon { get => Field("visual.icon"); set => SetField("visual.icon", value); }
     public string VisualModel { get => Field("visual.model"); set => SetField("visual.model", value); }
+
+    // ---- worn / equipped render (item@2, contract ①) --------------------------
+
+    public string WornAttachSocket
+    {
+        get => Field("visual.worn.attach.socket");
+        set => SetField("visual.worn.attach.socket", value);
+    }
+
+    public string WornSheathSocket
+    {
+        get => Field("visual.worn.attach.sheath_socket");
+        set => SetField("visual.worn.attach.sheath_socket", value);
+    }
 
     // ---- weapon / armor (PRD §4.2) ------------------------------------------
 
@@ -156,6 +190,9 @@ public sealed partial class ItemEditorViewModel : ViewModelBase
 
         SyncStats();
         SyncOnEquip();
+        SyncWornModels();
+        SyncWornHides();
+        SyncWornDyeChannels();
         if (!IsValid)
         {
             StatusText = $"Cannot save: {ValidationMessage}";
@@ -209,6 +246,60 @@ public sealed partial class ItemEditorViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Append a blank worn-model row.</summary>
+    [RelayCommand]
+    private void AddWornModel()
+    {
+        WornModels.Add(NewWornModelRow("core:art.item.new_model"));
+        SyncWornModels();
+    }
+
+    /// <summary>Remove <paramref name="row"/> from the worn-model list.</summary>
+    [RelayCommand]
+    private void RemoveWornModel(ItemWornModelRowViewModel? row)
+    {
+        if (row is not null && WornModels.Remove(row))
+        {
+            SyncWornModels();
+        }
+    }
+
+    /// <summary>Append a blank hidden-geoset row.</summary>
+    [RelayCommand]
+    private void AddWornHide()
+    {
+        WornHides.Add(NewTokenRow("torso", SyncWornHides));
+        SyncWornHides();
+    }
+
+    /// <summary>Remove <paramref name="row"/> from the hidden-geoset list.</summary>
+    [RelayCommand]
+    private void RemoveWornHide(ItemWornTokenRowViewModel? row)
+    {
+        if (row is not null && WornHides.Remove(row))
+        {
+            SyncWornHides();
+        }
+    }
+
+    /// <summary>Append a blank dye-channel row.</summary>
+    [RelayCommand]
+    private void AddWornDyeChannel()
+    {
+        WornDyeChannels.Add(NewTokenRow("primary", SyncWornDyeChannels));
+        SyncWornDyeChannels();
+    }
+
+    /// <summary>Remove <paramref name="row"/> from the dye-channel list.</summary>
+    [RelayCommand]
+    private void RemoveWornDyeChannel(ItemWornTokenRowViewModel? row)
+    {
+        if (row is not null && WornDyeChannels.Remove(row))
+        {
+            SyncWornDyeChannels();
+        }
+    }
+
     // ---- internals -----------------------------------------------------------
 
     private string Field(string path) => Data.Get(path) ?? string.Empty;
@@ -237,6 +328,24 @@ public sealed partial class ItemEditorViewModel : ViewModelBase
         for (int i = 0; i < Data.OnEquipCount; i++)
         {
             OnEquip.Add(OnEquipRowFromData(i));
+        }
+
+        WornModels.Clear();
+        for (int i = 0; i < Data.WornModelCount; i++)
+        {
+            WornModels.Add(WornModelRowFromData(i));
+        }
+
+        WornHides.Clear();
+        for (int i = 0; i < Data.WornHideCount; i++)
+        {
+            WornHides.Add(TokenRowFromData($"visual.worn.hides[{i}]", SyncWornHides));
+        }
+
+        WornDyeChannels.Clear();
+        for (int i = 0; i < Data.WornDyeChannelCount; i++)
+        {
+            WornDyeChannels.Add(TokenRowFromData($"visual.worn.dye_channels[{i}]", SyncWornDyeChannels));
         }
 
         // Every bound field changed identity — refresh the whole form.
@@ -302,6 +411,72 @@ public sealed partial class ItemEditorViewModel : ViewModelBase
         Revalidate();
     }
 
+    private ItemWornModelRowViewModel WornModelRowFromData(int index)
+    {
+        var row = new ItemWornModelRowViewModel
+        {
+            Model = Data.Get($"visual.worn.models[{index}].model") ?? string.Empty,
+            Mirror = Data.Get($"visual.worn.models[{index}].mirror") ?? string.Empty,
+        };
+        row.Changed += SyncWornModels;
+        return row;
+    }
+
+    private ItemWornModelRowViewModel NewWornModelRow(string model)
+    {
+        var row = new ItemWornModelRowViewModel { Model = model };
+        row.Changed += SyncWornModels;
+        return row;
+    }
+
+    private ItemWornTokenRowViewModel TokenRowFromData(string path, Action sync)
+    {
+        var row = new ItemWornTokenRowViewModel { Token = Data.Get(path) ?? string.Empty };
+        row.Changed += sync;
+        return row;
+    }
+
+    private ItemWornTokenRowViewModel NewTokenRow(string token, Action sync)
+    {
+        var row = new ItemWornTokenRowViewModel { Token = token };
+        row.Changed += sync;
+        return row;
+    }
+
+    private void SyncWornModels()
+    {
+        Data.RemoveWornModels();
+        for (int i = 0; i < WornModels.Count; i++)
+        {
+            Data.Set($"visual.worn.models[{i}].model", WornModels[i].Model);
+            Data.Set($"visual.worn.models[{i}].mirror", WornModels[i].Mirror);
+        }
+
+        Revalidate();
+    }
+
+    private void SyncWornHides()
+    {
+        Data.RemoveWornHides();
+        for (int i = 0; i < WornHides.Count; i++)
+        {
+            Data.Set($"visual.worn.hides[{i}]", WornHides[i].Token);
+        }
+
+        Revalidate();
+    }
+
+    private void SyncWornDyeChannels()
+    {
+        Data.RemoveWornDyeChannels();
+        for (int i = 0; i < WornDyeChannels.Count; i++)
+        {
+            Data.Set($"visual.worn.dye_channels[{i}]", WornDyeChannels[i].Token);
+        }
+
+        Revalidate();
+    }
+
     private void Revalidate()
     {
         try
@@ -354,4 +529,33 @@ public sealed partial class ItemOnEquipRowViewModel : ObservableObject
     private string _ability = string.Empty;
 
     partial void OnAbilityChanged(string value) => Changed?.Invoke();
+}
+
+/// <summary>One worn-model row of an item (art ref + optional mirror, visual.worn.models).</summary>
+public sealed partial class ItemWornModelRowViewModel : ObservableObject
+{
+    /// <summary>Raised whenever any field changes, so the editor can resync the array to YAML.</summary>
+    public event Action? Changed;
+
+    [ObservableProperty]
+    private string _model = string.Empty;
+
+    [ObservableProperty]
+    private string _mirror = string.Empty;
+
+    partial void OnModelChanged(string value) => Changed?.Invoke();
+
+    partial void OnMirrorChanged(string value) => Changed?.Invoke();
+}
+
+/// <summary>One enum-token row of a worn sequence (a geoset region or dye channel).</summary>
+public sealed partial class ItemWornTokenRowViewModel : ObservableObject
+{
+    /// <summary>Raised whenever the token changes, so the editor can resync the array to YAML.</summary>
+    public event Action? Changed;
+
+    [ObservableProperty]
+    private string _token = string.Empty;
+
+    partial void OnTokenChanged(string value) => Changed?.Invoke();
 }

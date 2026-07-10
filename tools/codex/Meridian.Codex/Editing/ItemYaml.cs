@@ -58,7 +58,26 @@ internal static class ItemYaml
             }
         }
 
+        // visual.worn.models is a variable-length sequence of {model, mirror}.
+        for (int i = 0; doc.Resolve($"visual.worn.models[{i}].model") is not null; i++)
+        {
+            data.Set($"visual.worn.models[{i}].model", doc.GetValue($"visual.worn.models[{i}].model"));
+            data.Set($"visual.worn.models[{i}].mirror", doc.GetValue($"visual.worn.models[{i}].mirror"));
+        }
+
+        // visual.worn.hides / dye_channels are variable-length sequences of bare enum tokens.
+        ReadScalarSequence(doc, data, "visual.worn.hides");
+        ReadScalarSequence(doc, data, "visual.worn.dye_channels");
+
         return data;
+    }
+
+    private static void ReadScalarSequence(YamlDocument doc, ItemData data, string path)
+    {
+        for (int i = 0; doc.Resolve($"{path}[{i}]") is not null; i++)
+        {
+            data.Set($"{path}[{i}]", doc.GetValue($"{path}[{i}]"));
+        }
     }
 
     /// <summary>
@@ -71,6 +90,15 @@ internal static class ItemYaml
         if (TrySurgical(originalText, original, edited, out var surgical))
         {
             return surgical;
+        }
+
+        // race_overrides is opaque to the editor (see ItemData.BuildWorn): the flat
+        // path store never captures it, so a canonical re-emit would drop it silently.
+        if (YamlDocument.Parse(originalText).Resolve("visual.worn.race_overrides") is not null)
+        {
+            throw new System.NotSupportedException(
+                "This edit requires rewriting the file, but visual.worn.race_overrides is not "
+                + "editable here and would be lost. Edit the file's structure by hand instead.");
         }
 
         return Emit(edited);
@@ -271,6 +299,58 @@ internal static class ItemYaml
         sb.Append("visual:\n");
         Line(sb, data, 1, "visual.icon", "icon");
         Line(sb, data, 1, "visual.model", "model");
+        EmitWorn(sb, data);
+    }
+
+    private static void EmitWorn(StringBuilder sb, ItemData data)
+    {
+        int modelCount = data.WornModelCount;
+        bool any = modelCount > 0 || data.WornHideCount > 0 || data.WornDyeChannelCount > 0
+            || data.Has("visual.worn.attach.socket") || data.Has("visual.worn.attach.sheath_socket");
+        if (!any)
+        {
+            return;
+        }
+
+        sb.Append("  worn:\n");
+
+        if (modelCount > 0)
+        {
+            sb.Append("    models:\n");
+            for (int i = 0; i < modelCount; i++)
+            {
+                sb.Append("      - model: ").Append(Render(data.Get($"visual.worn.models[{i}].model")!)).Append('\n');
+                if (data.Get($"visual.worn.models[{i}].mirror") is { } mirror)
+                {
+                    sb.Append("        mirror: ").Append(Render(mirror)).Append('\n');
+                }
+            }
+        }
+
+        EmitScalarSequence(sb, data, "visual.worn.hides", "hides", data.WornHideCount);
+
+        if (data.Has("visual.worn.attach.socket") || data.Has("visual.worn.attach.sheath_socket"))
+        {
+            sb.Append("    attach:\n");
+            Line(sb, data, 3, "visual.worn.attach.socket", "socket");
+            Line(sb, data, 3, "visual.worn.attach.sheath_socket", "sheath_socket");
+        }
+
+        EmitScalarSequence(sb, data, "visual.worn.dye_channels", "dye_channels", data.WornDyeChannelCount);
+    }
+
+    private static void EmitScalarSequence(StringBuilder sb, ItemData data, string path, string key, int count)
+    {
+        if (count == 0)
+        {
+            return;
+        }
+
+        sb.Append("    ").Append(key).Append(":\n");
+        for (int i = 0; i < count; i++)
+        {
+            sb.Append("      - ").Append(Render(data.Get($"{path}[{i}]")!)).Append('\n');
+        }
     }
 
     private static void Line(StringBuilder sb, ItemData data, int indent, string path, string? key = null)

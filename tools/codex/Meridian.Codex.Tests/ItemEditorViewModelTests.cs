@@ -20,7 +20,7 @@ public class ItemEditorViewModelTests
         var vm = new ItemEditorViewModel();
 
         Assert.True(vm.IsValid);
-        Assert.StartsWith("schema: meridian/item@1", vm.PreviewYaml);
+        Assert.StartsWith("schema: meridian/item@2", vm.PreviewYaml);
     }
 
     [Fact]
@@ -101,5 +101,53 @@ public class ItemEditorViewModelTests
 
         Assert.True(vm.IsValid);
         Assert.Contains("unique: true", vm.PreviewYaml);
+    }
+
+    [Fact]
+    public void Opening_an_item_with_worn_populates_the_worn_rows()
+    {
+        var vm = new ItemEditorViewModel { FilePath = ContentFixtures.ContentCorePath("items/rusty_pickaxe.item.yaml") };
+        vm.OpenCommand.Execute(null);
+
+        var row = Assert.Single(vm.WornModels);
+        Assert.Equal("core:art.item.weapon.pickaxe_rusty", row.Model);
+        Assert.Equal("none", row.Mirror);
+        Assert.Equal("main_hand", vm.WornAttachSocket);
+        Assert.Equal("back", vm.WornSheathSocket);
+        Assert.True(vm.IsValid);
+    }
+
+    [Fact]
+    public void Adding_a_worn_model_row_appears_in_the_preview()
+    {
+        var vm = new ItemEditorViewModel();
+        vm.AddWornModelCommand.Execute(null);
+        Assert.Single(vm.WornModels);
+
+        vm.WornModels[0].Model = "core:art.item.armor.test_hood";
+        vm.WornModels[0].Mirror = "x";
+
+        Assert.Contains("worn:", vm.PreviewYaml);
+        Assert.Contains("model: core:art.item.armor.test_hood", vm.PreviewYaml);
+        Assert.Contains("mirror: x", vm.PreviewYaml);
+    }
+
+    [Fact]
+    public void Editing_a_worn_field_saves_surgically_and_reloads()
+    {
+        var path = ContentFixtures.CopyToTemp("items/rusty_pickaxe.item.yaml");
+        var original = File.ReadAllText(path, Utf8);
+
+        var vm = new ItemEditorViewModel { FilePath = path };
+        vm.OpenCommand.Execute(null);
+        vm.WornSheathSocket = "hip_l";
+        vm.SaveCommand.Execute(null);
+
+        Assert.Equal(original.Replace("sheath_socket: back", "sheath_socket: hip_l"), File.ReadAllText(path, Utf8));
+
+        var reloaded = new ItemEditorViewModel { FilePath = path };
+        reloaded.OpenCommand.Execute(null);
+        Assert.Equal("hip_l", reloaded.WornSheathSocket);
+        Assert.Equal("core:art.item.weapon.pickaxe_rusty", Assert.Single(reloaded.WornModels).Model);
     }
 }
