@@ -798,7 +798,8 @@ void test_wire_frame_edge_cases() {
         kOpLootTake, kOpLootResult, kOpLootRelease, kOpLootClosed, kOpInventorySnapshot,
         kOpVendorBuyReq, kOpVendorBuyResult, kOpVendorSellReq, kOpVendorSellResult,
         kOpVendorBuybackReq, kOpVendorBuybackResult, kOpVendorList, kOpTrainerList,
-        kOpTrainerLearn, kOpTrainerLearnResult};
+        kOpTrainerLearn, kOpTrainerLearnResult,
+        kOpChatMessage, kOpChatDeliver, kOpChatRejected};
     for (std::uint16_t op : opcodes) {
         auto f = decode_world_frame(encode_world_frame(op, 1, Bytes{}));
         CHECK(f.has_value() && f->opcode == op);
@@ -1390,6 +1391,78 @@ void test_trainer_codec() {
     CHECK(!codec::decode_trainer_list(Bytes{}).has_value());
 }
 
+// ---------------------------------------------------------------------------
+// Chat codec — ChatMessage / ChatDeliver / ChatRejected (SOC-01, #367/#434). The
+// chat panel sends ChatMessage (say/yell/whisper/zone + a '.'-command line) and decodes
+// the server's ChatDeliver (delivered lines incl. SYSTEM lines with sender_guid 0 — the
+// GM-command reply + mute notice) and ChatRejected (typed refusal). Full byte round-trips
+// (both string fields exercised, empty + non-empty) + wrap under the 0x600x opcodes +
+// verify-before-GetRoot safety, mirroring test_trainer_codec.
+// ---------------------------------------------------------------------------
+void test_chat_codec() {
+    std::puts("[chat] ChatMessage/Deliver/Rejected round-trip + wrap + verifier (#434)");
+
+    // CHAT_MESSAGE (C→S) — a WHISPER carries BOTH strings (target + text) + the channel.
+    codec::ChatMessage whisper{/*channel=WHISPER*/ 2, "Brynn", "meet me at the gate"};
+    auto w_out = codec::decode_chat_message(codec::encode_chat_message(whisper));
+    CHECK(w_out.has_value() && w_out->channel == 2 && w_out->target == "Brynn" &&
+          w_out->text == "meet me at the gate");
+    // A SAY line has an EMPTY target (ignored for non-whisper) — round-trips empty.
+    codec::ChatMessage say{/*channel=SAY*/ 0, "", "hail, travellers"};
+    auto s_out = codec::decode_chat_message(codec::encode_chat_message(say));
+    CHECK(s_out.has_value() && s_out->channel == 0 && s_out->target.empty() &&
+          s_out->text == "hail, travellers");
+    // A '.'-prefixed GM command rides the SAME opcode — it is ordinary text on the wire.
+    codec::ChatMessage cmd{/*channel=SAY*/ 0, "", ".help"};
+    auto c_out = codec::decode_chat_message(codec::encode_chat_message(cmd));
+    CHECK(c_out.has_value() && c_out->text == ".help");
+    {
+        Bytes frame = encode_world_frame(kOpChatMessage, 11, codec::encode_chat_message(whisper));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x6001 && f->opcode == kOpChatMessage);
+    }
+
+    // CHAT_DELIVER (S→C) — a player SAY line carries the author's guid + name.
+    codec::ChatDeliver deliver{/*channel=SAY*/ 0, 0xAABBCCDDull, "Aldric", "hail, travellers"};
+    auto d_out = codec::decode_chat_deliver(codec::encode_chat_deliver(deliver));
+    CHECK(d_out.has_value() && d_out->channel == 0 && d_out->sender_guid == 0xAABBCCDDull &&
+          d_out->sender_name == "Aldric" && d_out->text == "hail, travellers");
+    // A SYSTEM line (GM reply / mute notice): sender_guid 0, name "System" — the client
+    // renders it as a system line, not a bubble.
+    codec::ChatDeliver system{/*channel=WHISPER*/ 2, 0, "System", "Commands: .help"};
+    auto sys_out = codec::decode_chat_deliver(codec::encode_chat_deliver(system));
+    CHECK(sys_out.has_value() && sys_out->sender_guid == 0 && sys_out->sender_name == "System" &&
+          sys_out->text == "Commands: .help");
+    {
+        Bytes frame = encode_world_frame(kOpChatDeliver, 12, codec::encode_chat_deliver(deliver));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x6002 && f->opcode == kOpChatDeliver);
+    }
+
+    // CHAT_REJECTED (S→C) — a WHISPER refused because the target is offline (echoes target),
+    // and a channel-only refusal (RATE_LIMITED, empty target).
+    codec::ChatRejected offline{/*channel=WHISPER*/ 2, /*reason=TARGET_OFFLINE*/ 5, "Brynn"};
+    auto off_out = codec::decode_chat_rejected(codec::encode_chat_rejected(offline));
+    CHECK(off_out.has_value() && off_out->channel == 2 && off_out->reason == 5 &&
+          off_out->target == "Brynn");
+    codec::ChatRejected rate{/*channel=SAY*/ 0, /*reason=RATE_LIMITED*/ 1, ""};
+    auto rate_out = codec::decode_chat_rejected(codec::encode_chat_rejected(rate));
+    CHECK(rate_out.has_value() && rate_out->reason == 1 && rate_out->target.empty());
+    {
+        Bytes frame = encode_world_frame(kOpChatRejected, 13, codec::encode_chat_rejected(offline));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x6003 && f->opcode == kOpChatRejected);
+    }
+
+    // Verify-before-GetRoot: garbage + empty rejected on every S→C decoder.
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_chat_deliver(garbage).has_value());
+    CHECK(!codec::decode_chat_rejected(garbage).has_value());
+    CHECK(!codec::decode_chat_message(garbage).has_value());
+    CHECK(!codec::decode_chat_deliver(Bytes{}).has_value());
+    CHECK(!codec::decode_chat_rejected(Bytes{}).has_value());
+}
+
 void test_inventory_codec() {
     std::puts("[inventory] INVENTORY_SNAPSHOT (0x5007) round-trip + wrap + verifier");
 
@@ -1553,6 +1626,28 @@ void test_golden_cross_decode() {
         CHECK(q.choice_items.size() == 2 && q.choice_items[0].item_id == 900001u &&
               q.choice_items[1].item_id == 900002u);
     }
+
+    // if2_chat_message.bin / if2_chat_deliver.bin / if2_chat_rejected.bin (SOC-01 #367/#434) —
+    // the CLIENT chat codec decodes the server-frozen chat corpus, proving the wire contract
+    // agrees across tracks. Values mirror conformance.cpp build_corpus:
+    //   ChatMessage  — WHISPER to "Brynn": "meet me at the gate"
+    //   ChatDeliver  — SAY from Aldric (guid 0xAABBCCDD): "hail, travellers"
+    //   ChatRejected — WHISPER TARGET_OFFLINE, echoes target "Brynn"
+    auto cm_bytes = read_golden("if2_chat_message.bin");
+    auto cm = cm_bytes.has_value() ? codec::decode_chat_message(*cm_bytes) : std::nullopt;
+    CHECK(cm.has_value() && cm->channel == 2 /*WHISPER*/ && cm->target == "Brynn" &&
+          cm->text == "meet me at the gate");
+
+    auto cd_bytes = read_golden("if2_chat_deliver.bin");
+    auto cd = cd_bytes.has_value() ? codec::decode_chat_deliver(*cd_bytes) : std::nullopt;
+    CHECK(cd.has_value() && cd->channel == 0 /*SAY*/ &&
+          cd->sender_guid == 0x00000000AABBCCDDull && cd->sender_name == "Aldric" &&
+          cd->text == "hail, travellers");
+
+    auto cr_bytes = read_golden("if2_chat_rejected.bin");
+    auto cr = cr_bytes.has_value() ? codec::decode_chat_rejected(*cr_bytes) : std::nullopt;
+    CHECK(cr.has_value() && cr->channel == 2 /*WHISPER*/ && cr->reason == 5 /*TARGET_OFFLINE*/ &&
+          cr->target == "Brynn");
 }
 
 }  // namespace
@@ -1575,6 +1670,7 @@ int main() {
     test_vendor_codec();
     test_vendor_list_codec();
     test_trainer_codec();
+    test_chat_codec();
     test_golden_cross_decode();
     test_full_stack();
     test_transport_links();

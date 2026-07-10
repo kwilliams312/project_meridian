@@ -53,6 +53,8 @@ const PlayerClassColors := preload("res://scenes/world/player_class_colors.gd")
 # unit event into it; the HUD subscribes to the bus and never touches the net thread.
 const MeridianEventBusScript := preload("res://hud/event_bus.gd")
 const MeridianHudScript := preload("res://hud/hud.gd")
+# Floating chat bubble (SOC-01, #434) — attached to an entity node for say/yell lines.
+const ChatBubbleScript := preload("res://hud/chat_bubble.gd")
 
 var _session: Dictionary = {}
 var _character: Dictionary = {}
@@ -156,6 +158,12 @@ func _ready() -> void:
 	_bus.trainer_learn_requested.connect(_on_trainer_learn_requested)
 	# Combat intent (CMB-01, D-10, #432): a slot press → CAST_REQUEST frame.
 	_bus.cast_requested.connect(_on_cast_requested)
+	# Chat (SOC-01, #434): a submitted line → CHAT_MESSAGE frame; a delivered SAY/YELL line
+	# floats a bubble over the sender's entity. CHAT_DELIVER/CHAT_REJECTED are decoded +
+	# published back through the SAME bus (never invented client-side — the sender even sees
+	# its own say/yell because worldd echoes it).
+	_bus.chat_send_requested.connect(_on_chat_send_requested)
+	_bus.chat_bubble_requested.connect(_on_chat_bubble_requested)
 
 	_interp = MeridianRemoteInterpolator.new()
 	_mover = MeridianMovementController.new()
@@ -546,7 +554,18 @@ func _input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
 	var code := (event as InputEventKey).physical_keycode
+	# SOC-01 (#434): while the chat input has focus, the player is TYPING — the LineEdit owns
+	# the keys (letters, numbers, WASD), so suppress every gameplay keybind here and let the
+	# focused control handle the event. The panel releases focus itself on submit (Enter).
+	if _hud != null and _hud.is_chat_input_focused():
+		return
 	match code:
+		KEY_ENTER, KEY_KP_ENTER:
+			# Open the chat line for typing (focus the input). The panel sends on the next
+			# Enter and releases focus so WASD/number keys work again.
+			if _hud != null:
+				_hud.focus_chat_input()
+			get_viewport().set_input_as_handled()
 		KEY_TAB:
 			_cycle_target()
 			get_viewport().set_input_as_handled()  # TAB targets, does not move UI focus
@@ -705,7 +724,27 @@ func _route_cast_frame(opcode: int, payload: PackedByteArray) -> void:
 		"cast_result":
 			_bus.publish_cast_result(c, now)
 		_:
-			pass  # not a combat opcode — ignore (ClockSync etc.)
+			# Not a combat opcode — try the chat decode seam (SOC-01, #434).
+			_route_chat_frame(opcode, payload)
+
+
+# Decode a raw chat S→C frame (CHAT_DELIVER / CHAT_REJECTED) and publish it to the bus. The
+# bus appends it to the scrollback and, for a SAY/YELL line, emits chat_bubble_requested
+# (SOC-01, #434). System lines (sender_guid 0) — GM-command replies + the mute notice — ride
+# CHAT_DELIVER and render as System lines through the same path.
+func _route_chat_frame(opcode: int, payload: PackedByteArray) -> void:
+	if _net == null or _bus == null:
+		return
+	var m: Dictionary = _net.decode_chat_frame(opcode, payload)
+	match String(m.get("kind", "")):
+		"chat_deliver":
+			_bus.publish_chat_deliver(int(m.get("channel", 0)), int(m.get("sender_guid", 0)),
+				String(m.get("sender_name", "")), String(m.get("text", "")))
+		"chat_rejected":
+			_bus.publish_chat_rejected(int(m.get("channel", 0)), int(m.get("reason", 0)),
+				String(m.get("target", "")))
+		_:
+			pass  # not a chat opcode — ignore (ClockSync etc.)
 
 
 # --- Bus intent handlers (send the matching outbound frame) -------------------
@@ -721,6 +760,38 @@ func _on_cast_requested(ability_id: int, target_guid: int, client_time_ms: int) 
 	if frame.size() > 0:
 		_net.send_bulk(frame)
 	print("[world] CAST_REQUEST -> ability=%d target=%d" % [ability_id, target_guid])
+
+
+# Chat (SOC-01, #434): a submitted line → CHAT_MESSAGE. `target` matters only for WHISPER; a
+# '.'-prefixed body is a GM command the SERVER intercepts on this same opcode (no client-side
+# parsing). The server routes/echoes the line back as a CHAT_DELIVER (or refuses it with a
+# CHAT_REJECTED), decoded by _route_chat_frame and published to the bus.
+func _on_chat_send_requested(channel: int, target: String, text: String) -> void:
+	if _net == null:
+		return
+	var frame: PackedByteArray = _net.build_chat_message_frame(channel, target, text)
+	if frame.size() > 0:
+		_net.send_bulk(frame)
+	print("[world] CHAT_MESSAGE -> channel=%d target='%s' text='%s'" % [channel, target, text])
+
+
+# Float a chat bubble over the sender's entity for a SAY/YELL line. The sender may be the LOCAL
+# player (its own echoed line — bubble over _body) or a remote entity (_remote_nodes[guid]). A
+# reused MeridianChatBubble child on the node refreshes in place + restarts its own hide timer.
+func _on_chat_bubble_requested(sender_guid: int, _sender_name: String, text: String, channel: int) -> void:
+	var host: Node3D = null
+	if sender_guid == _my_guid and _my_guid != 0:
+		host = _body
+	elif _remote_nodes.has(sender_guid):
+		host = _remote_nodes[sender_guid]
+	if host == null:
+		return  # sender not visible in this client's AoI — no bubble to float
+	var bubble := host.get_node_or_null("ChatBubble") as MeridianChatBubble
+	if bubble == null:
+		bubble = ChatBubbleScript.new()
+		bubble.name = "ChatBubble"
+		host.add_child(bubble)
+	bubble.show_message(text, channel)
 
 
 func _on_gossip_hello_requested(npc_guid: int) -> void:

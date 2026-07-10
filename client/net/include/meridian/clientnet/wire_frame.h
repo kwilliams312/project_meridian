@@ -100,6 +100,16 @@ inline constexpr std::uint16_t kOpTrainerList        = 0x5203;  // S→C
 inline constexpr std::uint16_t kOpTrainerLearn       = 0x5204;  // C→S
 inline constexpr std::uint16_t kOpTrainerLearnResult = 0x5205;  // S→C
 
+// Chat / social (M1 — SOC-01, #367/#434). The client sends ONE CHAT_MESSAGE per line
+// (the channel enum selects say/yell/whisper/zone routing) and DECODES the S→C
+// CHAT_DELIVER (a delivered line, incl. System lines with sender_guid 0 — GM-command
+// replies, the mute notice) + CHAT_REJECTED (a typed refusal). '.'-prefixed GM commands
+// ride the SAME CHAT_MESSAGE opcode (no separate wire op) — the server's System reply
+// comes back as a CHAT_DELIVER (world_dispatch.cpp / gm_command).
+inline constexpr std::uint16_t kOpChatMessage        = 0x6001;  // C→S
+inline constexpr std::uint16_t kOpChatDeliver        = 0x6002;  // S→C
+inline constexpr std::uint16_t kOpChatRejected       = 0x6003;  // S→C
+
 // IF-2 in-frame header size: u16 opcode + u64 seq (world_dispatch.h
 // kFrameHeaderBytes). A frame body shorter than this is malformed.
 inline constexpr std::size_t kFrameHeaderBytes =

@@ -702,6 +702,56 @@ struct TrainerLearnResult {
 Bytes encode_trainer_learn_result(const TrainerLearnResult& in);  // test/mock symmetry
 std::optional<TrainerLearnResult> decode_trainer_learn_result(const Bytes& buf);
 
+// ---------------------------------------------------------------------------
+// IF-2 (world.fbs) — CHAT / SOCIAL (M1 SOC-01, #367/#434). The client sends ONE
+// ChatMessage per line (the `channel` selects say/yell/whisper/zone routing); the
+// server delivers lines back as ChatDeliver (incl. SYSTEM lines — sender_guid 0,
+// sender_name "System" — for GM-command replies and the mute notice) and refuses a
+// bad send with a typed ChatRejected. '.'-prefixed GM commands (.help/.tele) ride the
+// SAME ChatMessage opcode; the server's System reply comes back as a ChatDeliver.
+//
+// Enum fields ride as u16 ordinals (world.fbs ChatChannel / ChatRejectReason) so this
+// POD API carries no generated-enum dependency, exactly like the status fields above:
+//   ChatChannel{SAY=0,YELL=1,WHISPER=2,ZONE=3};
+//   ChatRejectReason{NOT_IN_WORLD=0,RATE_LIMITED=1,EMPTY=2,TOO_LONG=3,NO_TARGET=4,
+//                    TARGET_OFFLINE=5}.
+// ---------------------------------------------------------------------------
+
+// CHAT_MESSAGE (C→S): send one chat line. `target` is meaningful only for WHISPER (the
+// recipient's character name, case-insensitive) and ignored for other channels; `text`
+// is the message body (a '.'-prefixed body is a GM command the server intercepts).
+struct ChatMessage {
+    std::uint16_t channel = 0;  // ChatChannel (default SAY)
+    std::string target;         // WHISPER recipient name (empty otherwise)
+    std::string text;           // the message body
+};
+Bytes encode_chat_message(const ChatMessage& in);
+std::optional<ChatMessage> decode_chat_message(const Bytes& buf);  // test/mock symmetry
+
+// CHAT_DELIVER (S→C): a chat line delivered to this client. `sender_guid` is the
+// author's entity guid (0 = SYSTEM — the client renders it as a "System" line rather
+// than a player line / bubble); `sender_name` is the display name; `channel` tells the
+// client how it was routed (SAY/YELL float a bubble over sender_guid's entity).
+struct ChatDeliver {
+    std::uint16_t channel = 0;  // ChatChannel
+    std::uint64_t sender_guid = 0;
+    std::string sender_name;
+    std::string text;
+};
+Bytes encode_chat_deliver(const ChatDeliver& in);  // test/mock symmetry (client decodes)
+std::optional<ChatDeliver> decode_chat_deliver(const Bytes& buf);
+
+// CHAT_REJECTED (S→C): the server refused a ChatMessage. `channel` echoes the attempted
+// channel; `reason` is world.fbs ChatRejectReason; `target` echoes the attempted WHISPER
+// target (empty otherwise) so the client can surface "X is not online".
+struct ChatRejected {
+    std::uint16_t channel = 0;  // ChatChannel
+    std::uint16_t reason = 0;   // ChatRejectReason
+    std::string target;
+};
+Bytes encode_chat_rejected(const ChatRejected& in);  // test/mock symmetry (client decodes)
+std::optional<ChatRejected> decode_chat_rejected(const Bytes& buf);
+
 }  // namespace meridian::clientnet::codec
 
 #endif  // MERIDIAN_CLIENTNET_CODEC_H
