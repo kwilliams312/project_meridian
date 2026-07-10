@@ -139,7 +139,7 @@ public:
 	// authenticated (post-HandshakeOk / character-select) session.
 	godot::PackedByteArray build_char_list_request_frame() const;
 	godot::PackedByteArray build_char_create_request_frame(const godot::String &name,
-			int race, int char_class) const;
+			int race, int char_class, int hair, int face, int skin) const;
 	godot::PackedByteArray build_char_delete_request_frame(int64_t character_id) const;
 	godot::PackedByteArray build_enter_world_request_frame(int64_t character_id) const;
 

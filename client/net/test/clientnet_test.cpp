@@ -583,6 +583,9 @@ void test_char_enter_codec() {
     cc.name = "Gandalf";
     cc.race = 4;
     cc.char_class = 2;
+    cc.appearance.hair = 2;
+    cc.appearance.face = 3;
+    cc.appearance.skin = 1;
     const std::pair<std::uint16_t, Bytes> reqs[] = {
         {kOpCharListReq, codec::encode_char_list_request()},
         {kOpCharCreateReq, codec::encode_char_create_request(cc)},
@@ -598,6 +601,28 @@ void test_char_enter_codec() {
     CHECK(!codec::encode_char_create_request(cc).empty());
     CHECK(!codec::encode_char_delete_request(1).empty());
     CHECK(!codec::encode_enter_world_request(1).empty());
+
+    // CHR-01 #435: the chosen appearance set round-trips through encode -> decode
+    // (name/race/class carry it too). Proves the client sends the player's picks, not
+    // just the server default, over CHAR_CREATE.
+    auto cc_rt = codec::decode_char_create_request(codec::encode_char_create_request(cc));
+    CHECK(cc_rt.has_value());
+    CHECK(cc_rt->name == "Gandalf" && cc_rt->race == 4 && cc_rt->char_class == 2);
+    CHECK(cc_rt->appearance.version == 1 && cc_rt->appearance.hair == 2
+          && cc_rt->appearance.face == 3 && cc_rt->appearance.skin == 1);
+    // A create with no explicit appearance decodes to the v1 default {1,1,1}.
+    codec::CharCreateRequest cc_def;
+    cc_def.name = "Frodo";
+    cc_def.race = 1;
+    cc_def.char_class = 1;
+    auto cc_def_rt =
+        codec::decode_char_create_request(codec::encode_char_create_request(cc_def));
+    CHECK(cc_def_rt.has_value() && cc_def_rt->appearance.version == 1
+          && cc_def_rt->appearance.hair == 1 && cc_def_rt->appearance.face == 1
+          && cc_def_rt->appearance.skin == 1);
+    // Garbage is rejected before GetRoot (verify-before-GetRoot discipline).
+    CHECK(!codec::decode_char_create_request(
+              bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01})).has_value());
 
     // Every response decoder rejects garbage (verify-before-GetRoot discipline).
     Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});

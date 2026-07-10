@@ -64,7 +64,11 @@ func count() -> int:
 ## these methods, map LIMIT_REACHED onto an "account_limit" error code; the char_select
 ## view already renders any create failure's `detail` gracefully ("Cannot create: …"),
 ## so a new reason needs no view change.
-func create(name: String, race_id: int, class_id: int) -> Dictionary:
+## `appearance` (optional) is the chosen look {version, hair, face, skin} (#435). It is
+## stored on the row verbatim so the offline flow mirrors the wire CharCreateRequest; the
+## server treats appearance as opaque-but-bounded (clamped, never rejected), so this stub
+## does NOT validate it. Absent ⇒ the default appearance record.
+func create(name: String, race_id: int, class_id: int, appearance: Dictionary = {}) -> Dictionary:
 	var trimmed := name.strip_edges()
 	# 1. Name: non-empty, within VARCHAR(32).
 	if trimmed.is_empty():
@@ -83,7 +87,9 @@ func create(name: String, race_id: int, class_id: int) -> Dictionary:
 		if String(r["name"]).to_lower() == lname:
 			return _err("duplicate_name", "The name '%s' is already taken." % trimmed)
 
-	var row := {"id": _next_id, "name": trimmed, "race": race_id, "class": class_id}
+	var look: Dictionary = appearance if not appearance.is_empty() else MeridianAppearance.default_appearance()
+	var row := {"id": _next_id, "name": trimmed, "race": race_id, "class": class_id,
+		"appearance": look}
 	_next_id += 1
 	_rows.append(row)
 	return {"ok": true, "row": row.duplicate()}
