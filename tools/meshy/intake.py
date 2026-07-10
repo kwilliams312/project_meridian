@@ -17,6 +17,8 @@ marking it `done`. No new policy is invented here.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -60,6 +62,42 @@ def validate_namespace(ns: str) -> None:
 
 def geometry_prefix(asset_class: str, budgets: dict) -> str:
     return budgets.get(asset_class, {}).get("prefix", _DEFAULT_PREFIX)
+
+
+# Local-image formats Meshy's image-to-3D accepts as base64 data URIs
+# (docs.meshy.ai image-to-3d: image_url is "Public URL or base64 data URI
+# (.jpg, .jpeg, .png)").
+_IMAGE_MIME_BY_SUFFIX = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+}
+
+
+def image_ref_to_url(image_ref: str) -> str:
+    """Resolve a `--image` argument to what the Meshy API accepts as `image_url`.
+
+    * `http(s)://...` (or an already-encoded `data:` URI) passes through.
+    * An existing local `.png`/`.jpg`/`.jpeg` file is base64-encoded into a
+      `data:<mime>;base64,...` URI (the documented alternative to a public URL).
+    * Anything else — missing file, unsupported extension — is an IntakeError,
+      raised before any network call.
+    """
+    if image_ref.startswith(("http://", "https://", "data:")):
+        return image_ref
+    path = Path(image_ref)
+    if not path.is_file():
+        raise IntakeError(
+            f"--image '{image_ref}' is neither a URL nor an existing local file"
+        )
+    mime = _IMAGE_MIME_BY_SUFFIX.get(path.suffix.lower())
+    if mime is None:
+        raise IntakeError(
+            f"--image '{image_ref}' has unsupported extension '{path.suffix}' — "
+            f"Meshy accepts {', '.join(sorted(_IMAGE_MIME_BY_SUFFIX))} for local files"
+        )
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
 
 
 def asset_id(ns: str, name: str) -> str:
@@ -133,12 +171,23 @@ def build_prompts_doc(
     """The prompts-file content: the exact generation request + resulting task id(s).
 
     Referenced from the sidecar's `provenance.ai.prompts_file` (Art PRD §3.2
-    prompt hygiene — an auditable record of exactly what was asked for).
+    prompt hygiene — an auditable record of exactly what was asked for). One
+    exception to verbatim recording: a base64 data-URI `image_url` (local-file
+    image-to-3D) is replaced by its byte length + SHA-256 digest — megabytes of
+    base64 in a YAML companion would be useless for review, and the digest
+    still pins exactly which image was submitted.
     """
     doc: dict = {"task_id": task_id, "model_version": model_version}
     if preview_task_id is not None:
         doc["preview_task_id"] = preview_task_id
-    doc["request"] = dict(request_payload)
+    request = dict(request_payload)
+    image_url = request.get("image_url")
+    if isinstance(image_url, str) and image_url.startswith("data:"):
+        digest = hashlib.sha256(image_url.encode("ascii")).hexdigest()
+        request["image_url"] = (
+            f"<data-uri omitted: {len(image_url)} chars, sha256:{digest}>"
+        )
+    doc["request"] = request
     return doc
 
 

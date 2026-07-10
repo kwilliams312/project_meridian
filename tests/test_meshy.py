@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO / "tools"))
 import meshy.__main__ as meshy_main  # noqa: E402
 import meshy.client as client_mod  # noqa: E402
 import meshy.intake as intake  # noqa: E402
+import validate_content  # noqa: E402
 from validate_content import check_provenance as ci_check_provenance  # noqa: E402
 
 
@@ -616,3 +617,288 @@ def test_generate_image_mode_happy_path(tmp_path, monkeypatch, asset_validator):
     doc = yaml.safe_load(sidecar_path.read_text())
     asset_validator.validate(doc)
     assert doc["provenance"]["source_tier"] == "ai"
+
+
+# ============================================================================
+# poll() API-shape-drift guard — unrecognized status fails loudly (review fix)
+# ============================================================================
+
+
+def test_poll_unrecognized_status_raises_immediately_naming_value():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "EXPLODED", "progress": 0})
+
+    client = client_mod.MeshyClient("fake-key", transport=httpx.MockTransport(handler))
+    with pytest.raises(client_mod.MeshyAPIError) as exc_info:
+        client.poll("task_1", interval_s=0, timeout_s=60)
+    message = str(exc_info.value)
+    assert "EXPLODED" in message
+    for known in sorted(client_mod.KNOWN_STATUSES):
+        assert known in message
+
+
+def test_poll_missing_status_field_raises_immediately():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"progress": 0})
+
+    client = client_mod.MeshyClient("fake-key", transport=httpx.MockTransport(handler))
+    with pytest.raises(client_mod.MeshyAPIError, match="None"):
+        client.poll("task_1", interval_s=0, timeout_s=60)
+
+
+# ============================================================================
+# --image local-file support (data-URI encoding; review fix)
+# ============================================================================
+
+# 1x1 transparent PNG (real, decodable bytes for the fixture file).
+_TINY_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000101030000002562d1"
+    "4f0000000467414d410000b18f0bfc6105000000206348524d00007a26000080"
+    "840000fa00000080e8000075300000ea6000003a98000017709cba513c000000"
+    "06504c5445000000ffffffa5d99fdd0000000174524e530040e6d8660000000a"
+    "4944415408d76360000000020001e221bc330000000049454e44ae426082"
+)
+
+
+def test_image_ref_to_url_passes_urls_through():
+    assert (
+        intake.image_ref_to_url("https://example.com/a.png")
+        == "https://example.com/a.png"
+    )
+    assert intake.image_ref_to_url("data:image/png;base64,AAAA").startswith("data:")
+
+
+def test_image_ref_to_url_encodes_local_png_as_data_uri(tmp_path):
+    import base64
+
+    img = tmp_path / "ref.png"
+    img.write_bytes(_TINY_PNG)
+    url = intake.image_ref_to_url(str(img))
+    assert url.startswith("data:image/png;base64,")
+    assert base64.b64decode(url.split(",", 1)[1]) == _TINY_PNG
+
+
+def test_image_ref_to_url_rejects_missing_file_and_bad_extension(tmp_path):
+    with pytest.raises(intake.IntakeError, match="neither a URL nor an existing"):
+        intake.image_ref_to_url(str(tmp_path / "nope.png"))
+    bad = tmp_path / "ref.gif"
+    bad.write_bytes(b"GIF89a")
+    with pytest.raises(intake.IntakeError, match="unsupported extension"):
+        intake.image_ref_to_url(str(bad))
+
+
+def test_build_prompts_doc_replaces_data_uri_with_digest():
+    data_uri = "data:image/png;base64," + "A" * 4096
+    doc = intake.build_prompts_doc(
+        task_id="task_image_1",
+        preview_task_id=None,
+        request_payload={"image_url": data_uri, "ai_model": "meshy-5"},
+        model_version="meshy-5",
+    )
+    recorded = doc["request"]["image_url"]
+    assert "data-uri omitted" in recorded
+    assert "sha256:" in recorded
+    assert len(recorded) < 200  # never megabytes of base64 in the companion
+
+
+def test_generate_image_mode_local_file_sends_data_uri(tmp_path, monkeypatch):
+    img = tmp_path / "ref.png"
+    img.write_bytes(_TINY_PNG)
+    glb_bytes = _make_glb(tmp_path / "src.glb", triangle_count=2).read_bytes()
+    submitted_image_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path == client_mod.IMAGE_TO_3D_PATH:
+            submitted_image_urls.append(json.loads(request.content)["image_url"])
+            return httpx.Response(200, json={"result": "task_image_1"})
+        if (
+            request.method == "GET"
+            and path == f"{client_mod.IMAGE_TO_3D_PATH}/task_image_1"
+        ):
+            return httpx.Response(
+                200,
+                json={"status": "SUCCEEDED", "model_urls": {"glb": GLB_ASSET_URL}},
+            )
+        if request.method == "GET" and str(request.url) == GLB_ASSET_URL:
+            return httpx.Response(200, content=glb_bytes)
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+
+    content_root = tmp_path / "content"
+    rc = meshy_main.main(
+        [
+            "generate",
+            "--image",
+            str(img),
+            "--ns",
+            "core",
+            "--name",
+            "test_localimg",
+            "--class",
+            "prop",
+            "--terms-verified",
+            "--content-root",
+            str(content_root),
+            "--poll-interval",
+            "0",
+            "--poll-timeout",
+            "5",
+        ]
+    )
+    assert rc == 0
+    assert submitted_image_urls == [intake.image_ref_to_url(str(img))]
+    assert submitted_image_urls[0].startswith("data:image/png;base64,")
+    prompts_doc = yaml.safe_load(
+        (
+            content_root / "core/assets/art/test_localimg/test_localimg.prompts.yaml"
+        ).read_text()
+    )
+    assert "data-uri omitted" in prompts_doc["request"]["image_url"]
+
+
+def test_generate_refuses_missing_local_image_before_http(
+    tmp_path, monkeypatch, capsys
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no HTTP call should happen for an invalid --image")
+
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+
+    rc = meshy_main.main(
+        [
+            "generate",
+            "--image",
+            str(tmp_path / "missing.png"),
+            "--ns",
+            "core",
+            "--name",
+            "test_x",
+            "--class",
+            "prop",
+            "--terms-verified",
+            "--content-root",
+            str(tmp_path / "content"),
+        ]
+    )
+    assert rc == 2
+    assert "neither a URL nor an existing" in capsys.readouterr().err
+
+
+# ============================================================================
+# CLI-level refusal for invalid --name / --ns (review fix)
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    ("ns", "name", "expected_fragment"),
+    [
+        ("core", "Bad-Name", "--name"),
+        ("Bad!NS", "good_name", "--ns"),
+    ],
+)
+def test_generate_refuses_invalid_ns_or_name_before_http(
+    tmp_path, monkeypatch, capsys, ns, name, expected_fragment
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no HTTP call should happen for invalid --ns/--name")
+
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+
+    rc = meshy_main.main(
+        [
+            "generate",
+            "--text",
+            "a barrel",
+            "--ns",
+            ns,
+            "--name",
+            name,
+            "--class",
+            "prop",
+            "--terms-verified",
+            "--content-root",
+            str(tmp_path / "content"),
+        ]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert err.startswith("refused:")
+    assert expected_fragment in err
+
+
+# ============================================================================
+# Integration: the landed asset dir (glb + sidecar + prompts file TOGETHER)
+# passes the real validate_content gate end-to-end (review fix — this is the
+# blind spot that hid the *.prompts.yaml L001 bug: earlier tests validated
+# the sidecar dict in isolation, never the on-disk tree the CLI creates).
+# ============================================================================
+
+
+def test_generate_output_tree_passes_validate_content_end_to_end(tmp_path, monkeypatch):
+    glb_bytes = _make_glb(tmp_path / "src.glb", triangle_count=2).read_bytes()
+    handler, _calls = _text_to_3d_handler(glb_bytes=glb_bytes)
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+
+    # A minimal but real pack: pack.yaml + the CLI-landed asset dir.
+    content_root = tmp_path / "content"
+    pack_dir = content_root / "core"
+    pack_dir.mkdir(parents=True)
+    (pack_dir / "pack.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema": "meridian/pack@1",
+                "namespace": "core",
+                "name": "Test Pack",
+                "version": "0.1.0",
+                "content_schema_version": 1,
+                "engine": {"godot": "4.6"},
+                "license": "Apache-2.0 (data) / CC-BY-4.0 (referenced original assets)",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    rc = meshy_main.main(
+        [
+            "generate",
+            "--text",
+            "a small barrel",
+            "--ns",
+            "core",
+            "--name",
+            "test_barrel",
+            "--class",
+            "prop",
+            "--terms-verified",
+            "--content-root",
+            str(content_root),
+            "--poll-interval",
+            "0",
+            "--poll-timeout",
+            "5",
+        ]
+    )
+    assert rc == 0
+    asset_dir = content_root / "core" / "assets" / "art" / "test_barrel"
+    # All three artifacts land together — the tree CI would actually see.
+    assert (asset_dir / "sm_test_barrel.glb").exists()
+    assert (asset_dir / "test_barrel.asset.yaml").exists()
+    assert (asset_dir / "test_barrel.prompts.yaml").exists()
+
+    # The full validate_content gate (schemas + lints + import presets) over
+    # the real on-disk tree — exactly what CI runs — must be error-free.
+    res = validate_content.validate(
+        content_root,
+        SCHEMA_DIR,
+        assets_mode="error",
+        imports_mode="error",
+        presets_path=REPO / "client" / "import-presets" / "presets.json",
+    )
+    assert res.errors == [], res.errors

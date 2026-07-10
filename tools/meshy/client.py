@@ -50,6 +50,12 @@ DEFAULT_POLL_INTERVAL_S = 5.0
 DEFAULT_POLL_TIMEOUT_S = 600.0
 
 TERMINAL_STATUSES = frozenset({"SUCCEEDED", "FAILED", "CANCELED"})
+PENDING_STATUSES = frozenset({"PENDING", "IN_PROGRESS"})
+# The full documented status vocabulary (docs.meshy.ai). Anything outside this
+# set means the API shape has drifted from what this client was written
+# against — poll() fails loudly and immediately rather than spinning until a
+# generic timeout that would mask the real problem.
+KNOWN_STATUSES = TERMINAL_STATUSES | PENDING_STATUSES
 
 
 class MeshyAPIError(RuntimeError):
@@ -219,15 +225,29 @@ class MeshyClient:
 
         `sleep`/`now` are injectable so tests can drive a fake clock instead
         of sleeping for real (repo testing rules: no arbitrary real waits).
+        A status value outside KNOWN_STATUSES (including a missing `status`
+        field) raises MeshyAPIError immediately — API-shape drift must fail
+        loudly, not dribble into a generic poll timeout.
         """
         deadline = now() + timeout_s
         while True:
             resp = self._client.get(f"{endpoint}/{task_id}")
             self._raise_for_http_error(resp)
             data = resp.json()
+            raw_status = data.get("status")
+            if raw_status not in KNOWN_STATUSES:
+                raise MeshyAPIError(
+                    f"Meshy task {task_id} returned unrecognized status "
+                    f"{raw_status!r} — expected one of "
+                    f"{', '.join(sorted(KNOWN_STATUSES))}. The API shape may "
+                    f"have drifted from what this client was written against "
+                    f"(see tools/meshy/README.md 'API notes').",
+                    task_id=task_id,
+                    status=raw_status,
+                )
             status = TaskStatus(
                 task_id=task_id,
-                status=data.get("status", "UNKNOWN"),
+                status=raw_status,
                 progress=data.get("progress", 0),
                 model_urls=data.get("model_urls") or {},
                 raw=data,

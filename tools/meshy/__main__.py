@@ -38,11 +38,24 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="meshy", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
 
-    gen = sub.add_parser("generate", help="generate + fetch an AI asset via Meshy")
+    gen = sub.add_parser(
+        "generate",
+        help="generate + fetch an AI asset via Meshy",
+        epilog=(
+            "Budget pre-check: only lod0_tris (triangle count) is checked "
+            "against the class ceiling before landing; texture_max_px and "
+            "vram_mb are NOT inspected at intake — declare them by hand in "
+            "the sidecar if known (the schema/lint gate still enforces them)."
+        ),
+    )
     prompt_group = gen.add_mutually_exclusive_group(required=True)
     prompt_group.add_argument("--text", help="text prompt for text-to-3D generation")
     prompt_group.add_argument(
-        "--image", help="image URL/path for image-to-3D generation"
+        "--image",
+        help=(
+            "image for image-to-3D generation: an http(s) URL, or a local "
+            ".png/.jpg/.jpeg file (base64-encoded into a data URI)"
+        ),
     )
     gen.add_argument("--ns", required=True, help="pack namespace, e.g. 'core'")
     gen.add_argument("--name", required=True, help="asset name, lowercase snake_case")
@@ -105,6 +118,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
     try:
         intake.validate_namespace(args.ns)
         intake.validate_name(args.name)
+        image_url = intake.image_ref_to_url(args.image) if args.image else None
     except intake.IntakeError as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2
@@ -129,7 +143,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
                 )
                 endpoint = client_mod.TEXT_TO_3D_PATH
             else:
-                handle = client.image_to_3d(args.image)
+                handle = client.image_to_3d(image_url)
                 endpoint = client_mod.IMAGE_TO_3D_PATH
         except (client_mod.MeshyAPIError, client_mod.MeshyPollTimeoutError) as exc:
             print(f"error: {exc}", file=sys.stderr)

@@ -110,6 +110,7 @@ def expected_envelope(ftype: str) -> str:
     envelope_type = ENVELOPE_TYPE_NAMES.get(ftype, ftype)
     return f"meridian/{envelope_type}@{SCHEMA_VERSIONS.get(ftype, 1)}"
 
+
 # --- Provenance / license policy (TD-09; Art PRD §3, Art SAD §3.2) ------------
 # License allowlist: original art is CC-BY-4.0, third-party must be CC0 or CC-BY.
 # Anything else "fails CI outright" (Art PRD §3, line 164). Matches the schema
@@ -530,8 +531,13 @@ def validate(
     # them, and the strudel_render tool consumes them. They carry no `meridian/<type>@1`
     # envelope, so skip them from discovery entirely — otherwise file_type() returns
     # None and they'd trip a spurious L001 "bad filename".
+    # `*.prompts.yaml` files are the same shape of auxiliary companion (spec ④ §7.2,
+    # story #505): the Meshy intake CLI writes one beside each AI-tier sidecar and
+    # references it from `provenance.ai.prompts_file` (Art PRD §3.2 prompt hygiene).
+    # No envelope either — excluded for the same reason, mirroring mcc discover.cpp.
+    AUX_SUFFIXES = (".render.yaml", ".prompts.yaml")
     files = sorted(
-        p for p in content_dir.rglob("*.yaml") if not p.name.endswith(".render.yaml")
+        p for p in content_dir.rglob("*.yaml") if not p.name.endswith(AUX_SUFFIXES)
     )
 
     def rel(path: Path) -> Path:

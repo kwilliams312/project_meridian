@@ -37,21 +37,30 @@ PYTHONPATH=tools uv run python -m meshy generate \
   --terms-verified
 ```
 
-or from an image reference:
+or from an image reference — an http(s) URL or a local `.png`/`.jpg`/`.jpeg`
+file (local files are base64-encoded into a `data:` URI, the documented
+alternative Meshy's `image_url` field accepts):
 
 ```bash
 PYTHONPATH=tools uv run python -m meshy generate \
-  --image https://example.com/ref.png \
+  --image ./refs/orc_warrior.png \
   --ns core --name orc_warrior --class character_model \
   --terms-verified
 ```
+
+For a local image, the prompts file records the submitted data URI's byte
+length + SHA-256 digest instead of the raw base64 blob — still pins exactly
+which image was submitted, without megabytes of base64 in a YAML companion.
 
 Lands under `content/<ns>/assets/art/<name>/`:
 
 - `<prefix><name>.glb` — the downloaded model (`sk_`/`sm_` prefix per the
   asset class, same table as `meridian_export/budgets.json`)
 - `<name>.asset.yaml` — the IF-8 sidecar
-- `<name>.prompts.yaml` — the exact generation request + Meshy task id(s)
+- `<name>.prompts.yaml` — the exact generation request + Meshy task id(s).
+  Auxiliary companion, not a content entity: `validate_content.py` and mcc
+  discovery exclude `*.prompts.yaml` from envelope checks, exactly like the
+  `*.render.yaml` strudel manifests (issue #410 precedent).
 
 `--class` accepts any `asset.schema.yaml` art class (`character_model`,
 `armor_model`, `weapon_model`, `kit_piece`, `prop`, `foliage`,
@@ -79,6 +88,13 @@ runs pygltflib triangle counting against the downloaded `.glb` and calls
 or prompts file is written — an over-budget generation fails immediately,
 never lands, and the oversized `.glb` is cleaned up. Contributor-visible
 review only ever sees on-budget candidates.
+
+**Budget pre-check limitation:** only `lod0_tris` (triangle count) is checked
+at intake. `texture_max_px` and `vram_mb` are **not** inspected — that would
+require decoding the glb's embedded images (an image-decode dependency this
+tool deliberately doesn't carry). If you know those figures, declare them by
+hand in the sidecar's `budget:` block; the existing L071 lints then enforce
+them in CI. An intake-time texture/VRAM check is a documented follow-up.
 
 ## Provenance shape
 
@@ -117,9 +133,14 @@ pass marks it `done` (Art PRD §3.4) — raw Meshy output never ships.
   both stages and returns a `TaskHandle` for the refine task.
 - Image-to-3D is single-stage on `/openapi/v1/image-to-3d` (note the `v1` —
   a real API quirk, not a typo).
-- Both poll at `GET <path>/{task_id}`; terminal statuses are `SUCCEEDED`,
-  `FAILED`, `CANCELED`. `model_urls.glb` on a `SUCCEEDED` task is the
-  presigned download URL.
+- Both poll at `GET <path>/{task_id}`; the documented status vocabulary is
+  `PENDING`, `IN_PROGRESS`, `SUCCEEDED`, `FAILED`, `CANCELED`. A status
+  outside that set makes `poll()` fail **immediately** naming the unexpected
+  value (API-shape drift must surface loudly, not decay into a generic
+  timeout). `model_urls.glb` on a `SUCCEEDED` task is the presigned download
+  URL.
+- Image-to-3D's `image_url` accepts a public URL **or** a base64 data URI —
+  the CLI's local-file support uses the data-URI form.
 - `DEFAULT_MODEL_VERSION = "meshy-5"` (`client.py`) is a **pinned** release,
   never `"latest"` — provenance must name an exact, reproducible tool
   version. Bump deliberately when adopting a new Meshy model.
