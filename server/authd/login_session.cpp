@@ -298,6 +298,20 @@ Bytes fake_salt_for(std::string_view username) {
     return salt;
 }
 
+// Lowercase hex of raw bytes, for the #510/#518 INFO ground-truth logging of the
+// decoded username (the username is NOT a secret). NEVER pass a password, SRP
+// verifier, salt, session key, or M1/M2 through here.
+std::string hex_encode(std::string_view bytes) {
+    static const char* hexd = "0123456789abcdef";
+    std::string out;
+    out.reserve(bytes.size() * 2);
+    for (unsigned char byte : bytes) {
+        out.push_back(hexd[byte >> 4]);
+        out.push_back(hexd[byte & 0x0F]);
+    }
+    return out;
+}
+
 // Format a UTC DATETIME string "YYYY-MM-DD HH:MM:SS" `ttl` seconds from now, for
 // the session_grant.expires_at column (SAD §4.1 — server writes UTC).
 std::string utc_expires_in(std::uint32_t ttl_seconds) {
@@ -412,6 +426,17 @@ LoginResult run_login(net::Session& sess, db::Connection& db,
     }
     const std::string username = start->account()->str();
 
+    // #510/#518 ground truth: log the decoded username bytes at INFO so a live
+    // FAILING session reveals whether the wire delivered a corrupt/empty username
+    // (framing bug) or a valid one. username_hex is the raw bytes — the username is
+    // NOT a secret; the password/verifier/salt/session key/M1/M2 are never logged.
+    core::log::info(
+        "authd", "login username decoded",
+        {core::log::field("peer", sess.peer()),
+         core::log::field("username_len",
+                          static_cast<std::int64_t>(username.size())),
+         core::log::field("username_hex", hex_encode(username))});
+
     // Load {salt, verifier} for the account (SAD §5.1 "load {salt, verifier}").
     // Parameterized — the username binds through a prepared-statement parameter,
     // never concatenated (backend standards; meridian-db contract).
@@ -423,6 +448,19 @@ LoginResult run_login(net::Session& sess, db::Connection& db,
     std::uint64_t account_id = 0;
     std::uint8_t gm_level = 0;  // account's GM tier (D-16; #417) — exposed via result
     bool known_user = (acct.rows.size() == 1);
+
+    // #510/#518 ground truth: log the account-lookup outcome at INFO. Pins whether
+    // a FAILING session genuinely got 0 rows for a valid username (DB mystery) vs a
+    // wire-corrupt username that simply doesn't exist. Correlate with the decode
+    // line above via peer + username_len.
+    core::log::info(
+        "authd", "account lookup",
+        {core::log::field("peer", sess.peer()),
+         core::log::field("username_len",
+                          static_cast<std::int64_t>(username.size())),
+         core::log::field("account_rows",
+                          static_cast<std::int64_t>(acct.rows.size())),
+         core::log::field("account_found", known_user)});
     if (known_user) {
         const db::Row& r = acct.rows[0];
         account_id = cell_u64(r[0]);
@@ -566,6 +604,15 @@ LoginResult run_login(net::Session& sess, db::Connection& db,
                               static_cast<std::int64_t>(realms.rows.size())),
              core::log::field("realmlist_frame_bytes",
                               static_cast<std::int64_t>(realm_list_frame.size()))});
+        // #510/#518 ground truth at INFO: the runtime log level suppresses DEBUG (and
+        // ArgoCD reverts env-toggled levels), so the realm row count served must also
+        // land at INFO to be captured on the live realm. The client sees only "empty
+        // realm list" — this line pins whether authd actually served 0 rows.
+        core::log::info(
+            "authd", "realm list served",
+            {core::log::field("peer", sess.peer()),
+             core::log::field("realm_rows",
+                              static_cast<std::int64_t>(realms.rows.size()))});
         sess.write_frame(realm_list_frame);
     }
 
