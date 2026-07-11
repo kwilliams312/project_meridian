@@ -44,6 +44,11 @@ class_name AssembledCharacter
 ## stable "<kind>:<id>" string (e.g. "model:core:art.nope", "preset:hair:99").
 signal assembly_failed(reason: String)
 
+# Preload-by-path (not the bare `MeridianContentDB` class name): a freshly-added
+# global class_name can be unresolvable against a stale .godot class cache — the
+# exact trap T2's fix round banned (see content_db_verify.gd, char_select.gd:46).
+const ContentDbScript := preload("res://content/content_db.gd")
+
 const _GEOSET_PREFIX: String = "geo_"
 const _SOCKET_BONE_PREFIX: String = "socket_"
 
@@ -70,7 +75,7 @@ var _failed: Dictionary = {}
 ## capsule fallback (spec §6). Re-entrant: always starts from clear().
 func assemble(race: int, sex: int, appearance: Dictionary, equipment: Array) -> bool:
 	clear()
-	var db = MeridianContentDB.instance()
+	var db = ContentDbScript.instance()
 	var cat: Dictionary = db.catalog(race, sex)
 	if cat.is_empty():
 		_fail("catalog:%d|%d" % [race, sex])
@@ -131,7 +136,7 @@ func set_equipment_slot(slot: int, item_template: int, dyes: Array) -> void:
 	if item_template <= 0:
 		_apply_hides()
 		return
-	var db = MeridianContentDB.instance()
+	var db = ContentDbScript.instance()
 	var w: Dictionary = db.worn(item_template)
 	if w.is_empty():
 		# Unknown item / no worn block → the piece stays hidden (spec §6).
@@ -263,7 +268,7 @@ func _load_model_scene(model_id: String) -> Node3D:
 	if model_id.is_empty():
 		_fail("model:<empty>")
 		return null
-	var db = MeridianContentDB.instance()
+	var db = ContentDbScript.instance()
 	var declared: String = db.model_path(model_id)
 	if declared.is_empty():
 		_fail("model:" + model_id)
@@ -402,15 +407,15 @@ func _region_of(node_name: String) -> String:
 func _apply_dyes(nodes: Array, dyes: Array) -> void:
 	if dyes.is_empty() or nodes.is_empty():
 		return
-	var db = MeridianContentDB.instance()
-	var tint: Color = MeridianContentDB.UNKNOWN_DYE
+	var db = ContentDbScript.instance()
+	var tint: Color = ContentDbScript.UNKNOWN_DYE
 	for d in dyes:
 		var c: Color = db.dye_color(int(d))
-		if c != MeridianContentDB.UNKNOWN_DYE:
+		if c != ContentDbScript.UNKNOWN_DYE:
 			tint = c
 			break
 		_fail("dye:%d" % int(d))
-	if tint == MeridianContentDB.UNKNOWN_DYE:
+	if tint == ContentDbScript.UNKNOWN_DYE:
 		return
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = tint
