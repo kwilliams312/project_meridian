@@ -26,12 +26,13 @@ Validates every YAML file under /content against the JSON Schemas in
   L071   declared texture dimension is within the Art PRD §2.3 class cap — error
   L072   declared material-set count is within the Art PRD §2.3/§2.4 cap — error
   I001-  Godot import-settings conformance vs the per-class import presets in
-  I010/  client/import-presets/ (Art SAD §2.3/§4.2, issue #138). Distinct from the
+  I023/  client/import-presets/ (Art SAD §2.3/§4.2, issue #138). Distinct from the
   IPRESET  budget lints above: these check IMPORT SETTINGS — compression mode,
          mipmaps, colorspace, size caps, model LOD-import flags, lightmap-UV2 /
-         occluder policy, and committed .import drift. Delegated to
-         validate_imports.py; severity via --imports (error [default] | warn |
-         ignore). See that module's header for the full I-rule table.
+         occluder policy, committed .import drift, and (I020-I023, spec ④ §5)
+         structural rig/geoset/LOD conformance of committed skeletal .glb files.
+         Delegated to validate_imports.py; severity via --imports (error
+         [default] | warn | ignore). See that module's header for the I-rule table.
   L080   visual.worn presence gate (contract ① §4/§9): REQUIRED for weapons and
          visible-slot armor; FORBIDDEN for invisible slots (neck/finger/trinket/bag)
          and non-equippables (item_class not in {weapon, armor}) — always a hard error

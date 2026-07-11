@@ -11,18 +11,26 @@ import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "tools"))
 
+import validate_imports  # noqa: E402
 from validate_imports import (  # noqa: E402
     build_class_index,
     load_presets,
+    load_skeleton_defs,
     parse_import_params,
     validate,
 )
 
 PRESETS = REPO / "client" / "import-presets" / "presets.json"
+SKELETON_DEFS = REPO / "schema" / "content" / "skeleton.defs.yaml"
+
+_DEFS_DOC = yaml.safe_load(SKELETON_DEFS.read_text(encoding="utf-8"))["$defs"]
+CANON_BONES: list[str] = _DEFS_DOC["boneName"]["enum"]
+GEOSET_REGIONS: list[str] = _DEFS_DOC["geosetRegion"]["enum"]
 
 PACK = """\
 schema: meridian/pack@1
@@ -285,6 +293,273 @@ class TestPresetTemplates:
             (PRESETS.parent / "env-kit.import.tmpl").read_text()
         )
         assert params["meshes/generate_lods"] == "false"
+
+
+# --- I020-I023 glb rig/geoset/LOD rules (spec ④ §5, story #503) -------------
+
+SKELETON_SIDECAR = """\
+schema: meridian/asset@1
+id: tp:art.char.test.skeleton
+class: character_model
+source: assets/art/char/skeleton.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: original
+  authors: [tester]
+import_hints:
+  lod_policy: authored
+"""
+
+BODY_SIDECAR = """\
+schema: meridian/asset@1
+id: tp:art.char.test.base
+class: character_model
+source: assets/art/char/body.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: original
+  authors: [tester]
+import_hints:
+  lod_policy: single
+"""
+
+ARMOR_SIDECAR = """\
+schema: meridian/asset@1
+id: tp:art.armor.chest.iron
+class: armor_model
+source: assets/art/armor/iron_chest.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: original
+  authors: [tester]
+import_hints:
+  lod_policy: authored
+"""
+
+GEO_LOD0 = [f"geo_{r}_lod0" for r in GEOSET_REGIONS]
+
+
+def _make_glb(path: Path, *, joints=(), meshes=(), skin=False) -> Path:
+    """Write a minimal structural .glb: named joint nodes, optional named meshes
+    (each on its own mesh-carrying node), optional skin over all joint nodes.
+    Structure only — no buffers/accessors; the validator reads names, not geometry.
+    """
+    from pygltflib import GLTF2, Mesh, Node, Scene, Skin
+
+    nodes = [Node(name=j) for j in joints]
+    gltf_meshes = []
+    for i, mesh_name in enumerate(meshes):
+        gltf_meshes.append(Mesh(name=mesh_name, primitives=[]))
+        nodes.append(Node(name=f"{mesh_name}_obj", mesh=i))
+    skins = []
+    if skin and joints:
+        skins.append(Skin(name="skin", joints=list(range(len(joints)))))
+    gltf = GLTF2(
+        nodes=nodes,
+        meshes=gltf_meshes,
+        skins=skins,
+        scenes=[Scene(nodes=list(range(len(nodes))))],
+        scene=0,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    gltf.save(str(path))
+    return path
+
+
+def run_rig(
+    tmp_path,
+    sidecar_text,
+    glb_rel,
+    *,
+    joints=(),
+    meshes=(),
+    skin=False,
+    imports_mode="error",
+    make_glb=True,
+):
+    content = build(tmp_path, {"tp/assets/art/asset.asset.yaml": sidecar_text})
+    if make_glb:
+        _make_glb(content / "tp" / glb_rel, joints=joints, meshes=meshes, skin=skin)
+    return validate(
+        content, PRESETS, imports_mode, skeleton_defs_path=SKELETON_DEFS
+    )
+
+
+@pytest.mark.unit
+class TestGltfRigRules:
+    """I020-I023 — glb rig/geoset/LOD conformance (spec ④ §5)."""
+
+    def test_passing_skeleton_glb(self, tmp_path):
+        # Skeleton-only asset (no meshes): exactly the canonical 63 joints.
+        res = run_rig(
+            tmp_path, SKELETON_SIDECAR, "assets/art/char/skeleton.glb",
+            joints=CANON_BONES,
+        )
+        assert res.errors == [], res.errors
+
+    def test_passing_body_glb(self, tmp_path):
+        # Body asset: canonical joints + all 8 geoset regions at lod0,
+        # lod_policy 'single' (blockout) exempts the LOD chain.
+        res = run_rig(
+            tmp_path, BODY_SIDECAR, "assets/art/char/body.glb",
+            joints=CANON_BONES, meshes=GEO_LOD0, skin=True,
+        )
+        assert res.errors == [], res.errors
+
+    def test_i020_missing_and_extra_bones_listed(self, tmp_path):
+        bad = [b for b in CANON_BONES if b != "Jaw"] + ["ExtraBone"]
+        res = run_rig(
+            tmp_path, SKELETON_SIDECAR, "assets/art/char/skeleton.glb", joints=bad
+        )
+        assert "I020" in codes(res.errors)
+        msg = next(m for m in res.errors if m.startswith("I020"))
+        assert "Jaw" in msg and "ExtraBone" in msg
+
+    def test_i020_does_not_require_full_set_on_armor(self, tmp_path):
+        # Gear binds a SUBSET of canonical bones — no I020 on armor_model.
+        res = run_rig(
+            tmp_path, ARMOR_SIDECAR, "assets/art/armor/iron_chest.glb",
+            joints=["Hips", "Spine", "Chest"],
+            meshes=["chest_lod0", "chest_lod1"], skin=True,
+        )
+        assert res.errors == [], res.errors
+
+    def test_i021_armor_binding_noncanonical_joint(self, tmp_path):
+        res = run_rig(
+            tmp_path, ARMOR_SIDECAR, "assets/art/armor/iron_chest.glb",
+            joints=["Hips", "NotABone"],
+            meshes=["chest_lod0", "chest_lod1"], skin=True,
+        )
+        assert "I021" in codes(res.errors)
+        msg = next(m for m in res.errors if m.startswith("I021"))
+        assert "NotABone" in msg
+        assert "Hips" not in msg  # canonical joints are not flagged
+
+    def test_i022_missing_region_at_lod0(self, tmp_path):
+        incomplete = [m for m in GEO_LOD0 if m != "geo_feet_lod0"]
+        res = run_rig(
+            tmp_path, BODY_SIDECAR, "assets/art/char/body.glb",
+            joints=CANON_BONES, meshes=incomplete, skin=True,
+        )
+        assert "I022" in codes(res.errors)
+        assert any("feet" in m for m in res.errors if m.startswith("I022"))
+
+    def test_i022_unknown_region(self, tmp_path):
+        res = run_rig(
+            tmp_path, BODY_SIDECAR, "assets/art/char/body.glb",
+            joints=CANON_BONES, meshes=GEO_LOD0 + ["geo_tail_lod0"], skin=True,
+        )
+        assert "I022" in codes(res.errors)
+        assert any("tail" in m for m in res.errors if m.startswith("I022"))
+
+    def test_i022_non_geoset_named_body_mesh(self, tmp_path):
+        res = run_rig(
+            tmp_path, BODY_SIDECAR, "assets/art/char/body.glb",
+            joints=CANON_BONES, meshes=GEO_LOD0 + ["torso_raw"], skin=True,
+        )
+        assert "I022" in codes(res.errors)
+        assert any("torso_raw" in m for m in res.errors if m.startswith("I022"))
+
+    def test_i023_missing_lod_chain(self, tmp_path):
+        # lod0-only body WITHOUT the 'single' exemption → I023.
+        sidecar = BODY_SIDECAR.replace("lod_policy: single", "lod_policy: authored")
+        res = run_rig(
+            tmp_path, sidecar, "assets/art/char/body.glb",
+            joints=CANON_BONES, meshes=GEO_LOD0, skin=True,
+        )
+        assert "I023" in codes(res.errors)
+
+    def test_i023_chain_present_passes(self, tmp_path):
+        sidecar = BODY_SIDECAR.replace("lod_policy: single", "lod_policy: authored")
+        res = run_rig(
+            tmp_path, sidecar, "assets/art/char/body.glb",
+            joints=CANON_BONES, meshes=GEO_LOD0 + ["geo_torso_lod1"], skin=True,
+        )
+        assert res.errors == [], res.errors
+
+    def test_i023_single_policy_exempts(self, tmp_path):
+        # Same lod0-only glb, sidecar lod_policy 'single' → no I023.
+        res = run_rig(
+            tmp_path, BODY_SIDECAR, "assets/art/char/body.glb",
+            joints=CANON_BONES, meshes=GEO_LOD0, skin=True,
+        )
+        assert "I023" not in codes(res.errors)
+
+    def test_rules_skip_when_bone_enum_empty(self, tmp_path, monkeypatch):
+        # Contract ① empty-means-skip: no boneName enum → I020-I023 silent.
+        monkeypatch.setattr(
+            validate_imports,
+            "load_skeleton_defs",
+            lambda path: {"bones": [], "regions": list(GEOSET_REGIONS)},
+        )
+        bad = [b for b in CANON_BONES if b != "Jaw"] + ["ExtraBone"]
+        res = run_rig(
+            tmp_path, SKELETON_SIDECAR, "assets/art/char/skeleton.glb", joints=bad
+        )
+        assert res.errors == [], res.errors
+
+    def test_rules_skip_when_defs_file_absent(self, tmp_path):
+        # A content tree without schema/content/skeleton.defs.yaml (default
+        # resolution) behaves like the pre-T1 empty enum: silent skip.
+        content = build(
+            tmp_path, {"tp/assets/art/asset.asset.yaml": SKELETON_SIDECAR}
+        )
+        _make_glb(
+            content / "tp" / "assets/art/char/skeleton.glb", joints=["OnlyBone"]
+        )
+        res = validate(content, PRESETS, "error")  # no skeleton_defs_path
+        assert res.errors == [], res.errors
+
+    def test_rules_skip_when_glb_absent(self, tmp_path):
+        # Source existence is L020's scope, not the rig rules'.
+        res = run_rig(
+            tmp_path, SKELETON_SIDECAR, "assets/art/char/skeleton.glb",
+            make_glb=False,
+        )
+        assert res.errors == [], res.errors
+
+    def test_rules_skip_on_unparseable_glb(self, tmp_path):
+        # An LFS pointer stub (or any unparseable blob) is not structurally
+        # checkable — skip, do not crash.
+        content = build(
+            tmp_path, {"tp/assets/art/asset.asset.yaml": SKELETON_SIDECAR}
+        )
+        glb = content / "tp" / "assets/art/char/skeleton.glb"
+        glb.parent.mkdir(parents=True, exist_ok=True)
+        glb.write_text(
+            "version https://git-lfs.github.com/spec/v1\n"
+            "oid sha256:deadbeef\nsize 42\n"
+        )
+        res = validate(content, PRESETS, "error", skeleton_defs_path=SKELETON_DEFS)
+        assert res.errors == [], res.errors
+
+    def test_gltf_rules_respect_warn_mode(self, tmp_path):
+        bad = [b for b in CANON_BONES if b != "Jaw"]
+        res = run_rig(
+            tmp_path, SKELETON_SIDECAR, "assets/art/char/skeleton.glb",
+            joints=bad, imports_mode="warn",
+        )
+        assert res.errors == []
+        assert "I020" in codes(res.warnings)
+
+    def test_load_skeleton_defs_reads_bones_and_regions(self):
+        defs = load_skeleton_defs(SKELETON_DEFS)
+        assert defs["bones"] == CANON_BONES
+        assert defs["regions"] == GEOSET_REGIONS
+
+    def test_load_skeleton_defs_absent_file_is_empty(self, tmp_path):
+        defs = load_skeleton_defs(tmp_path / "nope.yaml")
+        assert defs == {"bones": [], "regions": []}
+
+
+@pytest.mark.unit
+class TestCharacterPresetLodPolicy:
+    """The character preset must permit 'single' for script-generated blockouts."""
+
+    def test_i004_character_single_lod_policy_permitted(self, tmp_path):
+        single = CHAR.replace("lod_policy: authored", "lod_policy: single")
+        res = run(tmp_path, {"tp/assets/art/hero.asset.yaml": single})
+        assert "I004" not in codes(res.errors)
 
 
 @pytest.mark.integration

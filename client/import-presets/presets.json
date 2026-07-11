@@ -21,8 +21,8 @@
         "generate_occluder": false,
         "generate_collision": false
       },
-      "lod_policy": ["authored"],
-      "cite": "Art SAD §2.3 character preset — skeleton + BoneMap to shared rig; blend shapes on; no importer LOD generation (hand-authored, PRD §2.1)"
+      "lod_policy": ["authored", "single"],
+      "cite": "Art SAD §2.3 character preset — skeleton + BoneMap to shared rig; blend shapes on; no importer LOD generation (hand-authored, PRD §2.1); 'single' permitted for script-generated blockouts (spec ④ §6, I023 exemption)"
     },
     "env-kit": {
       "importer": "scene",
