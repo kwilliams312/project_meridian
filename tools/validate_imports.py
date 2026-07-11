@@ -24,7 +24,23 @@ Rule ids (I-band, Art SAD §2.3 import preset table):
   I006  import_hints.occluder is set for classes whose preset converts occluder nodes
   I007  a texture_set source carries a recognized channel suffix (sRGB/linear assignment)
   I010  a committed `.import` file's key params match the class template (drift guard, §8.1)
+  I020  a character_model glb's joint-node name set is exactly the canonical
+        skeleton.defs.yaml bone set (missing/extra listed by name) — spec ④ §5
+  I021  an armor_model glb's skins bind only canonical joint names — spec ④ §5
+  I022  character_model body meshes follow geo_<region>_lod<N> naming and cover
+        all 8 geoset regions at lod0 — spec ④ §3/§5
+  I023  a skeletal asset with meshes ships a LOD chain (lod0 + lod1+) per
+        mesh-name prefix unless import_hints.lod_policy is 'single' —
+        Art PRD §2.1/§2.2, spec ④ §5
+  IGLB  a skeletal .glb loaded but its structure is internally inconsistent
+        (e.g. skin joints indexing past the node array) — I020-I023 unverifiable
   IPRESET  the preset templates themselves are well-formed and cover the asset classes
+
+I020-I023 parse committed .glb files structurally with pygltflib (names only —
+no geometry decode, no Blender). They activate only when skeleton.defs.yaml's
+boneName enum is populated: an empty/absent enum means "no bone-name check yet"
+(contract ①'s empty-means-skip), so branches predating the rig work stay green.
+creature_model is explicitly out of scope (spec ④ §5 — NPC placeholders).
 
 Usage:
   python3 tools/validate_imports.py [--root <repo-root>] [--imports warn|error|ignore]
@@ -37,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,6 +61,7 @@ from pathlib import Path
 import yaml
 
 DEFAULT_PRESETS = "client/import-presets/presets.json"
+DEFAULT_SKELETON_DEFS = "schema/content/skeleton.defs.yaml"
 
 # IF-8 art classes this validator governs (mesh/texture/audio import). Content
 # classes without an import-settings dimension (none currently) are simply absent
@@ -75,6 +93,17 @@ LIGHTMAP_UV2_REQUIRED = ("kit_piece", "hero_landmark", "prop")
 # Static classes that must NOT carry lightmap UV2 (character: skinned; foliage:
 # unlit-shadow path, Art SAD §2.3). A declared `lightmap_uv2: true` here is wrong.
 LIGHTMAP_UV2_FORBIDDEN = ("character_model", "creature_model", "armor_model", "foliage")
+
+# Classes whose committed .glb files the I020-I023 rig rules structurally inspect
+# (spec ④ §5). creature_model is deliberately absent: the existing NPC placeholder
+# models predate the canonical rig and are not covered by I020-I023.
+GLTF_RIG_CLASSES = ("character_model", "armor_model")
+
+# Body geoset mesh naming (spec ④ §3): geo_<region>_lod<N>.
+_GEOSET_MESH_RE = re.compile(r"^geo_([a-z0-9_]+)_lod(\d+)$")
+# Any *_lod<N> suffix — the I023 LOD-chain probe (gear meshes are not
+# geoset-named but authored chains still carry the _lod<N> suffix).
+_LOD_SUFFIX_RE = re.compile(r"_lod(\d+)$")
 
 
 @dataclass
@@ -300,6 +329,176 @@ def _load_template_params(presets_dir: Path, preset_name: str) -> dict[str, str]
     return parse_import_params(tmpl.read_text(encoding="utf-8"))
 
 
+def load_skeleton_defs(defs_path: Path) -> dict:
+    """Read skeleton.defs.yaml → {'bones': [...], 'regions': [...]}.
+
+    Absent/malformed file or empty enums yield empty lists — the I020-I023
+    rules then skip (contract ①'s empty-means-skip; spec ④ §5).
+    """
+    try:
+        doc = yaml.safe_load(defs_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return {"bones": [], "regions": []}
+    defs = (doc or {}).get("$defs") or {}
+    bones = (defs.get("boneName") or {}).get("enum") or []
+    regions = (defs.get("geosetRegion") or {}).get("enum") or []
+    return {"bones": list(bones), "regions": list(regions)}
+
+
+def _load_glb(glb_path: Path):
+    """Parse a .glb structurally; None when absent or unparseable.
+
+    Unparseable covers LFS pointer stubs and truncated blobs — source existence
+    and integrity are L020/LFS scope, not the rig rules'.
+    """
+    if not glb_path.is_file():
+        return None
+    try:
+        from pygltflib import GLTF2
+
+        return GLTF2().load(str(glb_path))
+    except Exception:  # noqa: BLE001 — any parse failure means "not checkable"
+        return None
+
+
+def _joint_names(gltf) -> set[str]:
+    """Named joint nodes: skin joints when skins exist, else non-mesh nodes."""
+    names: set[str] = set()
+    if gltf.skins:
+        for skin in gltf.skins:
+            for j in skin.joints or []:
+                if gltf.nodes[j].name:
+                    names.add(gltf.nodes[j].name)
+    else:
+        for node in gltf.nodes:
+            if node.mesh is None and node.name:
+                names.add(node.name)
+    return names
+
+
+def check_gltf_rig(
+    doc: dict,
+    rel_path: Path,
+    glb_path: Path,
+    skeleton_defs: dict,
+) -> list[str]:
+    """I020-I023 — structural rig/geoset/LOD conformance of a committed .glb.
+
+    Skeleton-only assets (no meshes) get I020 but not I022/I023; body assets
+    (meshes present) get every applicable rule (spec ④ §5).
+    """
+    errors: list[str] = []
+    canonical = skeleton_defs.get("bones") or []
+    if not canonical:
+        return errors  # empty enum → no bone-name check yet (contract ①)
+    asset_class = doc.get("class")
+    if asset_class not in GLTF_RIG_CLASSES:
+        return errors
+    gltf = _load_glb(glb_path)
+    if gltf is None:
+        return errors
+
+    # A glb that pygltflib loads but whose structure is internally inconsistent
+    # (e.g. skin joints indexing past the node array) must surface as a
+    # validation error, not crash the whole CI validator run (PR #517 N4).
+    try:
+        canonical_set = set(canonical)
+        joints = _joint_names(gltf)
+        mesh_names = [m.name or f"meshes[{i}]" for i, m in enumerate(gltf.meshes)]
+    except Exception as exc:  # noqa: BLE001 — corrupt-but-loadable glb
+        return [
+            f"IGLB {rel_path}: glb '{glb_path.name}' loaded but its structure "
+            f"is unreadable ({exc.__class__.__name__}: {exc}) — cannot verify "
+            f"I020-I023 rig conformance (spec ④ §5)"
+        ]
+
+    # I020 — character_model rigs carry exactly the canonical joint set.
+    if asset_class == "character_model":
+        missing = sorted(canonical_set - joints)
+        extra = sorted(joints - canonical_set)
+        if missing or extra:
+            parts = []
+            if missing:
+                parts.append(f"missing: {', '.join(missing)}")
+            if extra:
+                parts.append(f"extra: {', '.join(extra)}")
+            errors.append(
+                f"I020 {rel_path}: joint-node name set diverges from the canonical "
+                f"skeleton ({'; '.join(parts)}) — character_model rigs must carry "
+                f"exactly the skeleton.defs.yaml bone set (spec ④ §5, Art SAD §2.3 "
+                f"shared rig)"
+            )
+
+    # I021 — armor skins bind only canonical joints (gear binds a subset).
+    if asset_class == "armor_model" and gltf.skins:
+        bad = sorted(joints - canonical_set)
+        if bad:
+            errors.append(
+                f"I021 {rel_path}: skin binds non-canonical joints "
+                f"({', '.join(bad)}) — armor_model gear must bind only canonical "
+                f"bones (spec ④ §5; conversion gate §7.3)"
+            )
+
+    # I022 — body geoset naming + lod0 region coverage (character bodies only).
+    regions = skeleton_defs.get("regions") or []
+    if asset_class == "character_model" and mesh_names and regions:
+        region_set = set(regions)
+        lod0_regions: set[str] = set()
+        for name in mesh_names:
+            m = _GEOSET_MESH_RE.match(name)
+            if m is None:
+                errors.append(
+                    f"I022 {rel_path}: body mesh '{name}' is not geoset-named — "
+                    f"character_model body meshes must be geo_<region>_lod<N> "
+                    f"(spec ④ §3)"
+                )
+                continue
+            region, lod = m.group(1), int(m.group(2))
+            if region not in region_set:
+                errors.append(
+                    f"I022 {rel_path}: body mesh '{name}' names unknown geoset "
+                    f"region '{region}' (regions: {', '.join(regions)}) — spec ④ §3"
+                )
+            elif lod == 0:
+                lod0_regions.add(region)
+        missing_regions = [r for r in regions if r not in lod0_regions]
+        if missing_regions:
+            errors.append(
+                f"I022 {rel_path}: lod0 does not cover all geoset regions "
+                f"(missing: {', '.join(missing_regions)}) — a body missing a "
+                f"region is invalid (spec ④ §3/§5)"
+            )
+
+    # I023 — skeletal LOD chain unless the sidecar declares lod_policy 'single'.
+    # The chain is required PER mesh-name prefix (the base before _lod<N>: a
+    # geoset region for bodies, a gear-piece prefix for armor), not per file —
+    # a body with 8×lod0 plus one stray geo_head_lod1 has 7 chainless regions
+    # (Art PRD §2.1/§2.2: every skeletal asset ships ITS chain; PR #517 N2).
+    lod_policy = (doc.get("import_hints") or {}).get("lod_policy")
+    if mesh_names and lod_policy != "single":
+        groups: dict[str, set[int]] = {}
+        for name in mesh_names:
+            m = _LOD_SUFFIX_RE.search(name)
+            if m:
+                groups.setdefault(name[: m.start()], set()).add(int(m.group(1)))
+            else:
+                groups.setdefault(name, set())  # unsuffixed mesh: no chain at all
+        chainless = sorted(
+            prefix
+            for prefix, lods in groups.items()
+            if 0 not in lods or not any(lod >= 1 for lod in lods)
+        )
+        if chainless:
+            errors.append(
+                f"I023 {rel_path}: LOD chain incomplete for mesh prefixes "
+                f"({', '.join(chainless)}) — each needs _lod0 plus _lod1+; "
+                f"skeletal assets ship an authored LOD chain per Art PRD "
+                f"§2.1/§2.2 unless import_hints.lod_policy is 'single' (spec ④ §5)"
+            )
+
+    return errors
+
+
 def check_preset_coverage(
     class_index: dict[str, tuple[str, dict]],
 ) -> list[str]:
@@ -318,6 +517,7 @@ def validate(
     content_dir: Path,
     presets_path: Path,
     imports_mode: str = "error",
+    skeleton_defs_path: Path | None = None,
 ) -> Result:
     """Validate every art sidecar under content_dir against the import presets."""
     res = Result()
@@ -329,6 +529,12 @@ def validate(
     except (ValueError, json.JSONDecodeError, OSError) as exc:
         res.errors.append(f"IPRESET {presets_path}: malformed preset set — {exc}")
         return res
+
+    # Canonical skeleton vocabulary for the I020-I023 rig rules (spec ④ §5);
+    # empty when the defs file is absent or its boneName enum is unpopulated.
+    skeleton_defs = load_skeleton_defs(
+        skeleton_defs_path or (root / DEFAULT_SKELETON_DEFS)
+    )
 
     # IPRESET coverage check is always a hard error (the policy must be complete).
     res.errors.extend(check_preset_coverage(class_index))
@@ -384,6 +590,12 @@ def validate(
                         import_path, rel(path), preset, template_cache[preset_name]
                     )
                 )
+
+            # I020-I023 — structural rig/geoset/LOD conformance of the committed
+            # .glb for skeletal classes (spec ④ §5). check_gltf_rig self-guards:
+            # non-rig classes, an empty boneName enum, and an absent/unparseable
+            # .glb (LFS pointer stub) all return no errors.
+            sink.extend(check_gltf_rig(doc, rel(path), src_path, skeleton_defs))
 
     res.stats = {
         "presets": len(presets_data["presets"]),
