@@ -21,8 +21,34 @@ The client flow is **Boot/Login → Character Select → World**:
   Enter World.
 - **World** (`res://scenes/world/world.tscn`) — the networked scene: connects to
   worldd, renders the local player + remote entities over the AoI relay (#87).
-  Player capsules are colored by class (#328, see
-  `scenes/world/player_class_colors.gd`).
+
+## Assembled characters (②, #541)
+
+Players (the local body and each remote) render as **assembled characters** — a
+per-race body + worn gear built from the ids the wire carries — instead of the old
+class-colored capsule. The one assembly node is
+`characters/assembled_character.gd` (`AssembledCharacter`), used by BOTH the world
+scene (`scenes/world/world.gd` — `_build_entity_body`) and the char-select preview
+(`scenes/charselect/char_select.gd`). It resolves all visuals client-side from the
+mounted mcc pack via `MeridianContentDB` (`content/content_db.gd`): only ids travel
+(`race`, `sex`, appearance preset ids, `item_template`, `dye_id`) — every model /
+catalog / dye lookup is local.
+
+`EntityEnter` gained additive `race`/`sex`/`appearance`/`equipment` fields (②/T1);
+the client codec decodes them (`client/net`), the GDExtension relays them into the
+entity dict, and `world.gd` assembles when `d.has("appearance")`.
+
+**Capsule fallback (spec §6 — never a crash).** The class-colored capsule
+(`_build_capsule_body`, colored via `scenes/world/player_class_colors.gd`, #328)
+remains the fallback body whenever assembly can't proceed:
+
+- the frame carries **no appearance** (an NPC/creature, or a pre-#538 server) — the
+  original capsule path, untouched;
+- `assemble()` returns **false** — no catalog for the race, or an unloadable body
+  model;
+- individual content misses (unknown preset → catalog entry 1; missing worn model →
+  the piece stays hidden and its geoset hides are **not** applied, so a body region
+  is never left uncovered; unknown dye → the item's authored colors).
 
 ## Rendering
 

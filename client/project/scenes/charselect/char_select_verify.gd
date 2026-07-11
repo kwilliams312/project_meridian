@@ -239,10 +239,39 @@ func _verify_scene() -> void:
 	_check("list label carries name + class",
 		char_list != null and char_list.get_item_text(0).begins_with("Kaelith — Vanguard"))
 
-	# The ONE shared placeholder model was built into the preview holder.
+	# The preview pane was built into the preview holder (a SubViewport render surface).
 	var has_preview := preview != null and preview.get_child_count() > 0 \
 		and preview.get_child(0) is SubViewportContainer
-	_check("shared placeholder model built into preview", has_preview)
+	_check("preview pane built into preview holder", has_preview)
+
+	# ②/T4 (#541): the preview is an AssembledCharacter driven by the pickers — the SAME
+	# assembly node the world builds — not a bare capsule. For the default (ardent) race
+	# it assembles against the mounted catalog, so the preview body has a real skeleton.
+	var preview_body: Node = scene.find_child("PreviewBody", true, false)
+	_check("preview mounts an AssembledCharacter for the default race",
+		preview_body != null and preview_body.has_method("body_skeleton")
+		and preview_body.has_method("applied_preset"))
+
+	# Roster selection re-assembles from a character's PERSISTED appearance (contract ①
+	# T5 wire, driven here directly). A persisted hair preset id 2 → the assembled preview
+	# resolves catalog entry 2 (proves the persisted look, not the default, drives it).
+	scene._refresh_preview(MeridianRoster.DEFAULT_RACE_ID,
+		{"version": 1, "hair": 2, "face": 1, "skin": 1}, [])
+	var looked_body: Node = scene.find_child("PreviewBody", true, false)
+	_check("persisted appearance re-assembles the preview",
+		looked_body != null and looked_body.has_method("applied_preset"))
+	_check("preview reflects the persisted hair preset (id 2, not the default)",
+		looked_body != null and int(looked_body.applied_preset("hair").get("id", 0)) == 2)
+
+	# A race with NO catalog (Dolmen, id 2) degrades the preview to the tinted capsule
+	# fallback (spec §6) rather than an empty/assembled body.
+	scene._refresh_preview(2, MeridianAppearance.default_appearance(), [])
+	var fallback_body: Node = scene.find_child("PreviewBody", true, false)
+	_check("no-catalog race degrades the preview to a capsule fallback",
+		fallback_body is MeshInstance3D and (fallback_body as MeshInstance3D).mesh is CapsuleMesh)
+	# Restore an assembled preview for a real race so the scene ends in a valid state.
+	scene._refresh_preview(MeridianRoster.DEFAULT_RACE_ID,
+		MeridianAppearance.default_appearance(), [])
 
 	# Enter World emits the intent for the SELECTED character. Detach the scene first so
 	# the enter guard (is_inside_tree()) skips the real change_scene_to_file — we are

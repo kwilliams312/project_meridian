@@ -51,6 +51,13 @@ const LOCAL_DEMO_SCENE: String = "res://scenes/world/camera_demo.tscn"
 # itself in _init), else a shared lazily-created instance (verify runs).
 const ContentDb := preload("res://content/content_db.gd")
 
+# AssembledCharacter (②/T4, #541): the preview pane renders the SAME assembly node the
+# world uses, driven by the create-form pickers (and re-driven from a roster row's
+# persisted appearance on selection). Preloaded by path — the headless verify has no
+# global class cache. A content miss (no catalog for the race) degrades to the tinted
+# capsule fallback, matching the "content missing" picker state (spec §6).
+const AssembledCharacterScript := preload("res://characters/assembled_character.gd")
+
 @onready var _account_label: Label = %AccountLabel
 @onready var _char_list: ItemList = %CharList
 @onready var _name_edit: LineEdit = %NameEdit
@@ -69,7 +76,7 @@ var _store: CharacterStore
 var _account: String = ""
 var _session: Dictionary = {}
 var _pending_status: String = ""            # set by configure(), shown once in _ready
-var _preview_body: MeshInstance3D = null    # shared placeholder mesh (skin tint applies here, #435)
+var _preview_root: Node3D = null            # preview 3D container; holds the AssembledCharacter (②/T4) or capsule fallback
 var _content_missing: bool = false          # no appearance catalog for the selected race (#477, spec §6)
 
 # --- Server-authoritative character CRUD over the net thread (#279 / D-35) -----
@@ -147,9 +154,13 @@ func _ready() -> void:
 	_enter_button.pressed.connect(_on_enter_pressed)
 	_char_list.item_selected.connect(_on_char_selected)
 	_name_edit.text_submitted.connect(func(_t: String) -> void: _on_create_pressed())
-	# Skin choice tints the shared preview so the appearance pick is visible (#435).
-	_skin_option.item_selected.connect(func(_i: int) -> void: _apply_preview_skin())
-	# Changing race re-drives the appearance pickers from that race's catalog (#477).
+	# Any appearance pick re-assembles the preview so the choice is visible before create
+	# (②/T4, #541 — the preview is the SAME AssembledCharacter the world builds).
+	_hair_option.item_selected.connect(func(_i: int) -> void: _refresh_preview_from_form())
+	_face_option.item_selected.connect(func(_i: int) -> void: _refresh_preview_from_form())
+	_skin_option.item_selected.connect(func(_i: int) -> void: _refresh_preview_from_form())
+	# Changing race re-drives the appearance pickers from that race's catalog (#477),
+	# which then re-assembles the preview for the new race.
 	_race_option.item_selected.connect(func(_i: int) -> void: _populate_appearance_pickers(_race_option.get_selected_id()))
 
 	_refresh_list()
@@ -244,7 +255,7 @@ func _populate_appearance_pickers(race_id: int) -> void:
 		_select_option_by_id(_hair_option, MeridianAppearance.DEFAULT_HAIR_ID)
 		_select_option_by_id(_face_option, MeridianAppearance.DEFAULT_FACE_ID)
 		_select_option_by_id(_skin_option, MeridianAppearance.DEFAULT_SKIN_ID)
-	_apply_preview_skin()
+	_refresh_preview_from_form()
 
 
 # Fill one preset picker from a catalog preset list ([{id, model}, ...]). Each item's
@@ -309,6 +320,13 @@ func _refresh_list() -> void:
 
 func _on_char_selected(_index: int) -> void:
 	_update_action_buttons()
+	# Roster selection re-assembles the preview from THAT character's persisted appearance
+	# + race (②/T4, #541 — appearance rides the char-list wire, contract ① T5). Falls back
+	# to the default record for a row with no appearance (old server / offline seed).
+	var row := _character_by_id(_selected_char_id())
+	if not row.is_empty():
+		_refresh_preview(int(row.get("race", 0)),
+			row.get("appearance", MeridianAppearance.default_appearance()), [])
 
 
 # Enter World / Delete are only actionable when a character is selected.
@@ -431,10 +449,12 @@ func _select_char_id(id: int) -> void:
 	_update_action_buttons()
 
 
-# Build the ONE shared placeholder character model (D-11: no per-class models). A tiny
-# self-contained 3D scene — light + capsule "character" with a nose so facing reads — is
-# rendered into a SubViewport inside the create panel. Built in code so the .tscn stays a
-# plain Control tree (same convention as scenes/world/camera_demo.gd).
+# Build the preview pane: a SubViewport (light + camera) with a `_preview_root` the
+# character model mounts into. The model is an AssembledCharacter (②/T4, #541) driven by
+# the create-form pickers — the SAME assembly node the world scene builds — replacing the
+# D-11 shared capsule placeholder. Built in code so the .tscn stays a plain Control tree
+# (same convention as scenes/world/camera_demo.gd). _refresh_preview_from_form() mounts
+# the first model once the pickers are populated.
 func _build_placeholder_preview() -> void:
 	var container := SubViewportContainer.new()
 	container.stretch = true
@@ -453,18 +473,60 @@ func _build_placeholder_preview() -> void:
 	light.rotation = Vector3(deg_to_rad(-45.0), deg_to_rad(35.0), 0.0)
 	world_root.add_child(light)
 
+	# The model mounts under this container so a re-assemble just clears + rebuilds it.
+	_preview_root = Node3D.new()
+	_preview_root.name = "PreviewRoot"
+	world_root.add_child(_preview_root)
+
+	# Framed for a standing figure (feet at y=0, head ~1.8) rather than the old centered
+	# capsule — the assembled body is rooted at the feet.
+	var cam := Camera3D.new()
+	cam.position = Vector3(0, 1.0, 3.2)
+	cam.current = true
+	world_root.add_child(cam)
+
+	_preview_holder.add_child(container)
+	_refresh_preview_from_form()
+
+
+# Re-assemble the preview from the CURRENT create-form state (selected race + the
+# appearance record the pickers report). Called on every appearance/race pick.
+func _refresh_preview_from_form() -> void:
+	_refresh_preview(_race_option.get_selected_id(), _selected_appearance(), [])
+
+
+# Mount an AssembledCharacter for (race, appearance) into the preview, replacing whatever
+# was there. On a content miss (no catalog for the race — assemble() false, spec §6) the
+# tinted-capsule fallback stands in, matching the "content missing" picker state. No-op
+# until the preview root is built (order-independent).
+func _refresh_preview(race: int, appearance: Dictionary, equipment: Array) -> void:
+	if _preview_root == null:
+		return
+	for child in _preview_root.get_children():
+		child.free()
+	var assembled = AssembledCharacterScript.new()
+	assembled.name = "PreviewBody"
+	var ok: bool = assembled.assemble(race, 0, appearance, equipment)
+	if ok:
+		_preview_root.add_child(assembled)
+		return
+	assembled.free()
+	_preview_root.add_child(_make_preview_capsule(int(appearance.get("skin", MeridianAppearance.DEFAULT_SKIN_ID))))
+
+
+# The tinted-capsule fallback (D-11 placeholder), used when no catalog is mounted for the
+# selected race (spec §6). Tinted by the chosen skin preset so the pick still reads (#435).
+func _make_preview_capsule(skin_id: int) -> MeshInstance3D:
 	var body := MeshInstance3D.new()
-	body.name = "PlaceholderBody"
+	body.name = "PreviewBody"
 	var capsule := CapsuleMesh.new()
 	capsule.height = 1.8
 	capsule.radius = 0.35
 	body.mesh = capsule
-	# Own material so the skin-preset pick can tint it live (#435).
-	body.material_override = StandardMaterial3D.new()
-	world_root.add_child(body)
-	_preview_body = body
-	_apply_preview_skin()
-
+	body.position = Vector3(0, 0.9, 0)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = MeridianAppearance.skin_color(skin_id)
+	body.material_override = mat
 	# A small "nose" so the model has an obvious front (facing -Z, Godot forward).
 	var nose := MeshInstance3D.new()
 	var nm := BoxMesh.new()
@@ -472,25 +534,7 @@ func _build_placeholder_preview() -> void:
 	nose.mesh = nm
 	nose.position = Vector3(0, 0.2, -0.45)
 	body.add_child(nose)
-
-	var cam := Camera3D.new()
-	cam.position = Vector3(0, 0.2, 3.0)
-	cam.current = true
-	world_root.add_child(cam)
-
-	_preview_holder.add_child(container)
-
-
-# Tint the shared placeholder model by the currently-selected skin preset, so the
-# appearance pick is visibly reflected before create (#435). No-op until the preview
-# is built (order-independent: _build_placeholder_preview also calls this once).
-func _apply_preview_skin() -> void:
-	if _preview_body == null:
-		return
-	var mat := _preview_body.material_override as StandardMaterial3D
-	if mat == null:
-		return
-	mat.albedo_color = MeridianAppearance.skin_color(_skin_option.get_selected_id())
+	return body
 
 
 # --- Net-thread signal handlers (online only) --------------------------------

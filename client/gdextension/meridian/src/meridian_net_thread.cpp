@@ -272,6 +272,18 @@ int MeridianNetThread::pump() {
 					row["race"] = static_cast<int64_t>(c.race);
 					row["class"] = static_cast<int64_t>(c.char_class);
 					row["level"] = static_cast<int64_t>(c.level);
+					// Persisted appearance (②/T4, #541): char-select re-assembles the
+					// preview from this on roster selection. Present only when the row
+					// carried the record (contract ① T5); shape matches assemble()'s
+					// appearance {version,hair,face,skin}.
+					if (c.has_appearance) {
+						Dictionary appearance;
+						appearance["version"] = static_cast<int64_t>(c.appearance.version);
+						appearance["hair"] = static_cast<int64_t>(c.appearance.hair);
+						appearance["face"] = static_cast<int64_t>(c.appearance.face);
+						appearance["skin"] = static_cast<int64_t>(c.appearance.skin);
+						row["appearance"] = appearance;
+					}
 					chars.push_back(row);
 				}
 				emit_signal("char_list", chars,
@@ -343,6 +355,34 @@ Dictionary MeridianNetThread::decode_entity_frame(int opcode,
 		d["power_type"] = static_cast<int64_t>(e->power_type);
 		d["level"] = static_cast<int64_t>(e->level);
 		d["name"] = String(e->name.c_str());
+		// Visual-assembly fields (②/T4, #541): present ONLY for player entities (the
+		// codec sets has_appearance when the Appearance table rode the frame). NPCs /
+		// pre-#538 servers omit them, so world.gd's `d.has("appearance")` gate keeps the
+		// capsule path untouched (design §6). Shapes match AssembledCharacter.assemble():
+		// appearance {v,hair,face,skin}; equipment [{slot, item_template, dyes:[dye_id]}].
+		if (e->has_appearance) {
+			d["race"] = static_cast<int64_t>(e->race);
+			d["sex"] = static_cast<int64_t>(e->sex);
+			Dictionary appearance;
+			appearance["v"] = static_cast<int64_t>(e->appearance.version);
+			appearance["hair"] = static_cast<int64_t>(e->appearance.hair);
+			appearance["face"] = static_cast<int64_t>(e->appearance.face);
+			appearance["skin"] = static_cast<int64_t>(e->appearance.skin);
+			d["appearance"] = appearance;
+			Array equipment;
+			for (const auto &ev : e->equipment) {
+				Dictionary slot;
+				slot["slot"] = static_cast<int64_t>(ev.slot);
+				slot["item_template"] = static_cast<int64_t>(ev.item_template);
+				Array dyes;  // AssembledCharacter takes an Array of numeric dye ids
+				for (const auto &dc : ev.dyes) {
+					dyes.push_back(static_cast<int64_t>(dc.dye_id));
+				}
+				slot["dyes"] = dyes;
+				equipment.push_back(slot);
+			}
+			d["equipment"] = equipment;
+		}
 	} else if (opcode == cn::kOpVitalsUpdate) {
 		// VITALS_UPDATE (#430/#431): the HUD health/power/level delta. Forwarded raw
 		// by the net thread (net_thread_core's default S→C path), decoded here into a

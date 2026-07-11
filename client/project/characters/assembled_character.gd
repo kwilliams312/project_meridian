@@ -168,7 +168,17 @@ func set_equipment_slot(slot: int, item_template: int, dyes: Array) -> void:
 		# piece (or that part of it) simply stays hidden (spec §6).
 
 	_apply_dyes(nodes, dyes)
-	_slots[slot] = {"item_template": item_template, "nodes": nodes, "hides": hides.duplicate()}
+	# Lead ruling (②/T4, #541): when an item DECLARES models but NONE of them mounted
+	# (every model failed to load), do NOT record its geoset hides — hiding a body region
+	# while the covering piece is invisible would leave that region uncovered ("hide-while-
+	# uncovered"). A pure-hide item (no models authored) still hides as authored. This
+	# supersedes the spec-literal "missing worn model → hide the piece + log": we keep the
+	# piece hidden (no nodes) but stop it from also stripping the body underneath.
+	var effective_hides: Array = hides
+	if not models.is_empty() and nodes.is_empty():
+		effective_hides = []
+	_slots[slot] = {"item_template": item_template, "nodes": nodes,
+		"hides": effective_hides.duplicate()}
 	_apply_hides()
 
 

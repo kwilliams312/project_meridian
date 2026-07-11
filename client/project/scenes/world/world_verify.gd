@@ -18,6 +18,17 @@
 
 extends SceneTree
 
+# MeridianContentDB (#477) by PATH — standalone --script mode has no autoloads; the
+# staged core pack must be loaded so _spawn_remote's assembled branch has real content
+# (②/T4, #541). preload is immune to a stale global class cache.
+const ContentDbScript := preload("res://content/content_db.gd")
+
+# The 8 blockout geoset regions (tools/blender/meridian_rig generate_blockout.py) — the
+# assembled body must show all 8 (②/T4 scene-tree proof).
+const REGIONS: Array = [
+	"feet", "forearms", "hands", "head", "hips_legs", "lower_legs", "torso", "waist",
+]
+
 var _fails := 0
 
 
@@ -89,7 +100,81 @@ func _initialize() -> void:
 	_check("HUD built", world.get_node_or_null("HUD") != null)
 	_check("no remote entities offline", world.get_node("Remotes").get_child_count() == 0)
 
+	# --- 4. ②/T4 (#541): _spawn_remote renders an AssembledCharacter when the frame
+	# carries appearance, and the class-colored capsule otherwise (the fallback seam). ---
+	var db = ContentDbScript.instance()
+	db.load_from("res://meridian/core")  # the staged pack the assembler builds from
+	_check("staged core pack loaded for the assembler", db.is_loaded())
+	var pickaxe: int = db.numeric_id_for("core:item.rusty_pickaxe")
+
+	# Assembled branch: a player EntityEnter with appearance + a socketed pickaxe.
+	var d_assembled := {
+		"kind": "enter", "guid": 7001, "position": Vector3(2, 0, 2), "orientation": 0.0,
+		"char_class": 1, "name": "Ardent", "race": 1, "sex": 0,
+		"appearance": {"v": 1, "hair": 1, "face": 1, "skin": 1},
+		"equipment": [{"slot": 1, "item_template": pickaxe, "dyes": []}],
+	}
+	world._spawn_remote(7001, d_assembled)
+	var rnode: Node3D = world.get_node_or_null("Remotes/Remote_7001")
+	_check("assembled remote node spawned", rnode != null)
+	var abody: Node = rnode.get_node_or_null("Body") if rnode != null else null
+	_check("remote body is an AssembledCharacter (not a capsule)",
+		abody != null and abody.has_method("body_skeleton") and abody.has_method("geoset_node"))
+	if abody != null and abody.has_method("body_skeleton"):
+		var skel: Skeleton3D = abody.body_skeleton()
+		_check("assembled remote has the 63-bone canonical skeleton",
+			skel != null and skel.get_bone_count() == 63)
+		var geosets := 0
+		for region in REGIONS:
+			var g: MeshInstance3D = abody.geoset_node(region)
+			if g != null and g.visible:
+				geosets += 1
+		_check("assembled remote shows all 8 geoset meshes", geosets == 8)
+		var eq: Array = abody.equipped_nodes(1)
+		_check("pickaxe socketed on socket_main_hand of the assembled remote",
+			eq.size() == 1 and eq[0] is BoneAttachment3D
+			and String(eq[0].bone_name) == "socket_main_hand")
+
+	# Fallback branch: an EntityEnter WITHOUT appearance (NPC / old server) → capsule.
+	var d_capsule := {
+		"kind": "enter", "guid": 7002, "position": Vector3(3, 0, 3), "orientation": 0.0,
+		"char_class": 2, "name": "Capsule",
+	}
+	world._spawn_remote(7002, d_capsule)
+	var cnode: Node3D = world.get_node_or_null("Remotes/Remote_7002")
+	var cbody: Node = cnode.get_node_or_null("Body") if cnode != null else null
+	_check("no-appearance remote falls back to a class-colored capsule",
+		cbody is MeshInstance3D and (cbody as MeshInstance3D).mesh is CapsuleMesh)
+
 	world.queue_free()
+	await _wait(1)
+
+	# --- 5. ②/T4: the LOCAL player body assembles from char-select data at ENTER_WORLD
+	# when the character carries appearance (seeded here as the login handoff would). ---
+	var packed2 := load("res://scenes/world/world.tscn") as PackedScene
+	var world2 := packed2.instantiate()
+	world2.configure({}, {
+		"name": "Ardent", "class": 1, "race": 1,
+		"appearance": {"v": 1, "hair": 1, "face": 1, "skin": 1},
+	})
+	root.add_child(world2)
+	await _wait(3)
+	var lbody: Node = world2.get_node_or_null("Player/Body")
+	_check("local player body is an AssembledCharacter when the char carries appearance",
+		lbody != null and lbody.has_method("body_skeleton"))
+	world2.queue_free()
+	await _wait(1)
+
+	# The offline warm-load character (no appearance) still gets the capsule fallback.
+	var packed3 := load("res://scenes/world/world.tscn") as PackedScene
+	var world3 := packed3.instantiate()
+	world3.configure({}, {"name": "Verifier"})
+	root.add_child(world3)
+	await _wait(3)
+	var lbody3: Node = world3.get_node_or_null("Player/Body")
+	_check("local player body is a capsule when the char carries no appearance",
+		lbody3 is MeshInstance3D and (lbody3 as MeshInstance3D).mesh is CapsuleMesh)
+	world3.queue_free()
 	await _wait(1)
 
 	print("")

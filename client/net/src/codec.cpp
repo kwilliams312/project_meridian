@@ -129,11 +129,38 @@ Bytes encode_entity_enter(const EntityEnter& in) {
     // name (#430): the character/creature display name for the unit frame. Empty
     // string round-trips as an empty name (worldd sends "" for the D-11 placeholder).
     auto name = b.CreateString(in.name);
+    // Visual-assembly fields (②/T4, #541). All nested tables/vectors MUST be built
+    // before CreateEntityEnter (FlatBuffers requirement). appearance/equipment stay 0
+    // (ABSENT) for an NPC / no-appearance entity so the decoder reports has_appearance
+    // false and empty equipment — the additive/optional wire contract (design §2).
+    fb::Offset<mn::Appearance> appearance = 0;
+    if (in.has_appearance) {
+        appearance = mn::CreateAppearance(b, in.appearance.version, in.appearance.hair,
+                                          in.appearance.face, in.appearance.skin);
+    }
+    fb::Offset<fb::Vector<fb::Offset<mn::EquippedVisual>>> equipment = 0;
+    if (!in.equipment.empty()) {
+        std::vector<fb::Offset<mn::EquippedVisual>> evs;
+        evs.reserve(in.equipment.size());
+        for (const auto& ev : in.equipment) {
+            fb::Offset<fb::Vector<fb::Offset<mn::DyeChoice>>> dyes = 0;
+            if (!ev.dyes.empty()) {
+                std::vector<fb::Offset<mn::DyeChoice>> dcs;
+                dcs.reserve(ev.dyes.size());
+                for (const auto& dc : ev.dyes) {
+                    dcs.push_back(mn::CreateDyeChoice(b, dc.channel, dc.dye_id));
+                }
+                dyes = b.CreateVector(dcs);
+            }
+            evs.push_back(mn::CreateEquippedVisual(b, ev.slot, ev.item_template, dyes));
+        }
+        equipment = b.CreateVector(evs);
+    }
     auto e = mn::CreateEntityEnter(b, in.entity_guid, in.type_id, in.x, in.y, in.z,
                                    in.orientation, attrs, in.char_class, in.health,
                                    in.max_health, in.power, in.max_power,
                                    static_cast<mn::PowerType>(in.power_type), in.level,
-                                   name);
+                                   name, in.race, in.sex, appearance, equipment);
     b.Finish(e);
     return to_bytes(b);
 }
@@ -157,6 +184,35 @@ std::optional<EntityEnter> decode_entity_enter(const Bytes& buf) {
     out.power_type = static_cast<std::uint8_t>(t->power_type());
     out.level = t->level();
     out.name = t->name() ? t->name()->str() : std::string();
+    // Visual-assembly fields (②/T4, #541): additive + optional. race/sex default to 0;
+    // appearance is present only for player entities (has_appearance gates the client's
+    // assemble-vs-capsule branch); equipment lists the visible worn items with dyes.
+    out.race = t->race();
+    out.sex = t->sex();
+    if (const mn::Appearance* a = t->appearance()) {
+        out.has_appearance = true;
+        out.appearance.version = a->version();
+        out.appearance.hair = a->hair();
+        out.appearance.face = a->face();
+        out.appearance.skin = a->skin();
+    }
+    if (const auto* eq = t->equipment()) {
+        out.equipment.reserve(eq->size());
+        for (const auto* ev : *eq) {
+            if (ev == nullptr) continue;
+            EquippedVisual e;
+            e.slot = ev->slot();
+            e.item_template = ev->item_template();
+            if (const auto* dyes = ev->dyes()) {
+                e.dyes.reserve(dyes->size());
+                for (const auto* dc : *dyes) {
+                    if (dc == nullptr) continue;
+                    e.dyes.push_back(DyeChoice{dc->channel(), dc->dye_id()});
+                }
+            }
+            out.equipment.push_back(std::move(e));
+        }
+    }
     return out;
 }
 
@@ -496,6 +552,13 @@ std::optional<CharListResponse> decode_char_list_response(const Bytes& buf) {
             c.race = e->race();
             c.char_class = e->char_class();
             c.level = e->level();
+            if (const mn::Appearance* a = e->appearance()) {
+                c.has_appearance = true;
+                c.appearance.version = a->version();
+                c.appearance.hair = a->hair();
+                c.appearance.face = a->face();
+                c.appearance.skin = a->skin();
+            }
             out.characters.push_back(std::move(c));
         }
     }
@@ -578,8 +641,15 @@ Bytes encode_char_list_response(const CharListResponse& in) {
     rows.reserve(in.characters.size());
     for (const auto& c : in.characters) {
         auto n = b.CreateString(c.name);
+        // Nested appearance table built before the row (FlatBuffers requirement). Absent
+        // (offset 0) when the summary has none, so an old-format row round-trips (②/T4).
+        fb::Offset<mn::Appearance> appearance = 0;
+        if (c.has_appearance) {
+            appearance = mn::CreateAppearance(b, c.appearance.version, c.appearance.hair,
+                                              c.appearance.face, c.appearance.skin);
+        }
         rows.push_back(mn::CreateCharListEntry(b, c.character_id, n, c.race,
-                                               c.char_class, c.level));
+                                               c.char_class, c.level, appearance));
     }
     b.Finish(mn::CreateCharListResponse(b, b.CreateVector(rows),
                                         static_cast<mn::CharListStatus>(in.status)));
