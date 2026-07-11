@@ -22,13 +22,19 @@ bl_info = {
     "category": "Import-Export",
 }
 
-# --- Import the pure module whether loaded as a Blender addon (package) or via a
+# --- Import the pure modules whether loaded as a Blender addon (package) or via a
 # direct path insertion. Blender registers the package, so relative import works;
-# the try/except keeps the module importable standalone for tooling.
+# the try/except keeps the modules importable standalone for tooling.
 try:  # pragma: no cover - exercised inside Blender
+    from . import rig_checks as _rig_checks
     from . import sidecar as _sidecar
 except ImportError:  # pragma: no cover - standalone fallback
+    import rig_checks as _rig_checks
     import sidecar as _sidecar
+
+# Skeletal export classes that require the E-rule rig/geoset conformance checks
+# (spec ④ §3/§4) before an export is allowed to proceed.
+_SKELETAL_CLASSES = ("character_model", "armor_model")
 
 try:  # pragma: no cover - bpy only exists inside Blender
     import bpy
@@ -79,6 +85,54 @@ def _mesh_info(obj) -> "_sidecar.MeshInfo":  # pragma: no cover - needs bpy
         scale=tuple(obj.scale),
         transform_applied=all(abs(s - 1.0) < 1e-4 for s in obj.scale),
         has_negative_scale=_has_negative_scale(obj),
+    )
+
+
+# --- rig/geoset introspection helpers (pure functions of bpy objects; not unit-
+# tested without Blender — the testable logic is in rig_checks.py). -------------
+
+
+def _find_armature(obj):  # pragma: no cover - needs bpy
+    """Find the armature driving `obj` via its Armature modifier, else None."""
+    for mod in obj.modifiers:
+        if mod.type == "ARMATURE" and mod.object is not None:
+            return mod.object
+    if obj.type == "ARMATURE":
+        return obj
+    return None
+
+
+def _skin_influence_stats(
+    mesh_objs,
+) -> tuple[int, bool]:  # pragma: no cover - needs bpy
+    """Max vertex-group influence count and whether weights are normalized (sum≈1)."""
+    max_influences = 0
+    normalized = True
+    for mesh_obj in mesh_objs:
+        for vertex in mesh_obj.data.vertices:
+            groups = [g for g in vertex.groups if g.weight > 0.0]
+            max_influences = max(max_influences, len(groups))
+            if groups and abs(sum(g.weight for g in groups) - 1.0) > 1e-3:
+                normalized = False
+    return max_influences, normalized
+
+
+def _build_rig_data(
+    context, obj, asset_class: str
+) -> "_rig_checks.RigData":  # pragma: no cover - needs bpy
+    """Build a RigData snapshot for a skeletal export (character_model/armor_model)."""
+    armature = _find_armature(obj)
+    bone_names = list(armature.data.bones.keys()) if armature is not None else []
+    socket_names = [n for n in bone_names if n.startswith("socket_")]
+    mesh_objs = [o for o in context.selected_objects if o.type == "MESH"]
+    max_influences, normalized = _skin_influence_stats(mesh_objs)
+    return _rig_checks.RigData(
+        asset_class=asset_class,
+        bone_names=bone_names,
+        socket_names=socket_names,
+        mesh_names=[o.name for o in mesh_objs],
+        max_influences=max_influences,
+        weights_normalized=normalized,
     )
 
 
@@ -160,6 +214,17 @@ class MERIDIAN_OT_export_asset(Operator):  # type: ignore[misc]
         if source_err:
             self.report({"ERROR"}, source_err)
             return {"CANCELLED"}
+
+        # E-rule rig/geoset conformance (spec ④ §3/§4): skeletal classes must pass
+        # every check before export proceeds — these are blocking, unlike the
+        # naming/scale/pivot warnings below.
+        if self.asset_class in _SKELETAL_CLASSES:
+            rig_data = _build_rig_data(context, obj, self.asset_class)
+            rig_errors = _rig_checks.check_rig(rig_data)
+            if rig_errors:
+                for err in rig_errors:
+                    self.report({"ERROR"}, err)
+                return {"CANCELLED"}
 
         budgets = _sidecar.load_budgets()
         mesh = _mesh_info(obj)
