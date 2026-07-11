@@ -1,0 +1,103 @@
+# Meshy auto-rig → canonical Meridian skeleton bone map (spec ④ §7.3).
+#
+# Keyed by Meshy model version (their rig naming can drift between releases).
+# Each version block maps a Meshy rig bone name → the canonical bone name from
+# tools/blender/meridian_rig/bones.py (the same 56 Godot SkeletonProfileHumanoid
+# bones + 7 sockets that skeleton.defs.yaml enumerates). `meshy convert-rig`
+# renames mapped bones and merges unmapped helper/twist bones into their nearest
+# mapped ancestor; a bone with no entry and no mapped-ancestor prefix is a hard,
+# listed error.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# ⚠️  verified: false  —  UNVERIFIED SEED (DONE_WITH_CONCERNS, story #506).
+#
+# Meshy does NOT publish the exact bone names its rigging emits. Checked
+# 2026-07-10:
+#   • docs.meshy.ai/en/api/rigging — documents the API surface (endpoints,
+#     FBX/GLB output) but NOT the skeleton bone names.
+#   • meshy.ai/tutorials/character-auto-rigging-workflow — says you may "rename
+#     or re-parent joints to match your target engine (Unity Humanoid or UE5)";
+#     does not disclose the native names.
+#   • ComfyUI MeshyRigModelNode + fal.ai meshy/rigging node docs — no bone list.
+# Meshy states its rig uses "industry-standard bone hierarchies" that "transfer
+# cleanly to Unity, Unreal, Godot, or Blender", and auto-generates Walking /
+# Running clips that retarget against standard humanoid skeletons. On that basis
+# this seed assumes the widely-used **Mixamo-style humanoid naming with the
+# `mixamorig:` namespace prefix stripped** (Hips / Spine / Spine1 / Spine2 /
+# LeftArm / LeftForeArm / LeftUpLeg / LeftToeBase / LeftHandThumb1 …). This is a
+# best-effort guess, not a confirmed schema.
+#
+# BEFORE relying on this in production: run one real Meshy rig through
+# `mapping.joint_names_from_glb`, reconcile the names below against the actual
+# output (fix renames, add/repoint helper merges, handle *_End tip bones), then
+# flip `verified: true`. Until then, `convert-rig` REFUSES to run on this version
+# unless `--allow-unverified-map` is passed (a development-only escape hatch that
+# exists solely so the pipeline can be exercised on hand-built fixtures).
+# ─────────────────────────────────────────────────────────────────────────────
+
+versions:
+  # Meshy's current pinned model (matches client.DEFAULT_MODEL_VERSION = meshy-5).
+  meshy-5:
+    verified: false
+    bones:
+      # --- Spine column ---
+      Hips: Hips
+      Spine: Spine
+      Spine1: Chest
+      Spine2: UpperChest
+      Neck: Neck
+      Head: Head
+
+      # --- Left arm + hand ---
+      LeftShoulder: LeftShoulder
+      LeftArm: LeftUpperArm
+      LeftForeArm: LeftLowerArm
+      LeftHand: LeftHand
+      LeftHandThumb1: LeftThumbMetacarpal
+      LeftHandThumb2: LeftThumbProximal
+      LeftHandThumb3: LeftThumbDistal
+      LeftHandIndex1: LeftIndexProximal
+      LeftHandIndex2: LeftIndexIntermediate
+      LeftHandIndex3: LeftIndexDistal
+      LeftHandMiddle1: LeftMiddleProximal
+      LeftHandMiddle2: LeftMiddleIntermediate
+      LeftHandMiddle3: LeftMiddleDistal
+      LeftHandRing1: LeftRingProximal
+      LeftHandRing2: LeftRingIntermediate
+      LeftHandRing3: LeftRingDistal
+      LeftHandPinky1: LeftLittleProximal
+      LeftHandPinky2: LeftLittleIntermediate
+      LeftHandPinky3: LeftLittleDistal
+
+      # --- Right arm + hand ---
+      RightShoulder: RightShoulder
+      RightArm: RightUpperArm
+      RightForeArm: RightLowerArm
+      RightHand: RightHand
+      RightHandThumb1: RightThumbMetacarpal
+      RightHandThumb2: RightThumbProximal
+      RightHandThumb3: RightThumbDistal
+      RightHandIndex1: RightIndexProximal
+      RightHandIndex2: RightIndexIntermediate
+      RightHandIndex3: RightIndexDistal
+      RightHandMiddle1: RightMiddleProximal
+      RightHandMiddle2: RightMiddleIntermediate
+      RightHandMiddle3: RightMiddleDistal
+      RightHandRing1: RightRingProximal
+      RightHandRing2: RightRingIntermediate
+      RightHandRing3: RightRingDistal
+      RightHandPinky1: RightLittleProximal
+      RightHandPinky2: RightLittleIntermediate
+      RightHandPinky3: RightLittleDistal
+
+      # --- Left leg ---
+      LeftUpLeg: LeftUpperLeg
+      LeftLeg: LeftLowerLeg
+      LeftFoot: LeftFoot
+      LeftToeBase: LeftToes
+
+      # --- Right leg ---
+      RightUpLeg: RightUpperLeg
+      RightLeg: RightLowerLeg
+      RightFoot: RightFoot
+      RightToeBase: RightToes
