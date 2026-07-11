@@ -11,13 +11,14 @@
 # rests on: it catches accidental nondeterminism AND unintended content/output
 # changes in one gate (Tools SAD §9.1 determinism, §9.4 golden corpus; DC-11).
 #
-# The golden corpus is FOUR files — the complete expected mcc output for the
+# The golden corpus is FIVE files — the complete expected mcc output for the
 # `core` pack under content/, all stamped with a FIXED built_at so they are
 # reproducible byte-for-byte:
 #
 #   tools/mcc/golden/world.sql            — IF-4 world DB SQL + world_manifest
 #   tools/mcc/golden/pack.manifest.json   — IF-5 client pack manifest
 #   tools/mcc/golden/pack.contents.jsonl  — IF-5 M0 directory-manifest pack
+#   tools/mcc/golden/pack.data.json       — IF-5 M0 client-render field data (#477)
 #   tools/mcc/golden/index.json           — `mcc index --json` (the IF-9 ID index)
 #
 # Two independent checks, either failing fails the gate:
@@ -34,7 +35,7 @@
 #
 #   scripts/check-golden.sh --update-golden
 #
-# This rebuilds mcc + content with the fixed built_at and overwrites the four
+# This rebuilds mcc + content with the fixed built_at and overwrites the five
 # golden files. Review the golden diff exactly as you would review the content
 # diff — a golden change is a content/output change — then commit both together.
 #
@@ -103,7 +104,7 @@ fi
 [ -x "$MCC" ] || die "mcc binary not found at $MCC after build"
 ok "mcc: $("$MCC" --version)"
 
-# --- Emit all four artifacts into a target dir (the golden's shape). ---------
+# --- Emit all five artifacts into a target dir (the golden's shape). ---------
 # emit-sql / emit-pck each re-run discover→parse→validate→link read-only against
 # the committed idmap.lock, so this leaves the working tree untouched (no id
 # churn) and is identical to what `mcc build` / content-build.sh emit.
@@ -121,10 +122,11 @@ emit_into() {  # $1 = target dir
   # Flatten the pack into the golden's flat shape.
   cp "$dir/pck/meridian/${PACK_NS}/pack.manifest.json"  "$dir/pack.manifest.json"
   cp "$dir/pck/meridian/${PACK_NS}/pack.contents.jsonl" "$dir/pack.contents.jsonl"
+  cp "$dir/pck/meridian/${PACK_NS}/pack.data.json"      "$dir/pack.data.json"
   rm -rf "$dir/pck"
 }
 
-GOLDEN_FILES=(world.sql pack.manifest.json pack.contents.jsonl index.json)
+GOLDEN_FILES=(world.sql pack.manifest.json pack.contents.jsonl pack.data.json index.json)
 
 # --- 2a. --update-golden: regenerate the checked-in golden and stop. ---------
 if [ "$UPDATE_GOLDEN" -eq 1 ]; then

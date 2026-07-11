@@ -161,10 +161,12 @@ run_build "$SCRATCH"
 WORLD_SQL="$SCRATCH/build/world.sql"
 PACK_MANIFEST="$SCRATCH/build/pck/meridian/${PACK_NS}/pack.manifest.json"
 PACK_CONTENTS="$SCRATCH/build/pck/meridian/${PACK_NS}/pack.contents.jsonl"
+PACK_DATA="$SCRATCH/build/pck/meridian/${PACK_NS}/pack.data.json"
 [ -f "$WORLD_SQL" ]     || die "emit-sql produced no world.sql at $WORLD_SQL"
 [ -f "$PACK_MANIFEST" ] || die "emit-pck produced no pack.manifest.json at $PACK_MANIFEST"
 [ -f "$PACK_CONTENTS" ] || die "emit-pck produced no pack.contents.jsonl at $PACK_CONTENTS"
-ok "emit-sql → world.sql, emit-pck → pack.manifest.json + pack.contents.jsonl"
+[ -f "$PACK_DATA" ]     || die "emit-pck produced no pack.data.json at $PACK_DATA"
+ok "emit-sql → world.sql, emit-pck → pack.manifest.json + pack.contents.jsonl + pack.data.json"
 
 # --- 3. Collect artifacts into the stable output dir. ------------------------
 rm -rf "$OUT_DIR"
@@ -172,11 +174,13 @@ mkdir -p "$OUT_DIR/pck/meridian/${PACK_NS}"
 cp "$WORLD_SQL"     "$OUT_DIR/world.sql"
 cp "$PACK_MANIFEST" "$OUT_DIR/pck/meridian/${PACK_NS}/pack.manifest.json"
 cp "$PACK_CONTENTS" "$OUT_DIR/pck/meridian/${PACK_NS}/pack.contents.jsonl"
+cp "$PACK_DATA"     "$OUT_DIR/pck/meridian/${PACK_NS}/pack.data.json"
 log "Artifacts collected under $OUT_DIR:"
 printf '      %s\n' \
   "world.sql                              (IF-4 world DB SQL + world_manifest)" \
   "pck/meridian/${PACK_NS}/pack.manifest.json   (IF-5 client pack manifest)" \
-  "pck/meridian/${PACK_NS}/pack.contents.jsonl  (IF-5 M0 directory-manifest pack)"
+  "pck/meridian/${PACK_NS}/pack.contents.jsonl  (IF-5 M0 directory-manifest pack)" \
+  "pck/meridian/${PACK_NS}/pack.data.json       (IF-5 M0 client-render field data, #477)"
 
 # --- 4. Invariant: IF-4 world_manifest hash == IF-5 pack.manifest hash. ------
 # world.sql row is: (pack_namespace, pack_version, id_band, content_hash, ...);
@@ -201,7 +205,8 @@ if [ "$DETERMINISM_CHECK" -eq 1 ]; then
   run_build "$SCRATCH2"
   for rel in "build/world.sql" \
              "build/pck/meridian/${PACK_NS}/pack.manifest.json" \
-             "build/pck/meridian/${PACK_NS}/pack.contents.jsonl"; do
+             "build/pck/meridian/${PACK_NS}/pack.contents.jsonl" \
+             "build/pck/meridian/${PACK_NS}/pack.data.json"; do
     if ! cmp -s "$SCRATCH/$rel" "$SCRATCH2/$rel"; then
       die "NON-DETERMINISTIC: $rel differs between two builds"
     fi

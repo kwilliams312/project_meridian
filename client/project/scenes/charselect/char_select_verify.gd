@@ -193,19 +193,42 @@ func _verify_scene() -> void:
 	_check("race picker item ids are roster ids",
 		race_opt != null and race_opt.get_item_id(0) == 1 and race_opt.get_item_id(3) == 4)
 
-	# Appearance pickers are populated from the placeholder set with 1-based ids (#435).
-	_check("hair picker populated from the appearance set",
-		hair_opt != null and hair_opt.item_count == MeridianAppearance.HAIR.size())
-	_check("face picker populated from the appearance set",
-		face_opt != null and face_opt.item_count == MeridianAppearance.FACE.size())
-	_check("skin picker populated from the appearance set",
-		skin_opt != null and skin_opt.item_count == MeridianAppearance.SKIN.size())
-	_check("appearance picker item ids are preset ids",
-		hair_opt != null and hair_opt.get_item_id(0) == 1
-		and skin_opt != null and skin_opt.get_item_id(0) == 1)
+	# Appearance pickers are CATALOG-DRIVEN off MeridianContentDB (#477, spec ② §3):
+	# the default race (Ardent) has a mounted catalog, so the pickers reflect its
+	# preset lists and the item ids are the stable preset ints the server validates.
+	var cat := ContentDB.catalog(MeridianRoster.DEFAULT_RACE_ID, 0)
+	_check("ardent catalog is mounted (content staged under res://meridian/core)",
+		not cat.is_empty())
+	var cat_presets: Dictionary = cat.get("presets", {})
+	_check("hair picker populated from the catalog preset list",
+		hair_opt != null and not cat_presets.get("hair", []).is_empty()
+		and hair_opt.item_count == cat_presets["hair"].size())
+	_check("face picker populated from the catalog preset list",
+		face_opt != null and face_opt.item_count == cat_presets.get("face", []).size())
+	_check("skin picker populated from the catalog preset list",
+		skin_opt != null and skin_opt.item_count == cat_presets.get("skin", []).size())
+	_check("appearance picker item ids are the catalog preset ids",
+		hair_opt != null and hair_opt.get_item_id(0) == int(cat_presets["hair"][0]["id"])
+		and not hair_opt.disabled)
 	_check("create form reports the selected appearance record",
 		scene._selected_appearance()["version"] == MeridianAppearance.VERSION
 		and int(scene._selected_appearance()["hair"]) == MeridianAppearance.DEFAULT_HAIR_ID)
+
+	# Content-missing (spec §6): a race with NO catalog (Dolmen, id 2 — M1 ships only
+	# the ardent catalog) disables the pickers with a visible "(content missing)" state
+	# rather than empty lists, and the create record falls back to the default.
+	race_opt.select(race_opt.get_item_index(2))
+	race_opt.item_selected.emit(race_opt.get_item_index(2))
+	_check("no-catalog race disables the appearance pickers",
+		hair_opt != null and hair_opt.disabled and face_opt.disabled and skin_opt.disabled)
+	_check("no-catalog race shows a visible 'content missing' item",
+		hair_opt != null and hair_opt.item_count == 1
+		and hair_opt.get_item_text(0) == "(content missing)")
+	_check("content-missing create record falls back to the default appearance",
+		int(scene._selected_appearance()["hair"]) == MeridianAppearance.DEFAULT_HAIR_ID)
+	# Restore the M1-playable race so the rest of the scene test runs on a real catalog.
+	race_opt.select(race_opt.get_item_index(MeridianRoster.DEFAULT_RACE_ID))
+	race_opt.item_selected.emit(race_opt.get_item_index(MeridianRoster.DEFAULT_RACE_ID))
 	_check("list shows the two seeded characters", char_list != null and char_list.item_count == 2)
 	_check("list label carries name + class",
 		char_list != null and char_list.get_item_text(0).begins_with("Kaelith — Vanguard"))

@@ -312,6 +312,91 @@ void test_entry_coverage() {
            "lines=" + std::to_string(lines));
 }
 
+// -- (e) pack.data.json client-render field data (issue #477) -----------------
+// A fixture with the three visual types the character assembler reads: an
+// appearance catalog, an item with visual.worn, and a dye. Asserts the data file
+// carries the FIELDS the manifest omits (catalog body/presets, worn attach socket,
+// dye color), keyed by IF-9 numeric id, and is byte-deterministic.
+fs::path make_data_fixture() {
+    const fs::path root = make_scratch("datafix");
+    const fs::path core = root / "content" / "core";
+    write_file(core / "pack.yaml",
+               "schema: meridian/pack@1\n"
+               "namespace: core\n"
+               "name: Data Pack\n"
+               "version: 1.0.0\n"
+               "content_schema_version: 1\n"
+               "engine:\n  godot: \"4.6\"\n");
+    write_file(core / "appearance" / "ard.appearance.yaml",
+               "schema: meridian/appearance_catalog@1\n"
+               "id: core:appearance.ardent.male\n"
+               "race: ardent\n"
+               "sex: male\n"
+               "skeleton: core:art.char.ardent.male.skeleton\n"
+               "body_model: core:art.char.ardent.male.base\n"
+               "presets:\n"
+               "  hair:\n    - { id: 1, model: core:art.char.ardent.male.base }\n"
+               "  face:\n    - { id: 1, texture: core:art.char.ardent.male.base }\n"
+               "  skin:\n    - { id: 1, palette: core:art.char.ardent.male.base }\n");
+    write_file(core / "items" / "pick.item.yaml",
+               "schema: meridian/item@2\n"
+               "id: core:item.pick\n"
+               "name: Pick\n"
+               "item_class: weapon\n"
+               "subclass: mace_1h\n"
+               "slot: main_hand\n"
+               "rarity: common\n"
+               "weapon:\n  damage: { min: 1, max: 2 }\n  speed_ms: 2000\n"
+               "visual:\n"
+               "  icon: core:art.icon.item.pick\n"
+               "  model: core:art.item.weapon.pick\n"
+               "  worn:\n"
+               "    models: [{ model: core:art.item.weapon.pick, mirror: none }]\n"
+               "    attach: { socket: main_hand, sheath_socket: back }\n");
+    write_file(core / "dyes" / "red.dye.yaml",
+               "schema: meridian/dye@1\n"
+               "id: core:dye.red\n"
+               "name: Red\n"
+               "color: \"#aa1122\"\n"
+               "rarity: common\n");
+    return (root / "content" / "core").parent_path().string();
+}
+
+void test_data_json() {
+    std::cout << "test_data_json (pack.data.json client-render fields, #477)\n";
+    const std::string content = make_data_fixture();
+    bool ok = false;
+    const mcc::stages::EmitPckResult res = run_emit_pck(content, ok);
+    const std::string& d = res.data_json;
+
+    report(d.find("\"schema\": \"meridian/pack-data@1\"") != std::string::npos,
+           "data file declares its own schema tag");
+    // Appearance catalog: race + body_model + a preset normalized to {id, model}.
+    report(d.find("\"race\": \"ardent\"") != std::string::npos,
+           "appearance carries the race name");
+    report(d.find("\"body_model\": \"core:art.char.ardent.male.base\"") != std::string::npos,
+           "appearance carries body_model");
+    report(d.find("\"presets\":") != std::string::npos &&
+               d.find("\"hair\": [{ \"id\": 1, \"model\":") != std::string::npos,
+           "appearance presets normalize to {id, model}");
+    // Item worn: only the wearable's worn block, attach socket resolved.
+    report(d.find("\"worn\":") != std::string::npos &&
+               d.find("\"socket\": \"main_hand\"") != std::string::npos,
+           "item worn carries attach.socket");
+    // Dye color verbatim.
+    report(d.find("\"color\": \"#aa1122\"") != std::string::npos,
+           "dye carries its authored color");
+    // Every data row is keyed by a non-zero IF-9 numeric id (the wire key).
+    report(d.find("\"numeric_id\": 0,") == std::string::npos,
+           "no data row has a zero numeric id");
+
+    // Determinism: a second independent build emits a byte-identical data file.
+    bool ok2 = false;
+    const std::string d2 = run_emit_pck(make_data_fixture(), ok2).data_json;
+    report(d == d2, "same content -> byte-identical pack.data.json",
+           d == d2 ? "" : "data files differ");
+}
+
 }  // namespace
 
 int main() {
@@ -320,6 +405,7 @@ int main() {
     test_if4_if5_hash_agreement();
     test_determinism();
     test_entry_coverage();
+    test_data_json();
 
     std::cout << "\n" << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
     if (g_failures) {

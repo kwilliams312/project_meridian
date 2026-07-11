@@ -1,0 +1,16 @@
+{
+  "schema": "meridian/pack-data@1",
+  "namespace": "core",
+  "appearance": [
+    { "id": "core:appearance.ardent.male", "numeric_id": 82, "race": "ardent", "sex": "male", "skeleton": "core:art.char.ardent.male.skeleton", "body_model": "core:art.char.ardent.male.base", "presets": { "hair": [{ "id": 1, "model": "core:art.char.ardent.male.base" }, { "id": 2, "model": "core:art.char.ardent.male.base" }, { "id": 3, "model": "core:art.char.ardent.male.base" }], "face": [{ "id": 1, "model": "core:art.char.ardent.male.base" }, { "id": 2, "model": "core:art.char.ardent.male.base" }, { "id": 3, "model": "core:art.char.ardent.male.base" }], "skin": [{ "id": 1, "model": "core:art.char.ardent.male.base" }, { "id": 2, "model": "core:art.char.ardent.male.base" }, { "id": 3, "model": "core:art.char.ardent.male.base" }] } }
+  ],
+  "dye": [
+    { "id": "core:dye.bone", "numeric_id": 77, "color": "#d9cfc0" },
+    { "id": "core:dye.russet", "numeric_id": 78, "color": "#8a4b2d" },
+    { "id": "core:dye.slate", "numeric_id": 79, "color": "#5a6672" }
+  ],
+  "item": [
+    { "id": "core:item.rusty_pickaxe", "numeric_id": 20, "worn": { "models": [{ "model": "core:art.item.weapon.pickaxe_rusty", "mirror": "none" }], "hides": [], "attach": { "socket": "main_hand", "sheath_socket": "back" }, "dye_channels": [], "race_overrides": {} } },
+    { "id": "core:item.emberforged_pick", "numeric_id": 53, "worn": { "models": [{ "model": "core:art.item.weapon.emberforged_pick", "mirror": "none" }], "hides": [], "attach": { "socket": "main_hand", "sheath_socket": "back" }, "dye_channels": [], "race_overrides": {} } }
+  ]
+}
