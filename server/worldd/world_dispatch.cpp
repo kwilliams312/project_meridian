@@ -648,7 +648,13 @@ std::vector<EquippedVisualRec> visible_equipment_visuals(const itm::Inventory& i
 // character row (race + §5.2 appearance) and equipment container (visible slots).
 // Present ONLY for players — NPCs never carry this (EntityIdentity::visual stays
 // nullopt), so their EntityEnter omits race/appearance/equipment entirely.
-CharacterVisual build_character_visual(const LoadedCharacter& pc, const itm::Inventory& inv) {
+//
+// Best-effort on the equipment load, exactly like push_inventory_snapshot: a
+// transient DB fault (or a minimal DB without the inventory tables) degrades to
+// appearance-without-equipment rather than throwing into enter-world (spec §6:
+// content problems degrade, never crash). Appearance + race always come through
+// (they are already in hand on `pc`).
+CharacterVisual build_character_visual(const LoadedCharacter& pc, db::Connection& char_db) {
     CharacterVisual vis;
     vis.race = pc.race;
     vis.sex = 0;  // M1 ships male only; the wire field reserves the additive future.
@@ -656,7 +662,14 @@ CharacterVisual build_character_visual(const LoadedCharacter& pc, const itm::Inv
     vis.hair = pc.appearance.hair;
     vis.face = pc.appearance.face;
     vis.skin = pc.appearance.skin;
-    vis.equipment = visible_equipment_visuals(inv);
+    try {
+        const itm::Inventory inv =
+            itm::load_inventory(char_db, pc.char_guid, item_templates());
+        vis.equipment = visible_equipment_visuals(inv);
+    } catch (const std::exception& e) {
+        log::warn(kCat, "EntityEnter equipment load failed (visuals degrade)",
+                  {log::field("error", e.what())});
+    }
     return vis;
 }
 
@@ -2103,15 +2116,11 @@ void Dispatcher::register_m0_stubs() {
                id.char_class = pc.class_id;  // #328: relay the class so clients color by class
                id.name = pc.name;            // #367: the whisper name key + ChatDeliver sender_name
                // ②/T1 (#538): resolve this PLAYER's visual-assembly block — race +
-               // §5.2 appearance (from the loaded row) + the visible equipped set
-               // (loaded fresh here, same source as the inventory snapshot pushed
-               // below). Relayed on every EntityEnter for this session so observers
-               // can assemble the character; NPCs never carry it.
-               {
-                   const itm::Inventory inv =
-                       itm::load_inventory(*ctx.char_db, pc.char_guid, item_templates());
-                   id.visual = build_character_visual(pc, inv);
-               }
+               // §5.2 appearance (from the loaded row) + the visible equipped set.
+               // Relayed on every EntityEnter for this session so observers can
+               // assemble the character; NPCs never carry it. Degrades gracefully
+               // if the equipment load faults (see build_character_visual).
+               id.visual = build_character_visual(pc, *ctx.char_db);
                EnterResult er = ctx.world->enter(
                    id, spawn,
                    [egress](net::Opcode op, const Bytes& payload) {
