@@ -114,9 +114,18 @@ ok "mcc: $("$MCC" --version)"
 STRUDEL_TSX="tools/strudel_render/node_modules/.bin/tsx"
 if [ -d tools/strudel_render ] && command -v node >/dev/null 2>&1; then
   log "Rendering Strudel stems (tools/strudel_render)"
-  ( cd tools/strudel_render && npm ci --silent )
-  "$STRUDEL_TSX" tools/strudel_render/src/cli.ts --all
-  ok "Strudel stems rendered"
+  # BEST-EFFORT: mcc hashes each asset's canonical sidecar YAML, NOT the WAV bytes
+  # (SAD §2.7, M0), so the content build + golden gate do NOT require these WAVs.
+  # Rendering needs a Playwright browser; where deps or the browser are unavailable
+  # (e.g. the content-build CI job, which intentionally does not install Chromium —
+  # the dedicated `strudel-render` job does), warn and continue instead of failing.
+  # The `if` condition is exempt from `set -e`, so a failed render never aborts here.
+  if ( cd tools/strudel_render && npm ci --silent ) \
+       && "$STRUDEL_TSX" tools/strudel_render/src/cli.ts --all; then
+    ok "Strudel stems rendered"
+  else
+    warn "Strudel stem render skipped (browser/deps unavailable) — mcc does not need the WAVs; continuing"
+  fi
 else
   warn "tools/strudel_render or node unavailable — skipping stem render (assumes WAVs present)"
 fi
