@@ -23,19 +23,24 @@
 // through each subscriber's WorldSession lives in world_state.{h,cpp}, on top of
 // this core.
 //
-// ─── THE GRID (SAD §2.5 / §3.2, D-19 flat bootstrap) ─────────────────────────
-// The SAD's production geometry is 533 m grids × 8×8 cells (~66 m) with a
-// default interest radius R = 90 m. At M0 (D-19) worldd runs on the flat 128 m
-// bootstrap chunk (movement_constants.h kZoneMinXY..kZoneMaxXY = [0,128] m), so a
-// single uniform cell grid over that square is sufficient — no grid activation /
-// deactivation is needed for one small map. We partition [0,128]² into square
-// cells of side kAoiCellSizeM. A session's cell index is derived from its
-// authoritative (x, y). An interest query for session S visits S's cell plus its
-// neighbour ring (a 3×3 block of cells when the cell side ≥ R, which it is at
-// M0) and keeps the sessions whose euclidean horizontal distance from S is
-// within the enter/leave radius. Positions are clamped into the play area before
-// indexing, so an out-of-bounds authoritative position (which the #86 validator
-// already prevents) can never index outside the grid.
+// ─── THE GRID (SAD §2.5 / §3.2; #559 real zone geometry) ─────────────────────
+// The SAD's production geometry is 533 m grids × 8×8 cells (66.625 m) with a
+// default interest radius R = 90 m. The grid is PARAMETERISED on a per-zone
+// AoiGridConfig — {origin (min corner), extent (size per axis), cell size, and
+// the enter/leave interest radii} — instead of the M0 [0,128]/(0,0)/64 m bootstrap
+// constants #87 baked in (#559). The single authoritative source of a zone's
+// origin/extent is zone_geometry.h (which binds them to the best zone geometry
+// worldd has, with a TODO to read the shared zone manifest — #22 Story 0, #508).
+// We partition the [origin, origin+extent] square into cells of side cfg.cell_size.
+// A session's cell index is derived from its authoritative (x, y) RELATIVE TO THE
+// ORIGIN (so a non-(0,0) origin indexes correctly). An interest query for session
+// S visits S's cell plus a neighbour block SIZED TO THE LEAVE RADIUS (a
+// (2k+1)×(2k+1) block, k = ceil(leave / cell)) — so even when the interest radius
+// exceeds one cell (as at the production R=90 m / 66.625 m cell) no in-range
+// partner is missed. It keeps the sessions whose euclidean horizontal distance
+// from S is within the enter/leave radius. Positions are clamped into the play
+// area before indexing, so an out-of-bounds authoritative position (which the #86
+// validator already prevents) can never index outside the grid.
 //
 // ─── HYSTERESIS (SAD §2.3 "population-band hysteresis" pattern applied to AoI) ──
 // A single radius R would make a session hovering exactly at distance R flip
@@ -68,40 +73,80 @@ namespace meridian::worldd {
 using AoiId = std::uint64_t;
 
 // ---------------------------------------------------------------------------
-// AoI tuning (v0, flat bootstrap map). Traceable to SAD §2.5 defaults, scaled
-// for the M0 128 m play area.
+// AoI tuning — SAD §2.5 PRODUCTION defaults (#559). These are the values an
+// AoiGridConfig carries unless a zone overrides them; they replace the M0 128 m
+// bootstrap-scaled constants #87 used. Origin/extent are NOT here — they are a
+// per-zone parameter (AoiGridConfig, sourced from zone_geometry.h).
 // ---------------------------------------------------------------------------
 
-// Cell side (metres). The SAD's production cell is ~66 m; on the 128 m bootstrap
-// chunk we use 64 m cells so the whole play area is a small 2×2 grid and one 3×3
-// neighbour block always covers a session's full leave-radius reach (64 m ≥ the
-// leave radius below, so no interest partner can hide two cells away). Uniform,
-// axis-aligned, origin at (kZoneMinXY, kZoneMinXY).
-inline constexpr float kAoiCellSizeM = 64.0f;
+// Cell side (metres). SAD §2.5 production geometry is 533 m grids × 8×8 cells, i.e.
+// 533 / 8 = 66.625 m per cell. Uniform, axis-aligned; the grid ORIGIN is a per-zone
+// parameter (AoiGridConfig::origin_*), never a hardcoded (0,0).
+inline constexpr float kAoiCellSizeM = 66.625f;  // 533 m / 8 cells (SAD §2.5)
 
-// Enter/leave radii (metres) — the Schmitt-trigger band (see file header). The
-// SAD default interest radius is R = 90 m; at M0 we pick an enter radius
-// comfortably inside a 64 m cell's 3×3 reach and a leave radius a band wider so
-// membership is sticky between them. These are the "AoI radius" the story asks
-// for; the small enter<leave gap is the hysteresis.
-inline constexpr float kAoiEnterRadiusM = 40.0f;  // come within 40 m to become visible
-inline constexpr float kAoiLeaveRadiusM = 50.0f;  // leave only past 50 m (10 m sticky band)
+// Enter/leave radii (metres) — the Schmitt-trigger hysteresis band (see file
+// header). SAD §2.5 default interest radius is R = 90 m; that is the ENTER radius.
+// The LEAVE radius is a band wider so membership is sticky between them (SAD §2.3
+// population-band hysteresis applied to AoI). The enter/leave radii can (and at
+// production DO) exceed one cell, so interest_set sizes its neighbour scan block
+// to the leave radius (k = ceil(leave / cell)) rather than assuming 3×3 — a
+// partner up to a full leave-radius away is never missed.
+inline constexpr float kAoiEnterRadiusM = 90.0f;   // SAD §2.5 default interest R
+inline constexpr float kAoiLeaveRadiusM = 100.0f;  // 10 m sticky hysteresis band
 
 static_assert(kAoiLeaveRadiusM > kAoiEnterRadiusM,
               "AoI hysteresis requires leave radius > enter radius");
-static_assert(kAoiLeaveRadiusM <= kAoiCellSizeM,
-              "leave radius must fit inside a cell's 3x3 neighbour reach so no "
-              "in-range partner is missed by the neighbour-block query");
 
 // Chat say/yell radii (SOC-01 #367) — spatial tuning, so they live here with the
 // AoI radii and feed within_radius(). say = a TIGHT local radius; yell = WIDER
 // (the story's "say = local cell radius, yell = wider"). Traceable to SAD §2.5
-// (default interest R = 90 m) scaled for the M0 128 m play area (D-19). Unlike
-// the movement enter/leave band, these are one-shot (no hysteresis) and yell may
-// exceed a single cell — within_radius sizes its scan block to the radius.
+// (default interest R = 90 m). Unlike the movement enter/leave band, these are
+// one-shot (no hysteresis) and yell may exceed a single cell — within_radius sizes
+// its scan block to the radius.
 inline constexpr float kChatSayRadiusM  = 25.0f;   // /say — local
 inline constexpr float kChatYellRadiusM = 90.0f;   // /yell — wider (SAD default R)
 static_assert(kChatYellRadiusM > kChatSayRadiusM, "yell must reach wider than say");
+
+// ---------------------------------------------------------------------------
+// AoiGridConfig — the per-zone geometry the grid is parameterised on (#559).
+// ---------------------------------------------------------------------------
+// The grid no longer hardcodes the M0 [0,128]/(0,0)/64 m bootstrap. A zone supplies
+// its play-area ORIGIN (min corner, zone-local metres) + EXTENT (size along each
+// axis) + CELL SIZE + the enter/leave interest radii. origin + extent define the
+// [origin, origin+extent] square positions are clamped into before cell indexing;
+// cell_of derives the cell index relative to the origin. The single authoritative
+// source of a zone's origin/extent is zone_geometry.h (which today binds them to
+// the best zone geometry worldd has, with a TODO to read the shared zone manifest
+// origin — #22 Story 0 / the #508 axis/origin lesson). Fields default to the SAD
+// §2.5 production tuning; origin/extent default to a degenerate zero area and MUST
+// be set by a factory (production_aoi_config) or an explicit zone config.
+struct AoiGridConfig {
+    float origin_x = 0.0f;       // play-area min x (zone-local metres)
+    float origin_y = 0.0f;       // play-area min y
+    float extent_x = 0.0f;       // play-area size along x (max_x = origin_x + extent_x)
+    float extent_y = 0.0f;       // play-area size along y
+    float cell_size = kAoiCellSizeM;
+    float enter_radius = kAoiEnterRadiusM;
+    float leave_radius = kAoiLeaveRadiusM;
+
+    float max_x() const { return origin_x + extent_x; }
+    float max_y() const { return origin_y + extent_y; }
+};
+
+// Assemble a production-tuned config (SAD §2.5: cell 66.625 m, enter R=90 m, leave
+// 100 m) over the given zone play area [origin, origin+extent]. The ONE place the
+// production tuning is bound to a concrete origin/extent: zone_geometry.h calls it
+// for the active zone; the pure unit tests call it for arbitrary origins/extents.
+inline AoiGridConfig production_aoi_config(float origin_x, float origin_y,
+                                           float extent_x, float extent_y) {
+    AoiGridConfig cfg;
+    cfg.origin_x = origin_x;
+    cfg.origin_y = origin_y;
+    cfg.extent_x = extent_x;
+    cfg.extent_y = extent_y;
+    // cell_size / enter_radius / leave_radius keep their production defaults.
+    return cfg;
+}
 
 // A discrete cell coordinate on the uniform grid.
 struct CellCoord {
@@ -121,7 +166,15 @@ struct CellCoord {
 // as world_state.cpp uses at M0) provides the serialization.
 class AoiGrid {
 public:
-    AoiGrid() = default;
+    // Construct on an explicit per-zone geometry (#559). There is NO default
+    // geometry — a zone's origin/extent/cell/radii must be supplied so the grid can
+    // never silently fall back to the old [0,128]/(0,0)/64 m hardcode. world_state
+    // builds the active zone's config via zone_geometry.h; tests build arbitrary
+    // ones via production_aoi_config.
+    explicit AoiGrid(const AoiGridConfig& cfg) : cfg_(cfg) {}
+
+    // The zone geometry this grid indexes on.
+    const AoiGridConfig& config() const { return cfg_; }
 
     // Insert or move a session to `pos`. Re-buckets it into the correct cell.
     // Idempotent for an unchanged position. The position is clamped into the
@@ -151,10 +204,11 @@ public:
     //   • ENTERS the set if it is not in `previous` and its distance ≤ enter R.
     //   • STAYS in the set if it is in `previous` and its distance ≤ leave R.
     //   • is otherwise OUT.
-    // Only cells in `self`'s 3×3 neighbour block are scanned (the leave radius
-    // fits one cell, so no in-range partner is outside that block). `self` is
-    // never in its own interest set. If `self` is not tracked, the result is
-    // empty.
+    // The scan visits `self`'s neighbour block sized to the leave radius (a
+    // (2k+1)×(2k+1) block, k = ceil(leave / cell)), so no in-range partner is
+    // missed even when the interest radius exceeds one cell (as at production
+    // R=90 m / 66.625 m cell). `self` is never in its own interest set. If `self`
+    // is not tracked, the result is empty.
     std::unordered_set<AoiId> interest_set(
         AoiId self, const std::unordered_set<AoiId>& previous) const;
 
@@ -162,11 +216,10 @@ public:
     // `self` is ≤ `radius` — a PURE, ONE-SHOT radius query with NO hysteresis (a
     // chat/say/yell "notify observers within R of P" visitor, SAD §2.5, distinct
     // from the movement interest set's sticky enter/leave band). `self` is never
-    // in the result; an untracked `self` yields the empty set. Unlike
-    // interest_set (whose 3×3 block assumes radius ≤ cell size), this scans a
-    // (2k+1)×(2k+1) block sized to the requested radius (k = ceil(radius /
-    // cell)), so an arbitrary radius — a wide yell, a small say — is covered
-    // exactly. Used by the SOC-01 chat router (#367) for spatial say/yell.
+    // in the result; an untracked `self` yields the empty set. Like interest_set,
+    // this scans a (2k+1)×(2k+1) block sized to the requested radius (k =
+    // ceil(radius / cell)), so an arbitrary radius — a wide yell, a small say — is
+    // covered exactly. Used by the SOC-01 chat router (#367) for spatial say/yell.
     std::unordered_set<AoiId> within_radius(AoiId self, float radius) const;
 
 private:
@@ -185,6 +238,7 @@ private:
         }
     };
 
+    AoiGridConfig cfg_;  // the per-zone geometry (#559) — origin/extent/cell/radii
     std::unordered_map<AoiId, Position> positions_;
     std::unordered_map<AoiId, CellCoord> cell_by_id_;
     std::unordered_map<CellKey, std::unordered_set<AoiId>, CellKeyHash> ids_by_cell_;
