@@ -21,6 +21,10 @@
 
 extends SceneTree
 
+# MeridianContentDB (#477) by PATH — standalone --script mode has no autoloads and
+# a freshly-added class_name may be missing from a stale global class cache.
+const ContentDbScript := preload("res://content/content_db.gd")
+
 var _fails := 0
 var _entered_character: Dictionary = {}
 
@@ -196,7 +200,9 @@ func _verify_scene() -> void:
 	# Appearance pickers are CATALOG-DRIVEN off MeridianContentDB (#477, spec ② §3):
 	# the default race (Ardent) has a mounted catalog, so the pickers reflect its
 	# preset lists and the item ids are the stable preset ints the server validates.
-	var cat: Dictionary = ContentDB.catalog(MeridianRoster.DEFAULT_RACE_ID, 0)
+	# Path-based access — same reason as char_select.gd: no autoloads in --script
+	# mode, and preload is immune to a stale global class cache.
+	var cat: Dictionary = ContentDbScript.instance().catalog(MeridianRoster.DEFAULT_RACE_ID, 0)
 	_check("ardent catalog is mounted (content staged under res://meridian/core)",
 		not cat.is_empty())
 	var cat_presets: Dictionary = cat.get("presets", {})

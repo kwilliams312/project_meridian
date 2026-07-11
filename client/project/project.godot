@@ -18,7 +18,10 @@ config/features=PackedStringArray("4.7", "Forward Plus")
 
 ; MeridianContentDB (#477): the client read side of mcc-built pack content —
 ; appearance catalogs, item worn data, dye colors, asset paths. Loaded at boot from
-; res://meridian/core; char-create pickers and the character assembler (spec ②) read it.
+; res://meridian/core. Consumers (char-create pickers, the spec-② assembler) do NOT
+; use the bare autoload name — standalone --script verify runs have no autoloads —
+; they preload res://content/content_db.gd and call .instance(), which returns this
+; autoload in the running app (see content_db.gd's ACCESS PATTERN header).
 ContentDB="*res://content/content_db.gd"
 
 [rendering]

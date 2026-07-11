@@ -71,3 +71,27 @@ $GODOT --headless --path client/project --script res://scenes/charselect/char_se
   String content id OR int numeric) — a superset of the written `: int` signature.
 - TDD note: the Godot verify could not be run RED-first here; the data contract was
   instead proven via the Python simulation above. Verify logic is correct-by-construction.
+
+## Addendum — lead-verification fix (commit 731a0c0)
+
+Lead's real-engine run found `content_db_verify.gd` failed to PARSE: 8x
+"Cannot infer the type" — `var x := <expr>` where the expression is Variant
+(all calls through the deliberately-untyped `db` binding return Variant; my
+Python simulation validated the DATA, not the GDScript — that GDScript was
+unverified here and is now flagged as such).
+
+Fixed: all eight locals (cat, pick, w, russet, c, by_id, numeric, ok) now
+explicitly typed. Defensively made the two `ContentDB.catalog()` call sites in
+char_select.gd / char_select_verify.gd explicit (`var cat: Dictionary = ...`).
+
+Audited (every GDScript added/modified in this story):
+- content_db_verify.gd — fixed (8 sites); only `var _fails := 0` remains (int literal).
+- content_db.gd — all `:=` infer from typed expressions (OS.get_environment→String,
+  same-type String ternary, typed helpers →bool/String, FileAccess.open→FileAccess,
+  String()/int() casts). JSON.parse_string results already plain `var x =`.
+  MeridianRoster referenced identically to char_select.gd (global class_name) —
+  no change, per lead (standalone-run cache issue, environmental).
+- char_select.gd / char_select_verify.gd — no `:=`-on-Variant in added lines after fix.
+
+Still cannot execute Godot in this env — the pushed branch is the gate for the
+lead's re-run of both verify scripts.

@@ -43,6 +43,14 @@ signal enter_world_requested(character: Dictionary)
 const WORLD_SCENE: String = "res://scenes/world/world.tscn"
 const LOCAL_DEMO_SCENE: String = "res://scenes/world/camera_demo.tscn"
 
+# MeridianContentDB (#477), referenced by PATH (not the bare `ContentDB` autoload
+# name, and not the bare class name): the headless verify harness runs standalone
+# --script, where autoloads never initialize, and a freshly-added class_name is
+# invisible to a stale .godot global class cache — preload is immune to both.
+# ContentDb.instance() returns the autoload in the running app (it registers
+# itself in _init), else a shared lazily-created instance (verify runs).
+const ContentDb := preload("res://content/content_db.gd")
+
 @onready var _account_label: Label = %AccountLabel
 @onready var _char_list: ItemList = %CharList
 @onready var _name_edit: LineEdit = %NameEdit
@@ -225,7 +233,7 @@ func _populate_pickers() -> void:
 # the pickers enable; no catalog → the pickers disable with a "(content missing)"
 # placeholder (spec §6), and _selected_appearance falls back to the default record.
 func _populate_appearance_pickers(race_id: int) -> void:
-	var cat: Dictionary = ContentDB.catalog(race_id, 0)
+	var cat: Dictionary = ContentDb.instance().catalog(race_id, 0)
 	var presets: Dictionary = cat.get("presets", {})
 	_content_missing = cat.is_empty() or not presets.has("hair")
 	_fill_preset_picker(_hair_option, presets.get("hair", []), "Hair")

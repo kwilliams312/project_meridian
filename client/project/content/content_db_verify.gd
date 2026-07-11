@@ -2,7 +2,7 @@
 #
 # Project Meridian — headless runtime verification for MeridianContentDB (issue
 # #477, client-assembler spec ② §3). NOT a shipped scene: a SceneTree script run
-#   godot --headless --script res://content/content_db_verify.gd
+#   godot --headless --path client/project --script res://content/content_db_verify.gd
 # (same convention as scenes/charselect/char_select_verify.gd) so CI / a dev box
 # can prove, with no render and no server, that the client reads mcc-built pack
 # content correctly and that every miss returns its documented empty sentinel.
@@ -16,6 +16,12 @@
 
 extends SceneTree
 
+# Standalone --script mode never initializes autoloads, so the `ContentDB`
+# autoload name does NOT exist here — preload the script and instantiate directly.
+# The real app exercises the same code as the autoload (content_db.gd loads in
+# _init, tree-independent), so this verifies the identical load + lookup path.
+const ContentDbScript := preload("res://content/content_db.gd")
+
 var _fails := 0
 
 
@@ -28,10 +34,10 @@ func _check(name: String, ok: bool) -> void:
 func _initialize() -> void:
 	print("meridian MeridianContentDB RUNTIME verify (#477)")
 
-	# Load the staged core pack explicitly (the autoload loads it at boot too; loading
-	# here makes the verify self-contained and independent of autoload ordering).
-	# Untyped so method calls bind dynamically to the autoload's script (#477).
-	var db = ContentDB
+	# Instantiate the DB directly (no autoloads in --script mode; see const above)
+	# and load the staged core pack explicitly so the verify is self-contained.
+	# Untyped so method calls bind dynamically to the script (#477).
+	var db = ContentDbScript.new()
 	var loaded: bool = db.load_from("res://meridian/core")
 	_check("staged core pack loads (res://meridian/core)", loaded and db.is_loaded())
 
@@ -42,6 +48,7 @@ func _initialize() -> void:
 	_verify_sentinels(db)
 	_verify_content_missing(db)
 
+	db.free()  # plain Node, never entered the tree
 	print("\n%s" % ("ALL RUNTIME CHECKS PASS" if _fails == 0 else "%d RUNTIME FAILURE(S)" % _fails))
 	quit(0 if _fails == 0 else 1)
 

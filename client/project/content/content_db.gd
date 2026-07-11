@@ -31,8 +31,19 @@
 #   worn(item_template) -> {} if none;    else {models, hides, attach, dye_channels, race_overrides}
 #   dye_color(dye_id)   -> Color(0,0,0,0) sentinel if unknown
 #   model_path(id)      -> "" if unknown (accepts a String content id OR an int numeric id)
+#
+# ACCESS PATTERN. In the running app this script is the `ContentDB` autoload
+# (project.godot). But the repo's headless verify harness runs scripts STANDALONE
+# (`godot --headless --path <proj> --script <p>`), where Godot does NOT initialize
+# autoloads — a bare `ContentDB` identifier is a compile error there. So consumer
+# scripts reference the CLASS (resolved via the global class cache, which standalone
+# runs DO have — same as MeridianRoster) through `MeridianContentDB.instance()`:
+# the autoload when the app is running (it registers itself in _init), else a
+# lazily-created shared instance (verify runs). Loading happens in _init — no scene
+# tree required — so both paths see identical content.
 
 extends Node
+class_name MeridianContentDB
 
 ## The env var a dev/CI run can point at a freshly built pack (e.g.
 ## build/content-out/pck/meridian/core) instead of the staged res:// copy.
@@ -45,6 +56,12 @@ const DEFAULT_PACK_DIR: String = "res://meridian/core"
 ## authored colors"). Fully transparent so a caller can tell a real color from a
 ## miss and fall through to the item's authored surface colors.
 const UNKNOWN_DYE: Color = Color(0, 0, 0, 0)
+
+# The process-wide shared instance `instance()` serves: the autoload in the app
+# (registered in _init), else the first lazily-created one (standalone verifies).
+# Untyped on purpose — GDScript self-referential static typing is avoided for
+# maximum parse-safety; instance() callers use explicit-typed locals.
+static var _instance = null
 
 var _loaded: bool = false
 var _pack_dir: String = ""
@@ -60,10 +77,26 @@ var _worn_by_numeric: Dictionary = {}       # item_template numeric -> worn dict
 var _dye_by_numeric: Dictionary = {}        # dye numeric -> Color
 
 
-func _ready() -> void:
+## The process-wide MeridianContentDB: the `ContentDB` autoload when the app is
+## running, else a lazily-created shared instance (standalone --script verify runs,
+## where autoloads never initialize). Untyped return so calls through it bind
+## dynamically — callers assign to explicit-typed locals.
+static func instance():
+	if _instance == null:
+		_instance = new()
+	return _instance
+
+
+func _init() -> void:
+	# First instance wins the singleton slot (the autoload in the app — it is
+	# constructed at boot before any consumer; the lazily-created one in verifies).
+	if _instance == null:
+		_instance = self
 	# Resolve the pack directory: an explicit env override wins (dev/CI pointing at a
-	# fresh build), else the staged res:// pack. A load failure is NOT fatal — the DB
-	# stays empty and callers use their content-missing fallback (spec §6).
+	# fresh build), else the staged res:// pack. Loading needs no scene tree, so it
+	# runs here (not _ready) and works identically for the autoload and standalone
+	# instances. A load failure is NOT fatal — the DB stays empty and callers use
+	# their content-missing fallback (spec §6).
 	var override_dir := OS.get_environment(PACK_DIR_ENV)
 	var dir := override_dir if not override_dir.is_empty() else DEFAULT_PACK_DIR
 	if not load_from(dir):
