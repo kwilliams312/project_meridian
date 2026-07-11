@@ -69,6 +69,13 @@ def test_unknown_profile_raises():
 # ---------------------------------------------------------------------------
 # generate_rig — pure argument/path helpers (importable without bpy).
 # ---------------------------------------------------------------------------
+def test_yup_to_blender_maps_gltf_yup_to_blender_zup():
+    # Table/glTF Y-up (x, y, z) -> Blender Z-up (x, -z, y); the exporter's
+    # +Y-up conversion maps it back, so table coords round-trip exactly.
+    assert generate_rig.yup_to_blender((1.0, 2.0, 3.0)) == (1.0, -3.0, 2.0)
+    assert generate_rig.yup_to_blender((0.0, 0.95, 0.0)) == (0.0, 0.0, 0.95)
+
+
 def test_argv_after_ddash_extracts_generator_args():
     argv = ["blender", "--background", "--python", "generate_rig.py",
             "--", "--profile", "ardent_male", "--out", "x.glb"]
@@ -126,6 +133,62 @@ def test_rig_glb_hierarchy_matches_table():
     for name, parent in bones.hierarchy().items():
         if parent is not None:
             assert child_to_parent.get(name) == parent, name
+
+
+def _quat_to_mat3(q):
+    """glTF quaternion [x, y, z, w] -> 3x3 rotation matrix (row-major)."""
+    x, y, z, w = q
+    return [
+        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+    ]
+
+
+def _global_positions(g) -> dict[str, tuple[float, float, float]]:
+    """Compose each node's TRS down the scene graph -> global joint positions."""
+    def local_mat(n):
+        r = _quat_to_mat3(n.rotation or [0.0, 0.0, 0.0, 1.0])
+        t = n.translation or [0.0, 0.0, 0.0]
+        s = n.scale or [1.0, 1.0, 1.0]
+        return [[r[i][j] * s[j] for j in range(3)] + [t[i]] for i in range(3)] + [
+            [0.0, 0.0, 0.0, 1.0]]
+
+    def matmul(a, b):
+        return [[sum(a[i][k] * b[k][j] for k in range(4)) for j in range(4)]
+                for i in range(4)]
+
+    out: dict[str, tuple[float, float, float]] = {}
+
+    def walk(node_idx: int, parent):
+        n = g.nodes[node_idx]
+        m = matmul(parent, local_mat(n))
+        if n.name:
+            out[n.name] = (m[0][3], m[1][3], m[2][3])
+        for c in n.children or []:
+            walk(c, m)
+
+    identity = [[float(i == j) for j in range(4)] for i in range(4)]
+    for root in g.scenes[g.scene].nodes:
+        walk(root, identity)
+    return out
+
+
+@pytest.mark.integration
+@skip_if_pointer
+def test_rig_glb_rest_transforms_match_table():
+    """Each joint's composed global rest position == the table's head_m (Y-up).
+
+    Spec ④ §2.2 contract: names/hierarchy/REST TRANSFORMS survive the export.
+    glTF stores joints (bone heads); tails are Blender-side authoring detail.
+    """
+    g = _load_rig_gltf()
+    pos = _global_positions(g)
+    for spec in bones.ALL_BONES:
+        got = pos[spec.name]
+        for axis, (a, b) in enumerate(zip(got, spec.head_m)):
+            assert abs(a - b) < 1e-4, (
+                f"{spec.name} axis {axis}: exported {got} != table {spec.head_m}")
 
 
 @pytest.mark.integration

@@ -53,16 +53,30 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def yup_to_blender(p: tuple[float, float, float]) -> tuple[float, float, float]:
+    """Map a table/glTF Y-up point to Blender's Z-up space: (x, y, z) -> (x, -z, y).
+
+    The bones table (and glTF) is Y-up; Blender edit-bone space is Z-up. The
+    exporter's ``export_yup=True`` conversion is the exact inverse, so table
+    coordinates round-trip unchanged into the exported .glb (asserted by
+    ``test_rig_glb_rest_transforms_match_table``).
+    """
+    x, y, z = p
+    return (x, -z, y)
+
+
 def build_armature(profile: str):  # pragma: no cover - requires bpy/Blender
     """Build a fresh armature object holding every bone for ``profile``.
 
-    Uses the full :data:`bones.ALL_BONES` table (56 profile bones + 7 sockets);
-    ``profile`` is validated via :func:`bones.for_profile`. Edit-bone head/tail
-    come straight from each ``BoneSpec``; parents are wired by name.
+    The profile bones come from :func:`bones.for_profile` (which validates the
+    profile name and returns that profile's rest transforms); the 7 Meridian
+    socket bones are profile-independent and always appended. Edit-bone
+    head/tail are the table's Y-up coords converted to Blender Z-up; parents
+    are wired by name.
     """
     import bpy  # noqa: PLC0415 - Blender-only import
 
-    bones.for_profile(profile)  # validates the profile name (raises on unknown)
+    all_specs = list(bones.for_profile(profile)) + list(bones.SOCKET_BONES)
 
     armature_data = bpy.data.armatures.new("ardent_male")
     armature_obj = bpy.data.objects.new("ardent_male", armature_data)
@@ -73,12 +87,12 @@ def build_armature(profile: str):  # pragma: no cover - requires bpy/Blender
     edit_bones = armature_data.edit_bones
 
     created = {}
-    for spec in bones.ALL_BONES:
+    for spec in all_specs:
         eb = edit_bones.new(spec.name)
-        eb.head = spec.head_m
-        eb.tail = spec.tail_m
+        eb.head = yup_to_blender(spec.head_m)
+        eb.tail = yup_to_blender(spec.tail_m)
         created[spec.name] = eb
-    for spec in bones.ALL_BONES:
+    for spec in all_specs:
         if spec.parent is not None:
             created[spec.name].parent = created[spec.parent]
 

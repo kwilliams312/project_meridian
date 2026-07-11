@@ -8,4 +8,8 @@ source: assets/art/char/sk_ardent_male_skeleton.glb
 license: CC-BY-4.0
 provenance:
   source_tier: original
-  authors: [Project Meridian contributors]
+  authors: [meridian-contributors]
+import_hints:
+  # I004: the 'character' preset permits only 'authored' (Art SAD §2.3), so the
+  # skeleton-only asset (no meshes, nothing to LOD) matches its 33 siblings.
+  lod_policy: authored
