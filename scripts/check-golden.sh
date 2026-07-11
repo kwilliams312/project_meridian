@@ -141,6 +141,20 @@ GOLDEN_FILES=(world.sql pack.manifest.json pack.contents.jsonl pack.data.json in
 STAGED_DIR="client/project/meridian/core"
 STAGED_FILES=(pack.manifest.json pack.contents.jsonl pack.data.json)
 
+# The STAGED MODEL SOURCES (spec ② T3, story #540): the source .glb bytes the
+# client's AssembledCharacter loads at runtime via GLTFDocument. emit-pck is
+# DECLARATIVE at M0 (no Godot importer runs), so the pack.contents.jsonl res://
+# paths (.scn) have no bytes behind them — the assembler falls back to the .glb
+# staged NEXT TO the declared path (same by-ID layout, source extension). These
+# copies are hand-staged like the pack JSON above and drift-gated the same way:
+# byte-identical to their content-tree source, refreshed by --update-golden.
+# Entry format: "<content-tree source>:<staged copy under $STAGED_DIR>".
+STAGED_ART=(
+  "content/core/assets/art/char/sk_ardent_male_base.glb:art/char/ardent/male/base.glb"
+  "content/core/assets/art/char/sk_ardent_male_skeleton.glb:art/char/ardent/male/skeleton.glb"
+  "content/core/assets/art/item/weapon/pickaxe_rusty.glb:art/item/weapon/pickaxe_rusty.glb"
+)
+
 # --- 2a. --update-golden: regenerate the checked-in golden and stop. ---------
 if [ "$UPDATE_GOLDEN" -eq 1 ]; then
   log "Regenerating golden corpus → $GOLDEN_DIR (built_at='$GOLDEN_BUILT_AT')"
@@ -156,7 +170,13 @@ if [ "$UPDATE_GOLDEN" -eq 1 ]; then
   for f in "${STAGED_FILES[@]}"; do
     cp "$GOLDEN_DIR/$f" "$STAGED_DIR/$f"
   done
-  ok "Staged client pack refreshed: $STAGED_DIR/{${STAGED_FILES[*]// /,}}"
+  for entry in "${STAGED_ART[@]}"; do
+    src="${entry%%:*}"; dst="$STAGED_DIR/${entry##*:}"
+    [ -f "$src" ] || die "staged model source missing: $src"
+    mkdir -p "$(dirname "$dst")"
+    cp "$src" "$dst"
+  done
+  ok "Staged client pack refreshed: $STAGED_DIR/{${STAGED_FILES[*]// /,}} + ${#STAGED_ART[@]} model source(s)"
   warn "Review the golden diff like a content diff, then commit tools/mcc/golden/ AND $STAGED_DIR/ together."
   exit 0
 fi
@@ -209,9 +229,16 @@ for f in "${STAGED_FILES[@]}"; do
     diff "$STAGED_DIR/$f" "$RUN1/$f" 2>/dev/null | head -20 >&2 || true
   fi
 done
+for entry in "${STAGED_ART[@]}"; do
+  src="${entry%%:*}"; dst="$STAGED_DIR/${entry##*:}"
+  if ! cmp -s "$src" "$dst"; then
+    stale=1
+    warn "STALE staged model source $dst vs $src"
+  fi
+done
 if [ "$stale" -ne 0 ]; then
   die "staged client pack is STALE — regenerate it with 'scripts/check-golden.sh --update-golden' and commit $STAGED_DIR/ together with tools/mcc/golden/."
 fi
-ok "Staged client pack matches the fresh emit"
+ok "Staged client pack matches the fresh emit (+ staged model sources match their content-tree sources)"
 
 log "${_B}Determinism gate passed.${_R} Golden corpus, staged client pack, and mcc output are all current and deterministic."
