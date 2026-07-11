@@ -328,6 +328,11 @@ int main(int argc, char** argv) {
     // stay valid for every served connection. Empty (all null) when no world DB is
     // wired OR when the boot degraded (#485) — the seams then keep the M1
     // placeholder stores.
+    // libmariadb one-time library init on the MAIN thread, before the boot DB
+    // connection below and before any IO worker opens its own connection (#510).
+    // Each IO worker additionally runs mysql_thread_init via db::ThreadGuard.
+    meridian::db::global_init();
+
     meridian::worldd::WorldContent content;
     if (!cfg.world_db.user.empty()) {
         std::optional<std::string> expected;
@@ -539,6 +544,13 @@ int main(int argc, char** argv) {
         pool.reserve(cfg.world.io_workers);
         for (unsigned w = 0; w < cfg.world.io_workers; ++w) {
             pool.emplace_back([&] {
+                // libmariadb thread-init/-end for this IO worker thread (#510).
+                // serve_connection opens this worker's own auth/char DB
+                // connection(s); without the per-thread init these concurrent
+                // connections race on libmariadb's thread-local state and
+                // intermittently return EMPTY result sets. One guard per worker
+                // thread brackets every connection it serves for the run.
+                meridian::db::ThreadGuard db_thread_guard;
                 for (;;) {
                     std::optional<meridian::net::Session> job;
                     {
@@ -582,6 +594,7 @@ int main(int argc, char** argv) {
         cv.notify_all();
         for (std::thread& t : pool) t.join();
         world.stop();
+        meridian::db::global_end();  // libmariadb teardown after all workers joined (#510)
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s: fatal: %s\n", kDaemonName, e.what());
         world.stop();

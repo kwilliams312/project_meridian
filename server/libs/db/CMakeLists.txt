@@ -5,6 +5,7 @@
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(MARIADB REQUIRED IMPORTED_TARGET libmariadb)
+find_package(Threads REQUIRED)  # concurrency regression test (#510)
 
 add_library(meridian-db STATIC
   src/connection.cpp
@@ -26,3 +27,12 @@ add_executable(meridian-db-test test/db_test.cpp)
 target_link_libraries(meridian-db-test PRIVATE meridian::db)
 set_target_properties(meridian-db-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME db COMMAND meridian-db-test)
+
+# Concurrency regression test (#510): N threads x M iterations, each opening its
+# own connection and asserting a parameterized SELECT returns the seeded row.
+# Reproduces the libmariadb thread-init race with the fix reverted; green with it.
+# Same MERIDIAN_DB_* / SKIP behaviour as db-test (inert without a live MariaDB).
+add_executable(meridian-db-concurrency-test test/db_concurrency_test.cpp)
+target_link_libraries(meridian-db-concurrency-test PRIVATE meridian::db Threads::Threads)
+set_target_properties(meridian-db-concurrency-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME db-concurrency COMMAND meridian-db-concurrency-test)

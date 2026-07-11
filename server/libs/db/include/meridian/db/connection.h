@@ -65,6 +65,49 @@ private:
     unsigned code_;
 };
 
+// Process-wide libmariadb initialization (#510). libmariadb (Connector/C) keeps
+// GLOBAL and THREAD-LOCAL state; its contract requires mysql_library_init() to
+// run ONCE before any thread opens a connection, and mysql_thread_init() on
+// every thread that then touches the client library. authd and worldd open a
+// fresh Connection per request on many concurrent worker threads; without these
+// calls, concurrent first-use mysql_init() races on libmariadb's shared init
+// state and intermittently corrupts prepared-statement/result fetching, yielding
+// EMPTY result sets for queries that must return rows (#510: intermittent
+// "unknown user" and "empty realm list" under concurrent load).
+//
+// global_init() is idempotent (std::call_once): the first call runs
+// mysql_library_init(); later calls are no-ops. Connection's constructor and
+// ThreadGuard both call it, so it is automatic — but every daemon should ALSO
+// call it explicitly from main() before spawning worker threads, so the one-time
+// global init can never first happen concurrently on a worker's first connect.
+// Throws DbError if mysql_library_init() fails.
+void global_init();
+
+// Release process-wide libmariadb resources (mysql_library_end). Call once at
+// clean daemon/tool shutdown, after all Connections are destroyed and every
+// worker thread (and its ThreadGuard) has exited. Safe to omit on a hard process
+// exit, but required for a leak-clean teardown.
+void global_end();
+
+// RAII per-thread libmariadb initialization (#510). Every thread OTHER than the
+// one that called global_init() must run mysql_thread_init() before its first
+// DB use and mysql_thread_end() before it exits — otherwise it races on / leaks
+// libmariadb thread-local state. Construct exactly one ThreadGuard at the top of
+// each worker thread that opens or uses a Connection (e.g. authd's per-connection
+// handler thread, worldd's IO-worker threads); its lifetime must bracket ALL DB
+// use on that thread. Placing the guard in the db layer means no call site can
+// forget the thread_end pairing. The ctor also calls global_init(), so a guard
+// alone guarantees correct init order even if main() forgot the explicit call.
+class ThreadGuard {
+public:
+    ThreadGuard();
+    ~ThreadGuard();
+    ThreadGuard(const ThreadGuard&) = delete;
+    ThreadGuard& operator=(const ThreadGuard&) = delete;
+    ThreadGuard(ThreadGuard&&) = delete;
+    ThreadGuard& operator=(ThreadGuard&&) = delete;
+};
+
 // One MariaDB connection. RAII: connects on construction, closes on destruction.
 // Not copyable; movable.
 class Connection {
