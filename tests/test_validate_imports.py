@@ -470,12 +470,60 @@ class TestGltfRigRules:
         assert "I023" in codes(res.errors)
 
     def test_i023_chain_present_passes(self, tmp_path):
+        # Every region ships its own chain (lod0 + lod1) → no I023.
+        sidecar = BODY_SIDECAR.replace("lod_policy: single", "lod_policy: authored")
+        chains = GEO_LOD0 + [f"geo_{r}_lod1" for r in GEOSET_REGIONS]
+        res = run_rig(
+            tmp_path, sidecar, "assets/art/char/body.glb",
+            joints=CANON_BONES, meshes=chains, skin=True,
+        )
+        assert res.errors == [], res.errors
+
+    def test_i023_chain_is_per_prefix_not_per_file(self, tmp_path):
+        # Reviewer counter-example (PR #517 N2): all 8 regions at lod0 plus a
+        # single stray geo_head_lod1 must NOT satisfy the chain — the other 7
+        # regions have no lod1+, and the chainless prefixes are named.
         sidecar = BODY_SIDECAR.replace("lod_policy: single", "lod_policy: authored")
         res = run_rig(
             tmp_path, sidecar, "assets/art/char/body.glb",
-            joints=CANON_BONES, meshes=GEO_LOD0 + ["geo_torso_lod1"], skin=True,
+            joints=CANON_BONES, meshes=GEO_LOD0 + ["geo_head_lod1"], skin=True,
         )
-        assert res.errors == [], res.errors
+        assert "I023" in codes(res.errors), res.errors
+        msg = next(m for m in res.errors if m.startswith("I023"))
+        assert "geo_torso" in msg and "geo_feet" in msg  # chainless prefixes named
+
+    def test_i023_complete_prefix_not_flagged(self, tmp_path):
+        # In a mixed body only the chainless prefixes appear in the message —
+        # geo_head (complete chain) must not be listed.
+        sidecar = BODY_SIDECAR.replace("lod_policy: single", "lod_policy: authored")
+        res = run_rig(
+            tmp_path, sidecar, "assets/art/char/body.glb",
+            joints=CANON_BONES, meshes=GEO_LOD0 + ["geo_head_lod1"], skin=True,
+        )
+        msg = next(m for m in res.errors if m.startswith("I023"))
+        listed = msg.split("(")[0]
+        assert "geo_head," not in listed and " geo_head " not in listed
+
+    def test_iglb_corrupt_but_loadable_glb_is_error_not_crash(self, tmp_path):
+        # A glb that pygltflib loads but whose skin joints index out of range
+        # must surface as a validation error, not crash the CI validator run.
+        from pygltflib import GLTF2, Node, Scene, Skin
+
+        content = build(
+            tmp_path, {"tp/assets/art/asset.asset.yaml": SKELETON_SIDECAR}
+        )
+        glb = content / "tp" / "assets/art/char/skeleton.glb"
+        glb.parent.mkdir(parents=True, exist_ok=True)
+        gltf = GLTF2(
+            nodes=[Node(name="Root")],
+            skins=[Skin(name="skin", joints=[99])],  # out-of-range node index
+            scenes=[Scene(nodes=[0])],
+            scene=0,
+        )
+        gltf.save(str(glb))
+        res = validate(content, PRESETS, "error", skeleton_defs_path=SKELETON_DEFS)
+        assert "IGLB" in codes(res.errors), res.errors
+        assert any("skeleton.glb" in m for m in res.errors if m.startswith("IGLB"))
 
     def test_i023_single_policy_exempts(self, tmp_path):
         # Same lod0-only glb, sidecar lod_policy 'single' → no I023.

@@ -29,8 +29,11 @@ Rule ids (I-band, Art SAD §2.3 import preset table):
   I021  an armor_model glb's skins bind only canonical joint names — spec ④ §5
   I022  character_model body meshes follow geo_<region>_lod<N> naming and cover
         all 8 geoset regions at lod0 — spec ④ §3/§5
-  I023  a skeletal asset with meshes ships a LOD chain (lod0 + lod1+) unless
-        import_hints.lod_policy is 'single' — Art PRD §2.1, spec ④ §5
+  I023  a skeletal asset with meshes ships a LOD chain (lod0 + lod1+) per
+        mesh-name prefix unless import_hints.lod_policy is 'single' —
+        Art PRD §2.1/§2.2, spec ④ §5
+  IGLB  a skeletal .glb loaded but its structure is internally inconsistent
+        (e.g. skin joints indexing past the node array) — I020-I023 unverifiable
   IPRESET  the preset templates themselves are well-formed and cover the asset classes
 
 I020-I023 parse committed .glb files structurally with pygltflib (names only —
@@ -395,9 +398,19 @@ def check_gltf_rig(
     if gltf is None:
         return errors
 
-    canonical_set = set(canonical)
-    joints = _joint_names(gltf)
-    mesh_names = [m.name or f"meshes[{i}]" for i, m in enumerate(gltf.meshes)]
+    # A glb that pygltflib loads but whose structure is internally inconsistent
+    # (e.g. skin joints indexing past the node array) must surface as a
+    # validation error, not crash the whole CI validator run (PR #517 N4).
+    try:
+        canonical_set = set(canonical)
+        joints = _joint_names(gltf)
+        mesh_names = [m.name or f"meshes[{i}]" for i, m in enumerate(gltf.meshes)]
+    except Exception as exc:  # noqa: BLE001 — corrupt-but-loadable glb
+        return [
+            f"IGLB {rel_path}: glb '{glb_path.name}' loaded but its structure "
+            f"is unreadable ({exc.__class__.__name__}: {exc}) — cannot verify "
+            f"I020-I023 rig conformance (spec ④ §5)"
+        ]
 
     # I020 — character_model rigs carry exactly the canonical joint set.
     if asset_class == "character_model":
@@ -457,20 +470,30 @@ def check_gltf_rig(
             )
 
     # I023 — skeletal LOD chain unless the sidecar declares lod_policy 'single'.
+    # The chain is required PER mesh-name prefix (the base before _lod<N>: a
+    # geoset region for bodies, a gear-piece prefix for armor), not per file —
+    # a body with 8×lod0 plus one stray geo_head_lod1 has 7 chainless regions
+    # (Art PRD §2.1/§2.2: every skeletal asset ships ITS chain; PR #517 N2).
     lod_policy = (doc.get("import_hints") or {}).get("lod_policy")
     if mesh_names and lod_policy != "single":
-        lods = {
-            int(m.group(1))
-            for name in mesh_names
-            if (m := _LOD_SUFFIX_RE.search(name))
-        }
-        if 0 not in lods or not any(lod >= 1 for lod in lods):
-            found = ", ".join(f"lod{n}" for n in sorted(lods)) or "none"
+        groups: dict[str, set[int]] = {}
+        for name in mesh_names:
+            m = _LOD_SUFFIX_RE.search(name)
+            if m:
+                groups.setdefault(name[: m.start()], set()).add(int(m.group(1)))
+            else:
+                groups.setdefault(name, set())  # unsuffixed mesh: no chain at all
+        chainless = sorted(
+            prefix
+            for prefix, lods in groups.items()
+            if 0 not in lods or not any(lod >= 1 for lod in lods)
+        )
+        if chainless:
             errors.append(
-                f"I023 {rel_path}: no LOD chain in mesh names (need _lod0 plus "
-                f"_lod1+; found: {found}) — skeletal assets ship an authored LOD "
-                f"chain per Art PRD §2.1 unless import_hints.lod_policy is "
-                f"'single' (spec ④ §5)"
+                f"I023 {rel_path}: LOD chain incomplete for mesh prefixes "
+                f"({', '.join(chainless)}) — each needs _lod0 plus _lod1+; "
+                f"skeletal assets ship an authored LOD chain per Art PRD "
+                f"§2.1/§2.2 unless import_hints.lod_policy is 'single' (spec ④ §5)"
             )
 
     return errors
@@ -569,12 +592,10 @@ def validate(
                 )
 
             # I020-I023 — structural rig/geoset/LOD conformance of the committed
-            # .glb for skeletal classes (spec ④ §5). Skips when the boneName enum
-            # is empty or the .glb is absent/unparseable (LFS pointer stub).
-            if doc.get("class") in GLTF_RIG_CLASSES:
-                sink.extend(
-                    check_gltf_rig(doc, rel(path), src_path, skeleton_defs)
-                )
+            # .glb for skeletal classes (spec ④ §5). check_gltf_rig self-guards:
+            # non-rig classes, an empty boneName enum, and an absent/unparseable
+            # .glb (LFS pointer stub) all return no errors.
+            sink.extend(check_gltf_rig(doc, rel(path), src_path, skeleton_defs))
 
     res.stats = {
         "presets": len(presets_data["presets"]),
