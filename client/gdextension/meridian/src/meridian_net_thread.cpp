@@ -93,6 +93,13 @@ void MeridianNetThread::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("decode_cast_frame", "opcode", "payload"),
 	                     &MeridianNetThread::decode_cast_frame);
 
+	ClassDB::bind_method(D_METHOD("build_release_request_frame"),
+	                     &MeridianNetThread::build_release_request_frame);
+	ClassDB::bind_method(D_METHOD("build_resurrect_request_frame"),
+	                     &MeridianNetThread::build_resurrect_request_frame);
+	ClassDB::bind_method(D_METHOD("decode_death_frame", "opcode", "payload"),
+	                     &MeridianNetThread::decode_death_frame);
+
 	ClassDB::bind_method(D_METHOD("build_char_list_request_frame"),
 	                     &MeridianNetThread::build_char_list_request_frame);
 	ClassDB::bind_method(
@@ -487,6 +494,62 @@ Dictionary MeridianNetThread::decode_cast_frame(int opcode,
 		d["abilities"] = abilities;
 	}
 	return d;  // kind stays "" for a non-combat opcode / undecodable payload
+}
+
+// ── Death / ghost / resurrect frame builders + decode (CMB-03, #359/#532) ────
+// The death overlay builds RELEASE_REQUEST (early graveyard release) and the ghost
+// presentation builds RESURRECT_REQUEST (resurrect at the corpse); both are empty C→S
+// bodies (send_control). The server's DEATH_STATE / GHOST_STATE / RESURRECT_RESULT arrive
+// as raw `entity_frame`s decoded by decode_death_frame. Presentation-only (never predicted).
+
+PackedByteArray MeridianNetThread::build_release_request_frame() const {
+	net::Bytes payload = cn::codec::encode_release_request();
+	return to_pba(cn::encode_world_frame(cn::kOpReleaseRequest, /*seq=*/1, payload));
+}
+
+PackedByteArray MeridianNetThread::build_resurrect_request_frame() const {
+	net::Bytes payload = cn::codec::encode_resurrect_request();
+	return to_pba(cn::encode_world_frame(cn::kOpResurrectRequest, /*seq=*/1, payload));
+}
+
+Dictionary MeridianNetThread::decode_death_frame(int opcode,
+		const PackedByteArray &payload) const {
+	Dictionary d;
+	d["kind"] = String("");
+	const net::Bytes buf = to_bytes(payload);
+	// Wire (Z-UP: x/y ground, z height) -> Godot render frame (Y-UP: y = height), the SAME
+	// mapping decode_entity_frame uses, so the scene can compare corpse/graveyard positions
+	// against the local player's render position directly.
+	auto to_godot = [](float wx, float wy, float wz) {
+		return Vector3(wx, /*y=height*/ wz, /*z=ground*/ wy);
+	};
+
+	if (opcode == cn::kOpDeathState) {
+		auto s = cn::codec::decode_death_state(buf);
+		if (!s) return d;
+		d["kind"] = String("death");
+		d["victim_guid"] = static_cast<int64_t>(s->victim_guid);
+		d["killer_guid"] = static_cast<int64_t>(s->killer_guid);
+		d["corpse_guid"] = static_cast<int64_t>(s->corpse_guid);
+		d["corpse_position"] = to_godot(s->corpse_x, s->corpse_y, s->corpse_z);
+		d["auto_release_ms"] = static_cast<int64_t>(s->auto_release_ms);
+	} else if (opcode == cn::kOpGhostState) {
+		auto g = cn::codec::decode_ghost_state(buf);
+		if (!g) return d;
+		d["kind"] = String("ghost");
+		d["player_guid"] = static_cast<int64_t>(g->player_guid);
+		d["graveyard_position"] = to_godot(g->graveyard_x, g->graveyard_y, g->graveyard_z);
+		d["corpse_guid"] = static_cast<int64_t>(g->corpse_guid);
+	} else if (opcode == cn::kOpResurrectResult) {
+		auto r = cn::codec::decode_resurrect_result(buf);
+		if (!r) return d;
+		d["kind"] = String("resurrect_result");
+		d["player_guid"] = static_cast<int64_t>(r->player_guid);
+		d["status"] = static_cast<int64_t>(r->status);  // ResurrectStatus
+		d["health"] = static_cast<int64_t>(r->health);
+		d["max_health"] = static_cast<int64_t>(r->max_health);
+	}
+	return d;  // kind stays "" for a non-death opcode / undecodable payload
 }
 
 // ── Character-select frame builders (D-35 / #286 / #341) ─────────────────────

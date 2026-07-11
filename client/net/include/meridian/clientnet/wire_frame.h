@@ -64,6 +64,17 @@ inline constexpr std::uint16_t kOpCastResult     = 0x3004;  // S→C  attack-tab
 // ENTER_WORLD and re-sent after a TRAINER_LEARN that grows the set, so the action bar
 // seeds from the character's REAL learned abilities + their cast/GCD/resource metadata.
 inline constexpr std::uint16_t kOpKnownAbilities = 0x3005;  // S→C  spellbook + metadata
+// Death / ghost / corpse-run / resurrect (M1 — CMB-03, #359/#532). DEATH_STATE opens the
+// death overlay (corpse guid + auto-release countdown); RELEASE_REQUEST asks for an early
+// graveyard release (C→S, empty); GHOST_STATE enters the ghost presentation at the graveyard
+// with the corpse-run destination; RESURRECT_REQUEST (C→S, empty) resurrects at the corpse
+// once the corpse-run completes; RESURRECT_RESULT carries the typed outcome (OK → alive +
+// restored health, or a refusal reason). Presentation-only — the client never predicts state.
+inline constexpr std::uint16_t kOpDeathState       = 0x3010;  // S→C  you died (corpse + timer)
+inline constexpr std::uint16_t kOpReleaseRequest   = 0x3011;  // C→S  early graveyard release (empty)
+inline constexpr std::uint16_t kOpGhostState       = 0x3012;  // S→C  released: ghost at the graveyard
+inline constexpr std::uint16_t kOpResurrectRequest = 0x3013;  // C→S  resurrect at your corpse (empty)
+inline constexpr std::uint16_t kOpResurrectResult  = 0x3014;  // S→C  resurrection outcome (status)
 // Quest state (M1 — QST-01, #371/#433). QUEST_LOG is bidirectional: C→S it REQUESTS
 // the log (an empty QuestLog table body); S→C it CARRIES the log snapshot. The others
 // are one C→S request paired with a typed S→C result; QUEST_PROGRESS is S→C only.

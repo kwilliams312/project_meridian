@@ -1419,3 +1419,191 @@ static func _chat_reject_text(reason: int, target: String) -> String:
 		CHAT_REJECT_TARGET_OFFLINE:
 			return ("%s is not online." % target) if not target.is_empty() else "That player is not online."
 		_: return "Your message could not be delivered."
+
+
+# =============================================================================
+# DEATH / GHOST / CORPSE-RUN / RESURRECT (CMB-03, #359/#532)
+# =============================================================================
+# The SAME MVVM seam as the registries above, applied to the death→ghost→corpse-run→rez
+# loop. The net layer PUBLISHES the decoded server frames (DEATH_STATE / GHOST_STATE /
+# RESURRECT_RESULT); the death overlay SUBSCRIBES to the signals + READS through the
+# getters. The two C→S intents (RELEASE_REQUEST, RESURRECT_REQUEST) are request_*() methods
+# the bus re-emits so the world scene (which owns the net thread) sends the frame.
+#
+# SERVER IS LAW: the bus only stores + re-emits what worldd delivered. It never predicts
+# the phase — a DEATH_STATE makes you dead, a GHOST_STATE makes you a ghost, and only a
+# RESURRECT_RESULT(OK) makes you alive again. The one client-side judgement is corpse-run
+# COMPLETION: while a ghost, the world scene feeds the local player's position and the bus
+# fires the RESURRECT_REQUEST intent once the player is within RESURRECT_RANGE_M of the
+# corpse (the server still validates with TOO_FAR and the overlay's Resurrect button offers
+# a manual retry). This is an INTENT, not a state change — the server remains authoritative.
+
+# world.fbs ResurrectStatus ordinals (kept here so views read them by name).
+const RESURRECT_OK := 0
+const RESURRECT_NOT_DEAD := 1
+const RESURRECT_NOT_RELEASED := 2
+const RESURRECT_TOO_FAR := 3
+
+# Death-loop phases (client presentation state, derived only from server frames).
+const DEATH_PHASE_ALIVE := "alive"
+const DEATH_PHASE_DEAD := "dead"     # DEATH_STATE seen, not yet released (overlay + countdown)
+const DEATH_PHASE_GHOST := "ghost"   # GHOST_STATE seen (ghost presentation + corpse-run)
+
+# Corpse-run completion radius (metres): within this of the corpse, a ghost may resurrect.
+# The server is the final arbiter (RESURRECT_TOO_FAR); this only gates the auto-intent so a
+# ghost that reaches the corpse resurrects without an extra click.
+const RESURRECT_RANGE_M := 5.0
+
+# --- View subscription signals (bus -> death overlay) ------------------------
+
+## DEATH_STATE arrived — you died. The overlay opens: dim screen, "You have died", the
+## auto-release countdown, and a Release control. `corpse_position` is the Godot-frame
+## corpse-run destination; `auto_release_ms` is the server's release timer.
+signal died(corpse_guid: int, corpse_position: Vector3, auto_release_ms: int)
+
+## GHOST_STATE arrived — you were released and are a ghost at the graveyard. The overlay
+## switches to the ghost presentation (greyscale tint + corpse-run guidance). `corpse_position`
+## is carried over from the death state (GHOST_STATE names only the corpse guid).
+signal became_ghost(graveyard_position: Vector3, corpse_position: Vector3, corpse_guid: int)
+
+## The ghost's distance to its corpse changed (metres). Drives the corpse-run guidance text
+## and enables the Resurrect control once within RESURRECT_RANGE_M. Only fires while a ghost.
+signal corpse_distance_changed(distance: float)
+
+## RESURRECT_RESULT arrived. On RESURRECT_OK you are alive again with `health`/`max_health`
+## restored (the overlay clears, the player frame repaints); otherwise `status` is the typed
+## refusal reason (RESURRECT_TOO_FAR etc.) the overlay surfaces, and you stay a ghost.
+signal resurrected(status: int, health: int, max_health: int)
+
+# --- Intent signals (view -> the world scene, which owns the net thread) ------
+
+## The player chose to release early: send RELEASE_REQUEST (empty C→S). Becoming a ghost is
+## still the server's call — it answers with a GHOST_STATE.
+signal release_requested()
+
+## Resurrect at the corpse: send RESURRECT_REQUEST (empty C→S). Fired by the corpse-run
+## auto-complete or the overlay's Resurrect button. The server answers with RESURRECT_RESULT.
+signal resurrect_requested()
+
+# --- Death-loop registry state -----------------------------------------------
+var _death_phase: String = DEATH_PHASE_ALIVE
+var _corpse_guid: int = 0
+var _corpse_position: Vector3 = Vector3.ZERO   # corpse-run destination (from DEATH_STATE)
+var _graveyard_position: Vector3 = Vector3.ZERO
+var _auto_release_ms: int = 0
+var _corpse_distance: float = INF              # last computed ghost→corpse distance
+var _resurrect_sent: bool = false              # a RESURRECT_REQUEST is in flight (guards spam)
+
+# --- Publish API (the net layer -> bus) --------------------------------------
+
+## Publish a DEATH_STATE (decode_death_frame kind "death"). Enters the "dead" phase, stores
+## the corpse-run destination + release timer, and emits `died` so the overlay opens.
+func publish_death_state(corpse_guid: int, corpse_position: Vector3, auto_release_ms: int) -> void:
+	_death_phase = DEATH_PHASE_DEAD
+	_corpse_guid = corpse_guid
+	_corpse_position = corpse_position
+	_auto_release_ms = auto_release_ms
+	_corpse_distance = INF
+	_resurrect_sent = false
+	died.emit(corpse_guid, corpse_position, auto_release_ms)
+
+## Publish a GHOST_STATE (decode_death_frame kind "ghost"). Enters the "ghost" phase and
+## emits `became_ghost` with the graveyard + the corpse position carried from the death state
+## (GHOST_STATE carries only the corpse guid). Resets the corpse-run resurrect guard.
+func publish_ghost_state(graveyard_position: Vector3, corpse_guid: int) -> void:
+	_death_phase = DEATH_PHASE_GHOST
+	if corpse_guid != 0:
+		_corpse_guid = corpse_guid
+	_graveyard_position = graveyard_position
+	_corpse_distance = INF
+	_resurrect_sent = false
+	became_ghost.emit(graveyard_position, _corpse_position, _corpse_guid)
+
+## Publish a RESURRECT_RESULT (decode_death_frame kind "resurrect_result"). On RESURRECT_OK
+## returns to the "alive" phase, clears the death state, and restores the local player's
+## health/max_health (the result carries them — server-authoritative, never invented) so the
+## unit frame repaints. On a refusal, stays a ghost and re-arms the corpse-run auto-intent so
+## the player can retry (walk closer / press Resurrect). Always emits `resurrected`.
+func publish_resurrect_result(status: int, health: int, max_health: int) -> void:
+	if status == RESURRECT_OK:
+		_death_phase = DEATH_PHASE_ALIVE
+		_corpse_guid = 0
+		_corpse_position = Vector3.ZERO
+		_graveyard_position = Vector3.ZERO
+		_auto_release_ms = 0
+		_corpse_distance = INF
+		_resurrect_sent = false
+		if _local_guid != 0 and max_health > 0:
+			var v := _record_for(_local_guid)
+			v["health"] = health
+			v["max_health"] = max_health
+			_entities[_local_guid] = v
+			entity_vitals_changed.emit(_local_guid, v)
+	else:
+		# Refused (TOO_FAR etc.) — still a ghost; allow another corpse-run auto-attempt.
+		_resurrect_sent = false
+	resurrected.emit(status, health, max_health)
+
+## Feed the local player's current position while a ghost so the bus can measure the corpse
+## run. Emits `corpse_distance_changed` and, on first reaching RESURRECT_RANGE_M, fires the
+## RESURRECT_REQUEST intent once (guarded by `_resurrect_sent`; re-armed by a refusal). No-op
+## unless a ghost with a known corpse position. Returns true iff it fired the intent.
+func update_ghost_position(player_position: Vector3) -> bool:
+	if _death_phase != DEATH_PHASE_GHOST or _corpse_guid == 0:
+		return false
+	var dist := player_position.distance_to(_corpse_position)
+	if dist != _corpse_distance:
+		_corpse_distance = dist
+		corpse_distance_changed.emit(dist)
+	if dist <= RESURRECT_RANGE_M and not _resurrect_sent:
+		_resurrect_sent = true
+		resurrect_requested.emit()
+		return true
+	return false
+
+# --- Request API (view -> intent signal; the world scene sends the frame) -----
+
+## The Release control was used: emit the RELEASE_REQUEST intent (idempotent — only meaningful
+## while dead-not-released; the server ignores a stray one).
+func request_release() -> void:
+	release_requested.emit()
+
+## The Resurrect control was used (manual corpse-run completion). Emits the RESURRECT_REQUEST
+## intent and arms the in-flight guard so the auto-run does not double-send.
+func request_resurrect() -> void:
+	_resurrect_sent = true
+	resurrect_requested.emit()
+
+# --- Read API (bus -> view-models) -------------------------------------------
+
+## The current death-loop phase ("alive" / "dead" / "ghost").
+func death_phase() -> String:
+	return _death_phase
+
+## True while dead or a ghost (the overlay is up).
+func is_dead_or_ghost() -> bool:
+	return _death_phase != DEATH_PHASE_ALIVE
+
+## True while a ghost (released, running to the corpse).
+func is_ghost() -> bool:
+	return _death_phase == DEATH_PHASE_GHOST
+
+## The corpse-run destination guid (0 = none).
+func corpse_guid() -> int:
+	return _corpse_guid
+
+## The corpse-run destination position (Godot frame).
+func corpse_position() -> Vector3:
+	return _corpse_position
+
+## The graveyard position the ghost spawned at (Godot frame; ZERO until a ghost).
+func graveyard_position() -> Vector3:
+	return _graveyard_position
+
+## The server's auto-release timer (ms) from the death state (0 when alive).
+func auto_release_ms() -> int:
+	return _auto_release_ms
+
+## The last measured ghost→corpse distance (metres; INF until measured).
+func corpse_distance() -> float:
+	return _corpse_distance

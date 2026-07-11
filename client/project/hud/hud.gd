@@ -33,6 +33,7 @@ const TrainerWindow := preload("res://hud/trainer_window.gd")
 const BagsWindow := preload("res://hud/bags_window.gd")
 # Chat panel (SOC-01, #434) — same MVVM binding as the other views.
 const ChatPanel := preload("res://hud/chat_panel.gd")
+const DeathOverlay := preload("res://hud/death_overlay.gd")
 
 var _bus: MeridianEventBus
 var _player_frame: MeridianUnitFrame
@@ -48,6 +49,7 @@ var _vendor: MeridianVendorWindow
 var _trainer: MeridianTrainerWindow
 var _bags: MeridianBagsWindow
 var _chat: MeridianChatPanel
+var _death_overlay: MeridianDeathOverlay
 
 
 func _ready() -> void:
@@ -82,6 +84,9 @@ func setup(bus: MeridianEventBus) -> void:
 	# Chat panel subscribes to the SAME bus (SOC-01, #434).
 	if _chat != null:
 		_chat.setup(bus)
+	# Death overlay subscribes to the SAME bus (CMB-03, #359/#532).
+	if _death_overlay != null:
+		_death_overlay.setup(bus)
 	# Action bar + cast bar subscribe to the SAME bus (CMB-01, D-10, #432).
 	if _action_bar != null:
 		_action_bar.setup(bus)
@@ -231,6 +236,12 @@ func _build() -> void:
 	_chat.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	add_child(_chat)
 
+	# Death overlay: full-screen, added LAST so its dim/greyscale wash sits over the whole HUD
+	# + world (CMB-03, #359/#532). Hidden until a DEATH_STATE arrives.
+	_death_overlay = DeathOverlay.new()
+	_death_overlay.name = "DeathOverlay"
+	add_child(_death_overlay)
+
 	# If setup() ran before _build() (node added after bind), paint + bind now.
 	if _bus != null:
 		_gossip.setup(_bus)
@@ -244,6 +255,7 @@ func _build() -> void:
 		_action_bar.setup(_bus)
 		_cast_bar.setup(_bus)
 		_xp_bar.setup(_bus)
+		_death_overlay.setup(_bus)
 		_refresh_player()
 		_refresh_target()
 

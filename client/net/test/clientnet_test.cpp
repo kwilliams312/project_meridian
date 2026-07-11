@@ -584,6 +584,100 @@ void test_cast_codec() {
 }
 
 // ---------------------------------------------------------------------------
+// DEATH / GHOST / RESURRECT codec (0x3010-0x3014 — CMB-03, #359/#532). The client
+// DECODES the S→C DEATH_STATE / GHOST_STATE / RESURRECT_RESULT the server pushes through
+// the death→ghost→corpse-run→rez loop, and ENCODES the two empty C→S intents
+// (RELEASE_REQUEST / RESURRECT_REQUEST). Proves the POD codec agrees with the .fbs and that
+// every S→C decoder applies verify-before-GetRoot on garbage. The direct WIRE-COMPAT proof
+// against the server-frozen corpus is in test_golden_cross_decode.
+// ---------------------------------------------------------------------------
+void test_death_codec() {
+    std::puts("[death] DeathState/GhostState/ResurrectResult round-trip + Release/Resurrect "
+              "encode + wrap + verifier");
+
+    // DEATH_STATE (S→C) — every field distinct so a mis-wired field is caught. killer 0 would
+    // be environment; here a real killer. corpse_z 0 (ground), corpse_y negative.
+    codec::DeathState death;
+    death.victim_guid = 0xAABBCCDDull;
+    death.killer_guid = 0x11223344ull;
+    death.corpse_guid = 0xD000000000000001ull;
+    death.corpse_x = 10.5f;
+    death.corpse_y = -20.25f;
+    death.corpse_z = 0.0f;
+    death.auto_release_ms = 6000u;
+    auto death_out = codec::decode_death_state(codec::encode_death_state(death));
+    CHECK(death_out.has_value() && death_out->victim_guid == 0xAABBCCDDull &&
+          death_out->killer_guid == 0x11223344ull &&
+          death_out->corpse_guid == 0xD000000000000001ull && death_out->corpse_x == 10.5f &&
+          death_out->corpse_y == -20.25f && death_out->corpse_z == 0.0f &&
+          death_out->auto_release_ms == 6000u);
+    {
+        Bytes frame = encode_world_frame(kOpDeathState, 11, codec::encode_death_state(death));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x3010 && f->opcode == kOpDeathState);
+    }
+
+    // GHOST_STATE (S→C) — released: a ghost at the graveyard, corpse-run destination guid.
+    codec::GhostState ghost;
+    ghost.player_guid = 0xAABBCCDDull;
+    ghost.graveyard_x = 100.0f;
+    ghost.graveyard_y = 50.0f;
+    ghost.graveyard_z = 0.0f;
+    ghost.corpse_guid = 0xD000000000000001ull;
+    auto ghost_out = codec::decode_ghost_state(codec::encode_ghost_state(ghost));
+    CHECK(ghost_out.has_value() && ghost_out->player_guid == 0xAABBCCDDull &&
+          ghost_out->graveyard_x == 100.0f && ghost_out->graveyard_y == 50.0f &&
+          ghost_out->graveyard_z == 0.0f && ghost_out->corpse_guid == 0xD000000000000001ull);
+    {
+        Bytes frame = encode_world_frame(kOpGhostState, 12, codec::encode_ghost_state(ghost));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x3012 && f->opcode == kOpGhostState);
+    }
+
+    // RESURRECT_RESULT (S→C) — an OK (alive, 100/200) and a typed refusal (TOO_FAR=3, no
+    // health). status rides as the world.fbs ResurrectStatus ordinal.
+    codec::ResurrectResult ok{/*player=*/0xAABBCCDDull, /*status=OK*/ 0, /*health=*/100u,
+                              /*max_health=*/200u};
+    auto ok_out = codec::decode_resurrect_result(codec::encode_resurrect_result(ok));
+    CHECK(ok_out.has_value() && ok_out->player_guid == 0xAABBCCDDull && ok_out->status == 0 &&
+          ok_out->health == 100u && ok_out->max_health == 200u);
+    codec::ResurrectResult too_far{/*player=*/0xAABBCCDDull, /*status=TOO_FAR*/ 3, /*health=*/0u,
+                                   /*max_health=*/200u};
+    auto tf_out = codec::decode_resurrect_result(codec::encode_resurrect_result(too_far));
+    CHECK(tf_out.has_value() && tf_out->status == 3 && tf_out->health == 0u);
+    {
+        Bytes frame = encode_world_frame(kOpResurrectResult, 14, codec::encode_resurrect_result(ok));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x3014 && f->opcode == kOpResurrectResult);
+    }
+
+    // RELEASE_REQUEST / RESURRECT_REQUEST (C→S) — empty bodies the CLIENT encodes. Prove they
+    // encode to a valid (verifiable) FlatBuffer and wrap at the right opcode.
+    Bytes rel = codec::encode_release_request();
+    CHECK(codec::decode_release_request(rel).has_value());
+    {
+        Bytes frame = encode_world_frame(kOpReleaseRequest, 13, rel);
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x3011 && f->opcode == kOpReleaseRequest);
+    }
+    Bytes rez = codec::encode_resurrect_request();
+    CHECK(codec::decode_resurrect_request(rez).has_value());
+    {
+        Bytes frame = encode_world_frame(kOpResurrectRequest, 13, rez);
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x3013 && f->opcode == kOpResurrectRequest);
+    }
+
+    // Verify-before-GetRoot: garbage + empty rejected on every S→C decoder.
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_death_state(garbage).has_value());
+    CHECK(!codec::decode_ghost_state(garbage).has_value());
+    CHECK(!codec::decode_resurrect_result(garbage).has_value());
+    CHECK(!codec::decode_death_state(Bytes{}).has_value());
+    CHECK(!codec::decode_resurrect_result(Bytes{}).has_value());
+}
+
+// ---------------------------------------------------------------------------
 // KNOWN_ABILITIES codec (0x3005 — CMB-01, #457/#456). The client DECODES the S→C
 // spellbook the server pushes at ENTER_WORLD (and re-pushes after a growing
 // TRAINER_LEARN) so the action bar seeds from the REAL learned set + per-ability
@@ -1668,7 +1762,7 @@ std::optional<Bytes> read_golden(const char* name) {
 // two tracks ever drift, this fails — the client analogue of the server conformance gate.
 void test_golden_cross_decode() {
     std::puts("[golden] cross-decode server conformance corpus (INVENTORY_SNAPSHOT + VENDOR_LIST + "
-              "KNOWN_ABILITIES + QUEST_LOG + CAST_RESULT + CHAT)");
+              "KNOWN_ABILITIES + QUEST_LOG + CAST_RESULT + CHAT + DEATH/GHOST/RESURRECT)");
 
     auto inv_bytes = read_golden("if2_inventory_snapshot.bin");
     if (!inv_bytes.has_value()) {
@@ -1779,6 +1873,38 @@ void test_golden_cross_decode() {
     auto cr = cr_bytes.has_value() ? codec::decode_chat_rejected(*cr_bytes) : std::nullopt;
     CHECK(cr.has_value() && cr->channel == 2 /*WHISPER*/ && cr->reason == 5 /*TARGET_OFFLINE*/ &&
           cr->target == "Brynn");
+
+    // if2_death_state.bin / if2_ghost_state.bin / if2_resurrect_result.bin (CMB-03 #359/#532) —
+    // the CLIENT death codec decodes the server-frozen death-loop corpus, proving the wire
+    // contract agrees across tracks. Values mirror conformance.cpp build_corpus:
+    //   DeathState      — victim 0xAABBCCDD, killer 0x11223344, corpse 0xD…01 at (10.5,-20.25,0),
+    //                     6000 ms auto-release
+    //   GhostState      — player 0xAABBCCDD, graveyard (100,50,0), corpse 0xD…01
+    //   ResurrectResult — player 0xAABBCCDD, OK, health 100/200
+    auto ds_bytes = read_golden("if2_death_state.bin");
+    auto ds = ds_bytes.has_value() ? codec::decode_death_state(*ds_bytes) : std::nullopt;
+    CHECK(ds.has_value() && ds->victim_guid == 0x00000000AABBCCDDull &&
+          ds->killer_guid == 0x0000000011223344ull &&
+          ds->corpse_guid == 0xD000000000000001ull && ds->corpse_x == 10.5f &&
+          ds->corpse_y == -20.25f && ds->corpse_z == 0.0f && ds->auto_release_ms == 6000u);
+
+    auto gs_bytes = read_golden("if2_ghost_state.bin");
+    auto gs = gs_bytes.has_value() ? codec::decode_ghost_state(*gs_bytes) : std::nullopt;
+    CHECK(gs.has_value() && gs->player_guid == 0x00000000AABBCCDDull &&
+          gs->graveyard_x == 100.0f && gs->graveyard_y == 50.0f && gs->graveyard_z == 0.0f &&
+          gs->corpse_guid == 0xD000000000000001ull);
+
+    auto rr_bytes = read_golden("if2_resurrect_result.bin");
+    auto rr = rr_bytes.has_value() ? codec::decode_resurrect_result(*rr_bytes) : std::nullopt;
+    CHECK(rr.has_value() && rr->player_guid == 0x00000000AABBCCDDull && rr->status == 0 /*OK*/ &&
+          rr->health == 100u && rr->max_health == 200u);
+
+    // if2_release_request.bin / if2_resurrect_request.bin — the empty C→S intents the CLIENT
+    // encodes also DECODE from the server-frozen bytes (proves the empty-table wire agrees).
+    auto rel_bytes = read_golden("if2_release_request.bin");
+    CHECK(!rel_bytes.has_value() || codec::decode_release_request(*rel_bytes).has_value());
+    auto rez_bytes = read_golden("if2_resurrect_request.bin");
+    CHECK(!rez_bytes.has_value() || codec::decode_resurrect_request(*rez_bytes).has_value());
 }
 
 }  // namespace
@@ -1793,6 +1919,7 @@ int main() {
     test_vitals_codec();
     test_progression_codec();
     test_cast_codec();
+    test_death_codec();
     test_known_abilities_codec();
     test_char_enter_codec();
     test_gossip_codec();

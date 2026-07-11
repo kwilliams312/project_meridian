@@ -204,6 +204,11 @@ func _ready() -> void:
 	# its own say/yell because worldd echoes it).
 	_bus.chat_send_requested.connect(_on_chat_send_requested)
 	_bus.chat_bubble_requested.connect(_on_chat_bubble_requested)
+	# Death loop (CMB-03, #359/#532): the death overlay's Release / Resurrect intents become
+	# the empty RELEASE_REQUEST / RESURRECT_REQUEST frames. DEATH_STATE / GHOST_STATE /
+	# RESURRECT_RESULT are decoded + published back through the SAME bus (never predicted).
+	_bus.release_requested.connect(_on_release_requested)
+	_bus.resurrect_requested.connect(_on_resurrect_requested)
 
 	_interp = MeridianRemoteInterpolator.new()
 	_mover = MeridianMovementController.new()
@@ -295,6 +300,12 @@ func _physics_process(delta: float) -> void:
 		_mover.advance_smoothing(int(delta * 1000.0))
 		if _player != null:
 			_player.position = _mover.get_render_position()
+
+	# 5. Corpse-run (CMB-03, #532): while a ghost, feed the local player's position to the bus
+	# so it measures the run to the corpse and fires RESURRECT_REQUEST once within range. The
+	# server still validates (RESURRECT_TOO_FAR) — this only completes the run without a click.
+	if _bus != null and _bus.is_ghost() and _player != null:
+		_bus.update_ghost_position(_player.position)
 
 	_refresh_hud()
 
@@ -865,7 +876,35 @@ func _route_chat_frame(opcode: int, payload: PackedByteArray) -> void:
 			_bus.publish_chat_rejected(int(m.get("channel", 0)), int(m.get("reason", 0)),
 				String(m.get("target", "")))
 		_:
-			pass  # not a chat opcode — ignore (ClockSync etc.)
+			# Not a chat opcode — try the death/ghost/resurrect decode seam (CMB-03, #532).
+			_route_death_frame(opcode, payload)
+
+
+# Decode a raw death/ghost/resurrect S→C frame (DEATH_STATE / GHOST_STATE / RESURRECT_RESULT)
+# and publish it to the bus (CMB-03, #359/#532). The bus drives the death overlay (dim +
+# countdown → greyscale ghost + corpse-run guidance → alive) and, on a RESURRECT_RESULT OK,
+# restores the local player's health. Presentation-only — never predicted client-side.
+func _route_death_frame(opcode: int, payload: PackedByteArray) -> void:
+	if _net == null or _bus == null:
+		return
+	var s: Dictionary = _net.decode_death_frame(opcode, payload)
+	match String(s.get("kind", "")):
+		"death":
+			_bus.publish_death_state(int(s.get("corpse_guid", 0)),
+				s.get("corpse_position", Vector3.ZERO), int(s.get("auto_release_ms", 0)))
+			print("[world] DEATH_STATE corpse=%d auto_release_ms=%d" % [
+				int(s.get("corpse_guid", 0)), int(s.get("auto_release_ms", 0))])
+		"ghost":
+			_bus.publish_ghost_state(s.get("graveyard_position", Vector3.ZERO),
+				int(s.get("corpse_guid", 0)))
+			print("[world] GHOST_STATE corpse=%d" % int(s.get("corpse_guid", 0)))
+		"resurrect_result":
+			_bus.publish_resurrect_result(int(s.get("status", 0)), int(s.get("health", 0)),
+				int(s.get("max_health", 0)))
+			print("[world] RESURRECT_RESULT status=%d health=%d/%d" % [
+				int(s.get("status", 0)), int(s.get("health", 0)), int(s.get("max_health", 0))])
+		_:
+			pass  # not a death opcode — end of the decode chain (ClockSync etc.)
 
 
 # --- Bus intent handlers (send the matching outbound frame) -------------------
@@ -881,6 +920,29 @@ func _on_cast_requested(ability_id: int, target_guid: int, client_time_ms: int) 
 	if frame.size() > 0:
 		_net.send_bulk(frame)
 	print("[world] CAST_REQUEST -> ability=%d target=%d" % [ability_id, target_guid])
+
+
+# Death loop (CMB-03, #359/#532): the death overlay's Release control → RELEASE_REQUEST (an
+# empty C→S intent). The server answers with a GHOST_STATE; the client never predicts release.
+func _on_release_requested() -> void:
+	if _net == null:
+		return
+	var frame: PackedByteArray = _net.build_release_request_frame()
+	if frame.size() > 0:
+		_net.send_control(frame)
+	print("[world] RELEASE_REQUEST ->")
+
+
+# Death loop (CMB-03, #359/#532): the corpse-run auto-complete or the Resurrect button →
+# RESURRECT_REQUEST (an empty C→S intent). The server answers with a RESURRECT_RESULT (OK +
+# health, or a typed refusal). Never predicted client-side.
+func _on_resurrect_requested() -> void:
+	if _net == null:
+		return
+	var frame: PackedByteArray = _net.build_resurrect_request_frame()
+	if frame.size() > 0:
+		_net.send_control(frame)
+	print("[world] RESURRECT_REQUEST ->")
 
 
 # Chat (SOC-01, #434): a submitted line → CHAT_MESSAGE. `target` matters only for WHISPER; a

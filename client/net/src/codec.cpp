@@ -336,6 +336,89 @@ std::optional<KnownAbilities> decode_known_abilities(const Bytes& buf) {
     return out;
 }
 
+// ---- IF-2 DEATH / GHOST / RESURRECT (0x3010-0x3014 — CMB-03, #359/#532) -----
+
+Bytes encode_death_state(const DeathState& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateDeathState(b, in.victim_guid, in.killer_guid, in.corpse_guid,
+                                  in.corpse_x, in.corpse_y, in.corpse_z, in.auto_release_ms));
+    return to_bytes(b);
+}
+
+std::optional<DeathState> decode_death_state(const Bytes& buf) {
+    const mn::DeathState* t = verify_and_get<mn::DeathState>(buf);
+    if (t == nullptr) return std::nullopt;
+    DeathState out;
+    out.victim_guid = t->victim_guid();
+    out.killer_guid = t->killer_guid();
+    out.corpse_guid = t->corpse_guid();
+    out.corpse_x = t->corpse_x();
+    out.corpse_y = t->corpse_y();
+    out.corpse_z = t->corpse_z();
+    out.auto_release_ms = t->auto_release_ms();
+    return out;
+}
+
+Bytes encode_ghost_state(const GhostState& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateGhostState(b, in.player_guid, in.graveyard_x, in.graveyard_y,
+                                  in.graveyard_z, in.corpse_guid));
+    return to_bytes(b);
+}
+
+std::optional<GhostState> decode_ghost_state(const Bytes& buf) {
+    const mn::GhostState* t = verify_and_get<mn::GhostState>(buf);
+    if (t == nullptr) return std::nullopt;
+    GhostState out;
+    out.player_guid = t->player_guid();
+    out.graveyard_x = t->graveyard_x();
+    out.graveyard_y = t->graveyard_y();
+    out.graveyard_z = t->graveyard_z();
+    out.corpse_guid = t->corpse_guid();
+    return out;
+}
+
+Bytes encode_resurrect_result(const ResurrectResult& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateResurrectResult(b, in.player_guid,
+                                       static_cast<mn::ResurrectStatus>(in.status),
+                                       in.health, in.max_health));
+    return to_bytes(b);
+}
+
+std::optional<ResurrectResult> decode_resurrect_result(const Bytes& buf) {
+    const mn::ResurrectResult* t = verify_and_get<mn::ResurrectResult>(buf);
+    if (t == nullptr) return std::nullopt;
+    ResurrectResult out;
+    out.player_guid = t->player_guid();
+    out.status = static_cast<std::uint16_t>(t->status());
+    out.health = t->health();
+    out.max_health = t->max_health();
+    return out;
+}
+
+Bytes encode_release_request() {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateReleaseRequest(b));
+    return to_bytes(b);
+}
+
+std::optional<bool> decode_release_request(const Bytes& buf) {
+    if (verify_and_get<mn::ReleaseRequest>(buf) == nullptr) return std::nullopt;
+    return true;
+}
+
+Bytes encode_resurrect_request() {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateResurrectRequest(b));
+    return to_bytes(b);
+}
+
+std::optional<bool> decode_resurrect_request(const Bytes& buf) {
+    if (verify_and_get<mn::ResurrectRequest>(buf) == nullptr) return std::nullopt;
+    return true;
+}
+
 // ---- IF-2 EntityUpdate (#87 AoI relay) -------------------------------------
 
 Bytes encode_entity_update(const EntityUpdate& in) {
