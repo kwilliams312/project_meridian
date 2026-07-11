@@ -144,6 +144,49 @@ chars — exactly the shape `worldd`'s `verify_world_manifest` accepts
 BLAKE3 is **vendored** (`src/hash/blake3.{h,cpp}`, no external hashing dep, SAD
 §2.6 decision table) and byte-verified against the published BLAKE3 test vectors.
 
+**chunk-emit** (Tools SAD §3, IF-6, #553) — emits a **procedural Zone-01 fixture
+pack**: the v0 slice of the real mcc chunk stage in *fixture mode*, so client
+stories A–E (chunk streamer, epic #22) can build + test against a
+contract-accurate pack before Forge v1 (#26) / the chunk-exporter (#315) land. It
+goes through the **real** schemas (`schema/chunk/chunk.fbs` `ServerChunk` +
+`chunk-manifest.schema.yaml`) and the **real** vendored BLAKE3, so the fixture is
+byte-shaped exactly like production — it can never rot or diverge from real mcc.
+
+- `mcc chunk-emit` — emit the IF-6 manifest to **stdout**.
+- `mcc chunk-emit --out <dir>` — write the whole fixture under
+  `<dir>/meridian/<ns>/chunks/<zone>/`.
+- `mcc chunk-emit --grid 4 --zone core:zone.zone01 --origin-x -512 --origin-z -512`
+  — tune the N×N grid / zone / non-zero grid origin.
+
+For the default `core:zone.zone01`, a **3×3** grid centred on negative indices
+(Zone-01 spawns at x ≈ −300, §3.1) it produces, in one directory:
+
+- **`zone01.chunks.json`** — the IF-6 manifest (validates against
+  `chunk-manifest.schema.yaml`): non-zero origin, `chunk_size_m` 128, grid bounds,
+  `far_ring`, and one sparse entry per chunk with C2 asset-ID refs
+  (`scene`/`proxy`/`server`), an `aabb`, a load-order `priority`, `deps`, and the
+  per-chunk **BLAKE3-256** (`blake3:<64hex>`) over **both** payloads.
+- **`<cx>_<cz>.chunk.bin`** — a real `ServerChunk` FlatBuffer (baked via the
+  flatc-generated `chunk.fbs` bindings) whose 129×129 f32 `Heightfield` is
+  deliberately **non-flat** (a ramp + shallow bowl, a pure function of zone-local
+  world coords so shared edges join exactly) — the contract-critical artifact the
+  client reads the heightfield from (Q1(a)); a flat-vs-sloped bug is catchable.
+- **`<cx>_<cz>.scn` + `<cx>_<cz>.proxy.scn`** — minimal but valid Godot text
+  scenes (a `MeshInstance3D` whose box Y-extent tracks the chunk's height span, so
+  the placeholder is visibly non-flat per chunk). A full baked terrain mesh is
+  Forge/#315 real-content work, out of scope for the v0 fixture.
+- **`zone01.assets.json`** — the IF-8 asset-ID table so the C2 refs resolve
+  (id → band-0 local index → IF-9 numeric id, allocated lexicographically).
+- **`pack.manifest.json` + `pack.contents.jsonl`** — the IF-5 client pack (same
+  `meridian/pack-manifest@1` shape as **emit-pck**) that **includes the server
+  `.chunk.bin`** per chunk (Q1(a)) alongside the scene/proxy/dep entries.
+
+Deterministic: identical options ⇒ identical bytes (pure integer/float geometry,
+no libm transcendentals, no wall-clock). The round-trip ctest (`mcc-chunk-emit-unit`)
+proves the manifest carries every schema-required field, each `.chunk.bin` passes
+the FlatBuffers verifier as a non-flat 129×129 `ServerChunk`, the recomputed
+per-chunk BLAKE3 matches the manifest, and the pack covers every referenced asset.
+
 **Deferred to later M0 tasks** (reported as stubs / not yet run): full JSON Schema 2020-12
 validation, L004 intRange, L020 asset-sidecar existence, the semantic lints
 (L034/L035/L052/L062), and the `bake` / `emit-pck` stages. Because JSON
@@ -151,13 +194,20 @@ Schema validation is deferred, a file the reference validator would reject at th
 layer (and skip) still reaches mcc's structural lints — the two agree wherever the reference
 actually reaches the structural layer.
 
-## Dependency: yaml-cpp
+## Dependencies: yaml-cpp + FlatBuffers
 
 The parse stage uses [yaml-cpp](https://github.com/jbeder/yaml-cpp) (Tools SAD §2). CMake
 prefers the system package via `find_package(yaml-cpp)` (Homebrew: `brew install yaml-cpp`;
 most distros and vcpkg ship a config), and falls back to a pinned `FetchContent` build
 (`0.8.0`) so CI runners without the system library still build hermetically. Both paths
-expose the same `yaml-cpp::yaml-cpp` target. Zero other new dependencies.
+expose the same `yaml-cpp::yaml-cpp` target.
+
+The **chunk-emit** stage (IF-6) bakes the real `schema/chunk/chunk.fbs` `ServerChunk`
+payload, so mcc also needs **FlatBuffers** — the `flatc` compiler (run at build time to
+generate `chunk_generated.h`, no committed generated code) plus the header-only C++
+runtime. Same find-first / fetch-fallback strategy as `server/libs/proto` (Homebrew:
+`brew install flatbuffers`; pinned FetchContent tag `v25.12.19` as the CI safety net).
+BLAKE3 is vendored (`src/hash/blake3.{h,cpp}`); no other new dependencies.
 
 ## Build
 
@@ -169,7 +219,8 @@ cmake --build build           # -> tools/mcc/build/mcc (+ mcc-tests)
 ./build/mcc fmt --check ../../content   # canonical-form gate
 ./build/mcc link ../../content --report # allocate IF-9 ids + print the idmap
 ./build/mcc emit-sql ../../content --out world.sql   # IF-4 world DB SQL + manifest
-ctest --test-dir build --output-on-failure   # unit tests (fmt, single-file, link, emit-sql)
+./build/mcc chunk-emit --out fixtures                # IF-6 procedural Zone-01 fixture pack
+ctest --test-dir build --output-on-failure   # unit tests (fmt, single-file, link, emit-sql, chunk-emit)
 ```
 
 ### emit-sql tests + the DB-backed integration test

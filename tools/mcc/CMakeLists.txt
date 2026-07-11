@@ -50,6 +50,70 @@ else()
     message(STATUS "mcc: using system yaml-cpp ${yaml-cpp_VERSION}")
 endif()
 
+# ---- FlatBuffers (Tools SAD §3 chunk-emit — IF-6 ServerChunk payload) -------
+# The chunk-emit stage bakes the real schema/chunk/chunk.fbs `ServerChunk`
+# payload, so mcc needs the `flatc` compiler (a build tool) + the header-only C++
+# runtime. Same find-first / fetch-fallback strategy as server/libs/proto so the
+# tree builds on a dev machine (Homebrew `flatbuffers`) AND a clean CI runner.
+# Pinned to the same tag as the server proto lib so flatc output is consistent.
+set(MCC_FLATBUFFERS_PINNED_TAG "v25.12.19"
+    CACHE STRING "FlatBuffers release tag used by the FetchContent fallback")
+
+find_package(FlatBuffers CONFIG QUIET)
+if(FlatBuffers_FOUND)
+    message(STATUS "mcc: using system FlatBuffers (find_package)")
+else()
+    message(STATUS
+        "mcc: system FlatBuffers not found — fetching ${MCC_FLATBUFFERS_PINNED_TAG} via FetchContent")
+    include(FetchContent)
+    set(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(FLATBUFFERS_BUILD_FLATC ON  CACHE BOOL "" FORCE)
+    set(FLATBUFFERS_BUILD_FLATLIB ON CACHE BOOL "" FORCE)
+    set(FLATBUFFERS_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(flatbuffers
+        GIT_REPOSITORY https://github.com/google/flatbuffers.git
+        GIT_TAG        ${MCC_FLATBUFFERS_PINNED_TAG}
+        GIT_SHALLOW    TRUE)
+    FetchContent_MakeAvailable(flatbuffers)
+endif()
+
+# Normalise the flatc executable target and the runtime target (the two provision
+# paths name them differently — imported `flatbuffers::flatc` vs plain `flatc`).
+if(TARGET flatbuffers::flatc)
+    set(MCC_FLATC flatbuffers::flatc)
+elseif(TARGET flatc)
+    set(MCC_FLATC flatc)
+elseif(DEFINED FLATBUFFERS_FLATC_EXECUTABLE)
+    set(MCC_FLATC "${FLATBUFFERS_FLATC_EXECUTABLE}")
+else()
+    message(FATAL_ERROR "mcc: FlatBuffers found but no flatc compiler resolved")
+endif()
+
+if(TARGET flatbuffers::flatbuffers)
+    set(MCC_FLATBUFFERS_RUNTIME flatbuffers::flatbuffers)
+elseif(TARGET flatbuffers)
+    set(MCC_FLATBUFFERS_RUNTIME flatbuffers)
+else()
+    message(FATAL_ERROR "mcc: could not resolve the flatbuffers runtime target")
+endif()
+
+# flatc --cpp on schema/chunk/chunk.fbs -> chunk_generated.h in the build tree
+# (no committed generated code — the .fbs is the single source of truth, same
+# discipline as schema/net). Repo root is two levels up (tools/mcc -> tools -> root).
+set(MCC_CHUNK_FBS "${CMAKE_CURRENT_SOURCE_DIR}/../../schema/chunk/chunk.fbs")
+cmake_path(NORMAL_PATH MCC_CHUNK_FBS)
+set(MCC_CHUNK_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${MCC_CHUNK_GEN_DIR}")
+set(MCC_CHUNK_GENERATED "${MCC_CHUNK_GEN_DIR}/chunk_generated.h")
+
+add_custom_command(
+    OUTPUT  ${MCC_CHUNK_GENERATED}
+    COMMAND ${MCC_FLATC} --cpp --scoped-enums -o "${MCC_CHUNK_GEN_DIR}" ${MCC_CHUNK_FBS}
+    DEPENDS ${MCC_CHUNK_FBS} ${MCC_FLATC}
+    COMMENT "mcc: flatc --cpp on schema/chunk/chunk.fbs"
+    VERBATIM)
+add_custom_target(mcc-chunk-codegen DEPENDS ${MCC_CHUNK_GENERATED})
+
 # ---- Pipeline stages as a small static lib ---------------------------------
 # The stage sources are shared between the `mcc` CLI and the unit-test binary,
 # so they live in an OBJECT/STATIC library rather than being compiled twice.
@@ -66,7 +130,14 @@ add_library(mcc_stages STATIC
     src/stages/content_hash.cpp
     src/stages/emit_sql.cpp
     src/stages/emit_pck.cpp
+    src/stages/chunk_emit.cpp
     src/hash/blake3.cpp)
+
+# chunk_emit.cpp #includes the flatc-generated chunk_generated.h — make the stage
+# lib depend on the codegen and see the generated dir + the flatbuffers runtime.
+add_dependencies(mcc_stages mcc-chunk-codegen)
+target_include_directories(mcc_stages PUBLIC "${MCC_CHUNK_GEN_DIR}")
+target_link_libraries(mcc_stages PUBLIC ${MCC_FLATBUFFERS_RUNTIME})
 
 # The single-file `--watch` loop (check.cpp) uses std::thread; some libstdc++
 # toolchains need an explicit pthread link. Threads::Threads is a no-op where
@@ -230,6 +301,29 @@ else()
 endif()
 
 add_test(NAME mcc-emit-pck-unit COMMAND mcc-emit-pck-tests)
+
+# chunk-emit stage tests (SAD §3, IF-6, #553): the procedural Zone-01 fixture
+# round-trip — the <zone>.chunks.json manifest carries every schema-required field
+# (non-zero origin, negative-index grid bounds, chunk_size_m, far_ring, per-chunk
+# C2 refs + aabb + priority + deps), each <cx>_<cz>.chunk.bin parses via the
+# FlatBuffers verifier as a ServerChunk with a NON-FLAT 129×129 heightfield, the
+# recomputed per-chunk BLAKE3 (over both payloads) matches the manifest, the IF-5
+# pack contains every referenced asset incl. the server chunk, and the whole emit
+# is deterministic (byte-identical across runs).
+add_executable(mcc-chunk-emit-tests
+    tests/test_chunk_emit.cpp)
+target_link_libraries(mcc-chunk-emit-tests PRIVATE mcc_stages)
+if(MSVC)
+    target_compile_options(mcc-chunk-emit-tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(mcc-chunk-emit-tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+# The test reads the checked-in manifest schema to assert every required property
+# is emitted; pass its path so the test needs no argv/cwd.
+target_compile_definitions(mcc-chunk-emit-tests PRIVATE
+    MCC_CHUNK_MANIFEST_SCHEMA="${CMAKE_CURRENT_SOURCE_DIR}/../../schema/chunk/chunk-manifest.schema.yaml")
+
+add_test(NAME mcc-chunk-emit-unit COMMAND mcc-chunk-emit-tests)
 
 # dye/appearance pipeline test (contract ① C1): the CLIENT-side content types
 # classify + validate their envelope (incl. the irregular appearance_catalog
