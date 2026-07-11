@@ -67,6 +67,10 @@ const MeridianEventBusScript := preload("res://hud/event_bus.gd")
 const MeridianHudScript := preload("res://hud/hud.gd")
 # Floating chat bubble (SOC-01, #434) — attached to an entity node for say/yell lines.
 const ChatBubbleScript := preload("res://hud/chat_bubble.gd")
+# Floating combat text (CMB-04, #530) — a POOLED set of billboarded numbers the world
+# scene floats over a target when a CAST_RESULT resolves (driven off the event bus's
+# cast_result_received seam). Pure presentation; server-authoritative.
+const FloatingCombatTextScript := preload("res://scenes/world/floating_combat_text.gd")
 
 var _session: Dictionary = {}
 var _character: Dictionary = {}
@@ -88,6 +92,10 @@ var _camera: Node3D
 
 var _remotes: Node3D                       # container for remote-player nodes
 var _remote_nodes: Dictionary = {}         # guid:int -> Node3D
+
+# Floating combat text (CMB-04, #530): the pooled billboarded-number system, spawned
+# over a target guid on cast_result_received. World-space child (never reparented).
+var _floating_text: Node3D
 
 # Click-to-target (#496): a single reusable selection ring reparented under / positioned
 # over the current target, plus the LMB click-vs-drag tracker (a drag orbits the camera;
@@ -185,6 +193,11 @@ func _ready() -> void:
 	_bus.trainer_learn_requested.connect(_on_trainer_learn_requested)
 	# Combat intent (CMB-01, D-10, #432): a slot press → CAST_REQUEST frame.
 	_bus.cast_requested.connect(_on_cast_requested)
+	# Combat presentation (CMB-04, #530): the server-authoritative CAST_RESULT the bus
+	# re-emits (cast_result_received) floats a pooled damage/heal number over the target.
+	# The world scene owns the 3D nodes + the guid→Node3D map, so it drives this visual.
+	_build_floating_text()
+	_bus.cast_result_received.connect(_on_cast_result)
 	# Chat (SOC-01, #434): a submitted line → CHAT_MESSAGE frame; a delivered SAY/YELL line
 	# floats a bubble over the sender's entity. CHAT_DELIVER/CHAT_REJECTED are decoded +
 	# published back through the SAME bus (never invented client-side — the sender even sees
@@ -587,6 +600,41 @@ func _spawn_remote(guid: int, d: Dictionary) -> void:
 	_remotes.add_child(node)
 	_remote_nodes[guid] = node
 	print("[world] remote ENTER guid=%d at %s (%d remotes)" % [guid, pos, _remote_nodes.size()])
+
+
+# --- Floating combat text (CMB-04, #530) -------------------------------------
+
+# Stand up the pooled floating-number system as a world-space child. Built ONCE in
+# _ready(); it preallocates its Label3D pool so a hit never allocates.
+func _build_floating_text() -> void:
+	_floating_text = FloatingCombatTextScript.new()
+	_floating_text.name = "FloatingCombatText"
+	add_child(_floating_text)
+
+
+# Resolve a guid to the SCENE node that represents it: the local player for our own guid,
+# otherwise the remote node from the #496 guid→Node3D map. Returns null when the guid is
+# not on screen (e.g. an out-of-AoI unit) so callers skip the visual.
+func _node_for_guid(guid: int) -> Node3D:
+	if guid == _my_guid and _my_guid != 0:
+		return _player
+	return _remote_nodes.get(guid, null)
+
+
+# CAST_RESULT resolved (bus.cast_result_received): float a pooled number over the TARGET.
+# Pure presentation — every value comes straight from the server frame (the attack-table
+# outcome + the damage/heal amount); the client invents nothing (Principle 1). Skips when
+# the target has no on-screen node to anchor to.
+func _on_cast_result(result: Dictionary) -> void:
+	if _floating_text == null:
+		return
+	var target_guid := int(result.get("target_guid", 0))
+	var node := _node_for_guid(target_guid)
+	if node == null:
+		return
+	_floating_text.spawn_over(node.global_position, int(result.get("amount", 0)),
+		int(result.get("outcome", FloatingCombatTextScript.OUTCOME_HIT)),
+		bool(result.get("is_heal", false)))
 
 
 func _despawn_remote(guid: int) -> void:
