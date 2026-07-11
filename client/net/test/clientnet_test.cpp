@@ -1668,7 +1668,7 @@ std::optional<Bytes> read_golden(const char* name) {
 // two tracks ever drift, this fails — the client analogue of the server conformance gate.
 void test_golden_cross_decode() {
     std::puts("[golden] cross-decode server conformance corpus (INVENTORY_SNAPSHOT + VENDOR_LIST + "
-              "KNOWN_ABILITIES + QUEST_LOG)");
+              "KNOWN_ABILITIES + QUEST_LOG + CAST_RESULT + CHAT)");
 
     auto inv_bytes = read_golden("if2_inventory_snapshot.bin");
     if (!inv_bytes.has_value()) {
@@ -1742,6 +1742,21 @@ void test_golden_cross_decode() {
         CHECK(q.choice_items.size() == 2 && q.choice_items[0].item_id == 900001u &&
               q.choice_items[1].item_id == 900002u);
     }
+
+    // if2_cast_result.bin (CMB-01/CMB-04 #432/#530) — the CLIENT combat codec decodes the
+    // server-frozen CAST_RESULT (0x3004): a CRIT for 99 damage, target left at 250 HP alive.
+    // The floating-combat-text presentation reads exactly these fields, so this is the
+    // cross-track proof the wire contract that drives the numbers has not drifted. Values
+    // mirror conformance.cpp build_corpus ("if2_cast_result").
+    auto castres_bytes = read_golden("if2_cast_result.bin");
+    auto castres = castres_bytes.has_value() ? codec::decode_cast_result(*castres_bytes)
+                                             : std::nullopt;
+    CHECK(castres.has_value() && castres->ability_id == 0xF0000001u &&
+          castres->caster_guid == 0x00000000AABBCCDDull &&
+          castres->target_guid == 0x0000000011223344ull &&
+          castres->outcome == 4 /*CRIT*/ && castres->amount == 99u && !castres->is_heal &&
+          castres->target_health == 250u && !castres->target_dead &&
+          castres->server_time_ms == 0x0000000000009999ull);
 
     // if2_chat_message.bin / if2_chat_deliver.bin / if2_chat_rejected.bin (SOC-01 #367/#434) —
     // the CLIENT chat codec decodes the server-frozen chat corpus, proving the wire contract
