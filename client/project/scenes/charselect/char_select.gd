@@ -43,6 +43,14 @@ signal enter_world_requested(character: Dictionary)
 const WORLD_SCENE: String = "res://scenes/world/world.tscn"
 const LOCAL_DEMO_SCENE: String = "res://scenes/world/camera_demo.tscn"
 
+# MeridianContentDB (#477), referenced by PATH (not the bare `ContentDB` autoload
+# name, and not the bare class name): the headless verify harness runs standalone
+# --script, where autoloads never initialize, and a freshly-added class_name is
+# invisible to a stale .godot global class cache — preload is immune to both.
+# ContentDb.instance() returns the autoload in the running app (it registers
+# itself in _init), else a shared lazily-created instance (verify runs).
+const ContentDb := preload("res://content/content_db.gd")
+
 @onready var _account_label: Label = %AccountLabel
 @onready var _char_list: ItemList = %CharList
 @onready var _name_edit: LineEdit = %NameEdit
@@ -62,6 +70,7 @@ var _account: String = ""
 var _session: Dictionary = {}
 var _pending_status: String = ""            # set by configure(), shown once in _ready
 var _preview_body: MeshInstance3D = null    # shared placeholder mesh (skin tint applies here, #435)
+var _content_missing: bool = false          # no appearance catalog for the selected race (#477, spec §6)
 
 # --- Server-authoritative character CRUD over the net thread (#279 / D-35) -----
 # When there is a live session (grant + WorldHello frame + worldd address), this
@@ -140,6 +149,8 @@ func _ready() -> void:
 	_name_edit.text_submitted.connect(func(_t: String) -> void: _on_create_pressed())
 	# Skin choice tints the shared preview so the appearance pick is visible (#435).
 	_skin_option.item_selected.connect(func(_i: int) -> void: _apply_preview_skin())
+	# Changing race re-drives the appearance pickers from that race's catalog (#477).
+	_race_option.item_selected.connect(func(_i: int) -> void: _populate_appearance_pickers(_race_option.get_selected_id()))
 
 	_refresh_list()
 	# A pending status (e.g. a world connect-failure the player was bounced back with,
@@ -196,9 +207,13 @@ func _process(_delta: float) -> void:
 		_net.pump()
 
 
-# Fill the race + class + appearance pickers. Race/class come from the M0-frozen roster;
-# hair/face/skin from the M1 appearance placeholder set (MeridianAppearance — see the gap
-# note there). Each item carries its id so create() reads ids, never list indices.
+# Fill the race + class + appearance pickers. Race/class come from the M0-frozen
+# roster; hair/face/skin are CATALOG-DRIVEN off MeridianContentDB (#477, spec ② §3):
+# the picker lists come from the appearance catalog for the selected race/sex, so
+# the ids offered are exactly the stable preset ints the server validates. When no
+# catalog is mounted for a race the pickers disable with a "content missing" state
+# (spec §6) instead of showing empty lists. Each item carries its id so create()
+# reads ids, never list indices.
 func _populate_pickers() -> void:
 	_race_option.clear()
 	for r in MeridianRoster.RACES:
@@ -206,27 +221,53 @@ func _populate_pickers() -> void:
 	_class_option.clear()
 	for c in MeridianRoster.CLASSES:
 		_class_option.add_item(String(c["name"]), int(c["id"]))
-	# Appearance set (#435): hair / face / skin preset pickers.
-	_hair_option.clear()
-	for h in MeridianAppearance.HAIR:
-		_hair_option.add_item(String(h["name"]), int(h["id"]))
-	_face_option.clear()
-	for f in MeridianAppearance.FACE:
-		_face_option.add_item(String(f["name"]), int(f["id"]))
-	_skin_option.clear()
-	for s in MeridianAppearance.SKIN:
-		_skin_option.add_item(String(s["name"]), int(s["id"]))
-	# Default to the M1-playable pair (Ardent / Vanguard) + the first appearance preset.
+	# Default to the M1-playable pair (Ardent / Vanguard), then drive the appearance
+	# pickers from that race's catalog.
 	_select_option_by_id(_race_option, MeridianRoster.DEFAULT_RACE_ID)
 	_select_option_by_id(_class_option, MeridianRoster.DEFAULT_CLASS_ID)
-	_select_option_by_id(_hair_option, MeridianAppearance.DEFAULT_HAIR_ID)
-	_select_option_by_id(_face_option, MeridianAppearance.DEFAULT_FACE_ID)
-	_select_option_by_id(_skin_option, MeridianAppearance.DEFAULT_SKIN_ID)
+	_populate_appearance_pickers(_race_option.get_selected_id())
+
+
+# (Re)fill the hair/face/skin pickers from the appearance catalog for `race_id`
+# (M1 sex 0 = male). A mounted catalog → each preset id becomes a picker item and
+# the pickers enable; no catalog → the pickers disable with a "(content missing)"
+# placeholder (spec §6), and _selected_appearance falls back to the default record.
+func _populate_appearance_pickers(race_id: int) -> void:
+	var cat: Dictionary = ContentDb.instance().catalog(race_id, 0)
+	var presets: Dictionary = cat.get("presets", {})
+	_content_missing = cat.is_empty() or not presets.has("hair")
+	_fill_preset_picker(_hair_option, presets.get("hair", []), "Hair")
+	_fill_preset_picker(_face_option, presets.get("face", []), "Face")
+	_fill_preset_picker(_skin_option, presets.get("skin", []), "Skin")
+	if not _content_missing:
+		# Default to the first preset of each channel (the catalog lists are ordered).
+		_select_option_by_id(_hair_option, MeridianAppearance.DEFAULT_HAIR_ID)
+		_select_option_by_id(_face_option, MeridianAppearance.DEFAULT_FACE_ID)
+		_select_option_by_id(_skin_option, MeridianAppearance.DEFAULT_SKIN_ID)
+	_apply_preview_skin()
+
+
+# Fill one preset picker from a catalog preset list ([{id, model}, ...]). Each item's
+# id IS the stable preset int. An empty list (no catalog for this race) disables the
+# picker with a single "(content missing)" item so the state is visible, not blank.
+func _fill_preset_picker(option: OptionButton, presets: Array, channel: String) -> void:
+	option.clear()
+	if presets.is_empty():
+		option.add_item("(content missing)")
+		option.disabled = true
+		return
+	for p in presets:
+		option.add_item("%s %d" % [channel, int(p["id"])], int(p["id"]))
+	option.disabled = false
 
 
 # The appearance record the create form currently shows: {version, hair, face, skin}.
-# Ids come straight off the pickers (each item id IS the preset id).
+# Ids come straight off the pickers (each item id IS the preset id). With no catalog
+# for the selected race the record falls back to the default (the server clamps any
+# out-of-range appearance, so a create still succeeds — spec §9).
 func _selected_appearance() -> Dictionary:
+	if _content_missing:
+		return MeridianAppearance.default_appearance()
 	return {
 		"version": MeridianAppearance.VERSION,
 		"hair": _hair_option.get_selected_id(),

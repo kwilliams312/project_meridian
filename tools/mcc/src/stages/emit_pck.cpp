@@ -150,6 +150,139 @@ int as_int(const YAML::Node& n, int fallback) {
     }
 }
 
+// ---- pack.data.json field extraction (M0 client-render data, issue #477) -----
+//
+// The manifest/contents carry only id->resource->hash; the character assembler
+// needs the visual FIELDS (appearance catalogs, item `visual.worn`, dye colors).
+// These renderers walk the already-parsed + validated YAML (so shapes are known)
+// and emit deterministic JSON objects. Numeric formatting is plain base-10 (no
+// locale); strings go through json_quote. Keyed later by IF-9 numeric id.
+
+// One `{ "id": <int> }`-carrying preset entry: `{ "id": N, "model": "<artRef>" }`.
+// hair/face/skin all normalize to {id, model} so the client has a uniform preset
+// shape (the binding ContentDB.catalog contract). `art_key` is the schema's field
+// name for the channel's asset ref (hair->model, face->texture, skin->palette).
+std::string render_presets(const YAML::Node& list, const char* art_key) {
+    std::string out = "[";
+    bool first = true;
+    if (list && list.IsSequence()) {
+        for (const auto& p : list) {
+            out += first ? "" : ", ";
+            first = false;
+            const int id = has(p, "id") ? as_int(p["id"], 0) : 0;
+            const std::string ref = has(p, art_key) ? as_str(p[art_key]) : std::string();
+            out += "{ \"id\": " + std::to_string(id) + ", \"model\": " + json_quote(ref) + " }";
+        }
+    }
+    out += "]";
+    return out;
+}
+
+// appearance_catalog -> the field tail `"race":..., "sex":..., "skeleton":...,
+// "body_model":..., "presets":{hair,face,skin}` (no outer braces — the caller
+// wraps it in the row object alongside id/numeric_id, mirroring dye/item bodies).
+std::string render_appearance(const YAML::Node& n) {
+    std::string out;
+    out += "\"race\": " + json_quote(has(n, "race") ? as_str(n["race"]) : "");
+    out += ", \"sex\": " + json_quote(has(n, "sex") ? as_str(n["sex"]) : "");
+    out += ", \"skeleton\": " + json_quote(has(n, "skeleton") ? as_str(n["skeleton"]) : "");
+    out += ", \"body_model\": " + json_quote(has(n, "body_model") ? as_str(n["body_model"]) : "");
+    const YAML::Node presets = n["presets"];
+    out += ", \"presets\": { \"hair\": " + render_presets(presets ? presets["hair"] : YAML::Node(), "model");
+    out += ", \"face\": " + render_presets(presets ? presets["face"] : YAML::Node(), "texture");
+    out += ", \"skin\": " + render_presets(presets ? presets["skin"] : YAML::Node(), "palette");
+    out += " }";
+    return out;
+}
+
+// A worn `models` list -> `[{ "model": ..., "mirror": ... }, ...]`. Shared by the
+// base worn block AND each race_overrides entry — the schema gives both the SAME
+// per-model shape (model + optional mirror, default "none"), and the assembler
+// substitutes overrides wholesale, so the emit must be byte-faithful for both.
+std::string render_model_list(const YAML::Node& list) {
+    std::string out = "[";
+    if (list && list.IsSequence()) {
+        bool first = true;
+        for (const auto& m : list) {
+            out += first ? "" : ", ";
+            first = false;
+            const std::string model = has(m, "model") ? as_str(m["model"]) : std::string();
+            const std::string mirror = has(m, "mirror") ? as_str(m["mirror"]) : "none";
+            out += "{ \"model\": " + json_quote(model) + ", \"mirror\": " + json_quote(mirror) + " }";
+        }
+    }
+    out += "]";
+    return out;
+}
+
+// A worn `hides` list -> `["hands", ...]`. Shared by the base block + overrides.
+std::string render_hides(const YAML::Node& list) {
+    std::string out = "[";
+    if (list && list.IsSequence()) {
+        bool first = true;
+        for (const auto& h : list) {
+            out += first ? "" : ", ";
+            first = false;
+            out += json_quote(as_str(h));
+        }
+    }
+    out += "]";
+    return out;
+}
+
+// item.visual.worn -> { models:[{model,mirror}], hides:[], attach:{socket[,sheath_socket]},
+// dye_channels:[], race_overrides:{race:{models,hides}} }. Returns "" when the item
+// has no `visual.worn` (non-wearables are omitted from the data file entirely).
+std::string render_worn(const YAML::Node& item) {
+    if (!has(item, "visual") || !has(item["visual"], "worn")) return std::string();
+    const YAML::Node worn = item["visual"]["worn"];
+    std::string out = "{ \"models\": ";
+    out += render_model_list(worn["models"]);
+    out += ", \"hides\": ";
+    out += render_hides(worn["hides"]);
+    out += ", \"attach\": ";
+    if (has(worn, "attach")) {
+        const YAML::Node at = worn["attach"];
+        out += "{ \"socket\": " + json_quote(has(at, "socket") ? as_str(at["socket"]) : "");
+        // sheath_socket is schema-optional: OMIT the key when absent (never "").
+        if (has(at, "sheath_socket"))
+            out += ", \"sheath_socket\": " + json_quote(as_str(at["sheath_socket"]));
+        out += " }";
+    } else {
+        out += "{}";
+    }
+    out += ", \"dye_channels\": [";
+    if (has(worn, "dye_channels") && worn["dye_channels"].IsSequence()) {
+        bool first = true;
+        for (const auto& d : worn["dye_channels"]) {
+            out += first ? "" : ", ";
+            first = false;
+            out += json_quote(as_str(d));
+        }
+    }
+    out += "], \"race_overrides\": ";
+    // race_overrides maps a raceName -> { models, hides } (the schema's full
+    // override shape). Serialized with the SAME renderers as the base block so
+    // nothing authored is lost; keys sorted (std::map) for byte-determinism.
+    if (has(worn, "race_overrides") && worn["race_overrides"].IsMap()) {
+        std::map<std::string, YAML::Node> ordered;
+        for (const auto& kv : worn["race_overrides"]) ordered[kv.first.Scalar()] = kv.second;
+        out += "{";
+        bool first = true;
+        for (const auto& kv : ordered) {
+            out += first ? " " : ", ";
+            first = false;
+            out += json_quote(kv.first) + ": { \"models\": " + render_model_list(kv.second["models"]);
+            out += ", \"hides\": " + render_hides(kv.second["hides"]) + " }";
+        }
+        out += first ? "}" : " }";
+    } else {
+        out += "{}";
+    }
+    out += " }";
+    return out;
+}
+
 }  // namespace
 
 EmitPckResult emit_pck(const model::ContentModel& model, const LinkResult& linked,
@@ -205,6 +338,15 @@ EmitPckResult emit_pck(const model::ContentModel& model, const LinkResult& linke
     const auto mit = linked.idmaps.find(ns);
     result.id_band = mit != linked.idmaps.end() ? mit->second.band : 0;
 
+    // pack.data.json field rows (issue #477): the client-render fields the
+    // manifest does not carry, collected per visual type and keyed by numeric id.
+    struct DataRow {
+        std::uint32_t numeric_id;
+        std::string id;
+        std::string body;   // the type-specific JSON tail (after id/numeric_id)
+    };
+    std::vector<DataRow> appearance_rows, dye_rows, item_rows;
+
     // ---- Build the entry list: every content entity + asset sidecar in this
     // namespace, with its IF-9 numeric id, res:// path, and per-resource hash.
     for (const auto& pf : model.files) {
@@ -237,6 +379,21 @@ EmitPckResult emit_pck(const model::ContentModel& model, const LinkResult& linke
                 : std::string();
         e.res_path = res_path_for(pf.id, pf.file.kind, asset_class);
         e.resource_hash = resource_hash_of(pf);
+
+        // Collect the client-render field data for the visual types (issue #477).
+        // Only content entities carry these; assets/other types are manifest-only.
+        if (pf.file.kind == model::FileKind::Content && numeric != 0) {
+            if (pf.file.file_type == "appearance") {
+                appearance_rows.push_back({numeric, pf.id, render_appearance(pf.root)});
+            } else if (pf.file.file_type == "dye") {
+                const std::string color = has(pf.root, "color") ? as_str(pf.root["color"]) : "";
+                dye_rows.push_back({numeric, pf.id, "\"color\": " + json_quote(color)});
+            } else if (pf.file.file_type == "item") {
+                std::string worn = render_worn(pf.root);
+                if (!worn.empty())
+                    item_rows.push_back({numeric, pf.id, "\"worn\": " + worn});
+            }
+        }
         result.entries.push_back(std::move(e));
     }
 
@@ -287,6 +444,40 @@ EmitPckResult emit_pck(const model::ContentModel& model, const LinkResult& linke
           << ",\"hash\":" << json_quote(e.resource_hash) << "}\n";
     }
     result.contents_jsonl = p.str();
+
+    // ---- Render pack.data.json (M0 client-render fields, issue #477). Each type
+    // array is sorted by numeric id (ties by string id) for byte-determinism, and
+    // the top-level key order is fixed (schema, namespace, then types alphabetically).
+    auto by_numeric = [](const DataRow& a, const DataRow& b) {
+        if (a.numeric_id != b.numeric_id) return a.numeric_id < b.numeric_id;
+        return a.id < b.id;
+    };
+    std::sort(appearance_rows.begin(), appearance_rows.end(), by_numeric);
+    std::sort(dye_rows.begin(), dye_rows.end(), by_numeric);
+    std::sort(item_rows.begin(), item_rows.end(), by_numeric);
+
+    auto render_array = [](std::ostringstream& os, const std::vector<DataRow>& rows) {
+        os << "[";
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            os << (i == 0 ? "\n" : ",\n");
+            os << "    { \"id\": " << json_quote(rows[i].id)
+               << ", \"numeric_id\": " << rows[i].numeric_id
+               << ", " << rows[i].body << " }";
+        }
+        os << (rows.empty() ? "" : "\n  ") << "]";
+    };
+    std::ostringstream d;
+    d << "{\n";
+    d << "  \"schema\": \"meridian/pack-data@1\",\n";
+    d << "  \"namespace\": " << json_quote(ns) << ",\n";
+    d << "  \"appearance\": ";
+    render_array(d, appearance_rows);
+    d << ",\n  \"dye\": ";
+    render_array(d, dye_rows);
+    d << ",\n  \"item\": ";
+    render_array(d, item_rows);
+    d << "\n}\n";
+    result.data_json = d.str();
 
     if (!diags.ok()) result.ok = false;
     return result;

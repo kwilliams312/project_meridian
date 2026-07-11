@@ -1,0 +1,29 @@
+# meridian/appearance_catalog@1 — the ardent/male character-create catalog
+# (contract ①/T3 §5.1, client-assembler spec ② §3). M1 enablement body: this is
+# the ONE catalog the client character assembler (spec ②) drives its pickers and
+# preview from, referencing the committed blockout rig + body (spec ④/T5:
+# core:art.char.ardent.male.skeleton / .base). Real sculpted meshes, distinct
+# hair meshes, face textures and skin palettes are spec ⑤ — until then every
+# preset points at the blockout base as a schema-valid placeholder (no new asset
+# sidecars are allocated here). Preset ids are the STABLE integers the server
+# validates + the per-character appearance record stores (§5.2); they never
+# renumber. morphs ship at 0 for M1 (§2.5 crowd budget).
+schema: meridian/appearance_catalog@1
+id: core:appearance.ardent.male
+race: ardent
+sex: male
+skeleton: core:art.char.ardent.male.skeleton
+body_model: core:art.char.ardent.male.base
+presets:
+  hair:
+    - { id: 1, model: core:art.char.ardent.male.base }
+    - { id: 2, model: core:art.char.ardent.male.base }
+    - { id: 3, model: core:art.char.ardent.male.base }
+  face:
+    - { id: 1, texture: core:art.char.ardent.male.base }
+    - { id: 2, texture: core:art.char.ardent.male.base }
+    - { id: 3, texture: core:art.char.ardent.male.base }
+  skin:
+    - { id: 1, palette: core:art.char.ardent.male.base }
+    - { id: 2, palette: core:art.char.ardent.male.base }
+    - { id: 3, palette: core:art.char.ardent.male.base }

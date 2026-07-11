@@ -245,6 +245,18 @@ int emit_pck_content(const std::string& content_dir, const std::string& out_dir,
             }
             f << emitted.contents_jsonl;
         }
+        {
+            // pack.data.json — M0 client-render field data (issue #477). Written
+            // alongside the manifest so MeridianContentDB can resolve appearance
+            // catalogs, item worn data, and dye colors the manifest omits.
+            std::ofstream f(pack_root / "pack.data.json",
+                            std::ios::binary | std::ios::trunc);
+            if (!f) {
+                err << "mcc emit-pck: could not write pack.data.json\n";
+                return 2;
+            }
+            f << emitted.data_json;
+        }
     }
     return 0;
 }

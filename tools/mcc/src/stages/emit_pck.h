@@ -82,6 +82,14 @@ struct PckEntry {
 struct EmitPckResult {
     std::string manifest_json;      // pack.manifest.json (the IF-5 contract)
     std::string contents_jsonl;     // M0 directory-manifest pack (one entry/line)
+    // pack.data.json — the M0 CLIENT-READABLE field data the character assembler
+    // (spec ②) needs but the manifest/contents (id->resource->hash only) do not
+    // carry: appearance catalogs, item `visual.worn`, and dye colors. The pck's
+    // per-type `tables/<type>.bin` are declarative res:// paths at M0 (no Godot
+    // importer yet), so the visual FIELDS ride this dep-free JSON sidecar instead,
+    // keyed by IF-9 numeric id. Deterministic (arrays sorted by numeric id, fixed
+    // key order) exactly like the manifest. Read by MeridianContentDB (issue #477).
+    std::string data_json;
     std::string pack_namespace;     // the pack this result describes
     std::string pack_version;       // semver from pack.yaml
     std::string content_hash;       // 64-hex BLAKE3 (== emit-sql's world_manifest)
