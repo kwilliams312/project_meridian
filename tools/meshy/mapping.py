@@ -13,6 +13,11 @@ names into a :class:`ConversionPlan`:
   by **longest matching name prefix** — Meshy/Mixamo-style twist and roll bones
   are named as suffixed children of the joint they help, so the flat name alone
   determines the ancestor (the pure function never sees the armature hierarchy).
+  Digit-adjacent suffixes (``Spine3`` after mapped ``Spine``) are **not**
+  helper-shaped: numbered names are how real chain segments are spelled
+  (``Spine1``/``Spine2`` are direct map entries), so folding an unknown one into
+  its prefix would silently mis-convert a whole segment — they land in
+  ``unmapped`` instead (hard error; PR #523 review).
 - **unmapped** — a bone with neither a map entry nor a mapped-ancestor prefix.
   A non-empty ``unmapped`` list is a **hard error at the CLI boundary** (the
   table grows deliberately, never silently); this module surfaces the names,
@@ -83,21 +88,32 @@ def load_map(version: str, *, path: Path = _DEFAULT_MAP_PATH) -> BoneMap:
             f"unknown Meshy model version {version!r}; "
             f"known versions: {sorted(versions)}"
         )
+    verified = block.get("verified", False)
+    if not isinstance(verified, bool):
+        # The verified flag is the unverified-map gate's spine: a quoted YAML
+        # string "false" is truthy and would UNLOCK the gate. Refuse loudly.
+        raise MappingError(
+            f"{path}: version {version!r} has non-boolean 'verified' "
+            f"({verified!r}) — must be a bare YAML true/false"
+        )
     return BoneMap(
         version=version,
-        verified=bool(block.get("verified", False)),
+        verified=verified,
         bones=dict(block.get("bones") or {}),
     )
 
 
-def _is_camel_or_sep_boundary(ch: str) -> bool:
-    """True where ``ch`` starts a new name token: uppercase, digit, or separator.
+def _is_helper_suffix_boundary(ch: str) -> bool:
+    """True where ``ch`` starts a helper-style suffix: uppercase or separator.
 
     This keeps ``LeftForeArm`` from matching a hypothetical ``LeftForeArmpit``
-    (lowercase 'p' — same token) while still matching ``LeftForeArmTwist`` (upper
-    'T'), ``LeftForeArm1`` (digit), and ``LeftForeArm_twist`` (separator '_').
+    (lowercase 'p' — same token) while matching ``LeftForeArmTwist`` (upper 'T')
+    and ``LeftForeArm_twist`` (separator '_'). Digits are deliberately NOT a
+    helper boundary: ``Spine3`` after a mapped ``Spine`` is a numbered chain
+    segment, not a twist helper — treating it as one would silently merge real
+    geometry into the wrong bone. Numbered unknowns go to ``unmapped``.
     """
-    return ch.isupper() or ch.isdigit() or not ch.isalnum()
+    return ch.isupper() or not ch.isalnum()
 
 
 def _nearest_mapped_ancestor(bone: str, mapped_by_len_desc: list[str]) -> str | None:
@@ -106,7 +122,7 @@ def _nearest_mapped_ancestor(bone: str, mapped_by_len_desc: list[str]) -> str | 
         if bone == candidate or not bone.startswith(candidate):
             continue
         remainder = bone[len(candidate) :]
-        if remainder and _is_camel_or_sep_boundary(remainder[0]):
+        if remainder and _is_helper_suffix_boundary(remainder[0]):
             return candidate
     return None
 

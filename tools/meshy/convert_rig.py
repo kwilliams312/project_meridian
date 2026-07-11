@@ -26,13 +26,14 @@ Pipeline (spec ④ §7.3):
 Only argument/plan parsing is pure/importable; everything touching ``bpy`` lives
 in functions marked ``# pragma: no cover`` (CI never runs Blender — spec ④ §10).
 
-Re-pose limitation (DONE_WITH_CONCERNS, story #506): the seed map is UNVERIFIED,
-so Meshy's true rest orientation is unknown. This converter binds the mesh (at
-its imported rest) to the canonical armature's rest; that is correct when the
-Meshy rest already matches the canonical T-pose (as the committed fixture is
-authored). A geometric per-bone re-pose (rotation deltas from the canonical rest)
-must be added and validated once a real Meshy sample verifies the map — until
-then convert-rig refuses unverified maps unless --allow-unverified-map is passed.
+Re-pose limitation (DONE_WITH_CONCERNS, story #506; tracked in issue #524): the
+seed map is UNVERIFIED, so Meshy's true rest orientation is unknown. This
+converter binds the mesh (at its imported rest) to the canonical armature's
+rest; that is correct when the Meshy rest already matches the canonical T-pose
+(as the committed fixture is authored). A geometric per-bone re-pose (rotation
+deltas from the canonical rest) must be added and validated with the #524 map
+verification — until then convert-rig refuses unverified maps unless
+--allow-unverified-map is passed.
 """
 
 from __future__ import annotations
@@ -80,21 +81,52 @@ def load_plan(path: Path) -> tuple[dict[str, str], dict[str, str]]:
 def merge_vertex_group(
     mesh_obj, src_name: str, dst_name: str
 ) -> None:  # pragma: no cover
-    """Add ``src_name`` group's per-vertex weights into ``dst_name``, drop src.
+    """Fold ``src_name`` group's per-vertex weights into ``dst_name``, drop src.
 
     Creates ``dst_name`` if absent (a merge target whose canonical bone had no
     directly-mapped Meshy source). No-op when the mesh lacks ``src_name``.
+
+    Two-pass by design (PR #523 review, items 1+2):
+
+    - **Pass 1 is read-only.** ``dst.add()`` can grow the very ``vert.groups``
+      collection being iterated (bpy iterator-invalidation hazard on vertices
+      not yet in ``dst``), so all (vertex, merged-weight) pairs are collected
+      before any mutation.
+    - **The merged weight is computed numerically** (``src + dst``) and written
+      once with ``"REPLACE"`` — never ``"ADD"``, whose in-Blender accumulation
+      clamps at 1.0 and can shift the vertex's relative weight distribution
+      before normalize runs. glTF imports arrive with per-vertex weight sums
+      ≤ 1.0 (WEIGHTS_0 is normalized), so ``src + dst`` cannot exceed 1.0 for
+      any glb input; if a non-glb source ever violates that, the clamp below
+      warns loudly instead of silently distorting (tracked with #524).
     """
     vgs = mesh_obj.vertex_groups
     src = vgs.get(src_name)
     if src is None:
         return
     dst = vgs.get(dst_name) or vgs.new(name=dst_name)
-    src_index = src.index
+    src_index, dst_index = src.index, dst.index
+
+    merged: list[tuple[int, float]] = []
     for vert in mesh_obj.data.vertices:
+        src_w = dst_w = 0.0
         for g in vert.groups:
-            if g.group == src_index and g.weight > 0.0:
-                dst.add([vert.index], g.weight, "ADD")
+            if g.group == src_index:
+                src_w = g.weight
+            elif g.group == dst_index:
+                dst_w = g.weight
+        if src_w > 0.0:
+            merged.append((vert.index, src_w + dst_w))
+
+    for vert_index, weight in merged:
+        if weight > 1.0 + 1e-6:
+            print(
+                f"[convert_rig] WARNING: merged weight {weight:.4f} > 1.0 on "
+                f"vertex {vert_index} ({src_name} + {dst_name}) — clamping; "
+                f"input weights were not normalized",
+                file=sys.stderr,
+            )
+        dst.add([vert_index], min(weight, 1.0), "REPLACE")
     vgs.remove(src)
 
 
@@ -128,39 +160,61 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - requires b
     out_glb = Path(args.out)
     renames, merges = load_plan(Path(args.plan_json))
 
-    # --- 1. Fresh scene, import the Meshy rig. ---
-    bpy.ops.object.select_all(action="SELECT")
-    bpy.ops.object.delete(use_global=False)
+    # --- 1. Fresh scene, import the Meshy rig. Purge via the data API, not
+    # ops.select_all+delete: the factory startup scene can hold HIDDEN objects
+    # (Blender 5.0 ships a hidden Icosphere) that ops-selection never reaches —
+    # they would then surface in the imported-mesh list and break conversion. ---
+    for obj in list(bpy.data.objects):
+        bpy.data.objects.remove(obj, do_unlink=True)
     bpy.ops.import_scene.gltf(filepath=str(in_glb))
 
     meshes = _scene_objects_by_type(bpy, "MESH")
     if not meshes:
         print(f"[convert_rig] ERROR: no mesh in {in_glb}", file=sys.stderr)
         return 1
-    mesh_obj = meshes[0]
+    if len(meshes) > 1:
+        # Every mesh is converted (PR #523 review, item 3) — but multi-mesh
+        # Meshy output is unexpected for a single rigged character, so say so.
+        print(
+            f"[convert_rig] note: {len(meshes)} meshes in {in_glb}; converting all",
+            file=sys.stderr,
+        )
 
-    # --- 2. Rename + merge vertex groups onto canonical bone names. ---
-    apply_plan_to_vertex_groups(mesh_obj, renames, merges)
+    # --- 2. Rename + merge vertex groups onto canonical bone names (ALL meshes —
+    # a second mesh silently keeping Meshy groups would defeat the I021 gate). ---
+    for mesh_obj in meshes:
+        apply_plan_to_vertex_groups(mesh_obj, renames, merges)
 
-    # --- 3. Drop the Meshy armature; re-bind to a fresh canonical armature. ---
+    # --- 3. Drop the Meshy armature; re-bind every mesh to one fresh canonical
+    # armature. ---
     for arm in _scene_objects_by_type(bpy, "ARMATURE"):
         bpy.data.objects.remove(arm, do_unlink=True)
-    for mod in list(mesh_obj.modifiers):
-        if mod.type == "ARMATURE":
-            mesh_obj.modifiers.remove(mod)
-
     canonical_arm = generate_rig.build_armature("ardent_male")
-    mesh_obj.parent = canonical_arm
-    arm_mod = mesh_obj.modifiers.new(name="Armature", type="ARMATURE")
-    arm_mod.object = canonical_arm
+    for mesh_obj in meshes:
+        for mod in list(mesh_obj.modifiers):
+            if mod.type == "ARMATURE":
+                mesh_obj.modifiers.remove(mod)
+        mesh_obj.parent = canonical_arm
+        arm_mod = mesh_obj.modifiers.new(name="Armature", type="ARMATURE")
+        arm_mod.object = canonical_arm
 
-    # --- 4. Limit ≤4 influences + normalize, then export. ---
-    bpy.ops.object.select_all(action="DESELECT")
-    mesh_obj.select_set(True)
-    bpy.context.view_layer.objects.active = mesh_obj
-    bpy.ops.object.mode_set(mode="OBJECT")
-    bpy.ops.object.vertex_group_limit_total(limit=4)
-    bpy.ops.object.vertex_group_normalize_all()
+    # --- 4. Limit ≤4 influences + normalize (per mesh), then export. ---
+    for mesh_obj in meshes:
+        if not mesh_obj.vertex_groups:
+            # An unskinned mesh (no groups) cannot pass limit/normalize's poll;
+            # it simply rides along unweighted rather than crashing the pass.
+            print(
+                f"[convert_rig] WARNING: mesh '{mesh_obj.name}' has no vertex "
+                f"groups (unskinned) — bound to the armature without weights",
+                file=sys.stderr,
+            )
+            continue
+        bpy.ops.object.select_all(action="DESELECT")
+        mesh_obj.select_set(True)
+        bpy.context.view_layer.objects.active = mesh_obj
+        bpy.ops.object.mode_set(mode="OBJECT")
+        bpy.ops.object.vertex_group_limit_total(limit=4)
+        bpy.ops.object.vertex_group_normalize_all()
 
     out_glb.parent.mkdir(parents=True, exist_ok=True)
     bpy.ops.export_scene.gltf(

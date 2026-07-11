@@ -274,10 +274,12 @@ def cmd_convert_rig(args: argparse.Namespace) -> int:
     reached once the request is proven valid, so CI (no Blender, no live Meshy)
     can exercise every rejection path.
     """
-    # --- Version gate: BEFORE touching the glb. ---
+    # --- Version/map gate: BEFORE touching the glb. MappingError also covers a
+    # structurally invalid map (e.g. non-boolean `verified:`) — refuse rather
+    # than let a malformed flag unlock the unverified-map gate.
     try:
         bone_map = mapping.load_map(args.meshy_version)
-    except mapping.UnknownVersionError as exc:
+    except mapping.MappingError as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2
 
@@ -319,12 +321,16 @@ def cmd_convert_rig(args: argparse.Namespace) -> int:
         )
         return 2
 
+    # --- Audit trail: echo every resolved merge pair BEFORE the Blender pass —
+    # a weight merge must never happen silently (PR #523 review).
+    for helper, target in sorted(conv_plan.merges.items()):
+        print(f"merge: {helper} -> {target}")
+
     return _run_blender_conversion(
         in_glb,
         Path(args.out),
         args.meshy_version,
         conv_plan,
-        allow_unverified_map=args.allow_unverified_map,
         blender=args.blender,
         timeout_s=args.blender_timeout,
     )
@@ -336,7 +342,6 @@ def _run_blender_conversion(  # pragma: no cover - spawns Blender (never in CI)
     version: str,
     conv_plan: mapping.ConversionPlan,
     *,
-    allow_unverified_map: bool = False,
     blender: str | None = None,
     timeout_s: float = 300.0,
 ) -> int:

@@ -52,13 +52,20 @@ _RIG = [
     _seg("LeftHand", "LeftHand", "LeftForeArm"),
 ]
 # Twist helper: absent from the map, descends from LeftForeArm (name prefix) →
-# convert_rig merges its weights into LeftLowerArm.
+# convert_rig merges its weights into LeftLowerArm. Its box's vertices carry a
+# MULTI-influence split (below) so the merge exercises numeric accumulation on
+# vertices already weighted to the merge target's source bone — the two-pass /
+# weight-conservation path from the PR #523 review (items 1+2).
 _TWIST = (
     "LeftForeArmTwist",
     (-0.55, 1.42, 0.0),
     (-0.60, 1.42, 0.0),
     "LeftForeArm",
 )
+# vertex weights for the twist box: 0.6 helper + 0.4 parent → must emerge from
+# conversion as exactly 1.0 on LeftLowerArm (asserted numerically in
+# tests/test_meshy.py::test_converted_fixture_conserves_weight_mass).
+_TWIST_SPLIT = {"LeftForeArmTwist": 0.6, "LeftForeArm": 0.4}
 
 
 def _cube_verts(center, half=0.03):
@@ -88,8 +95,10 @@ def main(argv):
     parser.add_argument("--out", required=True)
     args = parser.parse_args(generate_rig.argv_after_ddash(argv))
 
-    bpy.ops.object.select_all(action="SELECT")
-    bpy.ops.object.delete(use_global=False)
+    # Data-API purge (not ops select+delete): the factory startup scene can
+    # hold hidden objects that ops-selection never reaches (see convert_rig.py).
+    for obj in list(bpy.data.objects):
+        bpy.data.objects.remove(obj, do_unlink=True)
 
     segments = [(n, h, t, p) for (n, h, t, p) in _RIG] + [_TWIST]
 
@@ -127,7 +136,11 @@ def main(argv):
     for name, *_ in segments:
         mesh_obj.vertex_groups.new(name=name)
     for vi, bone in enumerate(vert_bone):
-        mesh_obj.vertex_groups[bone].add([vi], 1.0, "REPLACE")
+        if bone == "LeftForeArmTwist":
+            for group_name, weight in _TWIST_SPLIT.items():
+                mesh_obj.vertex_groups[group_name].add([vi], weight, "REPLACE")
+        else:
+            mesh_obj.vertex_groups[bone].add([vi], 1.0, "REPLACE")
 
     mesh_obj.parent = arm_obj
     mod = mesh_obj.modifiers.new(name="Armature", type="ARMATURE")

@@ -33,6 +33,10 @@
 # flip `verified: true`. Until then, `convert-rig` REFUSES to run on this version
 # unless `--allow-unverified-map` is passed (a development-only escape hatch that
 # exists solely so the pipeline can be exercised on hand-built fixtures).
+# Verification + the geometric re-pose it unblocks are tracked in issue #524.
+#
+# `verified:` must be a bare YAML boolean — a quoted "true"/"false" string is
+# refused outright (mapping.load_map raises), never coerced.
 # ─────────────────────────────────────────────────────────────────────────────
 
 versions:

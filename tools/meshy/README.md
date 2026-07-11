@@ -106,7 +106,7 @@ rig), limit to ≤4 influences + normalize, and re-export. The resolved plan
 crosses into Blender as JSON — Blender's bundled Python has no PyYAML, so the map
 is only ever loaded in system Python.
 
-### ⚠️ `bone_map.yaml` is an UNVERIFIED seed (DONE_WITH_CONCERNS)
+### ⚠️ `bone_map.yaml` is an UNVERIFIED seed (DONE_WITH_CONCERNS — issue #524)
 
 Meshy does **not** publish the bone names its rigging emits (checked 2026-07-10:
 `docs.meshy.ai/en/api/rigging`, the auto-rigging tutorial, and the ComfyUI/fal.ai
@@ -115,23 +115,44 @@ naming with the `mixamorig:` prefix stripped, and ships `verified: false`.
 `convert-rig` **refuses** an unverified version unless `--allow-unverified-map`
 (a development-only escape hatch used to exercise the pipeline on the committed
 fixtures). Reconcile the map against one real Meshy sample via
-`mapping.joint_names_from_glb`, then flip `verified: true`.
+`mapping.joint_names_from_glb`, then flip `verified: true` — tracked in **#524**.
+`verified:` must be a bare YAML boolean; a quoted `"false"` string is refused
+outright, never coerced.
 
 The converter binds at the imported rest pose; a geometric **re-pose** to the
-canonical T-pose (per-bone rotation deltas) is deferred until a verified sample
-exists — the committed fixture is authored at canonical rest so this is a no-op
-for it. The objective gate (I021, names-only) does not depend on the re-pose.
+canonical T-pose (per-bone rotation deltas) lands with the #524 map verification
+— the committed fixture is authored at canonical rest so this is a no-op for it.
+The objective gate (I021, names-only) does not depend on the re-pose.
 
 ### Fixture gate (Blender local, CI structural)
 
 `tests/fixtures/meshy/build_fixture.py` builds a mini Meshy-style rig
-(`meshy_rig_input.glb`, six Mixamo-named bones + a `LeftForeArmTwist` helper);
+(`meshy_rig_input.glb`, six Mixamo-named bones + a `LeftForeArmTwist` helper
+whose box vertices carry a 0.6 helper / 0.4 parent multi-influence split);
 `convert-rig` produces `canonical_rig_output.glb`. Both are committed (Git LFS).
 `tests/test_meshy.py::test_converted_fixture_binds_only_canonical_bones_I021`
 invokes the Task-4 checker (`validate_imports.check_gltf_rig`) directly on the
-converted output and asserts every bound joint is a canonical bone. Blender runs
-locally only; CI validates the committed artifact structurally (pygltflib), and
-skips on unsmudged LFS-pointer checkouts.
+converted output and asserts every bound joint is a canonical bone;
+`test_converted_fixture_conserves_weight_mass` additionally asserts per-vertex
+weight sums of 1.0 and per-bone weight-mass conservation through the merge.
+Blender runs locally only; CI validates the committed artifacts structurally
+(pygltflib), and skips on unsmudged LFS-pointer checkouts.
+
+Regenerate both fixtures (from the repo root; `--allow-unverified-map` is
+required because the seed map is unverified):
+
+```bash
+BLENDER=/Applications/Blender.app/Contents/MacOS/Blender
+
+"$BLENDER" --background --factory-startup -noaudio \
+  --python tests/fixtures/meshy/build_fixture.py -- \
+  --out tests/fixtures/meshy/meshy_rig_input.glb
+
+PYTHONPATH=tools uv run python -m meshy convert-rig \
+  tests/fixtures/meshy/meshy_rig_input.glb \
+  --meshy-version meshy-5 --out tests/fixtures/meshy/canonical_rig_output.glb \
+  --allow-unverified-map --blender "$BLENDER"
+```
 
 ## Refusal gates (TD-09)
 
