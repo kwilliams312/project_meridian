@@ -20,6 +20,7 @@ const EventBus := preload("res://hud/event_bus.gd")
 const UnitFrame := preload("res://hud/unit_frame.gd")
 const Hud := preload("res://hud/hud.gd")
 const PowerColors := preload("res://hud/power_colors.gd")
+const XpBar := preload("res://hud/xp_bar.gd")
 
 var _fails := 0
 
@@ -40,7 +41,9 @@ func _initialize() -> void:
 
 	_verify_power_colors()
 	_verify_event_bus()
+	_verify_xp_progression()
 	await _verify_unit_frame()
+	await _verify_xp_bar()
 	await _verify_hud_binding()
 	_verify_decode_safety()
 
@@ -127,6 +130,54 @@ func _verify_event_bus() -> void:
 	_check("target_changed fired to 0", target_events.size() >= 1 and int(target_events[-1]) == 0)
 
 
+func _verify_xp_progression() -> void:
+	print("[xp_progression]")
+	var bus = EventBus.new()
+
+	# An XP_GAINED award: the bus stores the server progress + emits xp_changed with the
+	# current/next/level exactly as the server computed them (no client-side XP math).
+	var xp_sig: Dictionary = {"seen": false, "current": -1, "next": -1, "level": -1}
+	bus.xp_changed.connect(func(cur, nxt, lvl):
+		xp_sig["seen"] = true
+		xp_sig["current"] = cur
+		xp_sig["next"] = nxt
+		xp_sig["level"] = lvl)
+	bus.publish_xp_gained(0x100, {
+		"xp_gained": 45, "level": 8, "xp_total": 420, "xp_to_next": 1000,
+	})
+	_check("xp_changed fired", bool(xp_sig["seen"]))
+	_check("xp_changed carried progress", int(xp_sig["current"]) == 420 and int(xp_sig["next"]) == 1000)
+	_check("xp_changed carried level", int(xp_sig["level"]) == 8)
+	_check("bus stored xp_current", bus.xp_current() == 420)
+	_check("bus stored xp_to_next", bus.xp_to_next() == 1000)
+	_check("bus stored xp_level", bus.xp_level() == 8)
+	_check("xp_ratio 42%", absf(bus.xp_ratio() - 0.42) < 0.001)
+	_check("xp_known true after award", bus.xp_known())
+
+	# A LEVEL_UP ding: leveled_up fires with the new level + the stat growth; the stored
+	# level advances, the XP-into-level resets, and the player's unit-frame caps are raised.
+	var lvl_sig: Dictionary = {"seen": false, "level": -1, "growth": {}}
+	bus.leveled_up.connect(func(nl, growth):
+		lvl_sig["seen"] = true
+		lvl_sig["level"] = nl
+		lvl_sig["growth"] = growth)
+	var caps: Dictionary = {"rec": {}}
+	bus.entity_vitals_changed.connect(func(_g, rec): caps["rec"] = rec)
+	bus.publish_level_up(0x100, {
+		"old_level": 8, "new_level": 9, "max_health": 1400, "max_resource": 130,
+	})
+	_check("leveled_up fired", bool(lvl_sig["seen"]))
+	_check("leveled_up carried new level", int(lvl_sig["level"]) == 9)
+	_check("leveled_up carried stat growth", \
+		int((lvl_sig["growth"] as Dictionary).get("max_health", 0)) == 1400 \
+		and int((lvl_sig["growth"] as Dictionary).get("max_resource", 0)) == 130)
+	_check("bus advanced level to 9", bus.xp_level() == 9)
+	_check("ding reset xp-into-level", bus.xp_current() == 0)
+	_check("ding raised unit-frame max health", int((caps["rec"] as Dictionary).get("max_health", 0)) == 1400)
+	_check("ding raised unit-frame max power", int((caps["rec"] as Dictionary).get("max_power", 0)) == 130)
+	_check("ding set unit-frame level", int((caps["rec"] as Dictionary).get("level", 0)) == 9)
+
+
 func _verify_unit_frame() -> void:
 	print("[unit_frame]")
 	var frame = UnitFrame.new()
@@ -154,6 +205,33 @@ func _verify_unit_frame() -> void:
 	_check("full health → full bar", absf(frame._health_fill.size.x - UnitFrame.BAR_W) < 1.0)
 	_check("no power bar for NONE", not frame._power_bar.visible)
 	frame.queue_free()
+
+
+func _verify_xp_bar() -> void:
+	print("[xp_bar]")
+	var bus = EventBus.new()
+	var bar = XpBar.new()
+	root.add_child(bar)
+	await _wait(1)  # let _ready() build the widgets
+	bar.setup(bus)
+
+	# An XP_GAINED award fills the bar toward the next level (fill width == ratio * BAR_W).
+	bus.publish_xp_gained(0x100, {
+		"xp_gained": 30, "level": 4, "xp_total": 250, "xp_to_next": 1000,
+	})
+	await _wait(1)
+	_check("xp fill ~25% width", absf(bar._fill.size.x - XpBar.BAR_W * 0.25) < 1.0)
+	_check("xp label shows level + progress", bar._label.text.contains("Lv 4") and bar._label.text.contains("250 / 1000"))
+
+	# A LEVEL_UP ding empties the fill (xp-into-level reset) and shows the burst + new level.
+	bus.publish_level_up(0x100, {
+		"old_level": 4, "new_level": 5, "max_health": 900, "max_resource": 110,
+	})
+	await _wait(1)
+	_check("ding emptied the fill", bar._fill.size.x < 1.0)
+	_check("ding label shows new level", bar._label.text.contains("Lv 5"))
+	_check("ding burst shows new level", bar._burst.text.contains("Level Up!") and bar._burst.text.contains("Lv 5"))
+	bar.queue_free()
 
 
 func _verify_hud_binding() -> void:
@@ -200,3 +278,9 @@ func _verify_decode_safety() -> void:
 	var net := MeridianNetThread.new()
 	var d: Dictionary = net.decode_entity_frame(0x2004, PackedByteArray([0xFF, 0xFF, 0xFF, 0xFF]))
 	_check("garbage VITALS_UPDATE → kind ''", String(d.get("kind", "x")) == "")
+	# The XP_GAINED (0x0020) + LEVEL_UP (0x0021) branches must also reject a garbage body
+	# safely (kind "") — never crash. The real round-trip is proven in the C++ ctest.
+	var dx: Dictionary = net.decode_entity_frame(0x0020, PackedByteArray([0xFF, 0xFF, 0xFF, 0xFF]))
+	_check("garbage XP_GAINED → kind ''", String(dx.get("kind", "x")) == "")
+	var dl: Dictionary = net.decode_entity_frame(0x0021, PackedByteArray([0xFF, 0xFF, 0xFF, 0xFF]))
+	_check("garbage LEVEL_UP → kind ''", String(dl.get("kind", "x")) == "")

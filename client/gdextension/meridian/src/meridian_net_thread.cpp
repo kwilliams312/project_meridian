@@ -351,6 +351,32 @@ Dictionary MeridianNetThread::decode_entity_frame(int opcode,
 		d["max_power"] = static_cast<int64_t>(v->max_power);
 		d["power_type"] = static_cast<int64_t>(v->power_type);
 		d["level"] = static_cast<int64_t>(v->level);
+	} else if (opcode == cn::kOpXpGained) {
+		// XP_GAINED (CHR-03, #531): the HUD XP-bar delta. Forwarded raw by the net thread
+		// (net_thread_core's default S→C path), decoded here into a scene-ready Dictionary
+		// the event bus publishes to the XP bar. Server-authoritative — display only.
+		auto x = cn::codec::decode_xp_gained(buf);
+		if (!x) return d;
+		d["kind"] = String("xp");
+		d["guid"] = static_cast<int64_t>(x->player_guid);
+		d["has_position"] = false;
+		d["xp_gained"] = static_cast<int64_t>(x->xp_gained);
+		d["level"] = static_cast<int64_t>(x->level);
+		d["xp_total"] = static_cast<int64_t>(x->xp_total);
+		d["xp_to_next"] = static_cast<int64_t>(x->xp_to_next);
+	} else if (opcode == cn::kOpLevelUp) {
+		// LEVEL_UP (CHR-03, #531): the player dinged. Decoded into the new level + the
+		// stat growth (new health / secondary-resource caps) the event bus routes to the
+		// level-up presentation + the player unit frame. Server-authoritative.
+		auto l = cn::codec::decode_level_up(buf);
+		if (!l) return d;
+		d["kind"] = String("level_up");
+		d["guid"] = static_cast<int64_t>(l->player_guid);
+		d["has_position"] = false;
+		d["old_level"] = static_cast<int64_t>(l->old_level);
+		d["new_level"] = static_cast<int64_t>(l->new_level);
+		d["max_health"] = static_cast<int64_t>(l->max_health);
+		d["max_resource"] = static_cast<int64_t>(l->max_resource);
 	} else if (opcode == cn::kOpEntityUpdate) {
 		auto u = cn::codec::decode_entity_update(buf);
 		if (!u) return d;

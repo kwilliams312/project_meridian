@@ -138,6 +138,44 @@ struct VitalsUpdate {
 Bytes encode_vitals_update(const VitalsUpdate& in);
 std::optional<VitalsUpdate> decode_vitals_update(const Bytes& buf);
 
+// ---------------------------------------------------------------------------
+// IF-2 (world.fbs) — PROGRESSION: XpGained (0x0020) and LevelUp (0x0021), both S→C
+// (CHR-03, #531). The server awards XP and dings the character; the client only
+// DISPLAYS the XP bar + level-up presentation — it never runs the XP curve or the
+// stat-growth math (Principle 1 "server is law"). Symmetric POD encode/decode like the
+// vitals block above (the client decodes; the encoders exist for test/mock symmetry).
+// ---------------------------------------------------------------------------
+
+// XP_GAINED (world.fbs XpGained): one XP award + the progress toward the next level.
+// `xp_gained` is THIS award; `xp_total` is XP accumulated INTO the current level (resets
+// on a level-up); `xp_to_next` is the threshold to reach the next level. `level` is the
+// player's level at the time of the award. The client fills the XP bar to xp_total/xp_to_next.
+struct XpGained {
+    std::uint64_t player_guid = 0;
+    std::uint32_t xp_gained = 0;   // this award
+    std::uint16_t level = 0;       // level at the time of the award
+    std::uint32_t xp_total = 0;    // XP into the current level (bar numerator)
+    std::uint32_t xp_to_next = 0;  // XP required to reach the next level (bar denominator)
+};
+
+Bytes encode_xp_gained(const XpGained& in);  // test/mock symmetry (client decodes)
+std::optional<XpGained> decode_xp_gained(const Bytes& buf);
+
+// LEVEL_UP (world.fbs LevelUp): the player leveled up. Carries the old + new level and
+// the stat growth applied from the level curve (the new health cap `max_health` and the
+// new secondary-resource cap `max_resource`). The client plays a brief level-up
+// presentation and reflects the raised caps in the player unit frame.
+struct LevelUp {
+    std::uint64_t player_guid = 0;
+    std::uint16_t old_level = 0;
+    std::uint16_t new_level = 0;
+    std::uint32_t max_health = 0;    // new health cap after stat growth
+    std::uint32_t max_resource = 0;  // new secondary-resource cap after stat growth
+};
+
+Bytes encode_level_up(const LevelUp& in);  // test/mock symmetry (client decodes)
+std::optional<LevelUp> decode_level_up(const Bytes& buf);
+
 // EntityUpdate (world.fbs): a delta. Position fields are OPTIONAL (a move delta
 // carries them; an attribute-only delta would not), so each is flagged present.
 struct EntityUpdate {

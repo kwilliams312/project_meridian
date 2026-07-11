@@ -20,6 +20,8 @@ const UnitFrame := preload("res://hud/unit_frame.gd")
 # Action bar + cast bar (CMB-01, D-10, #432) — same MVVM binding as the unit frames.
 const ActionBar := preload("res://hud/action_bar.gd")
 const CastBar := preload("res://hud/cast_bar.gd")
+# XP bar + level-up presentation (CHR-03, #531) — same MVVM binding as the unit frames.
+const XpBar := preload("res://hud/xp_bar.gd")
 # Quest/gossip views (QST-01, #433) — same MVVM binding as the unit frames.
 const GossipWindow := preload("res://hud/gossip_window.gd")
 const QuestLogWindow := preload("res://hud/quest_log_window.gd")
@@ -37,6 +39,7 @@ var _player_frame: MeridianUnitFrame
 var _target_frame: MeridianUnitFrame
 var _action_bar: MeridianActionBar
 var _cast_bar: MeridianCastBar
+var _xp_bar: MeridianXpBar
 var _gossip: MeridianGossipWindow
 var _quest_log: MeridianQuestLogWindow
 var _quest_tracker: MeridianQuestTracker
@@ -84,6 +87,9 @@ func setup(bus: MeridianEventBus) -> void:
 		_action_bar.setup(bus)
 	if _cast_bar != null:
 		_cast_bar.setup(bus)
+	# XP bar + level-up presentation subscribe to the SAME bus (CHR-03, #531).
+	if _xp_bar != null:
+		_xp_bar.setup(bus)
 	# Paint the initial state (the bus may already hold vitals from queued frames).
 	_refresh_player()
 	_refresh_target()
@@ -206,6 +212,16 @@ func _build() -> void:
 	_cast_bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	add_child(_cast_bar)
 
+	# XP bar: bottom-center, always visible (CHR-03, #531). Anchored to the bottom edge and
+	# grown upward so the slim progress strip sits just below the action bar. The level-up
+	# burst draws ABOVE it (the burst label is offset up within the view).
+	_xp_bar = XpBar.new()
+	_xp_bar.name = "XpBar"
+	_xp_bar.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_xp_bar.position = Vector2(-XpBar.BAR_W * 0.5, -18.0)
+	_xp_bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	add_child(_xp_bar)
+
 	# Chat panel: bottom-left, always visible (SOC-01, #434). Anchored to the bottom-left
 	# corner and grown upward so the scrollback + input row sit above the screen bottom.
 	_chat = ChatPanel.new()
@@ -227,6 +243,7 @@ func _build() -> void:
 		_chat.setup(_bus)
 		_action_bar.setup(_bus)
 		_cast_bar.setup(_bus)
+		_xp_bar.setup(_bus)
 		_refresh_player()
 		_refresh_target()
 

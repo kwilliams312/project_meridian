@@ -203,6 +203,115 @@ static func _apply_vitals(v: Dictionary, data: Dictionary) -> void:
 
 
 # =============================================================================
+# PROGRESSION: XP bar + level-up presentation (CHR-03, #531)
+# =============================================================================
+# The SAME MVVM seam as the vitals registry above, applied to the LOCAL player's XP +
+# level-up. The net layer PUBLISHES decoded XP_GAINED (0x0020) / LEVEL_UP (0x0021)
+# server events here; the XP bar SUBSCRIBES to xp_changed and the level-up presentation
+# SUBSCRIBES to leveled_up — neither touches the net thread.
+#
+# SERVER IS LAW (Principle 1): every value is server-authoritative. The bus only STORES
+# + re-emits what worldd sent — it never runs the XP curve or the stat-growth math. The
+# XP bar fills to `current / next_level_at` exactly as the server computed it.
+#
+# LEVEL-UP also reflects the STAT GROWTH (the new health / secondary-resource caps) into
+# the LOCAL player's vitals record so the player unit frame shows the raised maxes LIVE —
+# reusing the vitals registry above (a self VITALS_UPDATE with the real current values
+# rides separately; this only raises the caps from the LevelUp payload).
+
+# --- View subscription signals (bus -> XP bar / level-up presentation) --------
+
+## The local player's XP progress changed (an XP_GAINED award). `current` is XP INTO the
+## current level (the bar numerator); `next_level_at` is the threshold to the next level
+## (the denominator, 0 = unknown/max level); `level` is the current level. The XP bar
+## fills to current/next_level_at and shows the level.
+signal xp_changed(current: int, next_level_at: int, level: int)
+
+## The local player leveled up (a LEVEL_UP). `new_level` is the level just reached;
+## `stat_growth` carries {old_level, new_level, max_health, max_resource} — the raised
+## caps from the level curve. The level-up presentation flashes + shows the new level.
+signal leveled_up(new_level: int, stat_growth: Dictionary)
+
+# --- Progression registry state ----------------------------------------------
+var _xp_current: int = 0     # XP into the current level (bar numerator)
+var _xp_to_next: int = 0     # threshold to the next level (bar denominator; 0 = unknown)
+var _xp_level: int = 0       # the local player's current level
+var _xp_known: bool = false  # an XP_GAINED has been seen (else the bar is at 0/unknown)
+
+# --- Publish API (the net layer -> bus) --------------------------------------
+
+## Publish an XP_GAINED (decode_entity_frame kind "xp"). Stores the progress the server
+## computed and emits xp_changed. Server-authoritative — no client-side XP math.
+func publish_xp_gained(_guid: int, data: Dictionary) -> void:
+	_xp_current = int(data.get("xp_total", 0))
+	_xp_to_next = int(data.get("xp_to_next", 0))
+	_xp_level = int(data.get("level", _xp_level))
+	_xp_known = true
+	xp_changed.emit(_xp_current, _xp_to_next, _xp_level)
+
+
+## Publish a LEVEL_UP (decode_entity_frame kind "level_up"). Advances the stored level,
+## resets the XP-into-level progress (the server sends a fresh XP_GAINED for the new
+## level's threshold), reflects the raised caps into the player unit frame, and emits
+## leveled_up for the presentation. `guid` is the player's entity guid (the LevelUp payload).
+func publish_level_up(guid: int, data: Dictionary) -> void:
+	var new_level := int(data.get("new_level", _xp_level))
+	var stat_growth := {
+		"old_level": int(data.get("old_level", _xp_level)),
+		"new_level": new_level,
+		"max_health": int(data.get("max_health", 0)),
+		"max_resource": int(data.get("max_resource", 0)),
+	}
+	_xp_level = new_level
+	# The XP-into-level resets on a ding; the new threshold arrives with the next
+	# XP_GAINED. Empty the bar now so it does not briefly show the old (over-full) fill.
+	_xp_current = 0
+	xp_changed.emit(_xp_current, _xp_to_next, _xp_level)
+	# Reflect the stat growth (raised caps) into the player unit frame LIVE. Only the caps
+	# come from LevelUp; the current health/power ride a separate self VITALS_UPDATE.
+	if guid != 0:
+		var v := _record_for(guid)
+		v["level"] = new_level
+		var new_max_health := int(data.get("max_health", 0))
+		var new_max_resource := int(data.get("max_resource", 0))
+		if new_max_health > 0:
+			v["max_health"] = new_max_health
+		if new_max_resource > 0:
+			v["max_power"] = new_max_resource
+		_entities[guid] = v
+		entity_vitals_changed.emit(guid, v)
+	leveled_up.emit(new_level, stat_growth)
+
+# --- Read API (bus -> view-models; scalars) ----------------------------------
+
+## XP into the current level (the XP bar numerator).
+func xp_current() -> int:
+	return _xp_current
+
+
+## The threshold to reach the next level (the XP bar denominator; 0 = unknown/max).
+func xp_to_next() -> int:
+	return _xp_to_next
+
+
+## The local player's current level (0 = unknown).
+func xp_level() -> int:
+	return _xp_level
+
+
+## The XP bar fill ratio in [0, 1] (0 when the threshold is unknown).
+func xp_ratio() -> float:
+	if _xp_to_next <= 0:
+		return 0.0
+	return clampf(float(_xp_current) / float(_xp_to_next), 0.0, 1.0)
+
+
+## True once an XP_GAINED has been seen (else the bar is at 0 / unknown).
+func xp_known() -> bool:
+	return _xp_known
+
+
+# =============================================================================
 # QUEST + GOSSIP state (QST-01 / NPC-01/02, #371/#372/#433)
 # =============================================================================
 # The SAME MVVM seam as the vitals registry above: the net layer PUBLISHES decoded

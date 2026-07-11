@@ -426,6 +426,69 @@ void test_vitals_codec() {
 }
 
 // ---------------------------------------------------------------------------
+// 4d. Progression codec — XpGained (0x0020) + LevelUp (0x0021) (CHR-03, #531). The
+// HUD XP bar decodes XP_GAINED (award + progress toward next level); the level-up
+// presentation decodes LEVEL_UP (new level + stat growth). Full byte round-trips +
+// wrap under the 0x002x opcodes + verify-before-GetRoot safety, mirroring the vitals case.
+// ---------------------------------------------------------------------------
+void test_progression_codec() {
+    std::puts("[codec] XpGained + LevelUp round-trip + wrap + verifier");
+
+    // XP_GAINED — every field distinct so a mis-wired field is caught.
+    codec::XpGained xp;
+    xp.player_guid = 0xABCDEF01ull;
+    xp.xp_gained = 45;
+    xp.level = 8;
+    xp.xp_total = 420;
+    xp.xp_to_next = 1000;
+    auto xp_out = codec::decode_xp_gained(codec::encode_xp_gained(xp));
+    CHECK(xp_out.has_value());
+    CHECK(xp_out->player_guid == 0xABCDEF01ull);
+    CHECK(xp_out->xp_gained == 45 && xp_out->level == 8);
+    CHECK(xp_out->xp_total == 420 && xp_out->xp_to_next == 1000);
+    {
+        Bytes frame = encode_world_frame(kOpXpGained, 3, codec::encode_xp_gained(xp));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x0020 && f->opcode == kOpXpGained);
+    }
+
+    // LEVEL_UP — the new level + the raised caps (stat growth).
+    codec::LevelUp lv;
+    lv.player_guid = 0xABCDEF01ull;
+    lv.old_level = 8;
+    lv.new_level = 9;
+    lv.max_health = 1400;
+    lv.max_resource = 130;
+    auto lv_out = codec::decode_level_up(codec::encode_level_up(lv));
+    CHECK(lv_out.has_value());
+    CHECK(lv_out->player_guid == 0xABCDEF01ull);
+    CHECK(lv_out->old_level == 8 && lv_out->new_level == 9);
+    CHECK(lv_out->max_health == 1400 && lv_out->max_resource == 130);
+    {
+        Bytes frame = encode_world_frame(kOpLevelUp, 4, codec::encode_level_up(lv));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x0021 && f->opcode == kOpLevelUp);
+    }
+
+    // A no-secondary-resource ding (max_resource 0 — a Rage/Energy-less or basic unit).
+    codec::LevelUp no_res;
+    no_res.new_level = 2;
+    no_res.max_health = 250;  // max_resource stays 0
+    auto no_res_out = codec::decode_level_up(codec::encode_level_up(no_res));
+    CHECK(no_res_out.has_value());
+    CHECK(no_res_out->new_level == 2 && no_res_out->max_health == 250);
+    CHECK(no_res_out->max_resource == 0);
+
+    // Garbage / empty are rejected by the verifier (never GetRoot on unverified bytes).
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_xp_gained(garbage).has_value());
+    CHECK(!codec::decode_level_up(garbage).has_value());
+    Bytes empty;
+    CHECK(!codec::decode_xp_gained(empty).has_value());
+    CHECK(!codec::decode_level_up(empty).has_value());
+}
+
+// ---------------------------------------------------------------------------
 // 3b. Combat codec — CastRequest / CastStart / CastFailed / CastResult (CMB-01,
 // D-10, #432). The action bar sends CastRequest on a press and decodes the server's
 // ACCEPT (CastStart) / REJECT (CastFailed, carrying the GCD-resync remainder) /
@@ -1713,6 +1776,7 @@ int main() {
     test_codec();
     test_entity_codec();
     test_vitals_codec();
+    test_progression_codec();
     test_cast_codec();
     test_known_abilities_codec();
     test_char_enter_codec();

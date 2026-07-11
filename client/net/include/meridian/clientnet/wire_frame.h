@@ -41,6 +41,12 @@ inline constexpr std::uint16_t kOpCharDeleteResp = 0x0015;  // S→C
 // Server-authoritative enter-world (D-35 / #341): spawn as an OWNED character.
 inline constexpr std::uint16_t kOpEnterWorldReq  = 0x0016;  // C→S
 inline constexpr std::uint16_t kOpEnterWorldResp = 0x0017;  // S→C
+// Progression — XP award + level-up (M1 — CHR-03, #531). XP_GAINED carries this award +
+// the progress toward the next level (server-authoritative — the client only DISPLAYS the
+// XP bar, never predicts the curve); LEVEL_UP carries the new level + the stat growth
+// applied (the new health / secondary-resource caps) for the level-up presentation.
+inline constexpr std::uint16_t kOpXpGained       = 0x0020;  // S→C  XP award + progress
+inline constexpr std::uint16_t kOpLevelUp        = 0x0021;  // S→C  level increased + growth
 inline constexpr std::uint16_t kOpMovementIntent = 0x1001;  // C→S
 inline constexpr std::uint16_t kOpMovementState  = 0x1002;  // S→C
 inline constexpr std::uint16_t kOpEntityEnter    = 0x2001;  // S→C

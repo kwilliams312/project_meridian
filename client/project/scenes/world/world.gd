@@ -443,8 +443,14 @@ func _on_entity_frame(opcode: int, _seq: int, payload: PackedByteArray) -> void:
 				_bus.publish_vitals_update(guid, d)
 			"leave":
 				_bus.publish_entity_leave(guid)
-	if kind == "vitals":
-		return  # a vitals delta only updates the HUD — it never spawns/moves a node
+			"xp":
+				# XP_GAINED (CHR-03, #531): fills the HUD XP bar toward the next level.
+				_bus.publish_xp_gained(guid, d)
+			"level_up":
+				# LEVEL_UP (CHR-03, #531): the level-up presentation + raised unit-frame caps.
+				_bus.publish_level_up(guid, d)
+	if kind == "vitals" or kind == "xp" or kind == "level_up":
+		return  # a HUD-only delta — never spawns/moves a node
 
 	if guid == _my_guid and _my_guid != 0:
 		return  # never render ourselves as a remote
