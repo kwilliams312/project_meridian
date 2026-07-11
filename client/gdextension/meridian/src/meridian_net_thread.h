@@ -131,6 +131,24 @@ public:
 	godot::Dictionary decode_cast_frame(int opcode,
 			const godot::PackedByteArray &payload) const;
 
+	// ── Death / ghost / resurrect frame builders + decode (CMB-03, #359/#532) ──
+	// The death overlay sends RELEASE_REQUEST (early graveyard release) and the ghost
+	// presentation sends RESURRECT_REQUEST (resurrect at the corpse once the corpse-run
+	// completes) — both empty C→S bodies. The server's DEATH_STATE / GHOST_STATE /
+	// RESURRECT_RESULT arrive as raw `entity_frame`s decoded by decode_death_frame, the
+	// SAME decode seam as decode_cast_frame / decode_econ_frame. Presentation-only — the
+	// client never predicts the state.
+	godot::PackedByteArray build_release_request_frame() const;
+	godot::PackedByteArray build_resurrect_request_frame() const;
+
+	// Decode a raw death/ghost/resurrect S→C frame (opcode + FlatBuffer payload) into a
+	// scene-ready Dictionary the event bus publishes to the death overlay. Corpse/graveyard
+	// positions are mapped to the Godot render frame (Y-UP) like decode_entity_frame.
+	// Returns { "kind": "death"|"ghost"|"resurrect_result"|"",   # "" if not a death op
+	//           ...per-kind fields (see meridian_net_thread.cpp) }.
+	godot::Dictionary decode_death_frame(int opcode,
+			const godot::PackedByteArray &payload) const;
+
 	// ── Character-select frame builders (D-35 / #286 / #341) ───────────────────
 	// Each returns a ready-to-send IF-2 frame; pass to send_bulk() (char management)
 	// or send_control() (ENTER_WORLD). The server's reply is drained by pump() and

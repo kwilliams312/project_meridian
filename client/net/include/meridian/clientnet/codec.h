@@ -290,6 +290,64 @@ Bytes encode_known_abilities(const KnownAbilities& in);  // test/mock symmetry (
 std::optional<KnownAbilities> decode_known_abilities(const Bytes& buf);
 
 // ---------------------------------------------------------------------------
+// IF-2 (world.fbs) — DEATH / GHOST / CORPSE-RUN / RESURRECT (M1 — CMB-03, #359/#532).
+// The client PRESENTS this server-authoritative loop and sends the two empty C→S
+// intents; it never predicts the state. DEATH_STATE opens the overlay (corpse guid +
+// the auto-release countdown); RELEASE_REQUEST is the early-release intent; GHOST_STATE
+// enters the ghost presentation (graveyard + the corpse-run destination); RESURRECT_REQUEST
+// is the resurrect-at-corpse intent; RESURRECT_RESULT is the typed outcome. `status` rides
+// as a u16 ordinal (world.fbs ResurrectStatus{OK=0,NOT_DEAD=1,NOT_RELEASED=2,TOO_FAR=3}) so
+// this POD API carries no generated-enum dependency, exactly like the other status fields.
+// ---------------------------------------------------------------------------
+
+// DEATH_STATE (S→C): you died. `killer_guid` 0 = environment/unknown. The corpse
+// (`corpse_guid` at corpse_x/y/z, wire Z-up) is the corpse-run destination; the overlay
+// counts down `auto_release_ms` to the server's auto-release to the graveyard.
+struct DeathState {
+    std::uint64_t victim_guid = 0;
+    std::uint64_t killer_guid = 0;
+    std::uint64_t corpse_guid = 0;
+    float corpse_x = 0.0f;
+    float corpse_y = 0.0f;
+    float corpse_z = 0.0f;
+    std::uint32_t auto_release_ms = 0;
+};
+Bytes encode_death_state(const DeathState& in);  // test/mock symmetry (client decodes)
+std::optional<DeathState> decode_death_state(const Bytes& buf);
+
+// GHOST_STATE (S→C): you were released and are now a ghost at the graveyard
+// (graveyard_x/y/z, wire Z-up). Run back to `corpse_guid` (the corpse-run destination).
+struct GhostState {
+    std::uint64_t player_guid = 0;
+    float graveyard_x = 0.0f;
+    float graveyard_y = 0.0f;
+    float graveyard_z = 0.0f;
+    std::uint64_t corpse_guid = 0;
+};
+Bytes encode_ghost_state(const GhostState& in);  // test/mock symmetry (client decodes)
+std::optional<GhostState> decode_ghost_state(const Bytes& buf);
+
+// RESURRECT_RESULT (S→C): the typed resurrection outcome. `status` is world.fbs
+// ResurrectStatus (0=OK,1=NOT_DEAD,2=NOT_RELEASED,3=TOO_FAR). On OK the player is alive
+// with `health`/`max_health`; otherwise `health` is 0 and the reason is `status`.
+struct ResurrectResult {
+    std::uint64_t player_guid = 0;
+    std::uint16_t status = 0;  // ResurrectStatus (default OK)
+    std::uint32_t health = 0;
+    std::uint32_t max_health = 0;
+};
+Bytes encode_resurrect_result(const ResurrectResult& in);  // test/mock symmetry (client decodes)
+std::optional<ResurrectResult> decode_resurrect_result(const Bytes& buf);
+
+// RELEASE_REQUEST / RESURRECT_REQUEST (C→S): empty tables acting on self. The client
+// ENCODES these intents (early graveyard release; resurrect at the corpse once the
+// corpse-run completes). The decoders exist only for test/mock symmetry.
+Bytes encode_release_request();
+std::optional<bool> decode_release_request(const Bytes& buf);  // test/mock symmetry
+Bytes encode_resurrect_request();
+std::optional<bool> decode_resurrect_request(const Bytes& buf);  // test/mock symmetry
+
+// ---------------------------------------------------------------------------
 // IF-2 (world.fbs) — character management (D-35 / #286) + server-authoritative
 // enter-world (D-35 / #341), over the AUTHENTICATED world session (post-HandshakeOk).
 // The client lists/creates/deletes its OWN account's characters (worldd scopes
