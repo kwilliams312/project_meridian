@@ -185,6 +185,48 @@ std::optional<VitalsUpdate> decode_vitals_update(const Bytes& buf) {
     return out;
 }
 
+// ---- IF-2 PROGRESSION: XpGained / LevelUp (CHR-03, #531) -------------------
+
+Bytes encode_xp_gained(const XpGained& in) {
+    fb::FlatBufferBuilder b;
+    auto x = mn::CreateXpGained(b, in.player_guid, in.xp_gained, in.level, in.xp_total,
+                                in.xp_to_next);
+    b.Finish(x);
+    return to_bytes(b);
+}
+
+std::optional<XpGained> decode_xp_gained(const Bytes& buf) {
+    const mn::XpGained* t = verify_and_get<mn::XpGained>(buf);
+    if (t == nullptr) return std::nullopt;
+    XpGained out;
+    out.player_guid = t->player_guid();
+    out.xp_gained = t->xp_gained();
+    out.level = t->level();
+    out.xp_total = t->xp_total();
+    out.xp_to_next = t->xp_to_next();
+    return out;
+}
+
+Bytes encode_level_up(const LevelUp& in) {
+    fb::FlatBufferBuilder b;
+    auto l = mn::CreateLevelUp(b, in.player_guid, in.old_level, in.new_level, in.max_health,
+                               in.max_resource);
+    b.Finish(l);
+    return to_bytes(b);
+}
+
+std::optional<LevelUp> decode_level_up(const Bytes& buf) {
+    const mn::LevelUp* t = verify_and_get<mn::LevelUp>(buf);
+    if (t == nullptr) return std::nullopt;
+    LevelUp out;
+    out.player_guid = t->player_guid();
+    out.old_level = t->old_level();
+    out.new_level = t->new_level();
+    out.max_health = t->max_health();
+    out.max_resource = t->max_resource();
+    return out;
+}
+
 // ---- IF-2 COMBAT: CastRequest / CastStart / CastFailed / CastResult (CMB-01, D-10, #432) ----
 
 Bytes encode_cast_request(const CastRequest& in) {
