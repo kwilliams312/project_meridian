@@ -343,9 +343,53 @@ void test_entity_codec() {
     CHECK(en_out->power == 60 && en_out->max_power == 100);
     CHECK(en_out->power_type == 2 && en_out->level == 12);
     CHECK(en_out->name == "Aelric");
+    // ②/T4 (#541): a PLAYER EntityEnter with no appearance carries none of the
+    // visual-assembly fields — the base case (they only appear when populated below).
+    CHECK(!en_out->has_appearance);
+    CHECK(en_out->equipment.empty());
+
+    // ②/T4 (#541): a PLAYER EntityEnter WITH appearance + equipment (worldd's visual-
+    // assembly broadcast, design §2). race/sex + the appearance record + the visible
+    // equipped items (each with per-instance dyes) round-trip so the client assembler
+    // (world.gd → AssembledCharacter) can build the on-screen character from wire ids.
+    codec::EntityEnter av;
+    av.entity_guid = 0xA11ull;
+    av.char_class = 1;
+    av.race = 1;   // Ardent (roster.h)
+    av.sex = 0;    // male (M1)
+    av.has_appearance = true;
+    av.appearance.version = 1;
+    av.appearance.hair = 2;
+    av.appearance.face = 3;
+    av.appearance.skin = 1;
+    codec::EquippedVisual weapon;
+    weapon.slot = 1;                 // main hand (server EquipSlot id)
+    weapon.item_template = 42;       // IF-9 item template world id
+    weapon.dyes.push_back(codec::DyeChoice{/*channel=*/0, /*dye_id=*/7});
+    weapon.dyes.push_back(codec::DyeChoice{/*channel=*/1, /*dye_id=*/9});
+    codec::EquippedVisual chest;
+    chest.slot = 5;
+    chest.item_template = 88;        // no dyes (authored colors)
+    av.equipment.push_back(weapon);
+    av.equipment.push_back(chest);
+    auto av_out = codec::decode_entity_enter(codec::encode_entity_enter(av));
+    CHECK(av_out.has_value());
+    CHECK(av_out->race == 1 && av_out->sex == 0);
+    CHECK(av_out->has_appearance);
+    CHECK(av_out->appearance.version == 1 && av_out->appearance.hair == 2);
+    CHECK(av_out->appearance.face == 3 && av_out->appearance.skin == 1);
+    CHECK(av_out->equipment.size() == 2);
+    CHECK(av_out->equipment[0].slot == 1 && av_out->equipment[0].item_template == 42);
+    CHECK(av_out->equipment[0].dyes.size() == 2);
+    CHECK(av_out->equipment[0].dyes[0].channel == 0 && av_out->equipment[0].dyes[0].dye_id == 7);
+    CHECK(av_out->equipment[0].dyes[1].channel == 1 && av_out->equipment[0].dyes[1].dye_id == 9);
+    CHECK(av_out->equipment[1].slot == 5 && av_out->equipment[1].item_template == 88);
+    CHECK(av_out->equipment[1].dyes.empty());
 
     // #328/#430: char_class + vitals default to 0 / empty when a producer omits them —
-    // additive fields are backward-compatible (a pre-#430 EntityEnter decodes to 0).
+    // additive fields are backward-compatible (a pre-#430 EntityEnter decodes to 0). An
+    // NPC/creature EntityEnter (②/T4) carries NO appearance/equipment: race stays 0, the
+    // appearance record is ABSENT (has_appearance false), and equipment is empty.
     codec::EntityEnter en_noclass;
     en_noclass.entity_guid = 0x99ull;
     auto en_nc_out = codec::decode_entity_enter(codec::encode_entity_enter(en_noclass));
@@ -355,6 +399,9 @@ void test_entity_codec() {
     CHECK(en_nc_out->power == 0 && en_nc_out->max_power == 0);
     CHECK(en_nc_out->power_type == 0 && en_nc_out->level == 0);
     CHECK(en_nc_out->name.empty());
+    CHECK(en_nc_out->race == 0 && en_nc_out->sex == 0);
+    CHECK(!en_nc_out->has_appearance);
+    CHECK(en_nc_out->equipment.empty());
 
     // EntityUpdate — a movement delta (all position fields present, as worldd sends).
     codec::EntityUpdate up;
@@ -793,6 +840,23 @@ void test_char_enter_codec() {
     CHECK(ok_rt->status == 0 && ok_rt->characters.size() == 1);
     CHECK(ok_rt->characters.at(0).name == "Aldric"
           && ok_rt->characters.at(0).level == 7);
+    // A row with no appearance decodes has_appearance false (the base roster case).
+    CHECK(!ok_rt->characters.at(0).has_appearance);
+    // ②/T4 (#541): a roster row carries the character's persisted appearance record
+    // (contract ① T5) so char-select re-assembles the preview on roster selection.
+    codec::CharListResponse looked;
+    looked.status = 0;
+    codec::CharSummary sum{7ull, "Sylwen", 3, 2, 5};
+    sum.has_appearance = true;
+    sum.appearance = codec::Appearance{1, 4, 5, 2};
+    looked.characters.push_back(sum);
+    auto looked_rt = codec::decode_char_list_response(
+        codec::encode_char_list_response(looked));
+    CHECK(looked_rt.has_value() && looked_rt->characters.size() == 1);
+    CHECK(looked_rt->characters.at(0).has_appearance);
+    CHECK(looked_rt->characters.at(0).appearance.hair == 4
+          && looked_rt->characters.at(0).appearance.face == 5
+          && looked_rt->characters.at(0).appearance.skin == 2);
     // A genuinely empty account is ALSO status OK (zero characters is valid).
     codec::CharListResponse empty_ok;
     empty_ok.status = 0;

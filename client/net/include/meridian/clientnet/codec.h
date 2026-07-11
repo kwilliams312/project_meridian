@@ -95,6 +95,34 @@ std::optional<Disconnect> decode_disconnect(const Bytes& buf);
 // Positions carry the WIRE (Z-UP) frame from world.fbs: x/y = ground plane, z =
 // height. The consumer maps to the render frame (the interpolator / Godot node).
 
+// Per-character appearance (world.fbs Appearance, contract (1) §5.2 / CHR-01 #435).
+// hair/face/skin are 1-based preset ids from the race/sex customization catalog;
+// version is the record version (only v1 at M1). Opaque-but-bounded: never gameplay-
+// authoritative, so the server clamps out-of-range values rather than rejecting.
+struct Appearance {
+    std::uint8_t version = 1;
+    std::uint8_t hair = 1;
+    std::uint8_t face = 1;
+    std::uint8_t skin = 1;
+};
+
+// One dyed channel on an equipped item (world.fbs DyeChoice, contract (1) §6; T4 #541).
+// `dye_id` is the IF-9 NUMERIC dye id (the client resolves it to a colour from pck
+// content, design §3); at M1 no dye-application path exists so worldd sends none.
+struct DyeChoice {
+    std::uint8_t channel = 0;   // 0 = primary, 1 = secondary, 2 = accent
+    std::uint32_t dye_id = 0;   // IF-9 numeric dye id (0 = unset)
+};
+
+// One VISIBLE equipped item on a player's paperdoll (world.fbs EquippedVisual, T4 #541;
+// design §2). `slot` is the server EquipSlot id; `item_template` is the IF-9 item id
+// (never 0 on the wire); `dyes` is per-instance dye state (empty = authored colours).
+struct EquippedVisual {
+    std::uint8_t slot = 0;
+    std::uint32_t item_template = 0;
+    std::vector<DyeChoice> dyes;
+};
+
 // EntityEnter (world.fbs): a full spawn/enter snapshot. attrs are ignored at M0
 // (D-11 placeholder carries none); guid + type + pose drive render, and the vitals
 // block (#430/#431 HUD contract, UI-01) drives the unit frame. Vitals are additive
@@ -115,6 +143,16 @@ struct EntityEnter {
     std::uint8_t power_type = 0;   // world.fbs PowerType (0=NONE,1=MANA,2=ENERGY,3=RAGE)
     std::uint16_t level = 0;       // unit level (0 = unset/unknown)
     std::string name;              // display name for the unit frame (empty = unnamed)
+    // Visual-assembly fields for PLAYER entities (T4, #541; design §2). Additive +
+    // OPTIONAL exactly like the vitals block: an NPC/creature (or pre-#538 server)
+    // EntityEnter carries NONE of them - race stays 0, `has_appearance` is false, and
+    // `equipment` is empty, so the client renders the capsule/monolithic path. Only ids
+    // travel; all visual lookup is client-side pck content (design §2).
+    std::uint8_t race = 0;         // M0-frozen roster race id (roster.h); 0 = unset/non-player
+    std::uint8_t sex = 0;          // reserved; 0 = male (M1 ships male only)
+    bool has_appearance = false;   // true iff the Appearance table was present (player entity)
+    Appearance appearance;         // §5.2 record; meaningful only when has_appearance
+    std::vector<EquippedVisual> equipment;  // visible equipped items (empty for NPCs)
 };
 
 Bytes encode_entity_enter(const EntityEnter& in);
@@ -366,6 +404,12 @@ struct CharSummary {
     std::uint8_t race = 0;
     std::uint8_t char_class = 0;
     std::uint16_t level = 0;
+    // The character's persisted appearance record (contract ① T5; ②/T4 #541). Additive/
+    // optional exactly like on EntityEnter: an old-format roster row omits it and the
+    // decoder leaves has_appearance false (the default record). char-select re-assembles
+    // the preview from this when a roster row is selected.
+    bool has_appearance = false;
+    Appearance appearance;
 };
 
 // CHAR_LIST_REQUEST carries no fields (the account is the session's).
@@ -382,17 +426,9 @@ struct CharListResponse {
 };
 std::optional<CharListResponse> decode_char_list_response(const Bytes& buf);
 
-// Per-character appearance (world.fbs Appearance, contract ① §5.2 / CHR-01 #435).
-// hair/face/skin are 1-based preset ids from the race/sex customization catalog;
-// version is the record version (only v1 at M1). Opaque-but-bounded: never gameplay-
-// authoritative, so the server clamps out-of-range values rather than rejecting.
-// morphs (§2.5 crowd budget) are 0 at M1 and so are not carried here.
-struct Appearance {
-    std::uint8_t version = 1;
-    std::uint8_t hair = 1;
-    std::uint8_t face = 1;
-    std::uint8_t skin = 1;
-};
+// `Appearance` (world.fbs Appearance, contract ① §5.2 / CHR-01 #435) is defined up with
+// the entity-relay visual-assembly types (just before EntityEnter), since EntityEnter
+// carries it too (②/T4, #541). CharCreateRequest / CharSummary reuse that one definition.
 
 // CHAR_CREATE_REQUEST — name + M0-frozen race/class + the chosen appearance set
 // (CHR-01 #435). appearance is an APPENDED FlatBuffers field: omit it and the server

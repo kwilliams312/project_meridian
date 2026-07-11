@@ -75,6 +75,14 @@ const FloatingCombatTextScript := preload("res://scenes/world/floating_combat_te
 # scene attaches over each visible remote entity. Name from ENTITY_ENTER, health tracked off
 # the SAME event-bus vitals seam (entity_vitals_changed) the unit frames read. Server-authoritative.
 const NameplateManagerScript := preload("res://scenes/world/nameplate_manager.gd")
+# Assembled characters (②/T4, #541): when an EntityEnter carries appearance (a player
+# entity), the local player and each remote render an AssembledCharacter — the per-race
+# body + worn gear built from the wire ids via MeridianContentDB — instead of the
+# class-colored capsule. The capsule stays the FALLBACK: no appearance on the frame (NPC
+# / old server), assemble() returns false (no catalog for the race), or missing content
+# (spec §6). Preloaded by path (never the bare class name) so headless --script verifies,
+# which don't populate the global class cache, resolve it identically to the running app.
+const AssembledCharacterScript := preload("res://characters/assembled_character.gd")
 
 var _session: Dictionary = {}
 var _character: Dictionary = {}
@@ -577,21 +585,11 @@ func _spawn_remote(guid: int, d: Dictionary) -> void:
 	var pos: Vector3 = d.get("position", SPAWN)
 	node.position = pos
 
-	var body := MeshInstance3D.new()
-	var capsule := CapsuleMesh.new()
-	capsule.height = 1.8
-	capsule.radius = 0.35
-	body.mesh = capsule
-	body.position = Vector3(0, 0.9, 0)
-	# Color the capsule by the mover's class (#328), via the SHARED table the local
-	# player uses too — so this remote renders in the SAME color on every client, and
-	# in the same color the local player would show for that class. Flat (no emission),
-	# which keeps it distinct from the OWNER's glowing local capsule.
-	var class_id := int(d.get("char_class", 0))
-	var col := PlayerClassColors.color_for(class_id)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = col
-	body.material_override = mat
+	# The mover's BODY: an AssembledCharacter when the frame carried appearance (②/T4,
+	# #541), else the class-colored capsule fallback (spec §6). Same code path both here
+	# and for the local player — the ONE assembly seam (_build_entity_body). Flat (no
+	# emission) for remotes, which keeps them distinct from the OWNER's glowing capsule.
+	var body := _build_entity_body(d, int(d.get("char_class", 0)), false)
 	node.add_child(body)
 
 	# The entity's on-screen NAME is now the pooled nameplate (CMB-03, #535), attached below
@@ -628,6 +626,50 @@ func _spawn_remote(guid: int, d: Dictionary) -> void:
 			int(d.get("health", 0)), int(d.get("max_health", 0)))
 
 	print("[world] remote ENTER guid=%d at %s (%d remotes)" % [guid, pos, _remote_nodes.size()])
+
+
+# --- Body assembly + capsule fallback (②/T4, #541) ---------------------------
+# The ONE assembly seam shared by remotes (_spawn_remote) and the local player
+# (_build_player_and_camera). When the source carries appearance (an EntityEnter from a
+# player entity, or the char-select character on ENTER_WORLD), build an AssembledCharacter
+# — the per-race body + worn gear from the wire ids via MeridianContentDB. Any content
+# problem degrades to the class-colored capsule, never a crash (spec §6 / contract ① §9):
+#   * no "appearance" key (NPC / pre-#538 server) → capsule (today's path untouched);
+#   * assemble() == false (no catalog for the race, unloadable body) → capsule.
+# Returns a Node3D named "Body" either way, so the TPS camera's yaw target ("../Body")
+# and the chat-bubble host resolve it identically whichever body was built.
+func _build_entity_body(d: Dictionary, class_id: int, glow: bool) -> Node3D:
+	if d.has("appearance"):
+		var assembled = AssembledCharacterScript.new()
+		assembled.name = "Body"
+		var ok: bool = assembled.assemble(int(d.get("race", 0)), int(d.get("sex", 0)),
+			d.get("appearance", {}), d.get("equipment", []))
+		if ok:
+			return assembled
+		# No catalog / unloadable body model (spec §6) → discard and fall back to the capsule.
+		assembled.free()
+	return _build_capsule_body(class_id, glow)
+
+
+# The class-colored capsule body (#328) — the pre-②/T4 render path, now the FALLBACK used
+# whenever appearance is absent or assembly fails (spec §6). `glow` adds the local-owner
+# emission cue (#303) so the player can still tell which body is theirs; remotes stay flat.
+func _build_capsule_body(class_id: int, glow: bool) -> MeshInstance3D:
+	var body := MeshInstance3D.new()
+	body.name = "Body"
+	var capsule := CapsuleMesh.new()
+	capsule.height = 1.8
+	capsule.radius = 0.35
+	body.mesh = capsule
+	body.position = Vector3(0, 0.9, 0)
+	var col := PlayerClassColors.color_for(class_id)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = col
+	if glow:
+		mat.emission_enabled = true
+		mat.emission = col * 0.45
+	body.material_override = mat
+	return body
 
 
 # --- Floating combat text (CMB-04, #530) -------------------------------------
@@ -1391,25 +1433,24 @@ func _build_player_and_camera() -> void:
 	_player.position = SPAWN
 	add_child(_player)
 
-	_body = MeshInstance3D.new()
-	_body.name = "Body"
-	var capsule := CapsuleMesh.new()
-	capsule.height = 1.8
-	capsule.radius = 0.35
-	(_body as MeshInstance3D).mesh = capsule
-	_body.position = Vector3(0, 0.9, 0)
-	# The LOCAL player: colored by ITS class (#328) through the SHARED table remotes
-	# use too, so a second client sees this same character in the same color. The
-	# owner still tells which capsule is theirs by the emission GLOW (remotes are flat)
-	# plus the floating "YOU" label — the #303 "which capsule am I?" cue is preserved
-	# without a hardcoded color that would disagree with how others see this player.
+	# The LOCAL player body: an AssembledCharacter seeded from the char-select character
+	# when it carries appearance (②/T4, #541), else the class-colored capsule — the SAME
+	# assembly seam remotes use (_build_entity_body). Seeded from _character (race +
+	# appearance + class from ENTER_WORLD); local equipment isn't on the char row yet
+	# (M1), so the local body assembles body + presets and equips nothing. The owner still
+	# tells which body is theirs by the emission GLOW on the capsule fallback (remotes are
+	# flat) plus the floating "YOU" label — the #303 "which body am I?" cue is preserved.
+	# A capsule fallback stays class-colored so a second client sees a consistent color.
 	var local_class := int(_character.get("class", 0))
-	var local_col := PlayerClassColors.color_for(local_class)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = local_col
-	mat.emission_enabled = true
-	mat.emission = local_col * 0.45
-	(_body as MeshInstance3D).material_override = mat
+	var seed := {
+		"char_class": local_class,
+		"race": int(_character.get("race", 0)),
+	}
+	if _character.has("appearance"):
+		seed["appearance"] = _character["appearance"]
+		seed["sex"] = int(_character.get("sex", 0))
+		seed["equipment"] = _character.get("equipment", [])
+	_body = _build_entity_body(seed, local_class, true)
 	var nose := MeshInstance3D.new()
 	var nm := BoxMesh.new()
 	nm.size = Vector3(0.2, 0.2, 0.5)

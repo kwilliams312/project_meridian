@@ -46,6 +46,7 @@ const FX_BOOTS: int = 900001
 const FX_OVERRIDE: int = 900002
 const FX_SKINNED: int = 900003
 const FX_MISSING_MODEL: int = 900004
+const FX_HIDE_MISSING: int = 900005  # declares models + hides, but the model is missing (T4 ruling)
 
 var _fails := 0
 var _failures: Array = []  # captured assembly_failed reasons, in emit order
@@ -248,6 +249,23 @@ func _verify_fixtures(ac, db) -> void:
 		_failures.has("model:core:art.fixture.no_such_model"))
 	ac.set_equipment_slot(SLOT_MAIN_HAND, 0, [])
 
+	# Lead ruling (②/T4, #541): an item that DECLARES models AND hides but whose model
+	# fails to load must NOT hide the body region — otherwise the region is stripped while
+	# its covering piece is invisible ("hide-while-uncovered"). Equip a chest item that
+	# hides "torso" but whose only model is missing: the piece stays hidden (no nodes) AND
+	# geo_torso_lod0 stays VISIBLE (contrast the pure-hide fixture_boots above, which DOES
+	# hide because it authored NO model).
+	var torso_before: MeshInstance3D = ac.geoset_node("torso")
+	_check("torso geoset visible before the hide-missing item",
+		torso_before != null and torso_before.visible)
+	ac.set_equipment_slot(SLOT_CHEST, FX_HIDE_MISSING, [])
+	_check("hide-missing item mounts no piece (its model failed to load)",
+		ac.equipped_nodes(SLOT_CHEST).is_empty())
+	var torso_after: MeshInstance3D = ac.geoset_node("torso")
+	_check("torso geoset STAYS visible — no hide-while-uncovered (T4 ruling)",
+		torso_after != null and torso_after.visible)
+	ac.set_equipment_slot(SLOT_CHEST, 0, [])
+
 
 # The first MeshInstance3D of the piece mounted in `slot` (null when none).
 func _first_piece_mesh(ac, slot: int) -> MeshInstance3D:
@@ -310,6 +328,10 @@ func _write_fixture_pack() -> void:
 			{"id": "core:item.fixture_missing_model", "numeric_id": FX_MISSING_MODEL, "worn": {
 				"models": [{"model": "core:art.fixture.no_such_model", "mirror": "none"}],
 				"hides": [], "attach": {"socket": "main_hand"}, "dye_channels": [],
+				"race_overrides": {}}},
+			{"id": "core:item.fixture_hide_missing", "numeric_id": FX_HIDE_MISSING, "worn": {
+				"models": [{"model": "core:art.fixture.no_such_model", "mirror": "none"}],
+				"hides": ["torso"], "attach": {}, "dye_channels": [],
 				"race_overrides": {}}},
 		],
 	}
