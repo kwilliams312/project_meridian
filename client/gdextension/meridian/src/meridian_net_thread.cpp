@@ -275,10 +275,11 @@ int MeridianNetThread::pump() {
 					// Persisted appearance (②/T4, #541): char-select re-assembles the
 					// preview from this on roster selection. Present only when the row
 					// carried the record (contract ① T5); shape matches assemble()'s
-					// appearance {version,hair,face,skin}.
+					// appearance {v,hair,face,skin} (unified with the EntityEnter path
+					// below — story #550).
 					if (c.has_appearance) {
 						Dictionary appearance;
-						appearance["version"] = static_cast<int64_t>(c.appearance.version);
+						appearance["v"] = static_cast<int64_t>(c.appearance.version);
 						appearance["hair"] = static_cast<int64_t>(c.appearance.hair);
 						appearance["face"] = static_cast<int64_t>(c.appearance.face);
 						appearance["skin"] = static_cast<int64_t>(c.appearance.skin);
