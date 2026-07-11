@@ -195,16 +195,15 @@ std::string render_appearance(const YAML::Node& n) {
     return out;
 }
 
-// item.visual.worn -> { models:[{model,mirror}], hides:[], attach:{socket,sheath_socket},
-// dye_channels:[], race_overrides:{race:{...}} }. Returns "" when the item has no
-// `visual.worn` (non-wearables are omitted from the data file entirely).
-std::string render_worn(const YAML::Node& item) {
-    if (!has(item, "visual") || !has(item["visual"], "worn")) return std::string();
-    const YAML::Node worn = item["visual"]["worn"];
-    std::string out = "{ \"models\": [";
-    if (has(worn, "models") && worn["models"].IsSequence()) {
+// A worn `models` list -> `[{ "model": ..., "mirror": ... }, ...]`. Shared by the
+// base worn block AND each race_overrides entry — the schema gives both the SAME
+// per-model shape (model + optional mirror, default "none"), and the assembler
+// substitutes overrides wholesale, so the emit must be byte-faithful for both.
+std::string render_model_list(const YAML::Node& list) {
+    std::string out = "[";
+    if (list && list.IsSequence()) {
         bool first = true;
-        for (const auto& m : worn["models"]) {
+        for (const auto& m : list) {
             out += first ? "" : ", ";
             first = false;
             const std::string model = has(m, "model") ? as_str(m["model"]) : std::string();
@@ -212,20 +211,42 @@ std::string render_worn(const YAML::Node& item) {
             out += "{ \"model\": " + json_quote(model) + ", \"mirror\": " + json_quote(mirror) + " }";
         }
     }
-    out += "], \"hides\": [";
-    if (has(worn, "hides") && worn["hides"].IsSequence()) {
+    out += "]";
+    return out;
+}
+
+// A worn `hides` list -> `["hands", ...]`. Shared by the base block + overrides.
+std::string render_hides(const YAML::Node& list) {
+    std::string out = "[";
+    if (list && list.IsSequence()) {
         bool first = true;
-        for (const auto& h : worn["hides"]) {
+        for (const auto& h : list) {
             out += first ? "" : ", ";
             first = false;
             out += json_quote(as_str(h));
         }
     }
-    out += "], \"attach\": ";
+    out += "]";
+    return out;
+}
+
+// item.visual.worn -> { models:[{model,mirror}], hides:[], attach:{socket[,sheath_socket]},
+// dye_channels:[], race_overrides:{race:{models,hides}} }. Returns "" when the item
+// has no `visual.worn` (non-wearables are omitted from the data file entirely).
+std::string render_worn(const YAML::Node& item) {
+    if (!has(item, "visual") || !has(item["visual"], "worn")) return std::string();
+    const YAML::Node worn = item["visual"]["worn"];
+    std::string out = "{ \"models\": ";
+    out += render_model_list(worn["models"]);
+    out += ", \"hides\": ";
+    out += render_hides(worn["hides"]);
+    out += ", \"attach\": ";
     if (has(worn, "attach")) {
         const YAML::Node at = worn["attach"];
         out += "{ \"socket\": " + json_quote(has(at, "socket") ? as_str(at["socket"]) : "");
-        out += ", \"sheath_socket\": " + json_quote(has(at, "sheath_socket") ? as_str(at["sheath_socket"]) : "");
+        // sheath_socket is schema-optional: OMIT the key when absent (never "").
+        if (has(at, "sheath_socket"))
+            out += ", \"sheath_socket\": " + json_quote(as_str(at["sheath_socket"]));
         out += " }";
     } else {
         out += "{}";
@@ -240,9 +261,9 @@ std::string render_worn(const YAML::Node& item) {
         }
     }
     out += "], \"race_overrides\": ";
-    // race_overrides maps a raceName -> { models/hides/attach... }. M1 content has
-    // none; emit the object shape (sorted keys) so the client code path is exercised
-    // by a fixture. Each override value re-uses the same worn body renderer keys.
+    // race_overrides maps a raceName -> { models, hides } (the schema's full
+    // override shape). Serialized with the SAME renderers as the base block so
+    // nothing authored is lost; keys sorted (std::map) for byte-determinism.
     if (has(worn, "race_overrides") && worn["race_overrides"].IsMap()) {
         std::map<std::string, YAML::Node> ordered;
         for (const auto& kv : worn["race_overrides"]) ordered[kv.first.Scalar()] = kv.second;
@@ -251,18 +272,8 @@ std::string render_worn(const YAML::Node& item) {
         for (const auto& kv : ordered) {
             out += first ? " " : ", ";
             first = false;
-            std::string models = "[";
-            if (has(kv.second, "models") && kv.second["models"].IsSequence()) {
-                bool mf = true;
-                for (const auto& m : kv.second["models"]) {
-                    models += mf ? "" : ", ";
-                    mf = false;
-                    const std::string model = has(m, "model") ? as_str(m["model"]) : std::string();
-                    models += "{ \"model\": " + json_quote(model) + " }";
-                }
-            }
-            models += "]";
-            out += json_quote(kv.first) + ": { \"models\": " + models + " }";
+            out += json_quote(kv.first) + ": { \"models\": " + render_model_list(kv.second["models"]);
+            out += ", \"hides\": " + render_hides(kv.second["hides"]) + " }";
         }
         out += first ? "}" : " }";
     } else {

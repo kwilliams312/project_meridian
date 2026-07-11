@@ -21,7 +21,7 @@
 #   tools/mcc/golden/pack.data.json       — IF-5 M0 client-render field data (#477)
 #   tools/mcc/golden/index.json           — `mcc index --json` (the IF-9 ID index)
 #
-# Two independent checks, either failing fails the gate:
+# Three independent checks, any failing fails the gate:
 #
 #   (1) GOLDEN MATCH  — a fresh mcc build of content/ (with the fixed built_at)
 #       matches the checked-in golden byte-for-byte. Drift here means either
@@ -30,6 +30,11 @@
 #   (2) CROSS-RUN     — building twice in a row yields byte-identical output.
 #       This isolates *nondeterminism* specifically (independent of the golden),
 #       so a stale golden and a genuinely-flaky build give distinct diagnoses.
+#   (3) STAGED PACK   — the committed client copy of the pack artifacts
+#       (client/project/meridian/core/, the res://meridian/core mount the client
+#       ships at M0, issue #477) matches the fresh emit byte-for-byte, so the
+#       client can never silently ship stale catalog/worn/dye data.
+#       --update-golden refreshes golden AND staged copy in lockstep.
 #
 # REGENERATING THE GOLDEN (when content legitimately changes):
 #
@@ -128,6 +133,14 @@ emit_into() {  # $1 = target dir
 
 GOLDEN_FILES=(world.sql pack.manifest.json pack.contents.jsonl pack.data.json index.json)
 
+# The STAGED CLIENT PACK: the committed copy of the three pack artifacts the
+# client mounts at res://meridian/core (issue #477 — the M0 stand-in until an
+# automated client content-staging step exists). It MUST stay byte-identical to
+# the emit (same fixed built_at as the golden). --update-golden refreshes it in
+# lockstep; the gate below fails on any drift.
+STAGED_DIR="client/project/meridian/core"
+STAGED_FILES=(pack.manifest.json pack.contents.jsonl pack.data.json)
+
 # --- 2a. --update-golden: regenerate the checked-in golden and stop. ---------
 if [ "$UPDATE_GOLDEN" -eq 1 ]; then
   log "Regenerating golden corpus → $GOLDEN_DIR (built_at='$GOLDEN_BUILT_AT')"
@@ -137,7 +150,14 @@ if [ "$UPDATE_GOLDEN" -eq 1 ]; then
   for f in "${GOLDEN_FILES[@]}"; do
     printf '      %s  (%s bytes)\n' "$GOLDEN_DIR/$f" "$(wc -c < "$GOLDEN_DIR/$f" | tr -d ' ')"
   done
-  warn "Review the golden diff like a content diff, then commit tools/mcc/golden/ with the content change."
+  # Keep the staged client pack in lockstep (the golden/staged pair is atomic —
+  # the staleness gate below enforces it on every run).
+  mkdir -p "$STAGED_DIR"
+  for f in "${STAGED_FILES[@]}"; do
+    cp "$GOLDEN_DIR/$f" "$STAGED_DIR/$f"
+  done
+  ok "Staged client pack refreshed: $STAGED_DIR/{${STAGED_FILES[*]// /,}}"
+  warn "Review the golden diff like a content diff, then commit tools/mcc/golden/ AND $STAGED_DIR/ together."
   exit 0
 fi
 
@@ -176,4 +196,22 @@ if [ "$drift" -ne 0 ]; then
 fi
 ok "Golden match: fresh mcc output is byte-identical to the checked-in golden"
 
-log "${_B}Determinism gate passed.${_R} Golden corpus is current and mcc output is deterministic."
+# --- 5. STAGED CLIENT PACK: the committed res://meridian/core copy matches. ---
+# Guards the #477 hand-staged pack against silent drift: a content change that
+# regenerates the golden but forgets the client stage would ship stale
+# catalog/worn/dye data while every other gate stays green.
+log "Staged client pack: comparing $STAGED_DIR against the fresh emit"
+stale=0
+for f in "${STAGED_FILES[@]}"; do
+  if ! cmp -s "$RUN1/$f" "$STAGED_DIR/$f"; then
+    stale=1
+    warn "STALE staged pack file $STAGED_DIR/$f vs fresh emit:"
+    diff "$STAGED_DIR/$f" "$RUN1/$f" 2>/dev/null | head -20 >&2 || true
+  fi
+done
+if [ "$stale" -ne 0 ]; then
+  die "staged client pack is STALE — regenerate it with 'scripts/check-golden.sh --update-golden' and commit $STAGED_DIR/ together with tools/mcc/golden/."
+fi
+ok "Staged client pack matches the fresh emit"
+
+log "${_B}Determinism gate passed.${_R} Golden corpus, staged client pack, and mcc output are all current and deterministic."

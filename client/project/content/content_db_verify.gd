@@ -83,6 +83,9 @@ func _verify_worn(db) -> void:
 	_check("worn.models carries the weapon model",
 		not w.get("models", []).is_empty()
 		and String(w["models"][0]["model"]) == "core:art.item.weapon.pickaxe_rusty")
+	# The full worn shape is surfaced verbatim — race_overrides present (empty {}
+	# for M1 content; the non-empty round-trip is covered by the mcc unit fixture).
+	_check("worn surfaces race_overrides", w.has("race_overrides"))
 
 
 # --- dye_color(russet) — the authored color -----------------------------------

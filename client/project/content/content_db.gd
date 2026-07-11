@@ -138,8 +138,10 @@ func catalog(race: int, sex: int) -> Dictionary:
 
 ## The `visual.worn` block for an item template (the IF-9 numeric id the wire
 ## carries), or {} when the item has no worn data / is unknown (→ hide the piece,
-## spec §6). Returned dict: {models:[{model,mirror}], hides:[], attach:{socket,
-## sheath_socket}, dye_channels:[], race_overrides:{}}.
+## spec §6). Returned dict: {models:[{model,mirror}], hides:[], attach:{socket
+## [, sheath_socket — omitted when unauthored]}, dye_channels:[],
+## race_overrides:{<race>:{models:[{model,mirror}], hides:[]}}} — overrides carry
+## the FULL schema shape; the assembler substitutes them wholesale (spec ② §4).
 func worn(item_template: int) -> Dictionary:
 	return _worn_by_numeric.get(item_template, {})
 

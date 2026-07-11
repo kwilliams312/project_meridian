@@ -352,7 +352,28 @@ fs::path make_data_fixture() {
                "  model: core:art.item.weapon.pick\n"
                "  worn:\n"
                "    models: [{ model: core:art.item.weapon.pick, mirror: none }]\n"
-               "    attach: { socket: main_hand, sheath_socket: back }\n");
+               "    attach: { socket: main_hand, sheath_socket: back }\n"
+               "    race_overrides:\n"
+               "      emberkin:\n"
+               "        models: [{ model: core:art.item.weapon.pick_ember, mirror: x }]\n"
+               "        hides: [hands]\n");
+    // A second wearable whose attach has NO sheath_socket (schema-optional): the
+    // data file must OMIT the key rather than emit "".
+    write_file(core / "items" / "club.item.yaml",
+               "schema: meridian/item@2\n"
+               "id: core:item.club\n"
+               "name: Club\n"
+               "item_class: weapon\n"
+               "subclass: mace_1h\n"
+               "slot: main_hand\n"
+               "rarity: common\n"
+               "weapon:\n  damage: { min: 1, max: 2 }\n  speed_ms: 2000\n"
+               "visual:\n"
+               "  icon: core:art.icon.item.club\n"
+               "  model: core:art.item.weapon.club\n"
+               "  worn:\n"
+               "    models: [{ model: core:art.item.weapon.club, mirror: none }]\n"
+               "    attach: { socket: main_hand }\n");
     write_file(core / "dyes" / "red.dye.yaml",
                "schema: meridian/dye@1\n"
                "id: core:dye.red\n"
@@ -389,6 +410,25 @@ void test_data_json() {
     // Every data row is keyed by a non-zero IF-9 numeric id (the wire key).
     report(d.find("\"numeric_id\": 0,") == std::string::npos,
            "no data row has a zero numeric id");
+    // race_overrides round-trip BYTE-FAITHFULLY: an override carries the SAME
+    // per-model shape as the base worn block (model + mirror) plus its hides[] —
+    // the downstream assembler (spec ② §4) substitutes these wholesale, so a
+    // lossy emit would silently drop authored content.
+    report(d.find("\"race_overrides\": { \"emberkin\": { \"models\": "
+                  "[{ \"model\": \"core:art.item.weapon.pick_ember\", \"mirror\": \"x\" }]"
+                  ", \"hides\": [\"hands\"] } }") != std::string::npos,
+           "race_overrides carries the full override shape (models{model,mirror} + hides)");
+    // Optional attach.sheath_socket is OMITTED when absent, never emitted as "".
+    // Each data row renders on one line — bound the check to the club's row.
+    const std::size_t club = d.find("core:item.club");
+    const std::size_t club_eol = club == std::string::npos ? std::string::npos
+                                                           : d.find('\n', club);
+    const std::string club_row =
+        club == std::string::npos ? std::string() : d.substr(club, club_eol - club);
+    report(!club_row.empty() && club_row.find("\"sheath_socket\"") == std::string::npos,
+           "attach without sheath_socket omits the key (no empty-string emit)");
+    report(d.find("\"sheath_socket\": \"\"") == std::string::npos,
+           "no empty-string sheath_socket anywhere in the data file");
 
     // Determinism: a second independent build emits a byte-identical data file.
     bool ok2 = false;
