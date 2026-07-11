@@ -71,6 +71,10 @@ const ChatBubbleScript := preload("res://hud/chat_bubble.gd")
 # scene floats over a target when a CAST_RESULT resolves (driven off the event bus's
 # cast_result_received seam). Pure presentation; server-authoritative.
 const FloatingCombatTextScript := preload("res://scenes/world/floating_combat_text.gd")
+# Nameplates (CMB-03, #535) — a POOLED set of billboarded name+health-bar plates the world
+# scene attaches over each visible remote entity. Name from ENTITY_ENTER, health tracked off
+# the SAME event-bus vitals seam (entity_vitals_changed) the unit frames read. Server-authoritative.
+const NameplateManagerScript := preload("res://scenes/world/nameplate_manager.gd")
 
 var _session: Dictionary = {}
 var _character: Dictionary = {}
@@ -96,6 +100,10 @@ var _remote_nodes: Dictionary = {}         # guid:int -> Node3D
 # Floating combat text (CMB-04, #530): the pooled billboarded-number system, spawned
 # over a target guid on cast_result_received. World-space child (never reparented).
 var _floating_text: Node3D
+
+# Nameplates (CMB-03, #535): the pooled name+health-bar plate system. Plates are reparented
+# ONTO each remote entity node on spawn and recycled back to the pool on despawn.
+var _nameplates: Node3D
 
 # Click-to-target (#496): a single reusable selection ring reparented under / positioned
 # over the current target, plus the LMB click-vs-drag tracker (a drag orbits the camera;
@@ -198,6 +206,11 @@ func _ready() -> void:
 	# The world scene owns the 3D nodes + the guid→Node3D map, so it drives this visual.
 	_build_floating_text()
 	_bus.cast_result_received.connect(_on_cast_result)
+	# Nameplates (CMB-03, #535): the pooled name+health-bar plate system. Plates are attached
+	# in _spawn_remote (needs the entity node) and recycled in _despawn_remote; their health
+	# tracks the SAME entity_vitals_changed seam the unit frames read (no duplicate signal).
+	_build_nameplates()
+	_bus.entity_vitals_changed.connect(_on_nameplate_vitals)
 	# Chat (SOC-01, #434): a submitted line → CHAT_MESSAGE frame; a delivered SAY/YELL line
 	# floats a bubble over the sender's entity. CHAT_DELIVER/CHAT_REJECTED are decoded +
 	# published back through the SAME bus (never invented client-side — the sender even sees
@@ -581,13 +594,9 @@ func _spawn_remote(guid: int, d: Dictionary) -> void:
 	body.material_override = mat
 	node.add_child(body)
 
-	var label := Label3D.new()
-	label.text = "guid %d" % guid
-	label.modulate = col
-	label.position = Vector3(0, 2.2, 0)
-	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	label.no_depth_test = true
-	node.add_child(label)
+	# The entity's on-screen NAME is now the pooled nameplate (CMB-03, #535), attached below
+	# once the node is registered — it shows the server name from ENTITY_ENTER and a health
+	# bar, superseding the old debug "guid N" label.
 
 	# Pickable collider for click-to-target (#496): a capsule matching the body, on the
 	# DEDICATED target layer (mask 0 — it detects nothing; it is only a RAY target). The
@@ -610,6 +619,14 @@ func _spawn_remote(guid: int, d: Dictionary) -> void:
 
 	_remotes.add_child(node)
 	_remote_nodes[guid] = node
+
+	# Nameplates (CMB-03, #535): float a pooled name+health-bar plate over this remote. Only
+	# remotes reach here (the local player is guarded out in _on_entity_frame), so the local
+	# player's own nameplate is suppressed for free. Name + baseline health ride ENTITY_ENTER.
+	if _nameplates != null:
+		_nameplates.attach(guid, node, String(d.get("name", "")),
+			int(d.get("health", 0)), int(d.get("max_health", 0)))
+
 	print("[world] remote ENTER guid=%d at %s (%d remotes)" % [guid, pos, _remote_nodes.size()])
 
 
@@ -621,6 +638,27 @@ func _build_floating_text() -> void:
 	_floating_text = FloatingCombatTextScript.new()
 	_floating_text.name = "FloatingCombatText"
 	add_child(_floating_text)
+
+
+# --- Nameplates (CMB-03, #535) -----------------------------------------------
+
+# Stand up the pooled nameplate manager as a world-space child. Built ONCE in _ready(); it
+# preallocates its plate pool so a spawn reparents an existing plate rather than allocating.
+func _build_nameplates() -> void:
+	_nameplates = NameplateManagerScript.new()
+	_nameplates.name = "Nameplates"
+	add_child(_nameplates)
+
+
+# Track a remote's health on its nameplate from the event bus's entity_vitals_changed seam —
+# the SAME merged, server-authoritative vitals record the unit frames read (fired on both the
+# ENTITY_ENTER baseline and every VITALS_UPDATE delta). No-op for a guid with no plate (the
+# local player, or a pre-spawn enter emit): the manager only tracks attached remotes.
+func _on_nameplate_vitals(guid: int, vitals: Dictionary) -> void:
+	if _nameplates == null or not _nameplates.has(guid):
+		return
+	_nameplates.update_vitals(guid, int(vitals.get("health", 0)), int(vitals.get("max_health", 0)))
+	_nameplates.update_name(guid, String(vitals.get("name", "")))
 
 
 # Resolve a guid to the SCENE node that represents it: the local player for our own guid,
@@ -651,6 +689,10 @@ func _on_cast_result(result: Dictionary) -> void:
 func _despawn_remote(guid: int) -> void:
 	if not _remote_nodes.has(guid):
 		return
+	# Nameplates (CMB-03, #535): recycle the plate BACK to the pool before freeing the entity
+	# node, so the pooled plate (a child of `node`) survives the despawn instead of being freed.
+	if _nameplates != null:
+		_nameplates.recycle(guid)
 	var node: Node3D = _remote_nodes[guid]
 	if node != null:
 		node.queue_free()
