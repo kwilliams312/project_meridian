@@ -403,3 +403,47 @@ def test_armor_without_sockets_passes_e101_but_unknown_bone_still_fails_e100():
     errors = rig_checks.check_rig(bad)
     assert any(e.startswith("E100") and "Tail01" in e for e in errors), errors
     assert not any(e.startswith("E101") for e in errors), errors
+
+
+def test_skeleton_only_character_model_passes_e102():
+    """A committed rig asset is a skeleton-only character_model export — no
+    meshes at all. E102 geo-coverage applies only when meshes are present
+    (spec §5 skeleton-vs-body distinction; lead ruling on PR #514). A
+    character_model with ANY mesh must still satisfy full LOD0 coverage
+    (covered by test_body_missing_geo_waist_lod0_flagged_e102)."""
+    data = _rig_data(mesh_names=[], max_influences=0)
+    assert rig_checks.check_rig(data) == []
+
+
+def test_rig_checks_imports_lazily_and_raises_actionable_error_without_repo(
+    tmp_path, monkeypatch
+):
+    """The addon may be installed zipped into Blender's addon dir, where the
+    repo-relative skeleton.defs.yaml does not exist. Import must succeed (so
+    non-skeletal exports keep working); only check_rig() may fail, with an
+    actionable error naming the repo-checkout requirement."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "rig_checks_isolated", ADDON_DIR / "rig_checks.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    # dataclasses resolves `from __future__ import annotations` strings via
+    # sys.modules[cls.__module__] — register the isolated module first.
+    monkeypatch.setitem(sys.modules, "rig_checks_isolated", mod)
+    spec.loader.exec_module(mod)  # (a) import succeeds — nothing is read at import
+
+    # Redirect the defs path to a nonexistent location BEFORE first use: had the
+    # module read the YAML eagerly at import time, this patch would be ignored
+    # and check_rig would silently use the cached real data.
+    mod.SKELETON_DEFS_PATH = tmp_path / "missing" / "skeleton.defs.yaml"
+    data = mod.RigData(
+        asset_class="character_model",
+        bone_names=[],
+        socket_names=[],
+        mesh_names=[],
+        max_influences=0,
+        weights_normalized=True,
+    )
+    with pytest.raises(RuntimeError, match="repo checkout"):
+        mod.check_rig(data)  # (b) actionable failure, not a silent pass
