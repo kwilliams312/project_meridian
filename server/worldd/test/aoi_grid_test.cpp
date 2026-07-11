@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// worldd — Grid / AoI engine v0 UNIT TEST (issue #87, the core of the IT-M0
-// "two clients see each other move" capstone).
+// worldd — Grid / AoI engine UNIT TEST (issue #87; parameterised on real zone
+// geometry by #559). The core of the IT-M0 "two clients see each other move"
+// capstone, now proving the grid works at an ARBITRARY zone origin/extent.
 //
 // CLEAN-ROOM: written from docs/sad/server-sad.md §2.5 (Grid/AoI engine,
-// cell-visitor "notify observers within R of P"), §8.3 IT-M0 row (basic
-// visitors), decision D-19 (flat bootstrap map), and aoi_grid.h. No GPL source
-// consulted (CONTRIBUTING).
+// cell-visitor "notify observers within R of P", 533 m grids × 8×8 cells ~66 m,
+// default interest R = 90 m), §8.3 IT-M0 row (basic visitors), decision D-19
+// (flat bootstrap map), aoi_grid.h + zone_geometry.h. No GPL source consulted
+// (CONTRIBUTING).
 //
 // PURE / DB-FREE / SOCKET-FREE: exercises the AoiGrid spatial index + the
 // interest-set query (enter/leave/hysteresis, membership) directly. It runs in
@@ -30,10 +32,25 @@
 //      grid re-buckets a session when it crosses a cell boundary; remove() drops
 //      it from all queries.
 //   F. SELF: a session is never in its own interest set.
+//   G. WITHIN_RADIUS: the one-shot chat say/yell visitor (no hysteresis).
+//   H. NON-(0,0) ORIGIN + PRODUCTION R=90 (#559): at a shifted, negative-origin
+//      zone with the SAD §2.5 production tuning (cell ~66 m, enter R=90 m), cell
+//      indexing is correct relative to the origin, an entity within R=90 m ENTERS,
+//      and the enter/leave hysteresis band still holds — with the interest radius
+//      exceeding one cell (so the neighbour block is larger than 3×3).
+//   I. REGRESSION — NOT HARDCODED TO [0,128]/(0,0) (#559): a grid whose origin is
+//      not (0,0) indexes a world point OUTSIDE the old [0,128] bootstrap square to
+//      the correct cell (the old hardcode would have clamped it into [0,128]).
+//
+// Sections A–G run on the ACTIVE bootstrap zone config (zone_geometry.h:
+// active_zone_aoi_config — origin (0,0), 128 m extent, ~66 m cells, enter 40 /
+// leave 50 m radii scaled to fit the bootstrap square). Sections H–I build
+// production-tuned configs at arbitrary origins to prove the parameterisation.
 
 #include "aoi_grid.h"
 #include "movement_constants.h"
 #include "movement_validation.h"  // Position
+#include "zone_geometry.h"        // active_zone_aoi_config() — the #559 zone seam
 
 #include <cstdint>
 #include <cstdio>
@@ -62,20 +79,24 @@ bool has(const std::unordered_set<AoiId>& s, AoiId id) { return s.find(id) != s.
 
 const std::unordered_set<AoiId> kEmpty;
 
+// The ACTIVE bootstrap zone config sections A–G exercise: origin (0,0), 128 m
+// extent, ~66 m cells, enter 40 / leave 50 m (fits the bootstrap play area).
+AoiGridConfig boot_cfg() { return active_zone_aoi_config(); }
+
 }  // namespace
 
 int main() {
-    std::printf("worldd Grid/AoI engine v0 unit test (IT-M0 AoI core, #87)\n");
+    std::printf("worldd Grid/AoI engine unit test (IT-M0 AoI core #87; zone geometry #559)\n");
 
-    // Two guids used throughout. The play-area centre is (64, 64) on the 128 m
-    // bootstrap chunk (kZoneMinXY..kZoneMaxXY = [0,128]).
+    // Two guids used throughout. The bootstrap play-area centre is (64, 64) on the
+    // 128 m bootstrap chunk (kZoneMinXY..kZoneMaxXY = [0,128]).
     const AoiId A = 1001;
     const AoiId B = 2002;
     const AoiId C = 3003;
 
     // ===== A. MEMBERSHIP =====================================================
     {
-        AoiGrid g;
+        AoiGrid g(boot_cfg());
         // A and B 10 m apart (well inside the 40 m enter radius) → mutually seen.
         g.upsert(A, at(64.0f, 64.0f));
         g.upsert(B, at(74.0f, 64.0f));
@@ -85,7 +106,7 @@ int main() {
         check("A: 10 m apart — B sees A", has(b_sees, A));
         check("A: interest set has exactly one member", a_sees.size() == 1);
 
-        // Move B far away (100 m from A, beyond leave radius) → neither sees.
+        // Move B far away (60 m from A, beyond the 50 m leave radius) → neither sees.
         g.upsert(B, at(64.0f, 4.0f));  // dy = 60 m > 50 m leave radius
         auto a_sees2 = g.interest_set(A, kEmpty);
         check("A: 60 m apart — A does NOT see B", !has(a_sees2, B));
@@ -94,7 +115,7 @@ int main() {
 
     // ===== B. ENTER (far → inside enter radius) =============================
     {
-        AoiGrid g;
+        AoiGrid g(boot_cfg());
         g.upsert(A, at(64.0f, 64.0f));
         g.upsert(B, at(64.0f, 20.0f));  // 44 m away > 40 m enter radius
         auto prev = g.interest_set(A, kEmpty);
@@ -108,7 +129,7 @@ int main() {
 
     // ===== C. LEAVE (inside → beyond leave radius) ==========================
     {
-        AoiGrid g;
+        AoiGrid g(boot_cfg());
         g.upsert(A, at(64.0f, 64.0f));
         g.upsert(B, at(64.0f, 54.0f));  // 10 m away — visible
         auto prev = g.interest_set(A, kEmpty);
@@ -124,7 +145,7 @@ int main() {
     {
         // Place B in the band: enter(40) < d ≤ leave(50). At d = 45 m the
         // membership is STICKY — it is whatever it already was.
-        AoiGrid g;
+        AoiGrid g(boot_cfg());
         g.upsert(A, at(64.0f, 64.0f));
         g.upsert(B, at(64.0f, 19.0f));  // 45 m away — in the band
 
@@ -159,11 +180,11 @@ int main() {
 
     // ===== E. CELL INDEXING =================================================
     {
-        AoiGrid g;
-        // With 64 m cells over [0,128], (10,10) is cell (0,0); (70,10) is cell
+        AoiGrid g(boot_cfg());
+        // With ~66 m cells over [0,128], (60,10) is cell (0,0); (70,10) is cell
         // (1,0) — neighbours. A query must still find a partner in a neighbour
         // cell within radius.
-        g.upsert(A, at(60.0f, 10.0f));   // cell (0,0), near the x=64 boundary
+        g.upsert(A, at(60.0f, 10.0f));   // cell (0,0)
         g.upsert(B, at(70.0f, 10.0f));   // cell (1,0), 10 m from A across the seam
         check("E: A cell is (0,0)", g.cell_of(at(60.0f, 10.0f)) == CellCoord{0, 0});
         check("E: B cell is (1,0)", g.cell_of(at(70.0f, 10.0f)) == CellCoord{1, 0});
@@ -171,8 +192,8 @@ int main() {
         check("E: neighbour-cell partner found (A sees B across the cell seam)",
               has(a_sees, B));
 
-        // Move B across a cell boundary and confirm re-bucketing keeps it found.
-        g.upsert(B, at(64.0f, 10.0f));  // now cell (1,0)->(1,0) boundary, still ~4 m
+        // Move B into A's cell and confirm re-bucketing keeps it found.
+        g.upsert(B, at(64.0f, 10.0f));  // now cell (0,0), still ~4 m from A
         check("E: after move, tracked count still 2", g.size() == 2);
         auto a_sees2 = g.interest_set(A, kEmpty);
         check("E: re-bucketed partner still found", has(a_sees2, B));
@@ -187,7 +208,7 @@ int main() {
 
     // ===== F. SELF ==========================================================
     {
-        AoiGrid g;
+        AoiGrid g(boot_cfg());
         g.upsert(A, at(64.0f, 64.0f));
         g.upsert(B, at(64.0f, 64.0f));  // same spot as A
         g.upsert(C, at(64.0f, 64.0f));
@@ -202,7 +223,7 @@ int main() {
     // distance ≤ the requested radius, whatever that radius is (a tight say, a
     // wide yell), and self is never included.
     {
-        AoiGrid g;
+        AoiGrid g(boot_cfg());
         g.upsert(A, at(64.0f, 64.0f));
         g.upsert(B, at(70.0f, 64.0f));   //  6 m from A
         g.upsert(C, at(64.0f, 94.0f));   // 30 m from A
@@ -214,8 +235,8 @@ int main() {
         check("G: say radius — self excluded", !has(say, A));
         check("G: say radius — exactly one in range", say.size() == 1);
 
-        // Yell radius 90 m (spans > 1 cell): both B and C are in — the wider block
-        // scan reaches beyond the 3×3 the interest-set query uses.
+        // Yell radius 90 m (spans > 1 cell): both B and C are in — within_radius
+        // sizes its scan block to the radius (k = ceil(90 / ~66) = 2, a 5×5 block).
         auto yell = g.within_radius(A, kChatYellRadiusM);
         check("G: yell radius — near B in", has(yell, B));
         check("G: yell radius — far C now in (wider than say)", has(yell, C));
@@ -224,6 +245,80 @@ int main() {
         // A zero/negative radius is a no-op empty set; an untracked id too.
         check("G: zero radius — empty", g.within_radius(A, 0.0f).empty());
         check("G: untracked self — empty", g.within_radius(9999, kChatYellRadiusM).empty());
+    }
+
+    // ===== H. NON-(0,0) ORIGIN + PRODUCTION R=90 (#559) =====================
+    // A production-tuned zone at a SHIFTED, NEGATIVE origin (like the real Zone-01
+    // POIs, which run negative): origin (-256,-256), 512 m extent, SAD §2.5 cell
+    // ~66 m, enter R=90 m / leave 100 m. The interest radius EXCEEDS one cell, so
+    // the neighbour block is larger than 3×3 (k = ceil(100 / ~66) = 2).
+    {
+        const float ox = -256.0f, oy = -256.0f;
+        AoiGridConfig pcfg = production_aoi_config(ox, oy, /*extent=*/512.0f, 512.0f);
+        check("H: production config uses SAD R=90 enter radius",
+              pcfg.enter_radius == kAoiEnterRadiusM && kAoiEnterRadiusM == 90.0f);
+        check("H: production config uses ~66 m cell", pcfg.cell_size == kAoiCellSizeM);
+        AoiGrid g(pcfg);
+
+        // Cell indexing is RELATIVE TO THE ORIGIN: the origin corner is cell (0,0),
+        // and a point one-and-a-bit cells in is cell (1,0). Under the old
+        // [0,128]/(0,0) hardcode these world points would have clamped to (0,0).
+        check("H: origin corner indexes to cell (0,0)",
+              g.cell_of(at(ox, oy)) == CellCoord{0, 0});
+        check("H: one cell in from origin → cell (1,0)",
+              g.cell_of(at(ox + kAoiCellSizeM + 1.0f, oy)) == CellCoord{1, 0});
+
+        // An entity within R=90 m of a session ENTERS its interest set; one just
+        // outside R does not (fresh, previous empty). A is at the zone centre (0,0).
+        g.upsert(A, at(0.0f, 0.0f));
+        g.upsert(B, at(0.0f, -80.0f));   // 80 m from A ≤ 90 enter
+        g.upsert(C, at(0.0f, -95.0f));   // 95 m from A > 90 enter (fresh)
+        auto a_sees = g.interest_set(A, kEmpty);
+        check("H: entity 80 m away (≤ R=90) ENTERS A's interest set", has(a_sees, B));
+        check("H: entity 95 m away (> R=90) does NOT enter fresh", !has(a_sees, C));
+
+        // ENTER across the R=90 line: C walks from 95 m (out) to 85 m (in) → enters.
+        g.upsert(C, at(0.0f, -85.0f));   // 85 m from A ≤ 90
+        auto now = g.interest_set(A, a_sees);
+        check("H: C walks inside R=90 → ENTERS", has(now, C));
+
+        // HYSTERESIS at production radii: park a session in the band 90 < d ≤ 100.
+        // At 95 m it is sticky — OUT stays OUT, IN stays IN.
+        g.upsert(B, at(0.0f, -95.0f));   // 95 m — in the 90..100 band
+        check("H: band (95 m), was OUT — stays OUT",
+              !has(g.interest_set(A, kEmpty), B));
+        check("H: band (95 m), was IN — stays IN",
+              has(g.interest_set(A, std::unordered_set<AoiId>{B}), B));
+
+        // LEAVE past the 100 m leave radius: B to 105 m → leaves even if it was IN.
+        g.upsert(B, at(0.0f, -105.0f));  // 105 m > 100 leave radius (still in bounds)
+        check("H: B beyond 100 m leave radius → LEAVES",
+              !has(g.interest_set(A, std::unordered_set<AoiId>{B}), B));
+    }
+
+    // ===== I. REGRESSION — grid is NOT hardcoded to [0,128]/(0,0) (#559) =====
+    // A grid at a POSITIVE, non-zero origin must index a world point that lies
+    // OUTSIDE the old [0,128] bootstrap square to the correct cell. Under the old
+    // hardcode, cell_of clamped every axis into [0,128] and subtracted origin 0, so
+    // a point at (200,200) would clamp to (128,128) → cell (2,2) with 64 m cells.
+    // With the parameterised grid (origin (200,200)) it is the origin corner → (0,0).
+    {
+        const float ox = 200.0f, oy = 200.0f;
+        AoiGrid g(production_aoi_config(ox, oy, /*extent=*/200.0f, 200.0f));
+        check("I: point at the (200,200) origin → cell (0,0), NOT clamped to [0,128]",
+              g.cell_of(at(200.0f, 200.0f)) == CellCoord{0, 0});
+        check("I: point deep in the shifted zone indexes past cell (0,0)",
+              g.cell_of(at(333.0f, 200.0f)) == CellCoord{1, 0});
+
+        // Two entities living entirely outside the old [0,128] square still track at
+        // their real positions and see each other (they would have collapsed onto
+        // the clamped (128,128) corner under the old hardcode).
+        g.upsert(A, at(300.0f, 300.0f));
+        g.upsert(B, at(308.0f, 300.0f));  // 8 m from A ≤ 90 enter
+        check("I: entities outside old [0,128] are tracked and mutually visible",
+              has(g.interest_set(A, kEmpty), B));
+        check("I: their positions are NOT clamped into [0,128]",
+              g.position_of(A).x == 300.0f && g.position_of(B).x == 308.0f);
     }
 
     std::printf(g_fail == 0 ? "\nALL WORLDD AOI GRID TESTS PASSED\n"

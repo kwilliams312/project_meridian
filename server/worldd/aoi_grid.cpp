@@ -8,20 +8,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "movement_constants.h"
-
 namespace meridian::worldd {
-namespace {
-
-// Clamp a coordinate into the M0 bootstrap play area [kZoneMinXY, kZoneMaxXY]
-// before cell indexing, so an out-of-bounds authoritative position can never
-// index outside the grid (defence in depth; the #86 validator already keeps
-// positions in-bounds).
-float clamp_axis(float v) {
-    return std::clamp(v, movement::kZoneMinXY, movement::kZoneMaxXY);
-}
-
-}  // namespace
 
 float horizontal_distance(const Position& a, const Position& b) {
     const float dx = a.x - b.x;
@@ -30,11 +17,16 @@ float horizontal_distance(const Position& a, const Position& b) {
 }
 
 CellCoord AoiGrid::cell_of(const Position& pos) const {
-    const float x = clamp_axis(pos.x) - movement::kZoneMinXY;
-    const float y = clamp_axis(pos.y) - movement::kZoneMinXY;
+    // Clamp into the zone play area [origin, origin+extent] before indexing, so an
+    // out-of-bounds authoritative position can never index outside the grid
+    // (defence in depth; the #86 validator already keeps positions in-bounds). Then
+    // derive the cell index RELATIVE TO THE ORIGIN (so a non-(0,0) origin indexes
+    // from cell 0 at the origin corner — #559).
+    const float x = std::clamp(pos.x, cfg_.origin_x, cfg_.max_x()) - cfg_.origin_x;
+    const float y = std::clamp(pos.y, cfg_.origin_y, cfg_.max_y()) - cfg_.origin_y;
     CellCoord c;
-    c.cx = static_cast<std::int32_t>(std::floor(x / kAoiCellSizeM));
-    c.cy = static_cast<std::int32_t>(std::floor(y / kAoiCellSizeM));
+    c.cx = static_cast<std::int32_t>(std::floor(x / cfg_.cell_size));
+    c.cy = static_cast<std::int32_t>(std::floor(y / cfg_.cell_size));
     return c;
 }
 
@@ -94,11 +86,17 @@ std::unordered_set<AoiId> AoiGrid::interest_set(
     const Position& self_pos = self_pos_it->second;
     const CellCoord self_cell = cell_of(self_pos);
 
-    // Visit self's cell + the 8 neighbours (3×3 block). The leave radius fits in
-    // one cell (static_assert in the header), so every session within leave
-    // range of self lives in this block — a full-map scan is unnecessary.
-    for (std::int32_t dy = -1; dy <= 1; ++dy) {
-        for (std::int32_t dx = -1; dx <= 1; ++dx) {
+    // Visit self's cell + a neighbour block sized to the LEAVE radius: a candidate
+    // up to leave_radius away can be at most ceil(leave / cell) cells off in either
+    // axis, so a (2k+1)×(2k+1) block is exactly sufficient. At production geometry
+    // the interest radius exceeds one cell (R=90 m > 66.625 m cell → k=2), so this
+    // is NOT a fixed 3×3 — sizing to the radius is what keeps a far-but-in-range
+    // partner from hiding two cells away (#559). A full-map scan is unnecessary.
+    const std::int32_t k =
+        static_cast<std::int32_t>(std::ceil(cfg_.leave_radius / cfg_.cell_size));
+
+    for (std::int32_t dy = -k; dy <= k; ++dy) {
+        for (std::int32_t dx = -k; dx <= k; ++dx) {
             const CellKey key{self_cell.cx + dx, self_cell.cy + dy};
             auto bit = ids_by_cell_.find(key);
             if (bit == ids_by_cell_.end()) continue;
@@ -113,9 +111,9 @@ std::unordered_set<AoiId> AoiGrid::interest_set(
                 // Hysteresis: enter within the enter radius; only leave beyond
                 // the leave radius; sticky in the band between them.
                 if (was_visible) {
-                    if (dist <= kAoiLeaveRadiusM) out.insert(cand);
+                    if (dist <= cfg_.leave_radius) out.insert(cand);
                 } else {
-                    if (dist <= kAoiEnterRadiusM) out.insert(cand);
+                    if (dist <= cfg_.enter_radius) out.insert(cand);
                 }
             }
         }
@@ -138,7 +136,7 @@ std::unordered_set<AoiId> AoiGrid::within_radius(AoiId self, float radius) const
     // the SAD §2.5 cell-visitor "notify observers within R of P" — a wide yell
     // (k > 1) and a tight say (k = 1) are both covered.
     const std::int32_t k =
-        static_cast<std::int32_t>(std::ceil(radius / kAoiCellSizeM));
+        static_cast<std::int32_t>(std::ceil(radius / cfg_.cell_size));
 
     for (std::int32_t dy = -k; dy <= k; ++dy) {
         for (std::int32_t dx = -k; dx <= k; ++dx) {

@@ -77,6 +77,7 @@
 #include "movement_validation.h"  // Position
 #include "world_generated.h"
 #include "world_session.h"        // WorldSession (AEAD s2c channel)
+#include "zone_geometry.h"        // active_zone_aoi_config() — the #559 zone seam
 
 namespace meridian::net {
 class Session;  // fwd — the TLS socket (meridian/net/tls_listener.h)
@@ -612,7 +613,10 @@ private:
                    const std::string& sender_name, const std::string& text);
 
     mutable std::mutex mtx_;
-    AoiGrid grid_;
+    // The AoI grid, built on the ACTIVE zone's geometry (origin/extent/cell/radii)
+    // from the single-source zone_geometry.h seam (#559) — no longer the M0
+    // [0,128]/(0,0)/64 m hardcode.
+    AoiGrid grid_{active_zone_aoi_config()};
     std::unordered_map<SessionSlot, SessionRec> sessions_;
     std::unordered_map<AoiId, SessionSlot> slot_by_guid_;
     // Static world entities (content spawns, #486), keyed by wire guid. Share grid_
