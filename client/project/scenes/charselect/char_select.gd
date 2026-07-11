@@ -225,7 +225,7 @@ func _populate_pickers() -> void:
 # the pickers enable; no catalog → the pickers disable with a "(content missing)"
 # placeholder (spec §6), and _selected_appearance falls back to the default record.
 func _populate_appearance_pickers(race_id: int) -> void:
-	var cat := ContentDB.catalog(race_id, 0)
+	var cat: Dictionary = ContentDB.catalog(race_id, 0)
 	var presets: Dictionary = cat.get("presets", {})
 	_content_missing = cat.is_empty() or not presets.has("hair")
 	_fill_preset_picker(_hair_option, presets.get("hair", []), "Hair")

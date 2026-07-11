@@ -49,7 +49,9 @@ func _initialize() -> void:
 # --- catalog(1, 0) — the ardent/male catalog ----------------------------------
 func _verify_catalog(db) -> void:
 	print(" catalog(1, 0) — ardent male (MeridianRoster id 1):")
-	var cat := db.catalog(1, 0)
+	# `db` is untyped (dynamic binding to the autoload), so its calls return Variant
+	# — every local below is explicitly typed (`:=` cannot infer from Variant).
+	var cat: Dictionary = db.catalog(1, 0)
 	_check("catalog is non-empty", not cat.is_empty())
 	_check("catalog.body_model is set", String(cat.get("body_model", "")) == "core:art.char.ardent.male.base")
 	_check("catalog.skeleton is set", String(cat.get("skeleton", "")) == "core:art.char.ardent.male.skeleton")
@@ -65,9 +67,9 @@ func _verify_catalog(db) -> void:
 # --- worn(rusty_pickaxe) — the socketed weapon --------------------------------
 func _verify_worn(db) -> void:
 	print(" worn(core:item.rusty_pickaxe):")
-	var pick := db.numeric_id_for("core:item.rusty_pickaxe")
+	var pick: int = db.numeric_id_for("core:item.rusty_pickaxe")
 	_check("rusty_pickaxe resolves to a numeric id", pick != 0)
-	var w := db.worn(pick)
+	var w: Dictionary = db.worn(pick)
 	_check("worn is non-empty", not w.is_empty())
 	var attach: Dictionary = w.get("attach", {})
 	_check("worn.attach.socket == 'main_hand'", String(attach.get("socket", "")) == "main_hand")
@@ -79,18 +81,18 @@ func _verify_worn(db) -> void:
 # --- dye_color(russet) — the authored color -----------------------------------
 func _verify_dye(db) -> void:
 	print(" dye_color(core:dye.russet):")
-	var russet := db.numeric_id_for("core:dye.russet")
+	var russet: int = db.numeric_id_for("core:dye.russet")
 	_check("russet resolves to a numeric id", russet != 0)
-	var c := db.dye_color(russet)
+	var c: Color = db.dye_color(russet)
 	_check("dye_color == authored #8a4b2d", c.is_equal_approx(Color.html("8a4b2d")))
 
 
 # --- model_path — asset res:// resolution -------------------------------------
 func _verify_model_path(db) -> void:
 	print(" model_path(id) — by content id AND by numeric id:")
-	var by_id := db.model_path("core:art.char.ardent.male.base")
+	var by_id: String = db.model_path("core:art.char.ardent.male.base")
 	_check("model_path(content id) returns a res:// path", by_id.begins_with("res://meridian/"))
-	var numeric := db.numeric_id_for("core:art.char.ardent.male.base")
+	var numeric: int = db.numeric_id_for("core:art.char.ardent.male.base")
 	_check("model_path(numeric id) matches model_path(content id)",
 		numeric != 0 and db.model_path(numeric) == by_id)
 
@@ -109,7 +111,7 @@ func _verify_sentinels(db) -> void:
 # --- content-missing path (a pack dir with no artifacts) ----------------------
 func _verify_content_missing(db) -> void:
 	print(" content-missing (bogus pack dir → not loaded, all sentinels):")
-	var ok := db.load_from("res://meridian/does_not_exist")
+	var ok: bool = db.load_from("res://meridian/does_not_exist")
 	_check("load_from(bogus dir) returns false", not ok and not db.is_loaded())
 	_check("catalog() → {} when unloaded", db.catalog(1, 0).is_empty())
 	_check("dye_color() → sentinel when unloaded", db.dye_color(1) == Color(0, 0, 0, 0))
