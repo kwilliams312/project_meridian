@@ -27,8 +27,15 @@ sys.path.insert(0, str(REPO / "tools"))
 import meshy.__main__ as meshy_main  # noqa: E402
 import meshy.client as client_mod  # noqa: E402
 import meshy.intake as intake  # noqa: E402
+import meshy.convert_rig as convert_rig  # noqa: E402
+import meshy.mapping as mapping  # noqa: E402
 import validate_content  # noqa: E402
+import validate_imports  # noqa: E402
 from validate_content import check_provenance as ci_check_provenance  # noqa: E402
+
+# bones.py (canonical bone table) is pure-Python and importable without Blender.
+sys.path.insert(0, str(REPO / "tools" / "blender" / "meridian_rig"))
+import bones  # noqa: E402
 
 
 # --- Schema validator, with the shared $defs merged in (README contract). ------
@@ -902,3 +909,611 @@ def test_generate_output_tree_passes_validate_content_end_to_end(tmp_path, monke
         presets_path=REPO / "client" / "import-presets" / "presets.json",
     )
     assert res.errors == [], res.errors
+
+
+# ============================================================================
+# mapping.py — PURE bone-map load + ConversionPlan resolution (spec ④ §7.3)
+# No Blender, no network, no verified live map required: the plan logic is
+# exercised against a HYPOTHETICAL map version written to tmp_path, and the
+# committed seed map is checked only for structural validity (targets ∈ bones).
+# ============================================================================
+
+_HYPOTHETICAL_MAP = {
+    "versions": {
+        "test-rig-v1": {
+            "verified": True,
+            "bones": {
+                "Hips": "Hips",
+                "Spine": "Spine",
+                "Spine1": "Chest",
+                "LeftArm": "LeftUpperArm",
+                "LeftForeArm": "LeftLowerArm",
+                "LeftHand": "LeftHand",
+            },
+        },
+    },
+}
+
+
+def _write_map(tmp_path: Path, doc: dict) -> Path:
+    p = tmp_path / "bone_map.yaml"
+    p.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    return p
+
+
+def test_plan_resolves_renames_for_known_version(tmp_path):
+    map_path = _write_map(tmp_path, _HYPOTHETICAL_MAP)
+    result = mapping.plan(
+        ["Hips", "Spine", "Spine1", "LeftArm", "LeftForeArm", "LeftHand"],
+        "test-rig-v1",
+        path=map_path,
+    )
+    assert result.renames == {
+        "Hips": "Hips",
+        "Spine": "Spine",
+        "Spine1": "Chest",
+        "LeftArm": "LeftUpperArm",
+        "LeftForeArm": "LeftLowerArm",
+        "LeftHand": "LeftHand",
+    }
+    assert result.merges == {}
+    assert result.unmapped == []
+
+
+def test_plan_merges_twist_helper_into_nearest_mapped_ancestor(tmp_path):
+    map_path = _write_map(tmp_path, _HYPOTHETICAL_MAP)
+    # LeftForeArmTwist is a helper/twist bone absent from the map but named as a
+    # CamelCase descendant of the mapped LeftForeArm → its weights merge into
+    # that bone's canonical target (LeftLowerArm), never a rename.
+    result = mapping.plan(
+        ["LeftForeArm", "LeftForeArmTwist", "LeftHand"], "test-rig-v1", path=map_path
+    )
+    assert result.renames == {
+        "LeftForeArm": "LeftLowerArm",
+        "LeftHand": "LeftHand",
+    }
+    assert result.merges == {"LeftForeArmTwist": "LeftLowerArm"}
+    assert result.unmapped == []
+
+
+def test_plan_lists_truly_unknown_bones_as_unmapped(tmp_path):
+    map_path = _write_map(tmp_path, _HYPOTHETICAL_MAP)
+    result = mapping.plan(["Hips", "Tail_01", "Wing_L"], "test-rig-v1", path=map_path)
+    assert result.renames == {"Hips": "Hips"}
+    assert result.merges == {}
+    assert sorted(result.unmapped) == ["Tail_01", "Wing_L"]
+
+
+def test_plan_digit_suffix_is_unmapped_not_silently_merged(tmp_path):
+    # A numbered REAL chain bone the map doesn't know (Spine3 under a map with
+    # Spine/Spine1) must surface as unmapped — folding it into Spine's target
+    # silently would mis-convert a whole spine segment (PR #523 review, item 3).
+    # Only CamelCase ('...Twist') and separator ('..._twist') suffixes are
+    # helper-shaped; digit-adjacent matches are rejected.
+    map_path = _write_map(tmp_path, _HYPOTHETICAL_MAP)
+    result = mapping.plan(["Spine", "Spine3"], "test-rig-v1", path=map_path)
+    assert result.renames == {"Spine": "Spine"}
+    assert result.merges == {}
+    assert result.unmapped == ["Spine3"]
+
+
+def test_plan_separator_suffix_still_merges(tmp_path):
+    map_path = _write_map(tmp_path, _HYPOTHETICAL_MAP)
+    result = mapping.plan(
+        ["LeftForeArm", "LeftForeArm_twist"], "test-rig-v1", path=map_path
+    )
+    assert result.merges == {"LeftForeArm_twist": "LeftLowerArm"}
+    assert result.unmapped == []
+
+
+def test_plan_unknown_version_raises_naming_known_versions(tmp_path):
+    map_path = _write_map(tmp_path, _HYPOTHETICAL_MAP)
+    with pytest.raises(mapping.UnknownVersionError) as exc:
+        mapping.plan(["Hips"], "meshy-999", path=map_path)
+    message = str(exc.value)
+    assert "meshy-999" in message
+    assert "test-rig-v1" in message  # known versions are named
+
+
+def test_load_map_reports_verified_flag(tmp_path):
+    map_path = _write_map(tmp_path, _HYPOTHETICAL_MAP)
+    bmap = mapping.load_map("test-rig-v1", path=map_path)
+    assert bmap.verified is True
+    assert bmap.version == "test-rig-v1"
+    assert bmap.bones["Spine1"] == "Chest"
+
+
+def test_load_map_rejects_non_boolean_verified(tmp_path):
+    # The verified flag is the gate's spine: a quoted YAML string "false" is
+    # truthy under bool() and would UNLOCK the gate. Strict-boolean parsing must
+    # refuse the map instead (PR #523 review, item 4).
+    doc = {
+        "versions": {
+            "test-rig-v1": {"verified": "false", "bones": {"Hips": "Hips"}},
+        },
+    }
+    map_path = _write_map(tmp_path, doc)
+    with pytest.raises(mapping.MappingError, match="verified"):
+        mapping.load_map("test-rig-v1", path=map_path)
+
+
+# --- Committed seed map (tools/meshy/bone_map.yaml) structural validity -------
+
+
+def test_seed_map_every_target_is_a_canonical_bone():
+    canonical = set(bones.bone_names())
+    for version in mapping.known_versions():
+        bmap = mapping.load_map(version)
+        for meshy_bone, target in bmap.bones.items():
+            assert target in canonical, (
+                f"{version}: '{meshy_bone}' → '{target}' is not a canonical bone"
+            )
+
+
+def test_seed_map_meshy5_is_unverified():
+    # The seed map for the live Meshy rig naming is UNVERIFIED (no live sample
+    # was obtainable) — convert-rig must refuse it without --allow-unverified-map.
+    assert mapping.load_map("meshy-5").verified is False
+
+
+# ============================================================================
+# convert-rig CLI — refusal gates run in pure Python BEFORE any Blender spawn
+# (Blender never runs in CI). The Blender conversion itself is a monkeypatched
+# seam; only the gate logic is exercised here.
+# ============================================================================
+
+
+def _make_skinned_glb(path: Path, joint_names: list[str]) -> Path:
+    """A minimal but loadable skinned .glb whose skin binds `joint_names`."""
+    from pygltflib import (
+        ARRAY_BUFFER,
+        ELEMENT_ARRAY_BUFFER,
+        FLOAT,
+        SCALAR,
+        UNSIGNED_SHORT,
+        VEC3,
+        VEC4,
+        Accessor,
+        Attributes,
+        Buffer,
+        BufferView,
+        GLTF2,
+        Mesh,
+        Node,
+        Primitive,
+        Scene,
+        Skin,
+    )
+
+    vcount = 3
+    indices = [0, 1, 2]
+    indices_bytes = struct.pack(f"<{len(indices)}H", *indices)
+    indices_bytes += b"\x00" * ((-len(indices_bytes)) % 4)
+    positions = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+    positions_bytes = struct.pack(f"<{len(positions)}f", *positions)
+    joints0 = [0, 0, 0, 0] * vcount
+    joints0_bytes = struct.pack(f"<{len(joints0)}H", *joints0)
+    joints0_bytes += b"\x00" * ((-len(joints0_bytes)) % 4)
+    weights0 = [1.0, 0.0, 0.0, 0.0] * vcount
+    weights0_bytes = struct.pack(f"<{len(weights0)}f", *weights0)
+    blob = indices_bytes + positions_bytes + joints0_bytes + weights0_bytes
+
+    off_idx = 0
+    off_pos = len(indices_bytes)
+    off_j = off_pos + len(positions_bytes)
+    off_w = off_j + len(joints0_bytes)
+
+    # Joint nodes (named) followed by the skinned mesh node.
+    joint_nodes = [Node(name=n) for n in joint_names]
+    mesh_node = Node(mesh=0, skin=0)
+    nodes = joint_nodes + [mesh_node]
+
+    gltf = GLTF2(
+        scene=0,
+        scenes=[Scene(nodes=list(range(len(nodes))))],
+        nodes=nodes,
+        meshes=[
+            Mesh(
+                primitives=[
+                    Primitive(
+                        attributes=Attributes(POSITION=1, JOINTS_0=2, WEIGHTS_0=3),
+                        indices=0,
+                        mode=4,
+                    )
+                ]
+            )
+        ],
+        skins=[Skin(joints=list(range(len(joint_names))))],
+        accessors=[
+            Accessor(
+                bufferView=0,
+                componentType=UNSIGNED_SHORT,
+                count=len(indices),
+                type=SCALAR,
+                byteOffset=0,
+            ),
+            Accessor(
+                bufferView=1,
+                componentType=FLOAT,
+                count=vcount,
+                type=VEC3,
+                byteOffset=0,
+                min=[0.0, 0.0, 0.0],
+                max=[1.0, 1.0, 0.0],
+            ),
+            Accessor(
+                bufferView=2,
+                componentType=UNSIGNED_SHORT,
+                count=vcount,
+                type=VEC4,
+                byteOffset=0,
+            ),
+            Accessor(
+                bufferView=3, componentType=FLOAT, count=vcount, type=VEC4, byteOffset=0
+            ),
+        ],
+        bufferViews=[
+            BufferView(
+                buffer=0,
+                byteOffset=off_idx,
+                byteLength=len(indices_bytes),
+                target=ELEMENT_ARRAY_BUFFER,
+            ),
+            BufferView(
+                buffer=0,
+                byteOffset=off_pos,
+                byteLength=len(positions_bytes),
+                target=ARRAY_BUFFER,
+            ),
+            BufferView(
+                buffer=0,
+                byteOffset=off_j,
+                byteLength=len(joints0_bytes),
+                target=ARRAY_BUFFER,
+            ),
+            BufferView(
+                buffer=0,
+                byteOffset=off_w,
+                byteLength=len(weights0_bytes),
+                target=ARRAY_BUFFER,
+            ),
+        ],
+        buffers=[Buffer(byteLength=len(blob))],
+    )
+    gltf.set_binary_blob(blob)
+    gltf.save(str(path))
+    return path
+
+
+def test_joint_names_from_glb_reads_skin_joints(tmp_path):
+    glb = _make_skinned_glb(tmp_path / "rig.glb", ["Hips", "Spine", "LeftArm"])
+    assert mapping.joint_names_from_glb(glb) == ["Hips", "Spine", "LeftArm"]
+
+
+def test_convert_rig_refuses_unknown_version(tmp_path, capsys):
+    glb = _make_skinned_glb(tmp_path / "rig.glb", ["Hips"])
+    rc = meshy_main.main(
+        [
+            "convert-rig",
+            str(glb),
+            "--meshy-version",
+            "bogus-9",
+            "--out",
+            str(tmp_path / "out.glb"),
+        ]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "bogus-9" in err
+    assert "meshy-5" in err  # known versions named
+
+
+def test_convert_rig_hard_errors_on_unmapped_bones(tmp_path, capsys, monkeypatch):
+    # A joint with no canonical mapping and no mapped-ancestor prefix.
+    glb = _make_skinned_glb(tmp_path / "rig.glb", ["Hips", "Spine", "Tentacle_03"])
+    called = []
+    monkeypatch.setattr(
+        meshy_main,
+        "_run_blender_conversion",
+        lambda *a, **k: called.append((a, k)) or 0,
+    )
+    rc = meshy_main.main(
+        [
+            "convert-rig",
+            str(glb),
+            "--meshy-version",
+            "meshy-5",
+            "--out",
+            str(tmp_path / "out.glb"),
+            "--allow-unverified-map",
+        ]
+    )
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "Tentacle_03" in err
+    assert called == []  # never reached Blender
+
+
+def test_convert_rig_refuses_unverified_map_without_flag(tmp_path, capsys, monkeypatch):
+    glb = _make_skinned_glb(tmp_path / "rig.glb", ["Hips", "Spine"])
+    called = []
+    monkeypatch.setattr(
+        meshy_main,
+        "_run_blender_conversion",
+        lambda *a, **k: called.append((a, k)) or 0,
+    )
+    rc = meshy_main.main(
+        [
+            "convert-rig",
+            str(glb),
+            "--meshy-version",
+            "meshy-5",
+            "--out",
+            str(tmp_path / "out.glb"),
+        ]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--allow-unverified-map" in err
+    assert called == []
+
+
+def test_convert_rig_allow_unverified_invokes_blender_seam(tmp_path, monkeypatch):
+    glb = _make_skinned_glb(tmp_path / "rig.glb", ["Hips", "Spine"])
+    out = tmp_path / "out.glb"
+    captured = {}
+
+    def fake_conv(in_glb, out_glb, version, plan_obj, **kwargs):
+        captured["in"] = Path(in_glb)
+        captured["out"] = Path(out_glb)
+        captured["version"] = version
+        captured["plan"] = plan_obj
+        return 0
+
+    monkeypatch.setattr(meshy_main, "_run_blender_conversion", fake_conv)
+    rc = meshy_main.main(
+        [
+            "convert-rig",
+            str(glb),
+            "--meshy-version",
+            "meshy-5",
+            "--out",
+            str(out),
+            "--allow-unverified-map",
+        ]
+    )
+    assert rc == 0
+    assert captured["in"] == glb
+    assert captured["out"] == out
+    assert captured["version"] == "meshy-5"
+    assert captured["plan"].renames == {"Hips": "Hips", "Spine": "Spine"}
+
+
+def test_convert_rig_echoes_each_resolved_merge_pair(tmp_path, capsys, monkeypatch):
+    # A silent merge leaves no audit trace (PR #523 review, item 3): every
+    # resolved helper → target pair must be echoed BEFORE the Blender pass.
+    glb = _make_skinned_glb(
+        tmp_path / "rig.glb", ["Hips", "LeftForeArm", "LeftForeArmTwist"]
+    )
+    monkeypatch.setattr(meshy_main, "_run_blender_conversion", lambda *a, **k: 0)
+    rc = meshy_main.main(
+        [
+            "convert-rig",
+            str(glb),
+            "--meshy-version",
+            "meshy-5",
+            "--out",
+            str(tmp_path / "out.glb"),
+            "--allow-unverified-map",
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "LeftForeArmTwist -> LeftLowerArm" in out
+
+
+def test_convert_rig_load_plan_reads_renames_and_merges(tmp_path):
+    plan_json = tmp_path / "plan.json"
+    plan_json.write_text(
+        json.dumps(
+            {
+                "renames": {"LeftArm": "LeftUpperArm"},
+                "merges": {"LeftArmTwist": "LeftUpperArm"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    renames, merges = convert_rig.load_plan(plan_json)
+    assert renames == {"LeftArm": "LeftUpperArm"}
+    assert merges == {"LeftArmTwist": "LeftUpperArm"}
+
+
+def test_convert_rig_parse_args_requires_in_out_plan():
+    args = convert_rig.parse_args(
+        ["--in", "a.glb", "--out", "b.glb", "--plan-json", "p.json"]
+    )
+    assert args.input == "a.glb"
+    assert args.out == "b.glb"
+    assert args.plan_json == "p.json"
+
+
+def test_convert_rig_argv_after_ddash_splits_on_separator():
+    assert convert_rig.argv_after_ddash(["blender", "--", "--in", "x"]) == ["--in", "x"]
+    assert convert_rig.argv_after_ddash(["blender", "--background"]) == []
+
+
+def test_convert_rig_refuses_missing_input_glb(tmp_path, capsys):
+    rc = meshy_main.main(
+        [
+            "convert-rig",
+            str(tmp_path / "nope.glb"),
+            "--meshy-version",
+            "meshy-5",
+            "--out",
+            str(tmp_path / "out.glb"),
+        ]
+    )
+    assert rc == 2
+    assert "nope.glb" in capsys.readouterr().err
+
+
+# ============================================================================
+# Fixture gate — the committed CONVERTED fixture .glb binds only canonical
+# bones (I021), invoking the Task-4 checker directly. Blender produced the
+# fixture locally (BLOCKED without it); CI validates the artifact structurally.
+# On LFS-pointer checkouts (no smudge) the test skips, matching the rig tests.
+# ============================================================================
+
+FIXTURE_DIR = REPO / "tests" / "fixtures" / "meshy"
+CONVERTED_FIXTURE = FIXTURE_DIR / "canonical_rig_output.glb"
+
+
+def _is_real_glb(path: Path) -> bool:
+    """True for a smudged binary .glb; False for a Git-LFS pointer stub."""
+    if not path.is_file():
+        return False
+    with path.open("rb") as fh:
+        head = fh.read(8)
+    return head[:4] == b"glTF"
+
+
+@pytest.mark.skipif(
+    not _is_real_glb(CONVERTED_FIXTURE),
+    reason="converted fixture .glb absent or an unsmudged LFS pointer",
+)
+def test_converted_fixture_binds_only_canonical_bones_I021():
+    skeleton_defs = validate_imports.load_skeleton_defs(
+        REPO / "schema" / "content" / "skeleton.defs.yaml"
+    )
+    # The converted fixture is an armor_model gear piece: I021 requires its skin
+    # bind only canonical bones (a subset is fine). lod_policy 'single' silences
+    # the I023 LOD-chain rule for this single-mesh fixture.
+    doc = {
+        "class": "armor_model",
+        "source": "assets/art/char/canonical_rig_output.glb",
+        "import_hints": {"lod_policy": "single"},
+    }
+    errors = validate_imports.check_gltf_rig(
+        doc,
+        Path("fixtures/meshy/canonical_rig_output.asset.yaml"),
+        CONVERTED_FIXTURE,
+        skeleton_defs,
+    )
+    assert errors == [], errors
+
+    # And directly: every bound joint is a canonical bone name.
+    from pygltflib import GLTF2
+
+    gltf = GLTF2().load(str(CONVERTED_FIXTURE))
+    joints = validate_imports._joint_names(gltf)
+    assert joints  # the fixture really is skinned
+    assert joints <= set(bones.bone_names())
+
+
+# ============================================================================
+# Weight-mass conservation gate (PR #523 review, items 1+2): the input fixture
+# carries a MULTI-influence twist vertex set (0.6 LeftForeArmTwist + 0.4
+# LeftForeArm); after conversion every one of those vertices must hold its full
+# 1.0 on LeftLowerArm — the two-pass numeric merge conserved the mass, no bpy
+# iterator hazard, no ADD-mode clamp distortion.
+# ============================================================================
+
+INPUT_FIXTURE = FIXTURE_DIR / "meshy_rig_input.glb"
+
+
+def _decode_skin_vertex_weights(glb_path: Path) -> list[list[tuple[str, float]]]:
+    """Per-vertex [(joint_name, weight), ...] decoded from JOINTS_0/WEIGHTS_0."""
+    from pygltflib import GLTF2
+
+    gltf = GLTF2().load(str(glb_path))
+    blob = gltf.binary_blob()
+    prim = gltf.meshes[0].primitives[0]
+    assert prim.attributes.JOINTS_0 is not None
+    assert getattr(prim.attributes, "JOINTS_1", None) is None  # ≤4 influences
+    joint_node_names = [gltf.nodes[j].name for j in gltf.skins[0].joints]
+
+    def _read(accessor_index: int, fmt: str, comps: int):
+        acc = gltf.accessors[accessor_index]
+        bv = gltf.bufferViews[acc.bufferView]
+        start = (bv.byteOffset or 0) + (acc.byteOffset or 0)
+        n = acc.count * comps
+        return struct.unpack_from(f"<{n}{fmt}", blob, start), acc.count
+
+    jacc = gltf.accessors[prim.attributes.JOINTS_0]
+    jfmt = {5121: "B", 5123: "H", 5125: "I"}[jacc.componentType]
+    joints_flat, vcount = _read(prim.attributes.JOINTS_0, jfmt, 4)
+    wacc = gltf.accessors[prim.attributes.WEIGHTS_0]
+    assert wacc.componentType == 5126  # float weights (Blender export)
+    weights_flat, _ = _read(prim.attributes.WEIGHTS_0, "f", 4)
+
+    verts: list[list[tuple[str, float]]] = []
+    for i in range(vcount):
+        entries = [
+            (joint_node_names[joints_flat[i * 4 + k]], weights_flat[i * 4 + k])
+            for k in range(4)
+            if weights_flat[i * 4 + k] > 0.0
+        ]
+        verts.append(entries)
+    return verts
+
+
+@pytest.mark.skipif(
+    not _is_real_glb(INPUT_FIXTURE),
+    reason="input fixture .glb absent or an unsmudged LFS pointer",
+)
+def test_input_fixture_has_multi_influence_twist_vertices():
+    verts = _decode_skin_vertex_weights(INPUT_FIXTURE)
+    twist_verts = [
+        dict(v) for v in verts if any(name == "LeftForeArmTwist" for name, _ in v)
+    ]
+    assert twist_verts, "fixture lost its twist-weighted vertices"
+    for v in twist_verts:
+        # The multi-influence split that exercises the numeric two-pass merge.
+        assert v["LeftForeArmTwist"] == pytest.approx(0.6, abs=1e-3)
+        assert v["LeftForeArm"] == pytest.approx(0.4, abs=1e-3)
+
+
+@pytest.mark.skipif(
+    not (_is_real_glb(INPUT_FIXTURE) and _is_real_glb(CONVERTED_FIXTURE)),
+    reason="fixture .glbs absent or unsmudged LFS pointers",
+)
+def test_converted_fixture_conserves_weight_mass():
+    in_verts = _decode_skin_vertex_weights(INPUT_FIXTURE)
+    out_verts = _decode_skin_vertex_weights(CONVERTED_FIXTURE)
+
+    # Every vertex still sums to 1.0 (≤4 influences asserted in the decoder).
+    for v in out_verts:
+        assert sum(w for _, w in v) == pytest.approx(1.0, abs=1e-3)
+
+    # No trace of the helper; only the expected canonical bones carry weight.
+    weighted = {name for v in out_verts for name, _ in v}
+    assert weighted == {
+        "Hips",
+        "Spine",
+        "Chest",
+        "LeftUpperArm",
+        "LeftLowerArm",
+        "LeftHand",
+    }
+
+    # Mass conservation per bone: the twist verts' 0.6 + their 0.4 LeftForeArm
+    # share and the forearm box's own 1.0s all land on LeftLowerArm. Compare
+    # per-joint total mass input→output under the plan's rename/merge targets.
+    plan_obj = mapping.plan(mapping.joint_names_from_glb(INPUT_FIXTURE), "meshy-5")
+    target_of = {**plan_obj.renames, **plan_obj.merges}
+    in_mass: dict[str, float] = {}
+    for v in in_verts:
+        for name, w in v:
+            in_mass[target_of[name]] = in_mass.get(target_of[name], 0.0) + w
+    out_mass: dict[str, float] = {}
+    for v in out_verts:
+        for name, w in v:
+            out_mass[name] = out_mass.get(name, 0.0) + w
+    # Blender splits vertices per flat-shaded face on export (same factor for
+    # both fixtures — identical geometry), so compare RELATIVE mass shares.
+    in_total = sum(in_mass.values())
+    out_total = sum(out_mass.values())
+    for bone_name, mass in in_mass.items():
+        assert out_mass[bone_name] / out_total == pytest.approx(
+            mass / in_total, abs=1e-3
+        ), f"weight mass shifted for {bone_name}"

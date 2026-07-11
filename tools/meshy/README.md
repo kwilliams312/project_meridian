@@ -18,8 +18,16 @@ tools/meshy/
                  shaping, budget pre-check doc-building, triangle counting via
                  pygltflib. Mirrors tools/blender/meridian_export/sidecar.py's
                  "pure module + thin shell" split.
-  __main__.py    argparse CLI: refusal gates, orchestrates client.py + intake.py,
-                 writes the landed artifacts.
+  mapping.py     PURE Python (no network, no bpy) — loads the versioned
+                 bone_map.yaml and resolves a flat list of Meshy bone names into
+                 a ConversionPlan (renames / helper-merges / unmapped).
+  bone_map.yaml  versioned Meshy→canonical bone table (keyed by Meshy model
+                 version). Ships verified: false — see "convert-rig" below.
+  convert_rig.py headless-Blender pass (# pragma: no cover): import → rename +
+                 merge vertex groups → re-bind to the canonical armature (from
+                 meridian_rig.generate_rig) → limit ≤4 + normalize → export.
+  __main__.py    argparse CLI: refusal gates, orchestrates client.py + intake.py
+                 (generate) and mapping.py + convert_rig.py (convert-rig).
 ```
 
 `tests/test_meshy.py` mocks **every** HTTP call via `httpx.MockTransport` — CI
@@ -67,10 +75,84 @@ Lands under `content/<ns>/assets/art/<name>/`:
 `hero_landmark`, `creature_model`); the budget ceiling and filename prefix
 come from the shared `budgets.json` table.
 
-`convert-rig` (task ④/T7, story #506) is **not implemented here** — a
-separate story extends this CLI with a `convert-rig` subcommand that maps a
-Meshy auto-rig onto the canonical skeleton. `_build_parser` in `__main__.py`
-is structured so that subcommand slots in without touching `generate`.
+## `convert-rig` — Meshy auto-rig → canonical skeleton (spec ④ §7.3)
+
+Converts a Meshy auto-rigged humanoid `.glb` onto the canonical Meridian rig so
+it passes the same import rules as hand-made gear (I021: binds only canonical
+bones — conversion has no private definition of "good enough").
+
+```bash
+PYTHONPATH=tools uv run python -m meshy convert-rig raw_meshy.glb \
+  --meshy-version meshy-5 --out canonical.glb \
+  --blender /Applications/Blender.app/Contents/MacOS/Blender
+```
+
+**How it works.** The map/plan gates run in **pure Python first** (CI never runs
+Blender and never needs a live Meshy account):
+
+1. Load `bone_map.yaml` for `--meshy-version` (unknown version → exit 2, naming
+   the known versions).
+2. Read the input rig's joint names with pygltflib and resolve a `ConversionPlan`
+   (`mapping.plan`): mapped bones → **renames**; helper/twist bones named as
+   CamelCase/underscore descendants of a mapped bone (e.g. `LeftForeArmTwist`) →
+   **merges** into that ancestor's canonical target; anything else → **unmapped**
+   (exit 1, listing the names — the table grows deliberately, never silently).
+3. Refuse an **unverified** map (see below) unless `--allow-unverified-map`.
+
+Only then is a headless Blender spawned (`convert_rig.py`): rename + merge vertex
+groups onto canonical names, drop the Meshy armature, re-bind the mesh to a fresh
+canonical armature built from `meridian_rig.bones` (same source as the reference
+rig), limit to ≤4 influences + normalize, and re-export. The resolved plan
+crosses into Blender as JSON — Blender's bundled Python has no PyYAML, so the map
+is only ever loaded in system Python.
+
+### ⚠️ `bone_map.yaml` is an UNVERIFIED seed (DONE_WITH_CONCERNS — issue #524)
+
+Meshy does **not** publish the bone names its rigging emits (checked 2026-07-10:
+`docs.meshy.ai/en/api/rigging`, the auto-rigging tutorial, and the ComfyUI/fal.ai
+node docs all omit them). The seed therefore assumes the widely-used Mixamo-style
+naming with the `mixamorig:` prefix stripped, and ships `verified: false`.
+`convert-rig` **refuses** an unverified version unless `--allow-unverified-map`
+(a development-only escape hatch used to exercise the pipeline on the committed
+fixtures). Reconcile the map against one real Meshy sample via
+`mapping.joint_names_from_glb`, then flip `verified: true` — tracked in **#524**.
+`verified:` must be a bare YAML boolean; a quoted `"false"` string is refused
+outright, never coerced.
+
+The converter binds at the imported rest pose; a geometric **re-pose** to the
+canonical T-pose (per-bone rotation deltas) lands with the #524 map verification
+— the committed fixture is authored at canonical rest so this is a no-op for it.
+The objective gate (I021, names-only) does not depend on the re-pose.
+
+### Fixture gate (Blender local, CI structural)
+
+`tests/fixtures/meshy/build_fixture.py` builds a mini Meshy-style rig
+(`meshy_rig_input.glb`, six Mixamo-named bones + a `LeftForeArmTwist` helper
+whose box vertices carry a 0.6 helper / 0.4 parent multi-influence split);
+`convert-rig` produces `canonical_rig_output.glb`. Both are committed (Git LFS).
+`tests/test_meshy.py::test_converted_fixture_binds_only_canonical_bones_I021`
+invokes the Task-4 checker (`validate_imports.check_gltf_rig`) directly on the
+converted output and asserts every bound joint is a canonical bone;
+`test_converted_fixture_conserves_weight_mass` additionally asserts per-vertex
+weight sums of 1.0 and per-bone weight-mass conservation through the merge.
+Blender runs locally only; CI validates the committed artifacts structurally
+(pygltflib), and skips on unsmudged LFS-pointer checkouts.
+
+Regenerate both fixtures (from the repo root; `--allow-unverified-map` is
+required because the seed map is unverified):
+
+```bash
+BLENDER=/Applications/Blender.app/Contents/MacOS/Blender
+
+"$BLENDER" --background --factory-startup -noaudio \
+  --python tests/fixtures/meshy/build_fixture.py -- \
+  --out tests/fixtures/meshy/meshy_rig_input.glb
+
+PYTHONPATH=tools uv run python -m meshy convert-rig \
+  tests/fixtures/meshy/meshy_rig_input.glb \
+  --meshy-version meshy-5 --out tests/fixtures/meshy/canonical_rig_output.glb \
+  --allow-unverified-map --blender "$BLENDER"
+```
 
 ## Refusal gates (TD-09)
 
