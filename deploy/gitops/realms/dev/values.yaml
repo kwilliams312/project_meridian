@@ -65,7 +65,14 @@ db:
 mariadb:
   enabled: true
   image: { tag: "dev" }
-  persistence: { enabled: false }
+  # Durable storage (#520, root cause of #510): with emptyDir, every mariadb pod
+  # restart wiped the `realm` row + world content until the one-shot seed hooks
+  # re-ran on the next Helm sync — a window where every login got an empty realm
+  # list and no client could enter. A PVC (StatefulSet, longhorn) makes the realm
+  # row, accounts, and world content survive restarts. The seed-on-every-sync
+  # below is now belt-and-suspenders (idempotent) rather than the only line of
+  # defense; it can be retired when the admin portal (#339) lands.
+  persistence: { enabled: true, storageClass: "longhorn", size: "8Gi" }
 
 # SHORT-TERM: seed the realm row (→ the shared LB IP) + devtester on every sync,
 # so the ephemeral dev DB is usable without hand-seeding. Remove when the admin
