@@ -10,6 +10,13 @@ meridian_rig/
                    bones.py and exports the skeleton-only .glb. Arg parsing /
                    path helpers are pure module-level functions (pytest covers
                    them without Blender); bpy is only touched inside main().
+  generate_blockout.py  Deterministic greybox blockout-body generator (spec ④
+                   §6, T5). Reuses generate_rig's armature build + export;
+                   adds 8 geoset-cut primitive meshes (geo_<region>_lod0),
+                   skinned with automatic weights and clamped to ≤4
+                   influences. Region→bone mapping / bbox sizing / naming are
+                   pure module-level functions (pytest covers them without
+                   Blender); bpy is only touched inside main().
 ```
 
 **Blender version pin:** `Blender 5.0.0` (build date 2025-11-18, hash
@@ -31,6 +38,19 @@ The committed artifact (`content/core/assets/art/char/sk_ardent_male_skeleton.gl
 Git LFS) is validated structurally by `tests/test_meridian_rig.py` — bone
 names + hierarchy are read back with pygltflib, so CI needs no Blender. On
 checkouts without LFS smudge (CI), those tests skip via a pointer-file guard.
+
+The greybox blockout body (`content/core/assets/art/char/sk_ardent_male_base.glb`,
+Git LFS, same version pin and determinism guarantee) regenerates with:
+
+```bash
+/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup -noaudio \
+  --python tools/blender/meridian_rig/generate_blockout.py -- \
+  --profile ardent_male --out content/core/assets/art/char/sk_ardent_male_base.glb
+```
+
+Its structural tests (same file) assert the 8 `geo_<region>_lod0` geoset meshes,
+the exact canonical 63-joint skin binding, ≤4 influences/vertex, and normalized
+weights — all read back with pygltflib, no Blender needed in CI.
 
 ## `meridian_export` — Blender art pipeline addon
 

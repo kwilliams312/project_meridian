@@ -78,3 +78,4 @@
 {"id":"core:dye.russet","numeric_id":78,"resource":"res://meridian/core/tables/dye.bin","hash":"0720ee8448ff441ca5d442036fe8d3d29f6e677bdf3ff8a0da3c49c554d7f240"}
 {"id":"core:dye.slate","numeric_id":79,"resource":"res://meridian/core/tables/dye.bin","hash":"48a007e8acd84bde93a7c97b25373b0542fd348bbe683e8d4d3f1d4e56516ccf"}
 {"id":"core:art.char.ardent.male.skeleton","numeric_id":80,"resource":"res://meridian/core/art/char/ardent/male/skeleton.scn","hash":"3aa0ec51bfdb671fbca1f17b99ac865dfd3bac5f19785d18564fd25bc7ec6a6d"}
+{"id":"core:art.char.ardent.male.base","numeric_id":81,"resource":"res://meridian/core/art/char/ardent/male/base.scn","hash":"87372d6589e8bace058064f16d8431a360bca6072d8635ddbc36d459dc73bf93"}
