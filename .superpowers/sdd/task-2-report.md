@@ -95,3 +95,41 @@ Audited (every GDScript added/modified in this story):
 
 Still cannot execute Godot in this env — the pushed branch is the gate for the
 lead's re-run of both verify scripts.
+
+## Addendum 2 — autoload-identifier fix (commit d1485c7)
+
+Engine gate progressed to compile and found `Identifier not found: ContentDB`
+(content_db_verify.gd:34): standalone `--script` mode never initializes
+autoloads. The same latent break existed in char_select.gd (bare `ContentDB`),
+which would have failed compile when char_select_verify loads the scene —
+this project had ZERO autoloads before this story, which is why the verify
+harness and autoloads had never collided.
+
+Fix (keeps the real-app autoload path identical):
+- `content_db.gd`: + `class_name MeridianContentDB`; + static `instance()`
+  (autoload registers itself in `_init`; verify runs lazily create a shared
+  instance); boot load moved `_ready` → `_init` (tree-independent).
+- `content_db_verify.gd`: `const ContentDbScript := preload(...)` +
+  `ContentDbScript.new()` (per lead instruction); `db.free()` before quit.
+- `char_select.gd` / `char_select_verify.gd`: preload-by-path access
+  (`ContentDb.instance()` / `ContentDbScript.instance()`) — chosen over the
+  bare class name because a freshly-added class_name is invisible to a stale
+  `.godot/global_script_class_cache.cfg` (the parse trap run-client.sh
+  documents); preload is immune to both failure modes.
+- `project.godot`: autoload comment documents the access pattern for T3/T4.
+
+Audited: zero bare `ContentDB` identifier references remain in any .gd
+(grep-verified); only the project.godot registration (real-app boot) and
+path-based preloads. New constructs re-checked against GDScript 4 rules:
+`static var` (4.1+, engine pin 4.7), unqualified `new()` in a static func
+(legal — constructor is a static member), no-arg `_init` (required for
+autoload/.new()), Variant returns assigned only to explicit-typed locals.
+
+Documented invocation is unchanged (both scripts):
+`$GODOT --headless --path client/project --script res://<script>` — the
+content_db_verify header now states the full form. GDScript remains
+UNVERIFIED by execution in this env; the pushed branch is the lead's gate.
+
+Possible benign noise for the gate run: a "leaked instance" warning at exit
+from char_select_verify (the lazily-created ContentDB Node is a
+process-lifetime singleton, never freed) — does not affect the exit code.
