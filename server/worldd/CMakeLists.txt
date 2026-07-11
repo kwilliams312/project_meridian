@@ -697,6 +697,31 @@ target_link_libraries(worldd-char-mgmt-test
 set_target_properties(worldd-char-mgmt-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-char-mgmt COMMAND worldd-char-mgmt-test)
 
+# --- Cross-session character-persistence REGRESSION test (#543 / #341). ---------
+# Guards the actual #341 bug ("create a character, reopen the client → gone"): a
+# character created over ONE connection must be readable, owned by the same
+# account, on a SEPARATELY-opened FRESH connection against the same durable DB.
+# char_mgmt_test above proves the create→list round-trip WITHIN one session/handle
+# (so state that only lived in that connection would still pass it); this drives
+# the REAL reconnect read paths — meridian::characters::list_characters (CHAR_LIST)
+# and meridian::worldd::load_owned_character (ENTER_WORLD ownership) — from a brand
+# new connection to prove DURABILITY, not just session round-trip. Needs a live
+# MariaDB; CREATE-TABLE-IF-NOT-EXISTS the standalone `character` table (no outgoing
+# FK, §4.4) and seeds its own randomised account_id (no auth grant needed). Reads
+# MERIDIAN_DB_* env and SKIPS (exit 0) when none are set — inert in the plain server
+# ctest, runs for real only in the worldd-session CI job (or locally via
+# scripts/dev/test.sh --db).
+add_executable(worldd-char-persist-test
+  test/char_persist_test.cpp
+)
+target_link_libraries(worldd-char-persist-test
+  PRIVATE
+    meridian::world-dispatch
+    meridian::characters
+)
+set_target_properties(worldd-char-persist-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-char-persist COMMAND worldd-char-persist-test)
+
 # --- World-DB boot: DB-backed boot INTEGRATION test (IF-4; #89). ---------------
 # Loads the real world DDL (schema/sql/world/*.sql) into a live MariaDB, seeds a
 # world_manifest row, and asserts read_world_manifest + boot_world_db over a real
