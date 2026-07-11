@@ -117,6 +117,38 @@ std::vector<std::uint8_t> encode_entity_enter_payload(const EntityIdentity& subj
     // name (#430): the character/creature display name for the client unit frame.
     // Empty for the D-11 placeholder (no characters DB).
     auto name = b.CreateString(subject.name);
+
+    // Visual-assembly block (②/T1, #538): appearance + visible equipment for a
+    // PLAYER entity, resolved once at enter-world time (world_dispatch.cpp) and
+    // carried on `subject.visual`. Nested wire objects (Appearance / EquippedVisual
+    // / DyeChoice) MUST be built BEFORE the parent EntityEnter table starts, so
+    // they are created here first. An NPC/creature has no visual, so all four
+    // fields stay at their defaults (race/sex 0; appearance/equipment ABSENT) and
+    // the client falls back to the monolithic visual.model path.
+    std::uint8_t race = 0;
+    std::uint8_t sex = 0;
+    fb::Offset<mn::Appearance> appearance = 0;
+    fb::Offset<fb::Vector<fb::Offset<mn::EquippedVisual>>> equipment = 0;
+    if (subject.visual) {
+        const CharacterVisual& vis = *subject.visual;
+        race = vis.race;
+        sex = vis.sex;
+        appearance = mn::CreateAppearance(b, vis.appearance_version, vis.hair, vis.face,
+                                          vis.skin);
+        std::vector<fb::Offset<mn::EquippedVisual>> items;
+        items.reserve(vis.equipment.size());
+        for (const EquippedVisualRec& ev : vis.equipment) {
+            std::vector<fb::Offset<mn::DyeChoice>> dyes;
+            dyes.reserve(ev.dyes.size());
+            for (const DyeChoiceRec& d : ev.dyes) {
+                dyes.push_back(mn::CreateDyeChoice(b, d.channel, d.dye_id));
+            }
+            auto dyes_vec = b.CreateVector(dyes);
+            items.push_back(mn::CreateEquippedVisual(b, ev.slot, ev.item_template, dyes_vec));
+        }
+        equipment = b.CreateVector(items);
+    }
+
     // char_class (#328): the mover's M0-frozen class id, so every client renders the
     // placeholder capsule in a class-derived color. Authoritative here on the server.
     // vitals (#430): health/max, power/max + type, level — the HUD contract, read
@@ -125,7 +157,7 @@ std::vector<std::uint8_t> encode_entity_enter_payload(const EntityIdentity& subj
                                    pos.z, pos.orientation, attrs, subject.char_class,
                                    unit.health(), unit.max_health(), unit.resource(),
                                    unit.max_resource(), wire_power_type(unit.resource_type()),
-                                   unit.level(), name);
+                                   unit.level(), name, race, sex, appearance, equipment);
     b.Finish(e);
     return std::vector<std::uint8_t>(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
 }

@@ -318,8 +318,12 @@ std::optional<LoadedCharacter> load_owned_character(db::Connection& char_db,
     // different account, matches zero rows -> nullopt -> the caller rejects entry.
     // The server never fabricates a character (the D-11 placeholder is gone).
     // A db::DbError propagates to the caller (mapped to ENTER_WORLD INTERNAL).
+    // race + appearance (②/T1 #538) are loaded alongside the D-11 fields so the
+    // enter-world path can populate the EntityEnter visual-assembly block. race is
+    // NOT NULL; appearance is a nullable JSON column (from_json defaults a NULL/
+    // malformed cell to the bounded §5.2 record).
     db::Result r = char_db.execute(
-        "SELECT id, name, class, level FROM `character` "
+        "SELECT id, name, class, level, race, appearance FROM `character` "
         "WHERE id = ? AND account_id = ? LIMIT 1",
         {db::Param{std::to_string(character_id)},
          db::Param{std::to_string(account_id)}});
@@ -331,6 +335,8 @@ std::optional<LoadedCharacter> load_owned_character(db::Connection& char_db,
     if (row[1].has_value()) c.name = *row[1];
     c.class_id = static_cast<std::uint8_t>(cell_u64(row[2]));
     c.level = static_cast<std::uint16_t>(cell_u64(row[3]));
+    c.race = static_cast<std::uint8_t>(cell_u64(row[4]));
+    c.appearance = characters::AppearanceRecord::from_json(row[5]);
     return c;
 }
 

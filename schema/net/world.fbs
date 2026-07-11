@@ -320,6 +320,17 @@ table EntityEnter {
   power_type:PowerType = NONE;  // which secondary pool (mana/energy/rage/none)
   level:uint16 = 0;        // unit level (0 = unset/unknown)
   name:string;             // display name for the unit frame (empty = unnamed placeholder)
+  // Visual-assembly fields for PLAYER entities (②/T1, #538; client-character-
+  // assembler design §2). Additive (appended, defaulted/absent) exactly like the
+  // char_class + vitals blocks above — a pre-#538 decoder still reads the
+  // original fields, and NPC/creature EntityEnter carries NONE of these (race 0,
+  // appearance + equipment ABSENT), so the client renders NPCs via the monolithic
+  // visual.model path. Only ids travel; all visual lookup is client-side pck
+  // content (design §2 "only ids travel").
+  race:uint8 = 0;                 // M0-frozen roster race id (roster.h); 0 = unset/non-player
+  sex:uint8 = 0;                  // reserved; 0 = male (M1 ships male only)
+  appearance:Appearance;          // §5.2 record (contract ① T5); absent for NPCs
+  equipment:[EquippedVisual];     // visible equipped items; absent for NPCs
 }
 
 /// S→C. Delta update for an entity already in AoI. Only changed fields are present;
@@ -414,6 +425,29 @@ table Appearance {
   face:uint8 = 1;
   skin:uint8 = 1;
   morphs:[MorphValue];   // empty at M1 (A-03: ≤2 morphs, budget-gated)
+}
+
+/// S→C. One dyed channel on an equipped item (contract ① §6), carried in an
+/// EquippedVisual on EntityEnter (②/T1, #538). The client resolves dye_id to a
+/// colour from pck content (design §3); worldd sends only the numeric id.
+/// dye@1 is pck-only (#467) — the world DB has NO dye table — so `dye_id` is the
+/// IF-9 NUMERIC dye id, not a content string. At M1 no dye-application path
+/// exists, so worldd sends the enclosing `dyes` vector EMPTY; the shape is
+/// reserved for the M2 write path (design §2 resolution note).
+table DyeChoice {
+  channel:uint8;         // 0 = primary, 1 = secondary, 2 = accent
+  dye_id:uint32;         // IF-9 numeric dye id (0 = unset)
+}
+
+/// S→C. One VISIBLE equipped item on a player's paperdoll, for client visual
+/// assembly (②/T1, #538; design §2). Only visually-rendered slots are sent —
+/// jewellery (neck/finger/trinket) is omitted — and an EMPTY paperdoll position
+/// is omitted entirely (an item_template is never 0). `slot` is the server's
+/// EquipSlot id (server/items/src/inventory.h).
+table EquippedVisual {
+  slot:uint8;            // server EquipSlot id (0-based; inventory.h)
+  item_template:uint32;  // IF-9 item_template world id (never 0 on the wire)
+  dyes:[DyeChoice];      // per-instance dye state; empty = authored colours
 }
 
 /// C→S. List the characters owned by this session's account. Intentionally an
