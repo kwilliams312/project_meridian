@@ -133,3 +133,38 @@ UNVERIFIED by execution in this env; the pushed branch is the lead's gate.
 Possible benign noise for the gate run: a "leaked instance" warning at exit
 from char_select_verify (the lazily-created ContentDB Node is a
 process-lifetime singleton, never freed) — does not affect the exit code.
+
+## Addendum 3 — review fixes (commit 352570a)
+
+Per .superpowers/sdd/task-2-review.md (Approved, two Important + one Minor):
+
+**I-1 (race_overrides lossy):** render_worn now serializes overrides through the
+SAME shared renderers as the base worn block (`render_model_list`/`render_hides`)
+— full `{models:[{model,mirror}], hides:[]}` shape, keys sorted for determinism.
+RED-first: extended the mcc data fixture with a non-empty override
+(`emberkin: {models:[{model,mirror:x}], hides:[hands]}`) + byte-faithful
+round-trip assertion → 3 checks FAILED before the fix, all green after
+(emit-pck unit now 40/40). ContentDB's worn() passes the dict through verbatim
+(surfacing automatic); its doc states the full override shape and
+content_db_verify asserts `worn().has("race_overrides")`.
+
+**I-2 (staged-pack staleness gate):** check-golden.sh (PR-gated via content-ci)
+gained check (3): compares `client/project/meridian/core/{pack.manifest.json,
+pack.contents.jsonl,pack.data.json}` against the fresh emit, failing with the
+regeneration command in the message. `--update-golden` now refreshes golden AND
+staged copy in lockstep (atomic pair). Negative-tested in this worktree: a
+corrupted staged file fails the gate with the actionable message; restored →
+green.
+
+**N-1 (empty sheath_socket):** omitted when unauthored instead of `""`;
+fixture item without sheath_socket asserts key omission (row-bounded check).
+
+Golden + staged regenerated via --update-golden: **byte-identical to before**
+(committed content has no overrides; both wearables author sheath_socket) —
+no golden churn, gates prove currency.
+
+Evidence: mcc ctest 9/9 · check-golden (3 checks incl. new staged gate) green ·
+`uv run pytest -q` 316 passed · validate_content OK (83 files).
+GDScript delta (verify assertion + doc comment) audited against GDScript 4
+typing rules (`w.has(...)` on a typed Dictionary local — parse-safe); remains
+execution-unverified in this env, per the standing boundary.
