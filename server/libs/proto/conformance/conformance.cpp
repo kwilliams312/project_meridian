@@ -621,6 +621,82 @@ std::vector<Message> build_corpus() {
                  expect(attrs->Get(1)->key() == 2u &&
                             attrs->Get(1)->value() == -7,
                         "if2_entity_enter.attrs[1]");
+                 // ②/T1 (#538): this canonical instance is the NPC/legacy shape —
+                 // it sets NO visual-assembly fields, so they must decode ABSENT
+                 // (appearance/equipment null; race/sex 0). Locks the additive
+                 // "omitted for non-players" branch alongside the populated golden.
+                 expect(m->appearance() == nullptr,
+                        "if2_entity_enter.appearance absent");
+                 expect(m->equipment() == nullptr,
+                        "if2_entity_enter.equipment absent");
+                 expect(m->race() == 0u, "if2_entity_enter.race unset");
+                 expect(m->sex() == 0u, "if2_entity_enter.sex unset");
+               }});
+
+  // EntityEnter WITH the ②/T1 (#538) visual-assembly block — a PLAYER entity that
+  // carries race, the §5.2 appearance record (contract ① T5), and one visible
+  // equipped item (feet slot) dyed on the primary channel with a NUMERIC dye id.
+  // Freezes the appended-field wire shape Task 4 (the client assembler) binds to:
+  // an EquippedVisual list of {slot, item_template, [DyeChoice{channel,dye_id}]}.
+  // The dye vector is populated HERE (hand-seeded) even though worldd sends it
+  // empty at M1 (no dye-application path, #467) — the corpus is the wire contract,
+  // not the current server behaviour.
+  c.push_back({"if2_entity_enter_visual", "IF-2", "ENTITY_ENTER (0x2001)",
+               "S->C player AoI entry WITH appearance + equipped visuals + dye",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 auto name = b.CreateString("Delwyn");
+                 auto appearance = mn::CreateAppearance(
+                     b, /*version=*/1u, /*hair=*/2u, /*face=*/3u, /*skin=*/1u);
+                 std::vector<fb::Offset<mn::DyeChoice>> dyes;
+                 dyes.push_back(mn::CreateDyeChoice(b, /*channel=*/0u, /*dye_id=*/7u));
+                 auto dyes_vec = b.CreateVector(dyes);
+                 std::vector<fb::Offset<mn::EquippedVisual>> eq;
+                 eq.push_back(mn::CreateEquippedVisual(
+                     b, /*slot=*/8u, /*item_template=*/42001u, dyes_vec));
+                 auto eq_vec = b.CreateVector(eq);
+                 // No attrs on this instance (the visual block is the subject).
+                 auto av = b.CreateVector(std::vector<fb::Offset<mn::AttrDelta>>{});
+                 b.Finish(mn::CreateEntityEnter(
+                     b, /*entity_guid=*/0x00000000000000ABULL,
+                     /*type_id=*/0x00000001u, /*x=*/64.0f, /*y=*/64.0f,
+                     /*z=*/0.5f, /*orientation=*/0.0f, av,
+                     /*char_class=*/1u, /*health=*/100u, /*max_health=*/100u,
+                     /*power=*/0u, /*max_power=*/0u, mn::PowerType::NONE,
+                     /*level=*/1u, name, /*race=*/3u, /*sex=*/0u, appearance, eq_vec));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::EntityEnter>(nullptr),
+                             "if2_entity_enter_visual verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::EntityEnter>(buf.data());
+                 expect(m->race() == 3u, "if2_entity_enter_visual.race");
+                 expect(m->sex() == 0u, "if2_entity_enter_visual.sex (male)");
+                 const auto* a = m->appearance();
+                 if (expect(a != nullptr, "if2_entity_enter_visual.appearance present")) {
+                   expect(a->version() == 1u, "if2_entity_enter_visual.appearance.version");
+                   expect(a->hair() == 2u, "if2_entity_enter_visual.appearance.hair");
+                   expect(a->face() == 3u, "if2_entity_enter_visual.appearance.face");
+                   expect(a->skin() == 1u, "if2_entity_enter_visual.appearance.skin");
+                 }
+                 const auto* eq = m->equipment();
+                 if (expect(eq != nullptr && eq->size() == 1,
+                            "if2_entity_enter_visual has 1 equipped visual")) {
+                   const auto* e0 = eq->Get(0);
+                   expect(e0->slot() == 8u, "if2_entity_enter_visual.equipment[0].slot");
+                   expect(e0->item_template() == 42001u,
+                          "if2_entity_enter_visual.equipment[0].item_template");
+                   const auto* d = e0->dyes();
+                   if (expect(d != nullptr && d->size() == 1,
+                              "if2_entity_enter_visual.equipment[0] has 1 dye")) {
+                     expect(d->Get(0)->channel() == 0u,
+                            "if2_entity_enter_visual.dye.channel");
+                     expect(d->Get(0)->dye_id() == 7u,
+                            "if2_entity_enter_visual.dye.dye_id (numeric)");
+                   }
+                 }
                }});
 
   // EntityUpdate exercises the OPTIONAL float fields (x/y/z/orientation =

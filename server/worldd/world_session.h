@@ -49,6 +49,7 @@
 #include "meridian/db/connection.h"
 #include "meridian/net/tls_listener.h"
 
+#include "characters.h"  // AppearanceRecord — §5.2 appearance loaded for EntityEnter (②/T1 #538)
 #include "world_generated.h"
 
 namespace meridian::worldd {
@@ -206,6 +207,12 @@ struct LoadedCharacter {
     std::string name;
     std::uint8_t class_id = 0;
     std::uint16_t level = 1;
+    // ②/T1 (#538): the character's roster race id + §5.2 appearance record, loaded
+    // so the enter-world path can populate the EntityEnter visual-assembly block.
+    // race is NOT NULL in the schema; appearance defaults to the bounded record
+    // when the column is NULL (AppearanceRecord::from_json).
+    std::uint8_t race = 0;
+    characters::AppearanceRecord appearance;
 };
 
 // Load character `character_id` IFF it is owned by `account_id`

@@ -101,6 +101,48 @@ using SessionSlot = std::uint64_t;
 using EgressFn =
     std::function<bool(net::Opcode opcode, const std::vector<std::uint8_t>& payload)>;
 
+// ---------------------------------------------------------------------------
+// ②/T1 (#538): character visual-assembly projection relayed on a PLAYER's
+// EntityEnter (client-character-assembler design §2). The client turns these ids
+// into an assembled character (per-race body + worn gear + dyes) by resolving
+// every id against pck content — only ids travel here. NPC/creature EntityEnter
+// carries NONE of this (EntityIdentity::visual stays nullopt), so those render
+// via the monolithic visual.model path. Kept as plain worldd structs (not the
+// generated wire types) so the encoder owns the FlatBuffer layout in one place.
+// ---------------------------------------------------------------------------
+
+// One dyed channel on an equipped item (contract ① §6). `dye_id` is the IF-9
+// NUMERIC dye id (dye@1 is pck-only, #467 — no world DB dye table), so it is the
+// resolved numeric id, never a content string. Empty at M1 (no dye path yet).
+struct DyeChoiceRec {
+    std::uint8_t channel = 0;   // 0 = primary, 1 = secondary, 2 = accent
+    std::uint32_t dye_id = 0;   // IF-9 numeric dye id (0 = unset)
+};
+
+// One VISIBLE equipped item, projected to the wire EquippedVisual. Empty
+// paperdoll positions and non-visual (jewellery) slots are never included.
+struct EquippedVisualRec {
+    std::uint8_t slot = 0;            // items::EquipSlot id (0-based)
+    std::uint32_t item_template = 0;  // IF-9 item_template id (never 0)
+    std::vector<DyeChoiceRec> dyes;   // empty at M1 (no dye-application path yet)
+};
+
+// A player's appearance + worn gear, resolved once at enter-world time from the
+// character row (race + §5.2 appearance JSON) and the equipment container, then
+// relayed on every EntityEnter for the session. Present ONLY for player entities.
+struct CharacterVisual {
+    std::uint8_t race = 0;    // M0-frozen roster race id (roster.h); 0 = unset
+    std::uint8_t sex = 0;     // reserved; 0 = male (M1)
+    // §5.2 appearance record scalars — already normalised (AppearanceRecord bounds
+    // rule) by the caller. Held as scalars so world_state.h stays free of the
+    // meridian::characters dependency (the parse happens in world_dispatch.cpp).
+    std::uint8_t appearance_version = 1;
+    std::uint8_t hair = 1;
+    std::uint8_t face = 1;
+    std::uint8_t skin = 1;
+    std::vector<EquippedVisualRec> equipment;  // visible slots only
+};
+
 // The spawn/type identity a session presents to observers on EntityEnter.
 struct EntityIdentity {
     AoiId entity_guid = 0;   // the mover's stable id (placeholder char guid)
@@ -113,6 +155,11 @@ struct EntityIdentity {
                                   // for the D-11 placeholder (no characters DB): such a
                                   // session is unaddressable by whisper but still chats
                                   // spatially / on channels by guid.
+    // ②/T1 (#538): visual-assembly projection for PLAYER entities. nullopt for
+    // NPCs/creatures (WorldEntityRec never sets it) — their EntityEnter omits
+    // race/appearance/equipment entirely, so the client renders them via the
+    // monolithic visual.model path.
+    std::optional<CharacterVisual> visual;
 };
 
 // ---------------------------------------------------------------------------

@@ -312,6 +312,20 @@ target_link_libraries(worldd-vitals-test
 set_target_properties(worldd-vitals-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-vitals COMMAND worldd-vitals-test)
 
+# --- EntityEnter appearance + equipped-visuals broadcast (②/T1, #538). ---------
+# DB-free: drives encode_entity_enter_payload() directly to prove the additive
+# visual-assembly fields — a player round-trips race/sex/appearance/equipment
+# (incl. a numeric-id dye choice); an NPC (no visual) omits them entirely.
+add_executable(worldd-entity-enter-visual-test
+  test/entity_enter_visual_test.cpp
+)
+target_link_libraries(worldd-entity-enter-visual-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-entity-enter-visual-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-entity-enter-visual COMMAND worldd-entity-enter-visual-test)
+
 # --- GM COMMAND FRAMEWORK UNIT test (OPS-02a; #417). --------------------------
 # PURE (no DB, no socket, no session): drives the gm_command framework directly
 # with CAPTURING reply + audit sinks (both std::function seams), so it asserts the

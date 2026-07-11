@@ -601,6 +601,65 @@ Bytes encode_inventory_snapshot(std::int64_t money, const itm::Inventory& inv) {
     return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
 }
 
+// ---- EntityEnter visual-assembly builder (S→C; ②/T1 #538) --------------------
+
+// Which paperdoll positions are VISUALLY rendered on an assembled character
+// (client-character-assembler design §2/§4). Armour + weapons appear on the model
+// and drive geoset hides / socketed weapons; jewellery (neck/finger/trinket) has
+// no visual and is never broadcast (it would leak equipment state for no render
+// gain). This is the "slot-visibility set" the design references; it lives here
+// (not the items lib) because visibility is a RENDER concern, not an equip rule.
+bool is_visual_equip_slot(itm::EquipSlot slot) {
+    switch (slot) {
+        case itm::EquipSlot::kNeck:
+        case itm::EquipSlot::kFinger:
+        case itm::EquipSlot::kTrinket:
+            return false;  // jewellery — no visual
+        default:
+            return true;   // armour + weapons render on the body
+    }
+}
+
+// Project a character's equipped set to the wire's visible-equipment list. Only
+// OCCUPIED, VISUAL slots are emitted (an empty slot / jewellery is omitted), so an
+// item_template is never 0. `dyes` is left EMPTY at M1: dye@1 is pck-only (#467),
+// the world DB has no dye table, and no dye-application path writes item_instance.
+// dyes yet — so worldd carries authored colours (design §2 dye-resolution note).
+// The populated dye shape is exercised by the conformance corpus + the worldd
+// entity-enter-visual unit test (hand-seeded numeric ids).
+std::vector<EquippedVisualRec> visible_equipment_visuals(const itm::Inventory& inv) {
+    std::vector<EquippedVisualRec> out;
+    const auto& equipped = inv.equipment();
+    for (std::size_t i = 0; i < equipped.size(); ++i) {
+        const std::optional<itm::ItemInstance>& s = equipped[i];
+        if (!s.has_value()) continue;  // empty paperdoll position
+        const itm::EquipSlot slot = static_cast<itm::EquipSlot>(i);
+        if (!is_visual_equip_slot(slot)) continue;  // jewellery — no visual
+        EquippedVisualRec ev;
+        ev.slot = static_cast<std::uint8_t>(i);
+        ev.item_template = s->template_id;
+        // ev.dyes stays empty at M1 (no dye-application path — see note above).
+        out.push_back(std::move(ev));
+    }
+    return out;
+}
+
+// Assemble the EntityEnter visual-assembly block for a player from its loaded
+// character row (race + §5.2 appearance) and equipment container (visible slots).
+// Present ONLY for players — NPCs never carry this (EntityIdentity::visual stays
+// nullopt), so their EntityEnter omits race/appearance/equipment entirely.
+CharacterVisual build_character_visual(const LoadedCharacter& pc, const itm::Inventory& inv) {
+    CharacterVisual vis;
+    vis.race = pc.race;
+    vis.sex = 0;  // M1 ships male only; the wire field reserves the additive future.
+    vis.appearance_version = pc.appearance.version;
+    vis.hair = pc.appearance.hair;
+    vis.face = pc.appearance.face;
+    vis.skin = pc.appearance.skin;
+    vis.equipment = visible_equipment_visuals(inv);
+    return vis;
+}
+
 // ---- known-abilities encoder (S→C, world.fbs; CMB-01 #457) -------------------
 
 // Project AbilityStore's AbilityResourceType to the wire AbilityResource enum. The
@@ -2043,6 +2102,16 @@ void Dispatcher::register_m0_stubs() {
                id.type_id = pc.class_id;     // M0: class stands in for type_id
                id.char_class = pc.class_id;  // #328: relay the class so clients color by class
                id.name = pc.name;            // #367: the whisper name key + ChatDeliver sender_name
+               // ②/T1 (#538): resolve this PLAYER's visual-assembly block — race +
+               // §5.2 appearance (from the loaded row) + the visible equipped set
+               // (loaded fresh here, same source as the inventory snapshot pushed
+               // below). Relayed on every EntityEnter for this session so observers
+               // can assemble the character; NPCs never carry it.
+               {
+                   const itm::Inventory inv =
+                       itm::load_inventory(*ctx.char_db, pc.char_guid, item_templates());
+                   id.visual = build_character_visual(pc, inv);
+               }
                EnterResult er = ctx.world->enter(
                    id, spawn,
                    [egress](net::Opcode op, const Bytes& payload) {
