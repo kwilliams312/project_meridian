@@ -203,3 +203,140 @@ def test_rig_glb_has_single_bone_root():
     table = set(bones.bone_names())
     unparented = {b for b in table if child_to_parent.get(b) not in table}
     assert unparented == {"Root"}, unparented
+
+
+# ---------------------------------------------------------------------------
+# generate_blockout — pure helpers (importable without bpy) + structural checks
+# on the committed greybox blockout body .glb (spec ④ §6 / T5).
+# ---------------------------------------------------------------------------
+import generate_blockout  # noqa: E402
+
+BODY_GLB = REPO / "content/core/assets/art/char/sk_ardent_male_base.glb"
+
+skip_if_body_pointer = pytest.mark.skipif(
+    _is_lfs_pointer(BODY_GLB),
+    reason="body .glb is an unsmudged LFS pointer (CI checkout without LFS smudge)",
+)
+
+GEOSET_REGIONS = ["head", "hands", "forearms", "torso", "waist", "hips_legs",
+                  "lower_legs", "feet"]
+
+
+def test_blockout_region_groups_cover_exactly_the_8_geoset_regions():
+    """Drift guard: region keys == skeleton.defs.yaml $defs.geosetRegion.enum."""
+    defs = yaml.safe_load((REPO / "schema/content/skeleton.defs.yaml").read_text())
+    assert sorted(generate_blockout.region_bone_groups()) == sorted(
+        defs["$defs"]["geosetRegion"]["enum"])
+
+
+def test_blockout_region_groups_use_only_canonical_bones():
+    canonical = set(bones.bone_names())
+    for region, groups in generate_blockout.region_bone_groups().items():
+        for group in groups:
+            assert group, f"{region} has an empty bone group"
+            unknown = set(group) - canonical
+            assert not unknown, f"{region} names unknown bones: {sorted(unknown)}"
+
+
+def test_blockout_mesh_name_follows_geoset_convention():
+    assert generate_blockout.mesh_name("head") == "geo_head_lod0"
+    assert generate_blockout.mesh_name("hips_legs") == "geo_hips_legs_lod0"
+
+
+def test_blockout_group_bbox_encloses_bones_with_min_radius():
+    lo, hi = generate_blockout.group_bbox(["Head", "Neck"], radius=0.11)
+    # Neck head y=1.44, Head tail y=1.72 — box spans at least that.
+    assert lo[1] <= 1.44 and hi[1] >= 1.72
+    # X span of the chain is 0 — the radius guarantees >= 0.11 half-extent.
+    assert (hi[0] - lo[0]) / 2.0 >= 0.11 - 1e-9
+
+
+def test_blockout_parse_args_defaults():
+    ns = generate_blockout.parse_args([])
+    assert ns.profile == "ardent_male"
+    assert ns.out.endswith("sk_ardent_male_base.glb")
+
+
+def test_blockout_parse_args_rejects_unknown_profile():
+    with pytest.raises(SystemExit):
+        generate_blockout.parse_args(["--profile", "dwarf_female"])
+
+
+def _load_body_gltf():
+    from pygltflib import GLTF2
+
+    return GLTF2().load(str(BODY_GLB))
+
+
+def _read_accessor_vec4(g, accessor_idx):
+    """Decode a VEC4 accessor from the .glb binary blob -> list of 4-tuples."""
+    import struct
+
+    acc = g.accessors[accessor_idx]
+    bv = g.bufferViews[acc.bufferView]
+    blob = g.binary_blob()
+    fmt_by_component = {5121: "B", 5123: "H", 5125: "I", 5126: "f"}
+    fmt = fmt_by_component[acc.componentType]
+    elem_size = struct.calcsize(fmt) * 4
+    stride = bv.byteStride or elem_size
+    base = (bv.byteOffset or 0) + (acc.byteOffset or 0)
+    out = []
+    for i in range(acc.count):
+        off = base + i * stride
+        out.append(struct.unpack_from("<" + fmt * 4, blob, off))
+    return out
+
+
+@pytest.mark.integration
+@skip_if_body_pointer
+def test_body_glb_mesh_names_are_exactly_the_8_lod0_geosets():
+    g = _load_body_gltf()
+    got = sorted(m.name for m in g.meshes)
+    want = sorted(f"geo_{r}_lod0" for r in GEOSET_REGIONS)
+    assert got == want, f"mesh names {got} != expected geosets {want}"
+
+
+@pytest.mark.integration
+@skip_if_body_pointer
+def test_body_glb_skin_joints_are_exactly_the_canonical_bone_set():
+    """I020: every skin joint is canonical AND the full 63-bone set is bound."""
+    g = _load_body_gltf()
+    assert g.skins, "body .glb carries no skin"
+    joint_names = set()
+    for skin in g.skins:
+        for j in skin.joints or []:
+            joint_names.add(g.nodes[j].name)
+    canonical = set(bones.bone_names())
+    assert joint_names - canonical == set(), (
+        f"non-canonical joints: {sorted(joint_names - canonical)}")
+    assert canonical - joint_names == set(), (
+        f"canonical bones missing from skin: {sorted(canonical - joint_names)}")
+
+
+@pytest.mark.integration
+@skip_if_body_pointer
+def test_body_glb_vertices_have_at_most_4_influences():
+    """E103/spec ④ §6: one JOINTS_0/WEIGHTS_0 set only — no JOINTS_1 spillover."""
+    g = _load_body_gltf()
+    for mesh in g.meshes:
+        for prim in mesh.primitives:
+            attrs = prim.attributes
+            assert attrs.JOINTS_0 is not None, f"{mesh.name} is not skinned"
+            assert attrs.WEIGHTS_0 is not None, f"{mesh.name} has no weights"
+            assert getattr(attrs, "JOINTS_1", None) is None, (
+                f"{mesh.name} carries a second influence set (>4 influences)")
+
+
+@pytest.mark.integration
+@skip_if_body_pointer
+def test_body_glb_weights_are_normalized():
+    g = _load_body_gltf()
+    for mesh in g.meshes:
+        for prim in mesh.primitives:
+            weights = _read_accessor_vec4(g, prim.attributes.WEIGHTS_0)
+            comp = g.accessors[prim.attributes.WEIGHTS_0].componentType
+            scale = 1.0 if comp == 5126 else (255.0 if comp == 5121 else 65535.0)
+            for i, w in enumerate(weights):
+                total = sum(w) / scale
+                assert abs(total - 1.0) < 5e-3, (
+                    f"{mesh.name} vertex {i} weight sum {total}")

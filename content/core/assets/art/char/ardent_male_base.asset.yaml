@@ -1,0 +1,21 @@
+# IF-8 sidecar (meridian/asset@1). Meridian greybox blockout body — the
+# ardent_male base .glb (8 geoset-cut primitive meshes skinned to the canonical
+# 63-bone armature, ≤4 influences) generated deterministically from
+# tools/blender/meridian_rig/bones.py by generate_blockout.py (spec ④ §6, T5).
+# This is the end-to-end pipeline proof body that spec ② assembles and spec ⑤
+# replaces with the sculpted mesh.
+schema: meridian/asset@1
+id: core:art.char.ardent.male.base
+class: character_model
+source: assets/art/char/sk_ardent_male_base.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: original
+  authors: [meridian-contributors]
+budget:
+  # 13 primitive boxes × 12 tris — far under the 60k character_model ceiling.
+  lod0_tris: 156
+import_hints:
+  # I023 exemption: a script-generated greybox blockout ships lod0 only; the
+  # 'character' preset permits 'single' for exactly this case (spec ④ §6).
+  lod_policy: single
