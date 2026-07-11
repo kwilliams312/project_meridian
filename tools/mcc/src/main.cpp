@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "stages/check.h"
+#include "stages/chunk_emit.h"
 #include "stages/format.h"
 #include "stages/index.h"
 #include "stages/stages.h"
@@ -365,6 +366,101 @@ int cmd_emit_pck(const std::vector<std::string>& args) {
                                          godot_version, format, std::cout, std::cerr);
 }
 
+// mcc chunk-emit [--zone <id>] [--grid <N>] [--out <dir>] [--origin-x <m>]
+//                [--origin-z <m>] [--built-at "<ts>"] [--godot-version <v>]
+//                [--diag-format=...]
+//   Emit a procedural N×N chunk fixture pack for a zone (Tools SAD §3, IF-6): the
+//   v0 slice of the real mcc chunk stage in fixture mode (#553). Goes through the
+//   real chunk.fbs `ServerChunk` schema + chunk-manifest.schema.yaml + real BLAKE3
+//   so the pack is byte-shaped like production. Without --out the IF-6 manifest
+//   goes to stdout; with --out <dir> the whole fixture (manifest, IF-8 asset
+//   table, IF-5 pack, per-chunk .chunk.bin/.scn/.proxy.scn) lands under
+//   <dir>/meridian/<ns>/chunks/<zone>/. Deliberately non-flat heightfields so
+//   downstream flat-vs-sloped bugs are catchable.
+int cmd_chunk_emit(const std::vector<std::string>& args) {
+    mcc::stages::ChunkEmitOptions opts;
+    std::string out_dir;
+    mcc::stages::DiagFormat format = mcc::stages::DiagFormat::Text;
+    // Small typed-flag parser: each `want_*` remembers a pending value token.
+    enum class Want { None, Zone, Grid, Out, OriginX, OriginZ, BuiltAt, Godot };
+    Want want = Want::None;
+    auto take_double = [](const std::string& s, double& dst) -> bool {
+        try { dst = std::stod(s); return true; } catch (...) { return false; }
+    };
+    auto take_int = [](const std::string& s, int& dst) -> bool {
+        try { dst = std::stoi(s); return true; } catch (...) { return false; }
+    };
+    for (const auto& a : args) {
+        if (want != Want::None) {
+            switch (want) {
+                case Want::Zone: opts.zone = a; break;
+                case Want::Grid:
+                    if (!take_int(a, opts.grid)) {
+                        std::cerr << kProg << " chunk-emit: --grid needs an integer\n";
+                        return 2;
+                    }
+                    break;
+                case Want::Out: out_dir = a; break;
+                case Want::OriginX:
+                    if (!take_double(a, opts.origin_x)) {
+                        std::cerr << kProg << " chunk-emit: --origin-x needs a number\n";
+                        return 2;
+                    }
+                    break;
+                case Want::OriginZ:
+                    if (!take_double(a, opts.origin_z)) {
+                        std::cerr << kProg << " chunk-emit: --origin-z needs a number\n";
+                        return 2;
+                    }
+                    break;
+                case Want::BuiltAt: opts.built_at = a; break;
+                case Want::Godot: opts.godot_version = a; break;
+                case Want::None: break;
+            }
+            want = Want::None;
+            continue;
+        }
+        if (a == "--zone") want = Want::Zone;
+        else if (a.rfind("--zone=", 0) == 0) opts.zone = a.substr(std::strlen("--zone="));
+        else if (a == "--grid") want = Want::Grid;
+        else if (a.rfind("--grid=", 0) == 0) {
+            if (!take_int(a.substr(std::strlen("--grid=")), opts.grid)) {
+                std::cerr << kProg << " chunk-emit: --grid needs an integer\n";
+                return 2;
+            }
+        } else if (a == "--out") want = Want::Out;
+        else if (a.rfind("--out=", 0) == 0) out_dir = a.substr(std::strlen("--out="));
+        else if (a == "--origin-x") want = Want::OriginX;
+        else if (a.rfind("--origin-x=", 0) == 0) {
+            if (!take_double(a.substr(std::strlen("--origin-x=")), opts.origin_x)) {
+                std::cerr << kProg << " chunk-emit: --origin-x needs a number\n";
+                return 2;
+            }
+        } else if (a == "--origin-z") want = Want::OriginZ;
+        else if (a.rfind("--origin-z=", 0) == 0) {
+            if (!take_double(a.substr(std::strlen("--origin-z=")), opts.origin_z)) {
+                std::cerr << kProg << " chunk-emit: --origin-z needs a number\n";
+                return 2;
+            }
+        } else if (a == "--built-at") want = Want::BuiltAt;
+        else if (a.rfind("--built-at=", 0) == 0) opts.built_at = a.substr(std::strlen("--built-at="));
+        else if (a == "--godot-version") want = Want::Godot;
+        else if (a.rfind("--godot-version=", 0) == 0) opts.godot_version = a.substr(std::strlen("--godot-version="));
+        else if (a == "--diag-format=json") format = mcc::stages::DiagFormat::Json;
+        else if (a == "--diag-format=text") format = mcc::stages::DiagFormat::Text;
+        else {
+            std::cerr << kProg << " chunk-emit: unknown flag '" << a << "'\n";
+            return 2;
+        }
+    }
+    if (want != Want::None) {
+        std::cerr << kProg << " chunk-emit: a flag is missing its value argument\n";
+        return 2;
+    }
+    opts.mcc_version = MCC_VERSION;
+    return mcc::stages::chunk_emit_run(opts, out_dir, format, std::cout, std::cerr);
+}
+
 int cmd_check(const std::vector<std::string>& args) {
     // --watch is stripped here (single-file only); the rest go to parse_check_flags.
     bool watch = false;
@@ -502,6 +598,7 @@ const Command kCommands[] = {
     {"refs",      "find-usages / backlinks for an id (refs <id> --json)",                        cmd_refs},
     {"emit-sql",  "emit IF-4 world DB SQL + world_manifest (--out <file>, --built-at)",         cmd_emit_sql},
     {"emit-pck",  "emit IF-5 client pack + pack.manifest.json (--out <dir>, --built-at)",       cmd_emit_pck},
+    {"chunk-emit","emit a procedural N×N chunk fixture pack (IF-6) (--zone, --grid, --out)",     cmd_chunk_emit},
     {"fmt",       "canonically format /content YAML; --check for CI/pre-commit",       cmd_fmt},
     {"diff",      "compare two builds: diff <buildA> <buildB>",                        cmd_diff},
     {"pack",      "build a signed .mcpack community pack + content hash",              cmd_pack},
@@ -588,6 +685,19 @@ void print_help() {
            "                       emit-sql's world_manifest hash (three-way tie).\n"
            "                       At M0 the pack payload is a documented directory\n"
            "                       manifest; the Godot-native .pck binary is a follow-up.\n\n"
+           "CHUNK-EMIT OPTIONS (IF-6, SAD §3 — procedural fixture, #553):\n"
+           "  --zone <id>          zone content id (default core:zone.zone01).\n"
+           "  --grid <N>           emit an N×N chunk grid (default 3), centred on\n"
+           "                       negative indices (Zone-01 spawns at x ≈ −300).\n"
+           "  --origin-x/-z <m>    zone-local grid origin in metres (default -384).\n"
+           "  --out <dir>          write the whole fixture under\n"
+           "                       <dir>/meridian/<ns>/chunks/<zone>/ (manifest, IF-8\n"
+           "                       asset table, IF-5 pack, per-chunk .chunk.bin/.scn/\n"
+           "                       .proxy.scn). Without --out the IF-6 manifest is on\n"
+           "                       stdout. Heightfields are deliberately NON-FLAT so\n"
+           "                       downstream flat-vs-sloped bugs are catchable.\n"
+           "  --built-at \"<ts>\"    pack.manifest.json built_at (fixed epoch default).\n"
+           "  --godot-version <v>  engine pin recorded in the pack manifest.\n\n"
            "NOTE: discover/parse, the structural lints (L001-L011), the link stage\n"
            "(reference graph + backlinks + IF-9 idmap), the ID index / typed pickers /\n"
            "backlinks surface (index/pickable/refs), emit-sql (IF-4 world DB SQL +\n"
