@@ -11,7 +11,12 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
+      # lfs: true — validate_content and the rig structural tests
+      # (tests/test_meridian_rig.py) read committed .glb binaries; without LFS
+      # smudge they see pointer files (tests skip, future glb lints would error).
       - uses: actions/checkout@v4
+        with:
+          lfs: true
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
@@ -53,7 +58,11 @@ jobs:
   mcc-parity:
     runs-on: ubuntu-latest
     steps:
+      # lfs: true — the parity run invokes validate_content.py, which reads
+      # committed .glb binaries (see the validate job note).
       - uses: actions/checkout@v4
+        with:
+          lfs: true
 
       # C++20 toolchain for mcc. yaml-cpp is NOT installed system-wide on purpose:
       # mcc's CMake falls back to a pinned FetchContent build (yaml-cpp 0.8.0), so
