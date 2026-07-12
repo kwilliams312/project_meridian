@@ -24,7 +24,7 @@ export interface RenderResult {
 
 export async function renderStem(
   sidecarPath: string,
-  opts: { repoRoot: string; backendName?: string },
+  opts: { repoRoot: string; backendName?: string; cacheDir?: string },
 ): Promise<RenderResult> {
   const stem = await loadStem(sidecarPath);
   const banks = usedSampleBanks(stem.params.code);
@@ -34,7 +34,7 @@ export async function renderStem(
 
   const backendName = opts.backendName ?? 'playwright';
   const key = cacheKey(stem.params, depVersions(backendName));
-  let wav = await cacheGet(key);
+  let wav = await cacheGet(key, opts.cacheDir);
   let seam = 0;
   if (!wav) {
     const beats = beatsPerBar(stem.params.timeSignature);
@@ -45,7 +45,7 @@ export async function renderStem(
     const looped = stem.sidecar.music.loop === false ? raw : wrapTail(raw, loopN);
     seam = seamDiscontinuity(looped);
     wav = encodeWav(looped);
-    await cachePut(key, wav);
+    await cachePut(key, wav, opts.cacheDir);
   }
   return { wav, provenance, seam, wavOutPath: stem.wavOutPath };
 }
