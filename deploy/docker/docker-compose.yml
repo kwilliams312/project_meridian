@@ -90,11 +90,18 @@ services:
       MERIDIAN_DB_USER: ${MERIDIAN_DB_USER:-meridian}
       MERIDIAN_DB_PASS: ${MERIDIAN_DB_PASS:-meridian}
       MERIDIAN_DB_NAME: meridian_auth
+    # meridiand parses "--flag value" (space-separated); the "--flag=value" form
+    # is silently ignored (authd/worldd main.cpp), so each flag + value MUST be
+    # separate argv entries.
     command:
-      - --cert=/certs/server.crt
-      - --key=/certs/server.key
-      - --bind=0.0.0.0
-      - --port=7100
+      - --cert
+      - /certs/server.crt
+      - --key
+      - /certs/server.key
+      - --bind
+      - 0.0.0.0
+      - --port
+      - "7100"
     volumes:
       - ./certs:/certs:ro
     ports:
@@ -113,11 +120,18 @@ services:
     container_name: meridian-worldd
     restart: unless-stopped
     # worldd has no DB dependency at M0 (SAD §5.2) — it needs only the cert.
+    # meridiand parses "--flag value" (space-separated); the "--flag=value" form
+    # is silently ignored (authd/worldd main.cpp), so each flag + value MUST be
+    # separate argv entries.
     command:
-      - --cert=/certs/server.crt
-      - --key=/certs/server.key
-      - --bind=0.0.0.0
-      - --port=7200
+      - --cert
+      - /certs/server.crt
+      - --key
+      - /certs/server.key
+      - --bind
+      - 0.0.0.0
+      - --port
+      - "7200"
     volumes:
       - ./certs:/certs:ro
     ports:
