@@ -1,13 +1,15 @@
 # meridian/appearance_catalog@1 — the ardent/male character-create catalog
 # (contract ①/T3 §5.1, client-assembler spec ② §3). M1 enablement body: this is
 # the ONE catalog the client character assembler (spec ②) drives its pickers and
-# preview from, referencing the committed blockout rig + body (spec ④/T5:
-# core:art.char.ardent.male.skeleton / .base). Real sculpted meshes, distinct
-# hair meshes, face textures and skin palettes are spec ⑤ — until then every
-# preset points at the blockout base as a schema-valid placeholder (no new asset
-# sidecars are allocated here). Preset ids are the STABLE integers the server
-# validates + the per-character appearance record stores (§5.2); they never
-# renumber. morphs ship at 0 for M1 (§2.5 crowd budget).
+# preview from. ⑤/S6 wires it to the REAL spec-⑤ content: the S4 sculpted body
+# (core:art.char.ardent.male.base), the four S5 hair meshes (hair_1..4), the four
+# S1 face textures (face_1..4) and the three S1 skin palettes (skin_1..3) — the
+# blockout-base placeholders every preset used to alias are gone. Preset ids are
+# the STABLE integers the server validates + the per-character appearance record
+# stores (§5.2); ⑤ swaps the referenced asset ids BEHIND those ids and never
+# renumbers — ids 1..3 keep their meaning; hair/face gain an append-only id 4 for
+# the fourth real asset (the server clamps 0→1 and stores any id, so appending is
+# safe). morphs ship at 0 for M1 (§2.5 crowd budget).
 schema: meridian/appearance_catalog@1
 id: core:appearance.ardent.male
 race: ardent
@@ -16,14 +18,16 @@ skeleton: core:art.char.ardent.male.skeleton
 body_model: core:art.char.ardent.male.base
 presets:
   hair:
-    - { id: 1, model: core:art.char.ardent.male.base }
-    - { id: 2, model: core:art.char.ardent.male.base }
-    - { id: 3, model: core:art.char.ardent.male.base }
+    - { id: 1, model: core:art.char.ardent.male.hair_1 }
+    - { id: 2, model: core:art.char.ardent.male.hair_2 }
+    - { id: 3, model: core:art.char.ardent.male.hair_3 }
+    - { id: 4, model: core:art.char.ardent.male.hair_4 }
   face:
-    - { id: 1, texture: core:art.char.ardent.male.base }
-    - { id: 2, texture: core:art.char.ardent.male.base }
-    - { id: 3, texture: core:art.char.ardent.male.base }
+    - { id: 1, texture: core:art.char.ardent.male.face_1 }
+    - { id: 2, texture: core:art.char.ardent.male.face_2 }
+    - { id: 3, texture: core:art.char.ardent.male.face_3 }
+    - { id: 4, texture: core:art.char.ardent.male.face_4 }
   skin:
-    - { id: 1, palette: core:art.char.ardent.male.base }
-    - { id: 2, palette: core:art.char.ardent.male.base }
-    - { id: 3, palette: core:art.char.ardent.male.base }
+    - { id: 1, palette: core:art.char.ardent.male.skin_1 }
+    - { id: 2, palette: core:art.char.ardent.male.skin_2 }
+    - { id: 3, palette: core:art.char.ardent.male.skin_3 }

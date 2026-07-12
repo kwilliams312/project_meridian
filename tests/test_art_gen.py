@@ -172,7 +172,7 @@ class TestPlateLocality:
         # Left glove → LeftHand, right glove → RightHand (single influence, no collapse).
         from tools.art.generate_warden_kit import build_shells
 
-        pos, _n, _i, vjoints, used = build_shells(gwk.SLOTS["hands"])
+        pos, _n, _i, vjoints, used, _uv = build_shells(gwk.SLOTS["hands"])
         assert set(used) == {"LeftHand", "RightHand"}
         for p, bone in zip(pos, vjoints):
             expected = "RightHand" if p[0] > 0 else "LeftHand"
@@ -244,6 +244,80 @@ class TestDyeMasks:
         assert len(masks) == 6
         # Masks are per-slot distinct (not a single shared texture).
         assert len(set(masks.values())) == 6
+
+
+def _decode_mask_pixels(png: bytes) -> list[tuple[int, int, int]]:
+    """Decode a build_mask_png RGB PNG (filter 0 rows) into a flat pixel list."""
+    import zlib
+
+    w, h, _bits, ctype = struct.unpack_from(">IIBB", png, 16)
+    assert ctype == 2  # RGB
+    # Concatenate IDAT chunk payloads, then inflate.
+    idat = b""
+    off = 8
+    while off < len(png):
+        length = struct.unpack_from(">I", png, off)[0]
+        tag = png[off + 4:off + 8]
+        if tag == b"IDAT":
+            idat += png[off + 8:off + 8 + length]
+        off += 12 + length
+    raw = zlib.decompress(idat)
+    stride = 1 + w * 3
+    pixels: list[tuple[int, int, int]] = []
+    for y in range(h):
+        base = y * stride + 1  # skip the per-row filter byte (0)
+        for x in range(w):
+            p = base + x * 3
+            pixels.append((raw[p], raw[p + 1], raw[p + 2]))
+    return pixels
+
+
+@pytest.mark.unit
+class TestPlateAppearanceS6:
+    """⑤/S6: plates read as dyed armor, not grey boxes.
+
+    The dye shader multiplies albedo by the dye (S3), so (a) the base albedo must
+    be LIGHT for a dye to read as its true hue, (b) metallic must be low so the
+    albedo drives the look, (c) the mesh must carry UVs so the mask maps across the
+    surface, and (d) the mask must cover the FULL dyeable surface (no neutral gaps).
+    """
+
+    def test_base_albedo_is_light_steel(self):
+        # grey (~0.4) × dye = mud; light steel (≥ 0.6) × dye = the dye's true hue.
+        r, g, b, a = gwk.BASE_COLOR
+        assert min(r, g, b) >= 0.6, f"base albedo {gwk.BASE_COLOR} too dark for dyes to read"
+        assert a == 1.0
+
+    @pytest.mark.parametrize("slot", SLOTS)
+    def test_material_metallic_is_low(self, slot):
+        from pygltflib import GLTF2
+
+        gltf = GLTF2().load_from_bytes(gwk.build_plate_glb(slot))
+        pbr = gltf.materials[0].pbrMetallicRoughness
+        assert pbr.metallicFactor <= 0.2, f"{slot} metallic {pbr.metallicFactor} swallows the dyed albedo"
+
+    @pytest.mark.parametrize("slot", SLOTS)
+    def test_plate_carries_uvs_for_mask(self, slot):
+        # Without TEXCOORD_0 the dye mask samples one texel → a dye tints a stripe.
+        from pygltflib import GLTF2
+
+        gltf = GLTF2().load_from_bytes(gwk.build_plate_glb(slot))
+        prim = gltf.meshes[0].primitives[0]
+        assert prim.attributes.TEXCOORD_0 is not None, f"{slot} plate has no UVs"
+        acc = gltf.accessors[prim.attributes.TEXCOORD_0]
+        assert acc.type == "VEC2"
+        assert acc.count == gltf.accessors[prim.attributes.POSITION].count
+
+    @pytest.mark.parametrize("slot", SLOTS)
+    def test_mask_covers_full_surface(self, slot):
+        # Every texel is dyed by exactly one channel — no neutral/black gaps that
+        # would leave undyed stripes on the plate.
+        pixels = _decode_mask_pixels(gwk.build_mask_png(slot))
+        assert all(max(px) > 0 for px in pixels), f"{slot} mask has undyed (black) texels"
+        # Primary (R) is the dominant channel so a single primary dye reads across
+        # the whole plate body, not a thin band.
+        primary = sum(1 for px in pixels if px[0] > 0)
+        assert primary > len(pixels) * 0.5, f"{slot} primary region is not dominant"
 
 
 @pytest.mark.unit
