@@ -88,16 +88,12 @@ _CHEST: list[Shell] = [
 
 # Right shells for the paired plates (left mirrored below).
 _SHOULDERS_R: Shell = ((0.13, 1.44, 0.0), (0.20, 0.16, 0.22), 13, ("RightShoulder",))
-# Upper-arm guard (rerebrace) — bridges the shoulder→forearm SEAM (⑤/S6 lead GPU
-# finding): the body's UPPER ARM belongs to the `torso` geoset, so any torso-hiding
-# chest/shoulder plate erases it and orphans the SEPARATE `forearms` geoset (elbow→
-# wrist) — the arms float. This shell rides the RightUpperArm bone (rest span
-# 0.17→0.47 m at the shoulder line, bones.py), covering that gap so the full kit
-# reads as one connected arm. Sized just under the 0.30 m shoulders shell cap
-# (TestPlateLocality) — anatomy-scale, not an arm-span bar. NOTE: this fixes the
-# FULL-KIT composite (the S6 DoD); the true root cure is a body geoset re-cut
-# (upper arm → forearms region) which is S4 territory — filed as a follow-up.
-_UPPERARM_R: Shell = ((0.32, 1.42, 0.0), (0.29, 0.15, 0.15), 10, ("RightUpperArm",))
+# NOTE: the "floating arms" seam (a torso-hiding plate erases the upper arm, which
+# lives in the `torso` geoset, orphaning the separate `forearms` geoset) is NOT
+# patched here. An upper-arm guard shell only masks the FULL-kit case and leaves a
+# torso-hiding chest-alone still broken; the real cure is a body geoset re-cut
+# (upper arm → forearms region), S4 territory — tracked as a known limitation in
+# follow-up #587. See the ⑤/S6 PR "arms seam" note.
 # Hands: a COMPACT hand-scale glove centred ON the RightHand bone (head 0.72 →
 # tail 0.82, mid ~0.77), single-influence-skinned to that bone so it follows the
 # hand — NOT one wide volume spanning both hands (that reads as a 1.5 m bar across
@@ -111,8 +107,7 @@ _FEET_R: Shell = ((0.09, 0.12, 0.05), (0.18, 0.30, 0.34), 14,
 
 SLOTS: dict[str, list[Shell]] = {
     "head": _HEAD,
-    "shoulders": [_SHOULDERS_R, _mirror_shell(_SHOULDERS_R),
-                  _UPPERARM_R, _mirror_shell(_UPPERARM_R)],
+    "shoulders": [_SHOULDERS_R, _mirror_shell(_SHOULDERS_R)],
     "chest": _CHEST,
     "hands": [_HANDS_R, _mirror_shell(_HANDS_R)],
     "legs": [_LEGS_R, _mirror_shell(_LEGS_R)],

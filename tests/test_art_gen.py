@@ -319,16 +319,6 @@ class TestPlateAppearanceS6:
         primary = sum(1 for px in pixels if px[0] > 0)
         assert primary > len(pixels) * 0.5, f"{slot} primary region is not dominant"
 
-    def test_shoulders_bridge_covers_upper_arm(self):
-        # ⑤/S6 arms-seam fix: the shoulders plate must skin geometry to the
-        # UpperArm bones so a torso-hiding kit does not orphan the forearms geoset.
-        from tools.art.generate_warden_kit import build_shells
-
-        _p, _n, _i, _vj, used, _uv = build_shells(gwk.SLOTS["shoulders"])
-        assert "RightUpperArm" in used and "LeftUpperArm" in used, (
-            f"shoulders binds {used} — no upper-arm bridge for the shoulder→forearm seam"
-        )
-
 
 @pytest.mark.unit
 class TestDeterminism:
