@@ -183,7 +183,51 @@ ConcOutcome conc_create(const db::ConnectParams& p, characters::CreateRequest re
 }
 }  // namespace
 
+// Pure (no-DB) unit checks for AppearanceRecord::from_json — the durable-read
+// fallback path (contract ① §5.2/§9). from_json takes a db::Cell (an
+// optional<string> holding the raw `character.appearance` JSON column), so these
+// exercise it directly with no MariaDB, and therefore run in the PLAIN server
+// ctest (not only the --db job). A garbage/truncated JSON string must fall back to
+// the versioned default {v:1,hair:1,face:1,skin:1} and never throw (#464).
+void run_from_json_unit_checks() {
+    using characters::AppearanceRecord;
+    auto is_default = [](const AppearanceRecord& a) {
+        return a.version == 1 && a.hair == 1 && a.face == 1 && a.skin == 1;
+    };
+
+    // Total garbage — not JSON at all. No recognisable key/number pairs, so every
+    // field keeps its default; must not crash.
+    check("from_json: non-JSON garbage falls back to defaults",
+          is_default(AppearanceRecord::from_json(db::Cell{"@@@ not json at all !!!"})));
+
+    // Structurally broken JSON (unterminated object, keys but no values).
+    check("from_json: truncated/broken JSON falls back to defaults",
+          is_default(AppearanceRecord::from_json(db::Cell{"{\"hair\": , \"face\""})));
+
+    // A key present but immediately followed by a non-digit → that field stays
+    // default (the purpose-built reader returns nullopt), the rest too.
+    check("from_json: key with non-numeric value falls back to default",
+          is_default(AppearanceRecord::from_json(db::Cell{"{\"skin\":\"oops\"}"})));
+
+    // Empty string and NULL cell → the versioned default (spec §5.2).
+    check("from_json: empty column falls back to defaults",
+          is_default(AppearanceRecord::from_json(db::Cell{std::string{}})));
+    check("from_json: NULL column falls back to defaults",
+          is_default(AppearanceRecord::from_json(db::Cell{})));
+
+    // A well-formed but OUT-OF-BOUNDS record is clamped, not rejected: version!=1
+    // -> 1, preset id 0 -> 1, and an in-range id survives (normalise on read, §9).
+    {
+        AppearanceRecord a =
+            AppearanceRecord::from_json(db::Cell{"{\"v\":9,\"hair\":0,\"face\":7,\"skin\":0}"});
+        check("from_json: out-of-bounds record clamps to bounds on read",
+              a.version == 1 && a.hair == 1 && a.face == 7 && a.skin == 1);
+    }
+}
+
 int main() {
+    run_from_json_unit_checks();
+
     db::ConnectParams p;
     bool configured = false;
     if (const char* s = env("MERIDIAN_DB_SOCKET")) { p.unix_socket = s; configured = true; }
@@ -196,7 +240,9 @@ int main() {
     if (!configured || p.user.empty()) {
         std::printf("SKIP: no MERIDIAN_DB_* connection configured (set "
                     "MERIDIAN_DB_SOCKET or MERIDIAN_DB_HOST + MERIDIAN_DB_USER)\n");
-        return 0;
+        // The DB scenarios skip, but the pure from_json checks above already ran —
+        // surface their result rather than an unconditional pass.
+        return g_fail == 0 ? 0 : 1;
     }
 
     // Randomised, distinct account_ids + name prefix so repeated/parallel local

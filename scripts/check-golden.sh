@@ -289,7 +289,9 @@ if command -v python3 >/dev/null 2>&1; then
       --content "$REPO_ROOT/$CONTENT_DIR" --staged "$REPO_ROOT/$STAGED_DIR" \
     || die "staged-model coverage FAILED — add the missing model(s) to STAGED_ART in $(basename "${BASH_SOURCE[0]}") and re-run --update-golden."
 else
-  warn "python3 not found — skipping staged-model coverage gate (tools/check_staged_models.py)"
+  # A missing python3 means the coverage gate cannot run — fail closed (die), not
+  # open (warn), so a determinism run can never silently skip it (issue #583).
+  die "python3 not found — cannot run the staged-model coverage gate (tools/check_staged_models.py); install python3 and re-run."
 fi
 
 log "${_B}Determinism gate passed.${_R} Golden corpus, staged client pack, and mcc output are all current and deterministic."

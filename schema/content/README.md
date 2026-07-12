@@ -2,7 +2,7 @@
 
 Schemas for the YAML content database (`/content`) — the source of truth for all game data (Baseline TD-06). Authored by Forge and Codex, hand-editable, compiled by `mcc` into world-DB SQL for the server and `.pck` resource packs for the client. These schema files are the contract all three consumers share (Baseline §5.1–5.2).
 
-Format: JSON Schema draft 2020-12, stored as YAML for readability. Shared definitions live in [common.defs.yaml](common.defs.yaml); validators must merge its `$defs` into each type schema before use (the reference validator [tools/validate_content.py](../../tools/validate_content.py) and `mcc` both do this).
+Format: JSON Schema draft 2020-12, stored as YAML for readability. Shared definitions live in two files, both of whose `$defs` validators must merge into every type schema before use: [common.defs.yaml](common.defs.yaml) (general primitives) and [skeleton.defs.yaml](skeleton.defs.yaml) (`meridian/skeleton@1` — the character/geoset vocabulary for contract ①). The reference validator [tools/validate_content.py](../../tools/validate_content.py) and `mcc` both merge both before use.
 
 ## Identifiers
 

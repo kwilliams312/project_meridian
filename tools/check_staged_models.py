@@ -13,8 +13,9 @@ the CONTENT tree but never staged → every plate hit ``_load_model_scene``'s
 
 This gate closes that hole: it collects every model asset id a renderable content
 doc references (item ``visual.model`` / ``visual.worn.models[].model`` /
-``race_overrides``, appearance ``skeleton`` / ``body_model`` / preset ``model``
-entries) and, for any whose asset sidecar names a source .glb that ACTUALLY EXISTS
+``race_overrides``, NPC/creature ``visual.model``, appearance ``skeleton`` /
+``body_model`` / preset ``model`` entries) and, for any whose asset sidecar names a
+source .glb that ACTUALLY EXISTS
 on disk, requires a staged .glb at the by-id path. A model whose source is still a
 placeholder (no committed bytes — NPC/creature blockouts at M0) is skipped: it is
 unavailable everywhere, not a staging regression. So the gate fails precisely on
@@ -69,7 +70,7 @@ def _id_to_staged_glb(asset_id: str) -> str:
 
 
 def _referenced_model_ids(content_dir: Path) -> set[str]:
-    """Model (mesh) asset ids referenced by renderable content — items + appearance."""
+    """Model (mesh) asset ids referenced by renderable content — items + NPCs + appearance."""
     ids: set[str] = set()
 
     for _path, doc in _iter_docs(content_dir, "item"):
@@ -84,6 +85,16 @@ def _referenced_model_ids(content_dir: Path) -> set[str]:
             for m in (ov or {}).get("models") or []:
                 if isinstance(m, dict) and isinstance(m.get("model"), str):
                     ids.add(m["model"])
+
+    # NPCs / creatures declare their mesh the same way an item does — visual.model
+    # (npc.schema.yaml). Inert today (every NPC/creature model is a byteless M0
+    # placeholder, so the source-bytes check in check() skips them), but collecting
+    # them keeps the gate honest with its own docstring: it must cover a real NPC
+    # .glb the day one is staged, exactly as it covers item plates.
+    for _path, doc in _iter_docs(content_dir, "npc"):
+        visual = doc.get("visual") or {}
+        if isinstance(visual.get("model"), str):
+            ids.add(visual["model"])
 
     for _path, doc in _iter_docs(content_dir, "appearance"):
         for key in ("skeleton", "body_model"):
