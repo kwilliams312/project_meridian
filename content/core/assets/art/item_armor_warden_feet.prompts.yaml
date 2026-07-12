@@ -1,0 +1,16 @@
+# Auditable Meshy generation record for the Warden's Kit sabatons (feet slot, TD-09).
+# Auxiliary companion, NOT a content entity: validate_content.py + mcc discovery
+# exclude *.prompts.yaml from envelope checks (issue #410 precedent). The raw
+# text-to-3D sculpt this records is the non-deterministic half; the deterministic
+# restyle (restyle_armor.py, --region feet) turns it into the committed
+# warden_feet.glb. Regenerate the sculpt from this prompt + task id if ever needed.
+task_id: 019f574c-da86-7c51-ad92-2dd8a966172e
+model_version: meshy-5
+preview_task_id: 019f574b-9f24-7ff2-a754-5ebe40a93161
+request:
+  mode: preview
+  prompt: a pair of stylized fantasy plate-armor sabatons, armored steel boots with
+    layered toe plates and ankle guards, symmetric, front-facing, hollow open at the
+    top, low-poly game asset, clean even topology
+  ai_model: meshy-5
+  target_polycount: 30000

@@ -1,0 +1,16 @@
+# Auditable Meshy generation record for the Warden's Kit pauldrons (shoulders slot, TD-09).
+# Auxiliary companion, NOT a content entity: validate_content.py + mcc discovery
+# exclude *.prompts.yaml from envelope checks (issue #410 precedent). The raw
+# text-to-3D sculpt this records is the non-deterministic half; the deterministic
+# restyle (restyle_armor.py, --region shoulders) turns it into the committed
+# warden_shoulders.glb. Regenerate the sculpt from this prompt + task id if ever needed.
+task_id: 019f574c-d983-7d3c-8d10-812f2b687ceb
+model_version: meshy-5
+preview_task_id: 019f574b-9f28-7bf4-97b1-c02a555a833a
+request:
+  mode: preview
+  prompt: a pair of stylized fantasy plate-armor pauldrons, symmetric layered steel
+    shoulder guards with ridged riveted trim, front-facing, hollow underside, low-poly
+    game asset, clean even topology
+  ai_model: meshy-5
+  target_polycount: 30000

@@ -1,0 +1,16 @@
+# Auditable Meshy generation record for the Warden's Kit helm (head slot, TD-09).
+# Auxiliary companion, NOT a content entity: validate_content.py + mcc discovery
+# exclude *.prompts.yaml from envelope checks (issue #410 precedent). The raw
+# text-to-3D sculpt this records is the non-deterministic half; the deterministic
+# restyle (restyle_armor.py, --region head) turns it into the committed
+# warden_head.glb. Regenerate the sculpt from this prompt + task id if ever needed.
+task_id: 019f5748-f92f-727c-9828-e281caec9afc
+model_version: meshy-5
+preview_task_id: 019f5747-a90f-7e6d-9f34-e03da6461f6b
+request:
+  mode: preview
+  prompt: a stylized fantasy plate-armor helm, a single wearable steel head-piece
+    covering the crown and face with a visor and riveted cheek guards, symmetric,
+    front-facing, hollow open at the neck, low-poly game asset, clean even topology
+  ai_model: meshy-5
+  target_polycount: 30000

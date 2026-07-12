@@ -1,0 +1,16 @@
+# Auditable Meshy generation record for the Warden's Kit greaves and tassets (legs slot, TD-09).
+# Auxiliary companion, NOT a content entity: validate_content.py + mcc discovery
+# exclude *.prompts.yaml from envelope checks (issue #410 precedent). The raw
+# text-to-3D sculpt this records is the non-deterministic half; the deterministic
+# restyle (restyle_armor.py, --region legs) turns it into the committed
+# warden_legs.glb. Regenerate the sculpt from this prompt + task id if ever needed.
+task_id: 019f574c-5f65-7d28-8c89-6db21c21a14e
+model_version: meshy-5
+preview_task_id: 019f574b-9f3d-7cdd-bc38-7799db77064f
+request:
+  mode: preview
+  prompt: stylized fantasy plate-armor leg greaves and tassets, symmetric steel thigh
+    and shin plates with riveted trim, front-facing, hollow interior, low-poly game
+    asset, clean even topology
+  ai_model: meshy-5
+  target_polycount: 30000
