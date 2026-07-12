@@ -1,5 +1,6 @@
 """Tests for meridian_rig — the canonical bone table (spec ④ §2) and the
 committed reference rig .glb it generates."""
+
 import re
 import sys
 from pathlib import Path
@@ -12,6 +13,7 @@ sys.path.insert(0, str(REPO / "tools" / "blender" / "meridian_rig"))
 import blender_pin  # noqa: E402
 import bones  # noqa: E402
 import generate_rig  # noqa: E402
+import restyle_armor  # noqa: E402
 import restyle_body  # noqa: E402
 import restyle_hair  # noqa: E402
 
@@ -46,6 +48,7 @@ def test_bone_count_is_63():
     assert len(bones.PROFILE_BONES) == 56
     assert len(bones.SOCKET_BONES) == 7
 
+
 def test_hierarchy_is_wellformed_single_root():
     h = bones.hierarchy()
     roots = [n for n, p in h.items() if p is None]
@@ -53,17 +56,25 @@ def test_hierarchy_is_wellformed_single_root():
     names = set(h)
     assert all(p in names for p in h.values() if p is not None)
 
+
 def test_socket_parents_match_spec():
     parents = {b.name: b.parent for b in bones.SOCKET_BONES}
     assert parents == {
-        "socket_main_hand": "RightHand", "socket_off_hand": "LeftHand",
-        "socket_shield": "LeftHand", "socket_back": "Chest",
-        "socket_ranged": "Chest", "socket_hip_l": "Hips", "socket_hip_r": "Hips"}
+        "socket_main_hand": "RightHand",
+        "socket_off_hand": "LeftHand",
+        "socket_shield": "LeftHand",
+        "socket_back": "Chest",
+        "socket_ranged": "Chest",
+        "socket_hip_l": "Hips",
+        "socket_hip_r": "Hips",
+    }
+
 
 def test_skeleton_defs_bones_matches_table():
     """Drift guard: schema/content/skeleton.defs.yaml bones == bones.py names."""
     defs = yaml.safe_load((REPO / "schema/content/skeleton.defs.yaml").read_text())
     assert defs["$defs"]["boneName"]["enum"] == bones.bone_names()
+
 
 def test_unknown_profile_raises():
     with pytest.raises(ValueError, match="ardent_male"):
@@ -81,10 +92,23 @@ def test_yup_to_blender_maps_gltf_yup_to_blender_zup():
 
 
 def test_argv_after_ddash_extracts_generator_args():
-    argv = ["blender", "--background", "--python", "generate_rig.py",
-            "--", "--profile", "ardent_male", "--out", "x.glb"]
+    argv = [
+        "blender",
+        "--background",
+        "--python",
+        "generate_rig.py",
+        "--",
+        "--profile",
+        "ardent_male",
+        "--out",
+        "x.glb",
+    ]
     assert generate_rig.argv_after_ddash(argv) == [
-        "--profile", "ardent_male", "--out", "x.glb"]
+        "--profile",
+        "ardent_male",
+        "--out",
+        "x.glb",
+    ]
 
 
 def test_argv_after_ddash_empty_when_no_separator():
@@ -214,16 +238,20 @@ def _quat_to_mat3(q):
 
 def _global_positions(g) -> dict[str, tuple[float, float, float]]:
     """Compose each node's TRS down the scene graph -> global joint positions."""
+
     def local_mat(n):
         r = _quat_to_mat3(n.rotation or [0.0, 0.0, 0.0, 1.0])
         t = n.translation or [0.0, 0.0, 0.0]
         s = n.scale or [1.0, 1.0, 1.0]
         return [[r[i][j] * s[j] for j in range(3)] + [t[i]] for i in range(3)] + [
-            [0.0, 0.0, 0.0, 1.0]]
+            [0.0, 0.0, 0.0, 1.0]
+        ]
 
     def matmul(a, b):
-        return [[sum(a[i][k] * b[k][j] for k in range(4)) for j in range(4)]
-                for i in range(4)]
+        return [
+            [sum(a[i][k] * b[k][j] for k in range(4)) for j in range(4)]
+            for i in range(4)
+        ]
 
     out: dict[str, tuple[float, float, float]] = {}
 
@@ -255,7 +283,8 @@ def test_rig_glb_rest_transforms_match_table():
         got = pos[spec.name]
         for axis, (a, b) in enumerate(zip(got, spec.head_m)):
             assert abs(a - b) < 1e-4, (
-                f"{spec.name} axis {axis}: exported {got} != table {spec.head_m}")
+                f"{spec.name} axis {axis}: exported {got} != table {spec.head_m}"
+            )
 
 
 @pytest.mark.integration
@@ -285,15 +314,24 @@ skip_if_body_pointer = pytest.mark.skipif(
     reason="body .glb is an unsmudged LFS pointer (CI checkout without LFS smudge)",
 )
 
-GEOSET_REGIONS = ["head", "hands", "forearms", "torso", "waist", "hips_legs",
-                  "lower_legs", "feet"]
+GEOSET_REGIONS = [
+    "head",
+    "hands",
+    "forearms",
+    "torso",
+    "waist",
+    "hips_legs",
+    "lower_legs",
+    "feet",
+]
 
 
 def test_blockout_region_groups_cover_exactly_the_8_geoset_regions():
     """Drift guard: region keys == skeleton.defs.yaml $defs.geosetRegion.enum."""
     defs = yaml.safe_load((REPO / "schema/content/skeleton.defs.yaml").read_text())
     assert sorted(generate_blockout.region_bone_groups()) == sorted(
-        defs["$defs"]["geosetRegion"]["enum"])
+        defs["$defs"]["geosetRegion"]["enum"]
+    )
 
 
 def test_blockout_region_groups_use_only_canonical_bones():
@@ -374,7 +412,8 @@ def test_body_glb_lod0_covers_exactly_the_8_geoset_regions():
         if int(mm.group("lod")) == 0:
             lod0.add(mm.group("region"))
     assert lod0 == set(GEOSET_REGIONS), (
-        f"LOD0 regions {sorted(lod0)} != {sorted(GEOSET_REGIONS)}")
+        f"LOD0 regions {sorted(lod0)} != {sorted(GEOSET_REGIONS)}"
+    )
 
 
 @pytest.mark.integration
@@ -397,7 +436,8 @@ def test_body_glb_ships_authored_lod_chain_per_region():
         assert 0 in lods, f"region '{region}' has no LOD0"
         assert any(lod >= 1 for lod in lods), (
             f"region '{region}' has no LOD1+ — a real body ships an authored "
-            f"chain, not the blockout's 'single' exemption (I023)")
+            f"chain, not the blockout's 'single' exemption (I023)"
+        )
 
 
 @pytest.mark.integration
@@ -412,9 +452,11 @@ def test_body_glb_skin_joints_are_exactly_the_canonical_bone_set():
             joint_names.add(g.nodes[j].name)
     canonical = set(bones.bone_names())
     assert joint_names - canonical == set(), (
-        f"non-canonical joints: {sorted(joint_names - canonical)}")
+        f"non-canonical joints: {sorted(joint_names - canonical)}"
+    )
     assert canonical - joint_names == set(), (
-        f"canonical bones missing from skin: {sorted(canonical - joint_names)}")
+        f"canonical bones missing from skin: {sorted(canonical - joint_names)}"
+    )
 
 
 @pytest.mark.integration
@@ -428,7 +470,8 @@ def test_body_glb_vertices_have_at_most_4_influences():
             assert attrs.JOINTS_0 is not None, f"{mesh.name} is not skinned"
             assert attrs.WEIGHTS_0 is not None, f"{mesh.name} has no weights"
             assert getattr(attrs, "JOINTS_1", None) is None, (
-                f"{mesh.name} carries a second influence set (>4 influences)")
+                f"{mesh.name} carries a second influence set (>4 influences)"
+            )
 
 
 @pytest.mark.integration
@@ -443,7 +486,8 @@ def test_body_glb_weights_are_normalized():
             for i, w in enumerate(weights):
                 total = sum(w) / scale
                 assert abs(total - 1.0) < 5e-3, (
-                    f"{mesh.name} vertex {i} weight sum {total}")
+                    f"{mesh.name} vertex {i} weight sum {total}"
+                )
 
 
 # --- restyle_body pure helpers (spec ⑤/S4; bpy-free, unit-tested) ------------
@@ -578,8 +622,7 @@ def test_restyle_hair_parse_args_requires_input_and_defaults_out():
 # --- committed hair .glb structural tests (spec ⑤/S5) ------------------------
 
 HAIR_GLBS = [
-    REPO / f"content/core/assets/art/char/ardent/male/hair_{n}.glb"
-    for n in range(1, 5)
+    REPO / f"content/core/assets/art/char/ardent/male/hair_{n}.glb" for n in range(1, 5)
 ]
 
 # armor_model L070 ceiling (Art PRD §2.1 armor set piece 3-8k) — a hair mesh
@@ -607,9 +650,11 @@ def test_hair_glb_binds_only_the_canonical_head_bone(hair_glb):
             joints.add(g.nodes[j].name)
     canonical = set(bones.bone_names())
     assert joints - canonical == set(), (
-        f"{hair_glb.name} binds non-canonical joints: {sorted(joints - canonical)}")
+        f"{hair_glb.name} binds non-canonical joints: {sorted(joints - canonical)}"
+    )
     assert restyle_hair.HAIR_BONE in joints, (
-        f"{hair_glb.name} skin does not bind the {restyle_hair.HAIR_BONE} bone")
+        f"{hair_glb.name} skin does not bind the {restyle_hair.HAIR_BONE} bone"
+    )
 
 
 @pytest.mark.integration
@@ -626,7 +671,8 @@ def test_hair_glb_is_single_influence(hair_glb):
             attrs = prim.attributes
             assert attrs.JOINTS_0 is not None, f"{mesh.name} is not skinned"
             assert getattr(attrs, "JOINTS_1", None) is None, (
-                f"{mesh.name} carries a second influence set (>4 influences)")
+                f"{mesh.name} carries a second influence set (>4 influences)"
+            )
             weights = _read_accessor_vec4(g, attrs.WEIGHTS_0)
             comp = g.accessors[attrs.WEIGHTS_0].componentType
             scale = 1.0 if comp == 5126 else (255.0 if comp == 5121 else 65535.0)
@@ -634,9 +680,11 @@ def test_hair_glb_is_single_influence(hair_glb):
                 nonzero = [c for c in w if c / scale > 1e-3]
                 assert len(nonzero) == 1, (
                     f"{mesh.name} vertex {i} has {len(nonzero)} influences "
-                    f"(hair is single-influence)")
+                    f"(hair is single-influence)"
+                )
                 assert abs(nonzero[0] / scale - 1.0) < 5e-3, (
-                    f"{mesh.name} vertex {i} single weight {nonzero[0] / scale} != 1")
+                    f"{mesh.name} vertex {i} single weight {nonzero[0] / scale} != 1"
+                )
 
 
 @pytest.mark.integration
@@ -656,7 +704,8 @@ def test_hair_glb_is_low_poly_within_budget(hair_glb):
             else:
                 tris += g.accessors[prim.attributes.POSITION].count // 3
     assert 0 < tris <= _ARMOR_TRI_CEILING, (
-        f"{hair_glb.name} has {tris} tris (must be 1..{_ARMOR_TRI_CEILING})")
+        f"{hair_glb.name} has {tris} tris (must be 1..{_ARMOR_TRI_CEILING})"
+    )
 
 
 @pytest.mark.integration
@@ -670,4 +719,287 @@ def test_hair_glb_mesh_is_not_geoset_named(hair_glb):
     g = GLTF2().load(str(hair_glb))
     for mesh in g.meshes:
         assert not (mesh.name or "").startswith("geo_"), (
-            f"{hair_glb.name} mesh '{mesh.name}' is geoset-named (forbidden for gear)")
+            f"{hair_glb.name} mesh '{mesh.name}' is geoset-named (forbidden for gear)"
+        )
+
+
+# --- restyle_armor pure helpers (spec ⑤/S4, #595; bpy-free, unit-tested) ------
+
+
+def test_restyle_armor_regions_bind_only_canonical_bones():
+    """Every region's bind set names only canonical bones (I021/E100)."""
+    canonical = set(bones.bone_names())
+    for region, cfg in restyle_armor.REGION_BIND.items():
+        assert cfg.bind, f"{region} has an empty bind set"
+        assert set(cfg.bind) <= canonical, (
+            f"{region} binds non-canonical bones: {sorted(set(cfg.bind) - canonical)}"
+        )
+
+
+def test_restyle_armor_chest_binds_the_spine_column():
+    """The chest cuirass rides Spine/Chest/UpperChest (the torso column)."""
+    chest = restyle_armor.REGION_BIND["chest"]
+    assert chest.region == "torso"
+    assert set(chest.bind) == {"Spine", "Chest", "UpperChest"}
+
+
+def test_restyle_armor_mesh_name_is_not_geoset_named():
+    """E104: the exported armor mesh must not use geo_<region> geoset naming."""
+    assert not restyle_armor.ARMOR_MESH_NAME.startswith("geo_")
+
+
+def test_restyle_armor_budget_band_is_within_the_armor_ceiling():
+    """Art PRD §2.1: 3–8k tris/slot, under the 8k armor_model L070 ceiling."""
+    assert restyle_armor.MIN_TRIS >= 3_000
+    assert restyle_armor.MIN_TRIS <= restyle_armor.TARGET_TRIS <= restyle_armor.MAX_TRIS
+    assert restyle_armor.MAX_TRIS < 8_000
+
+
+def test_restyle_armor_torso_region_box_spans_spine_to_shoulders():
+    """The torso region box covers the spine column up to the shoulder girdle.
+
+    Blender Z-up: Z (index 2) is height. The torso bones run Spine.head (Y=1.05)
+    → UpperChest.tail (Y=1.44), so the box's Z span must bracket that range — the
+    span a chest cuirass covers and reaches up from.
+    """
+    lo, hi = restyle_armor.region_box("torso")
+    assert lo[2] <= 1.06, f"torso box floor {lo[2]} is above the spine base"
+    assert hi[2] >= 1.43, f"torso box ceiling {hi[2]} is below the upper chest"
+
+
+def test_restyle_armor_fit_spans_region_plus_inflation_no_void():
+    """The fitted plate AABB provably spans the region inflated outward + up.
+
+    A raw sculpt AABB mapped through the fit transform must land exactly on the
+    region box grown by ``inflate`` on every axis and by ``up_extend`` on the top
+    of the up-axis — so the plate covers the torso with no gap (no void) and
+    reaches up to bridge the shoulder seam, independent of the sculpt's shape.
+    """
+    lo, hi = restyle_armor.region_box("torso")
+    mesh_min = (-2.0, -3.0, 5.0)  # deliberately arbitrary raw-sculpt AABB
+    mesh_max = (4.0, 1.0, 9.0)
+    inflate, up_extend, up_axis = 0.06, 0.07, 2
+    scale, offset = restyle_armor.fit_region_transform(
+        mesh_min,
+        mesh_max,
+        lo,
+        hi,
+        inflate=inflate,
+        up_extend=up_extend,
+        up_axis=up_axis,
+    )
+    fitted_min = tuple(mesh_min[i] * scale[i] + offset[i] for i in range(3))
+    fitted_max = tuple(mesh_max[i] * scale[i] + offset[i] for i in range(3))
+    for i in range(3):
+        assert fitted_min[i] == pytest.approx(lo[i] - inflate, abs=1e-6)
+        exp_hi = hi[i] + inflate + (up_extend if i == up_axis else 0.0)
+        assert fitted_max[i] == pytest.approx(exp_hi, abs=1e-6)
+    # The top of the plate reaches above the bare region ceiling (bridges the seam).
+    assert fitted_max[up_axis] > hi[up_axis]
+
+
+def test_restyle_armor_cylindrical_uv_wraps_and_climbs():
+    """u wraps [0,1) around the vertical axis; v climbs 0→1 with height."""
+    lo, hi = restyle_armor.region_box("torso")
+    cx = (lo[0] + hi[0]) / 2.0
+    cy = (lo[1] + hi[1]) / 2.0
+    bottom = restyle_armor.cylindrical_uv((cx + 0.1, cy, lo[2]), lo, hi, up_axis=2)
+    top = restyle_armor.cylindrical_uv((cx + 0.1, cy, hi[2]), lo, hi, up_axis=2)
+    assert bottom[1] == pytest.approx(0.0, abs=1e-6)
+    assert top[1] == pytest.approx(1.0, abs=1e-6)
+    # A half-turn around the axis moves u by ~0.5.
+    front = restyle_armor.cylindrical_uv((cx + 0.1, cy, hi[2]), lo, hi, up_axis=2)
+    back = restyle_armor.cylindrical_uv((cx - 0.1, cy, hi[2]), lo, hi, up_axis=2)
+    assert abs(front[0] - back[0]) == pytest.approx(0.5, abs=1e-6)
+    for uv in (bottom, top, front, back):
+        assert 0.0 <= uv[0] < 1.0 and 0.0 <= uv[1] <= 1.0
+
+
+def test_restyle_armor_uv_normalized_against_fitted_bounds_not_prefit_box():
+    """v must be normalized against the mesh's fitted bounds, not the pre-fit box.
+
+    The mesh occupies the region grown by inflate (all axes) + up_extend (top of the
+    up-axis). Normalizing v against the PRE-FIT box sends the margin + shoulder-bridge
+    geometry outside [0,1] where it CLAMPS (the shipped regression: >50% at v=0). This
+    guards the pure invariant: over the FITTED span, v climbs 0→1 with no clamped bulk.
+    """
+    lo, hi = restyle_armor.region_box("torso")
+    inflate, up_extend, up_axis = 0.06, 0.07, 2
+    fit_lo = tuple(lo[i] - inflate for i in range(3))
+    fit_hi = tuple(
+        hi[i] + inflate + (up_extend if i == up_axis else 0.0) for i in range(3)
+    )
+    cx = (fit_lo[0] + fit_hi[0]) / 2.0
+    cy = (fit_lo[1] + fit_hi[1]) / 2.0
+
+    # WRONG (pre-fit box): the fitted bottom + top land outside [0,1] → clamp.
+    wrong_bottom = restyle_armor.cylindrical_uv((cx, cy, fit_lo[2]), lo, hi, up_axis)
+    wrong_top = restyle_armor.cylindrical_uv((cx, cy, fit_hi[2]), lo, hi, up_axis)
+    assert wrong_bottom[1] == 0.0 and wrong_top[1] == 1.0  # both clamp (info lost)
+
+    # RIGHT (fitted bounds): the same physical extremes map to exactly 0 and 1, and
+    # every interior height maps strictly inside — no bulk clamping.
+    right_bottom = restyle_armor.cylindrical_uv(
+        (cx, cy, fit_lo[2]), fit_lo, fit_hi, up_axis
+    )
+    right_top = restyle_armor.cylindrical_uv(
+        (cx, cy, fit_hi[2]), fit_lo, fit_hi, up_axis
+    )
+    assert right_bottom[1] == pytest.approx(0.0, abs=1e-6)
+    assert right_top[1] == pytest.approx(1.0, abs=1e-6)
+    for frac in (0.1, 0.25, 0.5, 0.75, 0.9):  # interior heights are unclamped
+        z = fit_lo[2] + frac * (fit_hi[2] - fit_lo[2])
+        v = restyle_armor.cylindrical_uv((cx, cy, z), fit_lo, fit_hi, up_axis)[1]
+        assert v == pytest.approx(frac, abs=1e-6)
+
+
+@pytest.mark.integration
+def test_chest_glb_dye_uv_v_spans_full_range_without_bulk_clamp():
+    """The shipped cuirass dye UV v spans ~[0,1] with <5% clamped at either extreme.
+
+    Regression guard for the fit→UV integration bug (#595 review): v was normalized
+    against the pre-fit region box while the mesh occupies the inflated + up-extended
+    envelope, so 52.3% of verts (concentrated in the shoulder-bridge geometry) clamped
+    to v=0 and the height-banded dye mask degenerated to flat colour over half the
+    plate. Normalizing against the mesh's real fitted bounds fixes it — the whole mesh
+    maps across the mask's full 0..1 range.
+    """
+    if not _chest_present_and_smudged():
+        pytest.skip(f"{CHEST_GLB.name} missing or an unsmudged LFS pointer")
+    import struct
+
+    from pygltflib import GLTF2
+
+    g = GLTF2().load(str(CHEST_GLB))
+    blob = g.binary_blob()
+    prim = g.meshes[0].primitives[0]
+    acc = g.accessors[prim.attributes.TEXCOORD_0]
+    bv = g.bufferViews[acc.bufferView]
+    base = (bv.byteOffset or 0) + (acc.byteOffset or 0)
+    stride = bv.byteStride or 8
+    vs = [
+        struct.unpack_from("<2f", blob, base + i * stride)[1] for i in range(acc.count)
+    ]
+    n = len(vs)
+    clamp_lo = sum(1 for v in vs if v <= 1e-6) / n
+    clamp_hi = sum(1 for v in vs if v >= 1.0 - 1e-6) / n
+    assert min(vs) < 0.05 and max(vs) > 0.95, (
+        f"dye UV v does not span [0,1]: min={min(vs):.3f} max={max(vs):.3f}"
+    )
+    assert clamp_lo < 0.05, (
+        f"{clamp_lo:.1%} of verts clamp at v=0 (was 52.3% before the fix)"
+    )
+    assert clamp_hi < 0.05, f"{clamp_hi:.1%} of verts clamp at v=1"
+
+
+def test_restyle_armor_nearest_bind_bone_picks_by_height():
+    """A point near the spine base binds Spine; near the top binds UpperChest."""
+    bind = ("Spine", "Chest", "UpperChest")
+    # Blender Z-up; spine base ~Z 1.11 (Spine mid), upper chest ~Z 1.38.
+    assert restyle_armor.nearest_bind_bone((0.0, 0.0, 1.10), bind) == "Spine"
+    assert restyle_armor.nearest_bind_bone((0.0, 0.0, 1.40), bind) == "UpperChest"
+
+
+def test_restyle_armor_parse_args_defaults_to_chest():
+    ns = restyle_armor.parse_args(["--in", "raw.glb"])
+    assert ns.in_glb == "raw.glb"
+    assert ns.region == "chest"
+    assert ns.out == restyle_armor.DEFAULT_OUT
+    assert ns.body_glb == restyle_armor.DEFAULT_BODY_GLB
+    with pytest.raises(SystemExit):
+        restyle_armor.parse_args([])  # --in is required
+
+
+def test_restyle_armor_read_glb_aabb_missing_mesh_returns_none():
+    """A missing file or absent mesh yields None (caller falls back to the nominal box)."""
+    assert (
+        restyle_armor._read_glb_mesh_aabb("/nonexistent.glb", "geo_torso_lod0") is None
+    )
+
+
+BODY_BASE_GLB = REPO / "content/core/assets/art/char/sk_ardent_male_base.glb"
+
+
+@pytest.mark.integration
+def test_restyle_armor_body_region_box_is_wider_than_nominal():
+    """The real torso surface is WIDER (X) than the bone-group box — so fitting to
+    it (not the nominal box) makes the cuirass sit outside the body with no void."""
+    if BODY_BASE_GLB.is_file() and _is_lfs_pointer(BODY_BASE_GLB):
+        pytest.skip("body base .glb is an unsmudged LFS pointer")
+    body = restyle_armor.body_region_box(str(BODY_BASE_GLB), "torso")
+    if body is None:
+        pytest.skip("body torso geoset unavailable")
+    nom_lo, nom_hi = restyle_armor.region_box("torso")
+    b_lo, b_hi = body
+    # X half-width from the real surface exceeds the nominal shoulder-bone span.
+    assert (b_hi[0] - b_lo[0]) > (nom_hi[0] - nom_lo[0]), (
+        "body torso surface should be wider in X than the nominal bone-group box"
+    )
+    # Height (Blender Z) brackets the spine column.
+    assert b_lo[2] <= 1.12 and b_hi[2] >= 1.42
+
+
+# --- committed warden_chest .glb structural tests (spec ⑤/S4, #595) -----------
+
+CHEST_GLB = REPO / "content/core/assets/art/item/armor/warden_chest.glb"
+
+
+def _chest_present_and_smudged() -> bool:
+    return CHEST_GLB.is_file() and not _is_lfs_pointer(CHEST_GLB)
+
+
+@pytest.mark.integration
+def test_chest_glb_binds_only_canonical_torso_bones():
+    """I021/E100: the cuirass skin binds only canonical bones, incl. the spine column."""
+    if not _chest_present_and_smudged():
+        pytest.skip(f"{CHEST_GLB.name} missing or an unsmudged LFS pointer")
+    from pygltflib import GLTF2
+
+    g = GLTF2().load(str(CHEST_GLB))
+    assert g.skins, f"{CHEST_GLB.name} carries no skin"
+    joints = set()
+    for skin in g.skins:
+        for j in skin.joints or []:
+            joints.add(g.nodes[j].name)
+    canonical = set(bones.bone_names())
+    assert joints - canonical == set(), (
+        f"{CHEST_GLB.name} binds non-canonical joints: {sorted(joints - canonical)}"
+    )
+    # At least one bound joint is a torso-column bone the cuirass rides.
+    assert joints & {"Spine", "Chest", "UpperChest"}, (
+        f"{CHEST_GLB.name} does not bind any torso-column bone"
+    )
+
+
+@pytest.mark.integration
+def test_chest_glb_is_within_the_armor_budget_band():
+    """L070 / Art PRD §2.1: the cuirass is 3–8k tris (real plate, not a blockout)."""
+    if not _chest_present_and_smudged():
+        pytest.skip(f"{CHEST_GLB.name} missing or an unsmudged LFS pointer")
+    from pygltflib import GLTF2
+
+    g = GLTF2().load(str(CHEST_GLB))
+    tris = 0
+    for mesh in g.meshes:
+        for prim in mesh.primitives:
+            if prim.indices is not None:
+                tris += g.accessors[prim.indices].count // 3
+            else:
+                tris += g.accessors[prim.attributes.POSITION].count // 3
+    assert 3_000 <= tris <= 8_000, (
+        f"{CHEST_GLB.name} has {tris} tris (must be 3,000..8,000)"
+    )
+
+
+@pytest.mark.integration
+def test_chest_glb_mesh_is_not_geoset_named():
+    """E104: the cuirass mesh must not use geo_<region> geoset naming (it is gear)."""
+    if not _chest_present_and_smudged():
+        pytest.skip(f"{CHEST_GLB.name} missing or an unsmudged LFS pointer")
+    from pygltflib import GLTF2
+
+    g = GLTF2().load(str(CHEST_GLB))
+    for mesh in g.meshes:
+        assert not (mesh.name or "").startswith("geo_"), (
+            f"{CHEST_GLB.name} mesh '{mesh.name}' is geoset-named (forbidden for gear)"
+        )
