@@ -487,3 +487,55 @@ def test_rig_checks_imports_lazily_and_raises_actionable_error_without_repo(
     )
     with pytest.raises(RuntimeError, match="repo checkout"):
         mod.check_rig(data)  # (b) actionable failure, not a silent pass
+
+
+# --- check_rigdata: the system-Python E-rule gate for the headless restyle ---
+# (spec ⑤/S4 — restyle_body writes a RigData snapshot as JSON because Blender's
+# bundled Python has no PyYAML; this shell renders the E100-E105 verdict.)
+import json  # noqa: E402
+
+import check_rigdata  # noqa: E402
+
+
+def _canonical_snapshot() -> dict:
+    """A minimal PASS-ing snapshot: 63 canonical bones, one skinned geoset."""
+    return {
+        "asset_class": "character_model",
+        "bone_names": list(rig_checks.CANONICAL_BONE_NAMES),
+        "socket_names": list(rig_checks.SOCKET_NAMES),
+        "mesh_names": [f"geo_{r}_lod0" for r in rig_checks.GEOSET_REGIONS]
+        + [f"geo_{r}_lod1" for r in rig_checks.GEOSET_REGIONS],
+        "max_influences": 4,
+        "weights_normalized": True,
+        "mesh_max_influences": {},
+        "unnormalized_meshes": [],
+        "object_transforms": [
+            {"name": f"geo_{r}_lod0", "transforms_applied": True}
+            for r in rig_checks.GEOSET_REGIONS
+        ],
+        "unit_scale_ok": True,
+    }
+
+
+def test_check_rigdata_reconstructs_and_passes_a_clean_snapshot(tmp_path):
+    snap = tmp_path / "rigdata.json"
+    snap.write_text(json.dumps(_canonical_snapshot()), encoding="utf-8")
+    assert check_rigdata.main([str(snap)]) == 0
+
+
+def test_check_rigdata_flags_a_non_canonical_bone(tmp_path, capsys):
+    doc = _canonical_snapshot()
+    doc["bone_names"].append("mixamorig:Hips")  # not in the canonical set
+    snap = tmp_path / "rigdata.json"
+    snap.write_text(json.dumps(doc), encoding="utf-8")
+    assert check_rigdata.main([str(snap)]) == 1
+    assert "E100" in capsys.readouterr().err
+
+
+def test_check_rigdata_flags_over_influence_mesh(tmp_path, capsys):
+    doc = _canonical_snapshot()
+    doc["mesh_max_influences"] = {"geo_torso_lod0": 6}
+    snap = tmp_path / "rigdata.json"
+    snap.write_text(json.dumps(doc), encoding="utf-8")
+    assert check_rigdata.main([str(snap)]) == 1
+    assert "E103" in capsys.readouterr().err

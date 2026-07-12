@@ -126,6 +126,64 @@ work anywhere, but exporting `character_model`/`armor_model` requires running
 Blender from a Project Meridian repo checkout (otherwise the export aborts with
 an error saying exactly that).
 
+## Restyle workflow — Meshy organic → canonical body/gear (spec ⑤ §5)
+
+"Kitbash to style" (Art PRD §3.4) made concrete for AI-tier organics. The raw
+Meshy sculpt never ships; it is restyled onto the pipeline before
+`restyle_status` is flipped to `done` in the reviewed PR. The **ardent male
+body** (`⑤/S4`) is the reference implementation, driven by
+`tools/blender/meridian_rig/restyle_body.py`:
+
+1. **Fetch** — `python -m meshy generate --text "…T-pose…" --class character_model
+   --terms-verified` lands the raw sculpt `.glb` + an auditable `*.prompts.yaml`
+   (task id, model version, exact request) + a `source_tier: ai`,
+   `restyle_status: pending` sidecar under `content/…/assets/art/<name>/`.
+2. **Fit** — import into Blender, join to one mesh, apply transforms, then
+   uniformly scale + translate so the sculpt's height matches the canonical
+   rig's and its feet sit on the floor, X/Y centred on the vertical axis
+   (`fit_transform`).
+3. **Budget + LOD** — collapse-decimate LOD0 into the Art PRD §2.1 player-body
+   band (45–60k), then derive an authored LOD0–3 chain per region (each level
+   ~halves the previous). Under-budget sculpts are subdivided once first.
+4. **Geoset cut** — spatially partition the body into the 8
+   `geo_<region>_lod<N>` meshes by nearest region bone-group anchor (a Voronoi
+   split using the same region→bone table the greybox blockout is built from).
+   Any region the sculpt didn't cover falls back to a blockout proxy box so all
+   8 regions are always present at LOD0 (I022).
+5. **Rig-skin** — bind each geoset to the canonical 63-bone armature by bone
+   name, ≤4 influences, normalized. `restyle_body` binds by bone-segment
+   proximity (each vertex to its ≤4 nearest canonical bones, inverse-square
+   weighted) rather than fragile headless bone-heat — the E103/I020 contract
+   (canonical joints, ≤4 influences, normalized, 63 skin joints) is identical.
+6. **Export gate** — run headless:
+   ```bash
+   BLENDER=/path/to/blender  # must match blender_pin.PINNED_VERSION
+   "$BLENDER" --background --factory-startup -noaudio \
+     --python tools/blender/meridian_rig/restyle_body.py -- \
+     --in  <raw_meshy>.glb \
+     --out content/core/assets/art/char/sk_ardent_male_base.glb \
+     --rigdata-json /tmp/rigdata.json
+   uv run python tools/blender/meridian_export/check_rigdata.py /tmp/rigdata.json
+   ```
+   The restyle writes the `.glb` with `meridian_export`'s baked-in axis/unit
+   conventions (`export_yup=True`, transforms applied) plus a **RigData
+   snapshot** of the E-rule inputs. `check_rigdata.py` then renders the
+   E100–E105 verdict in system Python — Blender's bundled Python has no PyYAML,
+   which `rig_checks` needs to load the geoset/bone vocabulary. A failing E-rule
+   aborts the landing.
+7. **Sidecar + CI** — hand-author the final sidecar at the reused asset id
+   (`source_tier: ai`, full `ai` block + `origin_url`, `budget.lod0_tris`,
+   `import_hints.lod_policy: authored`, `restyle_status: done`) with the
+   `*.prompts.yaml` as a sibling; then `validate_imports` (I020–I023),
+   `validate_content` (L021/L024/L025/L070), and the golden + staged-pack gate
+   (`scripts/check-golden.sh --update-golden`) must all pass before merge.
+
+> **`convert-rig` (Meshy auto-rig → canonical skeleton) is a separate path**
+> (`tools/meshy/convert_rig.py`, spec ④ §7.3) used when Meshy's own auto-rigger
+> emits a skinned humanoid. `restyle_body` skins an **unrigged** text/image-to-3D
+> sculpt directly to the canonical armature, so it does not exercise
+> `bone_map.yaml`; that map's real-sample verification stays tracked in #524.
+
 ## Sidecar fields emitted
 
 `schema`, `id`, `class`, `source` (pack-root-relative), `license`, `provenance`
