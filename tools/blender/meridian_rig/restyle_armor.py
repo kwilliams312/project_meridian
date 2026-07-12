@@ -114,12 +114,19 @@ class ArmorRegion:
         inflate: float = 0.06,
         up_extend: float = 0.06,
         uv_axis: int = 2,
+        floor: bool = False,
     ) -> None:
         self.region = region
         self.bind = bind
         self.inflate = inflate
         self.up_extend = up_extend
         self.uv_axis = uv_axis
+        # Ground-contact slots (feet) rest their sole ON the floor plane: the fit's
+        # inflate would otherwise push the bottom BELOW the ground (region_lo −
+        # inflate < 0), sinking the sabaton through the floor so it reads as a boot
+        # floating below the legs (the #599 GPU-render finding). ``floor`` lifts the
+        # fitted piece so its lowest point sits at Z=0 — a rigid shift, shape intact.
+        self.floor = floor
 
 
 # The proven chest region (this story) + the V2 slots pre-wired to the SAME
@@ -141,7 +148,9 @@ REGION_BIND: dict[str, ArmorRegion] = {
     "legs": ArmorRegion(
         "hips_legs", ("LeftUpperLeg", "RightUpperLeg"), inflate=0.03, up_extend=0.0
     ),
-    "feet": ArmorRegion("feet", ("LeftFoot", "RightFoot"), inflate=0.03, up_extend=0.0),
+    "feet": ArmorRegion(
+        "feet", ("LeftFoot", "RightFoot"), inflate=0.03, up_extend=0.0, floor=True
+    ),
 }
 
 
@@ -268,6 +277,7 @@ def fit_region_transform(
     inflate: float = 0.06,
     up_extend: float = 0.06,
     up_axis: int = 2,
+    floor_z: float | None = None,
 ) -> tuple[Vec3, Vec3]:
     """Per-axis scale + translation seating an armor AABB onto a body region.
 
@@ -278,6 +288,14 @@ def fit_region_transform(
     per-axis Vec3 — applied as ``p'[i] = p[i] * scale[i] + offset[i]`` per source
     vertex, so the fitted plate provably spans the (inflated) region: full coverage
     and no gap by construction, independent of the raw sculpt's proportions.
+
+    ``floor_z`` (ground-contact slots only, e.g. feet) clamps the fitted piece so
+    its lowest point on ``up_axis`` rests AT the floor plane instead of below it:
+    inflate pushes the bottom to ``region_lo − inflate`` which, for a slot already
+    on the ground, dips through the floor and the piece reads as floating below the
+    body (#599). The clamp is a RIGID lift (offset only, scale untouched) applied
+    solely when the fitted bottom would fall below ``floor_z`` — it never lowers a
+    piece — so the sabaton's shape is preserved and its sole sits on the ground.
     """
     scale = [1.0, 1.0, 1.0]
     offset = [0.0, 0.0, 0.0]
@@ -290,6 +308,10 @@ def fit_region_transform(
         s = (tgt_hi - tgt_lo) / mesh_extent
         scale[i] = s
         offset[i] = tgt_lo - mesh_min[i] * s
+    if floor_z is not None:
+        fitted_bottom = mesh_min[up_axis] * scale[up_axis] + offset[up_axis]
+        if fitted_bottom < floor_z:
+            offset[up_axis] += floor_z - fitted_bottom
     return (scale[0], scale[1], scale[2]), (offset[0], offset[1], offset[2])
 
 
@@ -434,6 +456,48 @@ def _apply_fit(obj, scale: Vec3, offset: Vec3):  # pragma: no cover - needs bpy
     obj.location = offset
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+
+
+# Weld distance (metres, post-fit body scale) for the heal pass. Meshy sculpts
+# export with split vertices along every UV/normal seam, so ~⅔ of a plate's edges
+# read as false boundaries; welding sub-⅓-mm-coincident verts fuses those seams so
+# only GENUINE holes remain for the fill to close. Small enough never to collapse
+# real detail on a ~0.5 m plate.
+HEAL_MERGE_DIST = 0.0003
+
+
+def _heal_mesh(
+    obj, merge_dist: float = HEAL_MERGE_DIST
+):  # pragma: no cover - needs bpy
+    """Make a raw Meshy sculpt watertight: weld split verts, fill holes, fix normals.
+
+    Meshy text-to-3D sculpts are not clean closed surfaces — they carry split
+    vertices along seams and genuine open boundary loops (the #599 chest cuirass
+    showed a topology hole punched through its centre). This deterministic bmesh
+    pass runs BEFORE the decimate so the collapse operates on a repaired surface:
+
+    1. ``remove_doubles`` welds coincident vertices, fusing the export-split seams
+       that otherwise masquerade as boundary edges,
+    2. ``holes_fill`` caps every remaining open boundary loop (``sides=0`` = all
+       sizes) — an equipped, body-conforming plate is a closed shell from the
+       outside, so capping the interior artifact hole removes the visible defect
+       without altering the plate's outward silhouette,
+    3. ``recalc_face_normals`` orients the (now-closed) surface consistently so the
+       new cap faces shade outward.
+
+    Deterministic: a fixed weld distance + full hole fill on the committed sculpt.
+    """
+    import bmesh  # noqa: PLC0415
+
+    me = obj.data
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=merge_dist)
+    bmesh.ops.holes_fill(bm, edges=bm.edges, sides=0)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.to_mesh(me)
+    bm.free()
+    me.update()
 
 
 def _tri_count(obj) -> int:  # pragma: no cover - needs bpy
@@ -636,8 +700,14 @@ def main(argv: list[str] | None = None) -> None:  # pragma: no cover - needs bpy
         inflate=cfg.inflate,
         up_extend=cfg.up_extend,
         up_axis=cfg.uv_axis,
+        floor_z=0.0 if cfg.floor else None,
     )
     _apply_fit(src, scale, offset)
+
+    # Repair the raw sculpt (weld export-split seams, cap open boundary holes,
+    # fix normals) BEFORE decimating so the collapse works a watertight surface —
+    # closes the #599 chest-centre topology hole deterministically.
+    _heal_mesh(src)
 
     _decimate_to(src, min(TARGET_TRIS, MAX_TRIS))
     src.name = ARMOR_MESH_NAME
