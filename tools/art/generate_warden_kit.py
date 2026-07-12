@@ -88,6 +88,16 @@ _CHEST: list[Shell] = [
 
 # Right shells for the paired plates (left mirrored below).
 _SHOULDERS_R: Shell = ((0.13, 1.44, 0.0), (0.20, 0.16, 0.22), 13, ("RightShoulder",))
+# Upper-arm guard (rerebrace) — bridges the shoulder→forearm SEAM (⑤/S6 lead GPU
+# finding): the body's UPPER ARM belongs to the `torso` geoset, so any torso-hiding
+# chest/shoulder plate erases it and orphans the SEPARATE `forearms` geoset (elbow→
+# wrist) — the arms float. This shell rides the RightUpperArm bone (rest span
+# 0.17→0.47 m at the shoulder line, bones.py), covering that gap so the full kit
+# reads as one connected arm. Sized just under the 0.30 m shoulders shell cap
+# (TestPlateLocality) — anatomy-scale, not an arm-span bar. NOTE: this fixes the
+# FULL-KIT composite (the S6 DoD); the true root cure is a body geoset re-cut
+# (upper arm → forearms region) which is S4 territory — filed as a follow-up.
+_UPPERARM_R: Shell = ((0.32, 1.42, 0.0), (0.29, 0.15, 0.15), 10, ("RightUpperArm",))
 # Hands: a COMPACT hand-scale glove centred ON the RightHand bone (head 0.72 →
 # tail 0.82, mid ~0.77), single-influence-skinned to that bone so it follows the
 # hand — NOT one wide volume spanning both hands (that reads as a 1.5 m bar across
@@ -101,16 +111,21 @@ _FEET_R: Shell = ((0.09, 0.12, 0.05), (0.18, 0.30, 0.34), 14,
 
 SLOTS: dict[str, list[Shell]] = {
     "head": _HEAD,
-    "shoulders": [_SHOULDERS_R, _mirror_shell(_SHOULDERS_R)],
+    "shoulders": [_SHOULDERS_R, _mirror_shell(_SHOULDERS_R),
+                  _UPPERARM_R, _mirror_shell(_UPPERARM_R)],
     "chest": _CHEST,
     "hands": [_HANDS_R, _mirror_shell(_HANDS_R)],
     "legs": [_LEGS_R, _mirror_shell(_LEGS_R)],
     "feet": [_FEET_R, _mirror_shell(_FEET_R)],
 }
 
-# Authored plate colour (weathered steel). The dye path tints OVER this via the
-# mask (S3); an unknown/absent dye leaves this authored albedo visible.
-BASE_COLOR = (0.38, 0.40, 0.44, 1.0)
+# Authored plate colour — LIGHT brushed steel. The dye path MULTIPLIES this via
+# the mask (S3: albedo = base * dye), so the base must be light for a dye to read
+# as its true hue: grey (0.4) × russet ≈ mud, but light steel (0.75) × russet ≈
+# russet (⑤/S6 lead GPU finding). An unknown/absent dye leaves this light steel
+# visible. Kept slightly cool + just under 1.0 so undyed plates still read as
+# metal, not white plastic.
+BASE_COLOR = (0.74, 0.76, 0.80, 1.0)
 
 # One box face: (outward normal, 4 corners as +/-1 signs) — CCW seen from outside.
 _FACES = (
@@ -133,10 +148,13 @@ def _nearest_bone(point: Vec3, bones: tuple[str, ...]) -> str:
 
 
 def _subdivided_face(normal, corners, center: Vec3, half: Vec3, n: int):
-    """Yield (position, normal) for an n×n grid of quads on one box face.
+    """Yield (position, normal, uv) for an n×n grid of quads on one box face.
 
-    Returns (positions, normals, quads) where quads index into the returned
-    positions list (local to this face).
+    Returns (positions, normals, uvs, quads) where quads index into the returned
+    positions list (local to this face). Each face carries its OWN planar UV
+    (u, v = iu/n, iv/n across the face's two in-plane edges) so the piece's RGB
+    dye mask (S3) maps across the FULL surface of every face — without UVs the
+    mask would sample a single texel and a dye would tint only a stripe (⑤/S6).
     """
     cx, cy, cz = center
     hx, hy, hz = half
@@ -145,6 +163,7 @@ def _subdivided_face(normal, corners, center: Vec3, half: Vec3, n: int):
     e_u = (c1[0] - c0[0], c1[1] - c0[1], c1[2] - c0[2])
     e_v = (c3[0] - c0[0], c3[1] - c0[1], c3[2] - c0[2])
     positions: list[Vec3] = []
+    uvs: list[tuple[float, float]] = []
     for iu in range(n + 1):
         u = iu / n
         for iv in range(n + 1):
@@ -157,6 +176,7 @@ def _subdivided_face(normal, corners, center: Vec3, half: Vec3, n: int):
                 round(cy + sy * hy, 6),
                 round(cz + sz * hz, 6),
             ))
+            uvs.append((round(u, 6), round(v, 6)))
     stride = n + 1
     quads: list[tuple[int, int, int, int]] = []
     for iu in range(n):
@@ -168,18 +188,20 @@ def _subdivided_face(normal, corners, center: Vec3, half: Vec3, n: int):
             # CCW winding consistent with the face's outward normal.
             quads.append((a, c, d, b))
     norm = tuple(float(x) for x in normal)
-    return positions, norm, quads
+    return positions, norm, uvs, quads
 
 
 def build_shells(shells: list[Shell]):
     """Build merged geometry for a plate's shells.
 
-    Returns (positions, normals, indices, vjoints, used_bones) where `vjoints`[i]
-    is the bone name owning vertex i (single influence, weight 1.0) and `used_bones`
-    is the sorted unique bone set (the skin's joint list).
+    Returns (positions, normals, indices, vjoints, used_bones, uvs) where
+    `vjoints`[i] is the bone name owning vertex i (single influence, weight 1.0),
+    `used_bones` is the sorted unique bone set (the skin's joint list), and
+    `uvs`[i] is the per-vertex planar UV that maps the dye mask across each face.
     """
     positions: list[Vec3] = []
     normals: list[Vec3] = []
+    uvs: list[tuple[float, float]] = []
     indices: list[int] = []
     vjoints: list[str] = []
     used: set[str] = set()
@@ -187,15 +209,16 @@ def build_shells(shells: list[Shell]):
         half = (size[0] / 2.0, size[1] / 2.0, size[2] / 2.0)
         used.update(bones)
         for normal, corners in _FACES:
-            fpos, fnorm, quads = _subdivided_face(normal, corners, center, half, n)
+            fpos, fnorm, fuvs, quads = _subdivided_face(normal, corners, center, half, n)
             base = len(positions)
-            for p in fpos:
+            for p, uv in zip(fpos, fuvs):
                 positions.append(p)
                 normals.append(fnorm)
+                uvs.append(uv)
                 vjoints.append(_nearest_bone(p, bones))
             for a, c, d, b in quads:
                 indices += [base + a, base + c, base + d, base + a, base + d, base + b]
-    return positions, normals, indices, vjoints, sorted(used)
+    return positions, normals, indices, vjoints, sorted(used), uvs
 
 
 def shell_extents(slot: str) -> list[tuple[float, float, float]]:
@@ -224,12 +247,13 @@ def _pad4(buf: bytes, fill: bytes = b"\x00") -> bytes:
 def build_plate_glb(slot: str) -> bytes:
     """Deterministic skinned glTF-binary bytes for one Warden's Kit plate."""
     shells = SLOTS[slot]
-    positions, normals, indices, vjoints, used_bones = build_shells(shells)
+    positions, normals, indices, vjoints, used_bones, uvs = build_shells(shells)
     joint_index = {name: i for i, name in enumerate(used_bones)}
 
     # Vertex attribute buffers.
     pos_bytes = b"".join(struct.pack("<3f", *p) for p in positions)
     nrm_bytes = b"".join(struct.pack("<3f", *n) for n in normals)
+    uv_bytes = b"".join(struct.pack("<2f", *uv) for uv in uvs)
     # JOINTS_0 (VEC4 UBYTE) + WEIGHTS_0 (VEC4 float): one influence, weight 1.0.
     joints_bytes = b"".join(
         struct.pack("<4B", joint_index[vj], 0, 0, 0) for vj in vjoints
@@ -249,14 +273,14 @@ def build_plate_glb(slot: str) -> bytes:
         )
 
     # Lay bufferViews out 4-byte aligned in declaration order.
-    chunks = [pos_bytes, nrm_bytes, joints_bytes, weights_bytes, ibm_bytes,
-              _pad4(idx_bytes)]
+    chunks = [pos_bytes, nrm_bytes, uv_bytes, joints_bytes, weights_bytes,
+              ibm_bytes, _pad4(idx_bytes)]
     offsets: list[int] = []
     blob = b""
     for c in chunks:
         offsets.append(len(blob))
         blob += c
-    (pos_off, nrm_off, joi_off, wgt_off, ibm_off, idx_off) = offsets
+    (pos_off, nrm_off, uv_off, joi_off, wgt_off, ibm_off, idx_off) = offsets
 
     mins = [min(p[a] for p in positions) for a in range(3)]
     maxs = [max(p[a] for p in positions) for a in range(3)]
@@ -294,8 +318,8 @@ def build_plate_glb(slot: str) -> bytes:
         "meshes": [{
             "name": f"warden_{slot}",
             "primitives": [{
-                "attributes": {"POSITION": 0, "NORMAL": 1, "JOINTS_0": 2,
-                               "WEIGHTS_0": 3},
+                "attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 6,
+                               "JOINTS_0": 2, "WEIGHTS_0": 3},
                 "indices": 5,
                 "material": 0,
             }],
@@ -304,8 +328,11 @@ def build_plate_glb(slot: str) -> bytes:
             "name": f"m_warden_{slot}",
             "pbrMetallicRoughness": {
                 "baseColorFactor": list(BASE_COLOR),
-                "metallicFactor": 0.6,
-                "roughnessFactor": 0.5,
+                # Low metallic so the (dyed) ALBEDO drives the diffuse look — a
+                # high metallic surface reflects the environment and swallows the
+                # albedo, which is what made S2's dyes read dark/muddy (⑤/S6).
+                "metallicFactor": 0.15,
+                "roughnessFactor": 0.55,
             },
         }],
         "accessors": [
@@ -321,6 +348,8 @@ def build_plate_glb(slot: str) -> bytes:
              "type": "MAT4"},                                     # 4 inverseBind
             {"bufferView": 5, "componentType": 5123, "count": len(indices),
              "type": "SCALAR"},                                   # 5 indices
+            {"bufferView": 6, "componentType": 5126, "count": nverts,
+             "type": "VEC2"},                                     # 6 TEXCOORD_0
         ],
         "bufferViews": [
             {"buffer": 0, "byteOffset": pos_off, "byteLength": len(pos_bytes),
@@ -334,6 +363,8 @@ def build_plate_glb(slot: str) -> bytes:
             {"buffer": 0, "byteOffset": ibm_off, "byteLength": len(ibm_bytes)},
             {"buffer": 0, "byteOffset": idx_off, "byteLength": len(idx_bytes),
              "target": 34963},
+            {"buffer": 0, "byteOffset": uv_off, "byteLength": len(uv_bytes),
+             "target": 34962},
         ],
         "buffers": [{"byteLength": len(blob)}],
     }
@@ -365,27 +396,32 @@ def _png_chunk(tag: bytes, data: bytes) -> bytes:
 def build_mask_png(slot: str) -> bytes:
     """Deterministic RGB dye-mask PNG for one plate.
 
-    R selects the primary-dye region, G the secondary, B the accent. Regions are a
-    simple, per-slot-varied banding so each piece has a distinct primary/secondary
-    split; the shader (S3) multiplies each channel's region by the chosen dye.
+    R selects the primary-dye region, G the secondary, B the accent. Every texel
+    belongs to exactly ONE channel — the mask covers the FULL dyeable surface with
+    NO neutral gaps, so a primary dye tints the whole plate body rather than a
+    stripe (⑤/S6 lead GPU finding). Layout: a dominant primary body, one secondary
+    trim band (per-slot placement so the six masks stay distinct + deterministic),
+    and a thin accent piping edge. With the plate's per-face UVs (build_shells),
+    this banding maps across every face of the piece.
     """
     n = _MASK_SIZE
     # Per-slot phase so the six masks are not byte-identical (deterministic).
     phase = list(SLOTS).index(slot)
+    # Secondary trim band: ~22% tall, its top edge walked per slot so no two masks
+    # are identical (all six band tops are distinct: 0.30,0.40,0.50,0.60,0.70,0.00).
+    band_top = round((0.30 + 0.10 * phase) % 0.80, 6)
+    band_bot = band_top + 0.22
     rows = bytearray()
     for y in range(n):
         rows.append(0)  # PNG filter type 0 (None) per scanline
-        for x in range(n):
-            t = (y + phase * 4) / n
-            if t < 0.55:
-                px = (255, 0, 0)        # primary
-            elif t < 0.9:
-                px = (0, 255, 0)        # secondary
+        v = y / n
+        for _x in range(n):
+            if band_top <= v < band_bot:
+                px = (0, 255, 0)        # secondary trim band
+            elif v >= 0.93:
+                px = (0, 0, 255)        # accent piping (thin edge)
             else:
-                px = (0, 0, 255)        # accent
-            # A narrow neutral seam every 16 px keeps some albedo undyed.
-            if (x + phase) % 16 == 0:
-                px = (0, 0, 0)
+                px = (255, 0, 0)        # primary body (dominant, full coverage)
             rows.extend(px)
     ihdr = struct.pack(">IIBBBBB", n, n, 8, 2, 0, 0, 0)  # 8-bit RGB
     png = b"\x89PNG\r\n\x1a\n"

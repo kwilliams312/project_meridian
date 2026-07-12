@@ -42,6 +42,12 @@ const REGIONS: Array = [
 const SLOT_MAIN_HAND: int = 1
 const SLOT_CHEST: int = 5
 const SLOT_FEET: int = 8
+# Additional distinct slot keys for the full Warden's Kit composite (⑤/S6). Values
+# are opaque — the assembler keys _slots by them; realism is irrelevant here.
+const SLOT_HEAD: int = 2
+const SLOT_SHOULDERS: int = 3
+const SLOT_HANDS: int = 6
+const SLOT_LEGS: int = 7
 
 # Fixture item numeric ids (far above the staged pack's IF-9 range).
 const FX_BOOTS: int = 900001
@@ -82,6 +88,7 @@ func _initialize() -> void:
 	_verify_pickaxe_socket(ac, pickaxe)
 	_verify_idempotence(ac, pickaxe)
 	_verify_dye(ac, db, pickaxe)
+	_verify_full_kit(ac, db)
 	_verify_unknown_preset(ac)
 	_verify_catalog_miss(ac)
 
@@ -226,6 +233,109 @@ func _verify_dye(ac, db, pickaxe: int) -> void:
 	_check("non-dyeable piece (no dye_channels) is never tinted",
 		mesh != null and mesh.material_override == null)
 	ac.set_equipment_slot(SLOT_MAIN_HAND, 0, [])
+
+
+# --- A4b. ⑤/S6 FULL-KIT composite proof: the whole Warden's Kit + a dye + hair --
+# The S6 "no grey boxes" DoD, proven headlessly (the lead's GPU render proves it
+# visually): assemble the ardent body with a real HAIR preset and equip ALL SIX
+# real staged Warden's Kit slots at once, with a dye on the chest. Asserts every
+# slot mounts a mesh; the hide UNION leaves only the two uncovered regions
+# (forearms + waist) visible; the chest carries the mask-tint dye ShaderMaterial
+# in the composite; the real hair mesh is seated on the head; and the shoulders
+# plate skins geometry to an UpperArm bone (the arms-seam bridge — without it the
+# torso hide orphans the forearms geoset and the arms float, ⑤/S6).
+func _verify_full_kit(ac, db) -> void:
+	print(" ⑤/S6 full Warden's Kit composite — body + hair + 6 slots + dye:")
+	var russet: int = db.numeric_id_for("core:dye.russet")
+	var slot_items: Dictionary = {
+		SLOT_HEAD: "core:item.warden_head",
+		SLOT_SHOULDERS: "core:item.warden_shoulders",
+		SLOT_CHEST: "core:item.warden_chest",
+		SLOT_HANDS: "core:item.warden_hands",
+		SLOT_LEGS: "core:item.warden_legs",
+		SLOT_FEET: "core:item.warden_feet",
+	}
+
+	# Assemble with a REAL hair preset (⑤/S6 catalog now points hair at hair_2).
+	var ok: bool = ac.assemble(1, 0, {"hair": 2, "face": 2, "skin": 2}, [])
+	_check("full-kit assemble returns true", ok and ac.is_assembled())
+
+	# Real hair mesh seated on the head (a distinct model, re-parented on the
+	# skeleton) — the blockout aliased hair to the body so nothing mounted; ⑤/S5+S6
+	# ship real hair, so a hair mesh must now be present.
+	var hair: Dictionary = ac.applied_preset("hair")
+	var hair_model: String = String(hair.get("model", ""))
+	_check("hair preset resolves to a real (non-body) hair model",
+		hair_model != "" and hair_model != "core:art.char.ardent.male.base")
+	var skel: Skeleton3D = ac.body_skeleton()
+	var hair_mesh_seated: bool = false
+	if skel != null:
+		for c in skel.find_children("*", "MeshInstance3D", true, false):
+			if String(c.get_meta("model_id", "")) == hair_model:
+				hair_mesh_seated = true
+	_check("real hair mesh is seated on the body skeleton", hair_mesh_seated)
+
+	# Equip all six kit slots; dye the chest on the primary channel.
+	for slot in slot_items:
+		var iid: int = db.numeric_id_for(slot_items[slot])
+		_check("%s resolves to a numeric id" % slot_items[slot], iid != 0)
+		var dyes: Array = []
+		if slot == SLOT_CHEST:
+			dyes = [{"channel": 0, "dye_id": russet}]
+		ac.set_equipment_slot(slot, iid, dyes)
+
+	# Every slot mounts at least one mesh (no invisible/greybox-missing piece).
+	var all_slots_mounted: bool = true
+	for slot in slot_items:
+		if _first_piece_mesh(ac, slot) == null:
+			all_slots_mounted = false
+	_check("all six Warden's Kit slots mount a mesh", all_slots_mounted)
+
+	# Hide union: the kit hides head, torso, hands, hips_legs, feet, lower_legs —
+	# leaving ONLY forearms + waist body geosets visible (the two regions no kit
+	# piece covers). That is the "no bare grey body poking through" invariant.
+	var hidden_regions: Array = ["head", "torso", "hands", "hips_legs", "feet", "lower_legs"]
+	var visible_regions: Array = ["forearms", "waist"]
+	var hides_ok: bool = true
+	for region in hidden_regions:
+		var g: MeshInstance3D = ac.geoset_node(region)
+		if g == null or g.visible:
+			hides_ok = false
+	_check("all six kit-covered body regions are hidden", hides_ok)
+	var uncovered_ok: bool = true
+	for region in visible_regions:
+		var g2: MeshInstance3D = ac.geoset_node(region)
+		if g2 == null or not g2.visible:
+			uncovered_ok = false
+	_check("the two uncovered regions (forearms, waist) stay visible", uncovered_ok)
+	_check("exactly 2 body geosets visible under the full kit",
+		_visible_geoset_count(ac) == 2)
+
+	# The chest dye survives in the composite (mask-tint ShaderMaterial applied).
+	var chest_mesh: MeshInstance3D = _first_piece_mesh(ac, SLOT_CHEST)
+	var chest_mat: ShaderMaterial = null
+	if chest_mesh != null:
+		chest_mat = chest_mesh.material_override as ShaderMaterial
+	_check("dyed chest carries the mask-tint ShaderMaterial in the full kit",
+		chest_mat != null
+		and chest_mat.shader != null
+		and chest_mat.shader.resource_path == "res://characters/dye_tint.gdshader")
+
+	# Arms-seam bridge (⑤/S6): the shoulders plate skins geometry to an UpperArm
+	# bone, so the torso hide does not orphan the forearms geoset (floating arms).
+	var shoulders_nodes: Array = ac.equipped_nodes(SLOT_SHOULDERS)
+	var bridges_upper_arm: bool = false
+	for mi in shoulders_nodes:
+		if mi is MeshInstance3D and mi.skin != null:
+			for i in range(mi.skin.get_bind_count()):
+				if String(mi.skin.get_bind_name(i)).contains("UpperArm"):
+					bridges_upper_arm = true
+	_check("shoulders plate bridges the shoulder→forearm seam (skins an UpperArm bone)",
+		bridges_upper_arm)
+
+	# Tear the kit back down so later phases start clean.
+	for slot in slot_items:
+		ac.set_equipment_slot(slot, 0, [])
 
 
 # --- A5. unknown preset id → catalog entry 1 + assembly_failed -----------------
