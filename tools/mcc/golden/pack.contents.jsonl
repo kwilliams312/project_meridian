@@ -105,3 +105,7 @@
 {"id":"core:item.warden_head","numeric_id":105,"resource":"res://meridian/core/tables/item.bin","hash":"7d7b01cd2777fd996dc503756823d4104abd017decc1e27e3ed54345e785bf64"}
 {"id":"core:item.warden_legs","numeric_id":106,"resource":"res://meridian/core/tables/item.bin","hash":"7945363f0968824d86248e9ba977f943d0f674687b46bdf098ddfce8bb2db7a5"}
 {"id":"core:item.warden_shoulders","numeric_id":107,"resource":"res://meridian/core/tables/item.bin","hash":"20d039161c30a906f1c142b5cb7ff339f0e45f0bfc52b5a773870cca7b2d8de8"}
+{"id":"core:art.char.ardent.male.hair_1","numeric_id":108,"resource":"res://meridian/core/art/char/ardent/male/hair_1.res","hash":"25b53f4c13fe5c7204233cf21d912cfcd0efeb90a2e6721e1fd1eb47046447be"}
+{"id":"core:art.char.ardent.male.hair_2","numeric_id":109,"resource":"res://meridian/core/art/char/ardent/male/hair_2.res","hash":"0628227e4aa34db661f7f7f6d752d557fe9f40bdd57a4fa7860654bf73106be9"}
+{"id":"core:art.char.ardent.male.hair_3","numeric_id":110,"resource":"res://meridian/core/art/char/ardent/male/hair_3.res","hash":"21e7c24f052478a110fb4d7c140c9ae1849672e07c9c3ac5b52832f26a431e52"}
+{"id":"core:art.char.ardent.male.hair_4","numeric_id":111,"resource":"res://meridian/core/art/char/ardent/male/hair_4.res","hash":"4eefad84182090776dfb003523f44880c9db923c390c02d970b6f12b9779bbb8"}

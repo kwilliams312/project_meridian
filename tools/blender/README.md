@@ -184,6 +184,46 @@ body** (`⑤/S4`) is the reference implementation, driven by
 > sculpt directly to the canonical armature, so it does not exercise
 > `bone_map.yaml`; that map's real-sample verification stays tracked in #524.
 
+### Hair variant — `restyle_hair.py` (`⑤/S5`)
+
+Hair customization meshes (`content/core/assets/art/char/ardent/male/hair_{1..4}.glb`)
+follow the same fetch → fit → budget → skin → export gate, driven by
+`tools/blender/meridian_rig/restyle_hair.py`, but simplified for a light
+attachment rather than a full body:
+
+- **Class `armor_model`, not `character_model`.** Hair is a skinned piece bound
+  to a SUBSET of canonical bones — exactly what the client assembler mounts via
+  its gear `_mount_skinned` path. So the pipeline rules that describe it are the
+  gear rules: E100 (canonical bones) + E104 (no geoset naming) + E103 (≤4
+  influences) apply; the body-only E101/E102 and the strict `character_model`
+  I020/I022 skip. `character_model` would wrongly demand 63 joints + 8 geosets;
+  `prop` would skip every rig check and mis-declare a static lightmapped object.
+- **Fit to the HEAD region** (`fit_head_transform`) — scale the sculpt's
+  horizontal footprint to the canonical head geoset width and centre the volume
+  on the head, so the hair caps the skull. The head span is single-sourced from
+  the same `head` region→bone table the blockout/`restyle_body` use.
+- **Single-influence skin to `Head`** — every vertex is weighted 1.0 to the
+  canonical `Head` bone on the shared armature. One influence per vertex (E103),
+  binding only canonical bones (I021/E100).
+- **Single mesh, no LOD chain** — the sidecar declares `import_hints.lod_policy:
+  single` (permitted by the `character` preset), so the LOD-chain rule I023 does
+  not apply. The mesh is named `hair` (never `geo_*`, which E104 forbids for gear).
+
+```bash
+BLENDER=/path/to/blender  # must match blender_pin.PINNED_VERSION
+"$BLENDER" --background --factory-startup -noaudio \
+  --python tools/blender/meridian_rig/restyle_hair.py -- \
+  --in  <raw_meshy_hair>.glb \
+  --out content/core/assets/art/char/ardent/male/hair_1.glb \
+  --rigdata-json /tmp/hair.rigdata.json
+uv run python tools/blender/meridian_export/check_rigdata.py /tmp/hair.rigdata.json
+```
+
+The final sidecar (`class: armor_model`, `source_tier: ai`, full `ai` block +
+`origin_url`, `budget.lod0_tris`, `import_hints.lod_policy: single`,
+`restyle_status: done`) is hand-authored at `hair_{1..4}.asset.yaml` with the
+`*.prompts.yaml` as a sibling, exactly like the body.
+
 ## Sidecar fields emitted
 
 `schema`, `id`, `class`, `source` (pack-root-relative), `license`, `provenance`
