@@ -144,6 +144,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=DEFAULT_OUT,
         help="output .glb path (default: the committed blockout-body path)",
     )
+    parser.add_argument(
+        "--allow-unpinned-blender",
+        action="store_true",
+        help=(
+            "DEVELOPMENT ONLY: proceed even though the running Blender does "
+            "not match blender_pin.PINNED_VERSION. Without it, an unpinned "
+            "Blender is refused so the export is never silently "
+            "non-byte-identical to the committed artifact."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -232,6 +242,9 @@ def main(argv: list[str] | None = None) -> None:  # pragma: no cover - requires 
     """Blender entry point: build the skinned blockout body and write the .glb."""
     args = parse_args(
         generate_rig.argv_after_ddash(argv if argv is not None else sys.argv)
+    )
+    generate_rig.enforce_blender_pin(
+        args.allow_unpinned_blender, tag="generate_blockout"
     )
     generate_rig.reset_scene()
     build_body(args.profile)

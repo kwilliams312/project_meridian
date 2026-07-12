@@ -69,6 +69,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         required=True,
         help="JSON file: {'renames': {meshy: canonical}, 'merges': {helper: canonical}}",
     )
+    parser.add_argument(
+        "--allow-unpinned-blender",
+        action="store_true",
+        help=(
+            "DEVELOPMENT ONLY: proceed even though the running Blender does "
+            "not match blender_pin.PINNED_VERSION. Without it, an unpinned "
+            "Blender is refused so the converted rig is never silently "
+            "non-byte-identical to what the pinned build would produce."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -156,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - requires b
     import generate_rig  # noqa: PLC0415 - Blender-only (builds canonical armature)
 
     args = parse_args(argv_after_ddash(argv if argv is not None else sys.argv))
+    generate_rig.enforce_blender_pin(args.allow_unpinned_blender, tag="convert_rig")
     in_glb = Path(args.input)
     out_glb = Path(args.out)
     renames, merges = load_plan(Path(args.plan_json))

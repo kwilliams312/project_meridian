@@ -6,10 +6,18 @@
 meridian_rig/
   bones.py         PURE Python (no bpy). Canonical 63-bone table (56 Godot
                    SkeletonProfileHumanoid bones + 7 Meridian gear sockets).
+  blender_pin.py   PURE Python (no bpy). Single source of truth for the
+                   Blender version pin (`PINNED_VERSION`) and the comparison
+                   logic (`check_pin`) every bpy entry point below runs against
+                   `bpy.app.version` at startup. Unit-tested without Blender
+                   (`tests/test_meridian_rig.py`).
   generate_rig.py  Deterministic rig generator. Builds the armature from
                    bones.py and exports the skeleton-only .glb. Arg parsing /
                    path helpers are pure module-level functions (pytest covers
                    them without Blender); bpy is only touched inside main().
+                   Also hosts `enforce_blender_pin()`, the thin bpy-touching
+                   wrapper around `blender_pin.check_pin` that every entry
+                   point below calls.
   generate_blockout.py  Deterministic greybox blockout-body generator (spec ④
                    §6, T5). Reuses generate_rig's armature build + export;
                    adds 8 geoset-cut primitive meshes (geo_<region>_lod0),
@@ -19,11 +27,20 @@ meridian_rig/
                    Blender); bpy is only touched inside main().
 ```
 
-**Blender version pin:** `Blender 5.0.0` (build date 2025-11-18, hash
-`a37564c4df7a`) — the exact `--version` output of the binary used to generate
-the committed rig. Regenerate with the same version to keep the artifact
-byte-identical (the export is deterministic: same table + same Blender ⇒ same
-SHA-256).
+**Blender version pin (spec ④ §9):** `tools/blender/meridian_rig/blender_pin.py`
+→ `PINNED_VERSION` is the canonical value — this paragraph documents it for
+humans but is not itself parsed by anything. It is currently `"5.0.0"`
+(`Blender 5.0.0`, build date 2025-11-18, hash `a37564c4df7a`) — the exact
+`--version` output of the binary used to generate the committed rig.
+Regenerate with the same version to keep the artifact byte-identical (the
+export is deterministic: same table + same Blender ⇒ same SHA-256).
+
+Every bpy entry point in this repo (`generate_rig.py`, `generate_blockout.py`,
+`tools/meshy/convert_rig.py`, `tests/fixtures/meshy/build_fixture.py`) checks
+`bpy.app.version` against `PINNED_VERSION` at startup and refuses to run on a
+mismatch, naming both versions in the error. Pass `--allow-unpinned-blender`
+to any of them to proceed anyway — **development only**: the resulting export
+is not guaranteed byte-identical to the committed artifact.
 
 **Regeneration command** (from the repo root; adjust the binary path to your
 install — on macOS the binary is not on PATH):
