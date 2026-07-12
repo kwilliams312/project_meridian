@@ -380,6 +380,71 @@ int main() {
 		      (vd.position.x - spawn.x) > 1e-3f);
 	}
 
+	// =======================================================================
+	// 6. NO FALL-THROUGH over ground that has not streamed in (#558 Story E).
+	// =======================================================================
+	// When the covering chunk is not resident, an IWorldQuery reports the cell as
+	// NOT walkable (HeightfieldWorldQuery returns {0, false} out of bounds). The
+	// integrator MUST NOT clamp the character down to that guessed y=0 plane — an
+	// entity arriving ahead of its chunk holds its (server-authoritative) height
+	// until the ground is resident. This pins the integrate + reconcile guarantee
+	// with a stub query so it is independent of the heightfield decode.
+	std::printf("[6] no fall-through over non-resident ground (#558)\n");
+	{
+		// A ground query that reports every cell as a non-resident hole.
+		struct UnknownGround final : public mv::IWorldQuery {
+			mv::GroundSample sample_ground(float, float) const override {
+				return mv::GroundSample{0.0f, false};   // height 0, NOT walkable
+			}
+		} unknown;
+
+		// Spawn standing on terrain at y = 20 (as a server would place a player on a
+		// Zone-01 hill), with the covering chunk NOT yet resident.
+		const mv::Vec3 spawn{-320.0f, 20.0f, -320.0f};
+		mv::MovementSnapshot start;
+		start.position = spawn;
+		start.grounded = true;
+
+		// A bare integrate with NO input must hold y — never snap to the 0 plane.
+		mv::MovementInput idle;
+		mv::MovementSnapshot s = mv::integrate_tick(start, idle, unknown);
+		check("idle over non-resident ground holds y (no drop to 0)",
+		      near(s.position.y, 20.0f));
+
+		// Walking across non-resident ground keeps y — the character does not sink.
+		s = start;
+		bool held = true;
+		for (int i = 0; i < 40; ++i) {   // 2 s of forward run over unloaded chunks
+			s = mv::integrate_tick(s, fwd_run(), unknown);
+			if (!near(s.position.y, 20.0f)) held = false;
+		}
+		check("walking across non-resident ground never drops the character", held);
+		check("horizontal motion still advances over unloaded ground",
+		      s.position.z > spawn.z + 1.0f);
+
+		// Reconcile to a server position on the hill with the ground still unknown:
+		// the authoritative height is preserved (grounded, not integrated into a fall).
+		mv::PredictionReconciler rec(unknown, start);
+		mv::MovementStateIn sv;
+		sv.ack_seq = 0;
+		sv.position = mv::Vec3{-320.0f, 23.36f, -320.0f};   // fixture terrain height
+		sv.orientation = 0.0f;
+		const mv::MovementSnapshot r = rec.reconcile(sv);
+		check("reconcile to a hill position over unknown ground keeps the server y",
+		      near(r.position.y, 23.36f));
+		check("predicted position holds the server height (no fall)",
+		      near(rec.predicted_state().position.y, 23.36f));
+
+		// SANITY: over WALKABLE flat ground the same start FALLS and LANDS on the
+		// plane (the M0 clamp is unchanged — only the unknown-ground path holds an
+		// entity up). Contrast with the hold above: unknown ground never lands.
+		mv::FlatWorldQuery flat(0.0f);
+		mv::MovementSnapshot fs = start;
+		for (int i = 0; i < 200; ++i) fs = mv::integrate_tick(fs, idle, flat);
+		check("walkable flat ground still lands the character on the plane (M0 unchanged)",
+		      near(fs.position.y, 0.0f) && fs.grounded);
+	}
+
 	std::printf(g_fail == 0 ? "\nALL MOVEMENT CONTROLLER TESTS PASSED\n"
 	                        : "\n%d MOVEMENT CONTROLLER TEST(S) FAILED\n", g_fail);
 	return g_fail == 0 ? 0 : 1;

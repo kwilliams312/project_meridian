@@ -105,7 +105,19 @@ MovementSnapshot integrate_tick(const MovementSnapshot& prev,
 	// --- 4. Resolve against the ground via the query seam (spike §3). --------
 	// FlatWorldQuery at M0 (y=0 plane); HeightfieldWorldQuery at M1 — drop-in.
 	const GroundSample g = world.sample_ground(s.position.x, s.position.z);
-	if (s.position.y <= g.height) {
+	if (!g.walkable) {
+		// The ground under this XZ is UNKNOWN — the covering chunk has not streamed
+		// in yet (HeightfieldWorldQuery returns {0, false} for a non-resident cell)
+		// or it is a hole. NEVER clamp the character down onto the guessed y=0 plane:
+		// that is the "fall through the world before the chunk arrives" bug this story
+		// (#558) must make impossible. Hold the current y (server-authoritative until
+		// the chunk is resident) and neutralise fall velocity so no downward drift
+		// accumulates. Once the chunk streams in this branch stops firing and the
+		// normal clamp/airborne logic below resumes. (FlatWorldQuery is always
+		// walkable, so the M0 path is unchanged.)
+		s.velocity.y = 0.0f;
+		s.grounded   = true;
+	} else if (s.position.y <= g.height) {
 		// Landed / on ground: clamp to the surface, kill downward velocity.
 		s.position.y = g.height;
 		if (s.velocity.y <= 0.0f) {
@@ -187,7 +199,11 @@ MovementSnapshot PredictionReconciler::reconcile(const MovementStateIn& server) 
 	// the server sends position only, so we resolve grounded against the same
 	// ground sample and let the re-simulation below rebuild velocity from input.
 	const GroundSample g = world_.sample_ground(state.position.x, state.position.z);
-	state.grounded = (state.position.y <= g.height + 1e-4f);
+	// Over ground that is not yet resident (walkable == false) the height is unknown,
+	// so treat the authoritative position as supported rather than deriving "airborne"
+	// and integrating a fall on the next tick (#558 no-fall-through). FlatWorldQuery is
+	// always walkable, so the M0 reconcile path is unchanged.
+	state.grounded = (!g.walkable) || (state.position.y <= g.height + 1e-4f);
 	state.velocity = Vec3{};
 
 	// 3. Re-simulate every UNACKED input in order, from the authoritative state.
