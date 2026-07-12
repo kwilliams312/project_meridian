@@ -755,6 +755,82 @@ def test_restyle_armor_budget_band_is_within_the_armor_ceiling():
     assert restyle_armor.MAX_TRIS < 8_000
 
 
+def test_restyle_armor_only_feet_are_floored_to_the_ground():
+    """Feet are the sole ground-contact slot, so only feet set ``floor`` (#599).
+
+    Every other slot sits mid-body and must NOT be floored (flooring shifts a
+    plate up so its bottom rests at the ground plane — meaningless for a cuirass
+    or gauntlet). Guards the config so a future slot does not inherit flooring.
+    """
+    assert restyle_armor.REGION_BIND["feet"].floor is True
+    for region, cfg in restyle_armor.REGION_BIND.items():
+        if region != "feet":
+            assert cfg.floor is False, f"{region} must not be floored"
+
+
+def test_restyle_armor_feet_fit_rests_the_sabaton_on_the_floor_not_below():
+    """The feet fit shifts the fitted sabaton so its sole rests AT the floor (#599).
+
+    Regression for the lead full-kit GPU render: the sabatons floated BELOW the
+    legs because the fit inflated the bottom BELOW the ground plane (region_lo −
+    inflate < 0), so the boot bulk sank through the floor (27% of verts below
+    Z=0). With ``floor_z=0.0`` the transform lifts the whole piece so its lowest
+    point sits exactly on the ground — nothing below the floor — while preserving
+    the fitted shape (scale unchanged; it is a rigid lift, not a squash).
+    """
+    lo, hi = restyle_armor.region_box("feet")
+    mesh_min = (-1.0, -2.0, -3.0)  # arbitrary raw-sculpt AABB
+    mesh_max = (2.0, 1.0, 4.0)
+    inflate, up_axis = 0.03, 2
+    # Without flooring: the bottom lands below the ground (region_lo − inflate < 0).
+    scale0, off0 = restyle_armor.fit_region_transform(
+        mesh_min, mesh_max, lo, hi, inflate=inflate, up_extend=0.0, up_axis=up_axis
+    )
+    unfloored_bottom = mesh_min[up_axis] * scale0[up_axis] + off0[up_axis]
+    assert unfloored_bottom < 0.0  # the shipped defect: boot sinks below the floor
+
+    # With flooring: the bottom rests exactly at Z=0, the shape (scale) is intact,
+    # and the whole piece is lifted by exactly the sub-floor amount.
+    scale1, off1 = restyle_armor.fit_region_transform(
+        mesh_min,
+        mesh_max,
+        lo,
+        hi,
+        inflate=inflate,
+        up_extend=0.0,
+        up_axis=up_axis,
+        floor_z=0.0,
+    )
+    fitted_bottom = mesh_min[up_axis] * scale1[up_axis] + off1[up_axis]
+    fitted_top = mesh_max[up_axis] * scale1[up_axis] + off1[up_axis]
+    assert fitted_bottom == pytest.approx(0.0, abs=1e-6)  # rests ON the floor
+    assert scale1 == scale0  # rigid lift — no squash, shape preserved
+    assert fitted_top == pytest.approx(
+        mesh_max[up_axis] * scale0[up_axis] + off0[up_axis] - unfloored_bottom,
+        abs=1e-6,
+    )
+    # Off-axis (X/Y) placement is untouched by flooring — only the up-axis lifts.
+    for i in range(3):
+        if i != up_axis:
+            assert off1[i] == pytest.approx(off0[i], abs=1e-6)
+
+
+def test_restyle_armor_floor_only_lifts_never_lowers():
+    """``floor_z`` never pulls a piece DOWN — it only lifts a sub-floor bottom up.
+
+    If the fitted bottom is already at or above the floor, the transform is
+    unchanged (a mid-body slot passing ``floor_z`` by accident is a no-op, and a
+    boot whose inflated bottom already clears the ground is left alone).
+    """
+    lo, hi = restyle_armor.region_box("torso")  # high off the ground
+    mesh_min, mesh_max = (0.0, 0.0, 0.0), (1.0, 1.0, 1.0)
+    plain = restyle_armor.fit_region_transform(mesh_min, mesh_max, lo, hi, up_axis=2)
+    floored = restyle_armor.fit_region_transform(
+        mesh_min, mesh_max, lo, hi, up_axis=2, floor_z=0.0
+    )
+    assert floored == plain  # already well above the floor → no change
+
+
 def test_restyle_armor_torso_region_box_spans_spine_to_shoulders():
     """The torso region box covers the spine column up to the shoulder girdle.
 
@@ -1003,3 +1079,179 @@ def test_chest_glb_mesh_is_not_geoset_named():
         assert not (mesh.name or "").startswith("geo_"), (
             f"{CHEST_GLB.name} mesh '{mesh.name}' is geoset-named (forbidden for gear)"
         )
+
+
+def _glb_mesh0_positions_and_indices(glb_path: Path):
+    """(positions, indices) of a glTF's first mesh primitive — pure pygltflib read."""
+    import struct
+
+    from pygltflib import GLTF2
+
+    g = GLTF2().load(str(glb_path))
+    blob = g.binary_blob()
+    prim = g.meshes[0].primitives[0]
+
+    def _read(acc_i, fmt, elem_size):
+        acc = g.accessors[acc_i]
+        bv = g.bufferViews[acc.bufferView]
+        base = (bv.byteOffset or 0) + (acc.byteOffset or 0)
+        stride = bv.byteStride or elem_size
+        return [
+            struct.unpack_from(fmt, blob, base + i * stride) for i in range(acc.count)
+        ]
+
+    pos = _read(prim.attributes.POSITION, "<3f", 12)
+    iacc = g.accessors[prim.indices]
+    ifmt = {5121: "<B", 5123: "<H", 5125: "<I"}[iacc.componentType]
+    isz = {5121: 1, 5123: 2, 5125: 4}[iacc.componentType]
+    ibv = g.bufferViews[iacc.bufferView]
+    ibase = (ibv.byteOffset or 0) + (iacc.byteOffset or 0)
+    idx = [
+        struct.unpack_from(ifmt, blob, ibase + i * isz)[0] for i in range(iacc.count)
+    ]
+    return pos, idx
+
+
+def _count_boundary_loops(idx: list[int]) -> tuple[int, int]:
+    """(boundary_edge_count, boundary_loop_count) of a triangle index list.
+
+    A boundary edge is used by exactly one triangle; boundary loops are the
+    connected components of the boundary-edge graph. A watertight (closed) surface
+    has zero of both — a Meshy sculpt riddled with holes has many.
+    """
+    from collections import Counter, defaultdict
+
+    ec: Counter = Counter()
+    for t in range(0, len(idx), 3):
+        a, b, c = idx[t], idx[t + 1], idx[t + 2]
+        for e in ((a, b), (b, c), (c, a)):
+            ec[tuple(sorted(e))] += 1
+    bnd = [e for e, n in ec.items() if n == 1]
+    adj: defaultdict = defaultdict(list)
+    for a, b in bnd:
+        adj[a].append(b)
+        adj[b].append(a)
+    seen: set = set()
+    loops = 0
+    for a, _b in bnd:
+        if a in seen:
+            continue
+        loops += 1
+        stack = [a]
+        while stack:
+            x = stack.pop()
+            if x in seen:
+                continue
+            seen.add(x)
+            stack.extend(adj[x])
+    return len(bnd), loops
+
+
+@pytest.mark.integration
+def test_chest_glb_is_watertight_no_center_topology_hole():
+    """The restyled cuirass is a closed shell — the #599 centre hole is gone.
+
+    The raw Meshy sculpt (and the pre-#599 shipped plate) was riddled with open
+    boundary loops — 141 of them, a topology hole punched through the cuirass
+    centre in the lead's full-kit GPU render. The restyle heal pass (weld
+    export-split seams + fill open holes + recalc normals) closes them: the
+    committed plate reads as a near-watertight closed surface (a couple of
+    negligible residual slivers at most, vs the gaping centre hole).
+    """
+    if not _chest_present_and_smudged():
+        pytest.skip(f"{CHEST_GLB.name} missing or an unsmudged LFS pointer")
+    _pos, idx = _glb_mesh0_positions_and_indices(CHEST_GLB)
+    edges, loops = _count_boundary_loops(idx)
+    assert loops <= 20, f"{CHEST_GLB.name} has {loops} open boundary loops (holey)"
+    assert edges <= 200, f"{CHEST_GLB.name} has {edges} boundary edges (holey)"
+
+
+# --- committed warden_feet .glb structural tests (sabaton fit, #599) ----------
+
+FEET_GLB = REPO / "content/core/assets/art/item/armor/warden_feet.glb"
+
+
+def _feet_present_and_smudged() -> bool:
+    return FEET_GLB.is_file() and not _is_lfs_pointer(FEET_GLB)
+
+
+@pytest.mark.integration
+def test_feet_glb_binds_only_canonical_foot_bones():
+    """I021/E100: the sabaton skin binds only canonical bones, incl. the foot bones."""
+    if not _feet_present_and_smudged():
+        pytest.skip(f"{FEET_GLB.name} missing or an unsmudged LFS pointer")
+    from pygltflib import GLTF2
+
+    g = GLTF2().load(str(FEET_GLB))
+    assert g.skins, f"{FEET_GLB.name} carries no skin"
+    joints = {g.nodes[j].name for skin in g.skins for j in (skin.joints or [])}
+    canonical = set(bones.bone_names())
+    assert joints - canonical == set(), (
+        f"{FEET_GLB.name} binds non-canonical joints: {sorted(joints - canonical)}"
+    )
+    assert joints & {"LeftFoot", "RightFoot"}, (
+        f"{FEET_GLB.name} does not bind any foot bone"
+    )
+
+
+@pytest.mark.integration
+def test_feet_glb_is_within_the_armor_budget_band():
+    """L070 / Art PRD §2.1: the sabatons are 3–8k tris."""
+    if not _feet_present_and_smudged():
+        pytest.skip(f"{FEET_GLB.name} missing or an unsmudged LFS pointer")
+    _pos, idx = _glb_mesh0_positions_and_indices(FEET_GLB)
+    tris = len(idx) // 3
+    assert 3_000 <= tris <= 8_000, f"{FEET_GLB.name} has {tris} tris (must be 3k..8k)"
+
+
+@pytest.mark.integration
+def test_feet_glb_rests_on_the_floor_at_the_foot_bone_not_below():
+    """#599: the sabatons sit ON the feet at the foot bone, NOT floating below.
+
+    The lead's full-kit GPU render showed the sabatons floating BELOW the legs:
+    the fit inflated the boot bottom through the ground plane (27% of verts below
+    Y=0). The floor-clamped fit rests the sole AT the floor and centres the piece
+    on the Foot bone. Exported Y-up, so POSITION Y is height; the canonical Foot
+    bone head sits at Y≈0.1 (bones.py, Y-up table space).
+    """
+    if not _feet_present_and_smudged():
+        pytest.skip(f"{FEET_GLB.name} missing or an unsmudged LFS pointer")
+    pos, _idx = _glb_mesh0_positions_and_indices(FEET_GLB)
+    ys = [p[1] for p in pos]
+    lo, hi = min(ys), max(ys)
+    center = (lo + hi) / 2.0
+    below_floor = sum(1 for y in ys if y < -1e-3) / len(ys)
+    foot_head_y = {b.name: b for b in bones.ALL_BONES}["LeftFoot"].head_m[1]
+    assert lo >= -1e-3, f"{FEET_GLB.name} dips below the floor: min Y={lo:.3f}"
+    assert below_floor < 0.02, f"{below_floor:.1%} of verts are below the floor"
+    assert abs(center - foot_head_y) < 0.06, (
+        f"{FEET_GLB.name} centre Y={center:.3f} is not near the Foot bone "
+        f"({foot_head_y:.3f}) — sabaton not seated on the foot"
+    )
+
+
+@pytest.mark.integration
+def test_feet_glb_dye_uv_v_spans_full_range_without_bulk_clamp():
+    """The sabaton dye UV v spans ~[0,1] with <5% clamped — the height-banded mask tints."""
+    if not _feet_present_and_smudged():
+        pytest.skip(f"{FEET_GLB.name} missing or an unsmudged LFS pointer")
+    import struct
+
+    from pygltflib import GLTF2
+
+    g = GLTF2().load(str(FEET_GLB))
+    blob = g.binary_blob()
+    prim = g.meshes[0].primitives[0]
+    acc = g.accessors[prim.attributes.TEXCOORD_0]
+    bv = g.bufferViews[acc.bufferView]
+    base = (bv.byteOffset or 0) + (acc.byteOffset or 0)
+    stride = bv.byteStride or 8
+    vs = [
+        struct.unpack_from("<2f", blob, base + i * stride)[1] for i in range(acc.count)
+    ]
+    n = len(vs)
+    assert min(vs) < 0.05 and max(vs) > 0.95, (
+        f"feet dye UV v does not span [0,1]: min={min(vs):.3f} max={max(vs):.3f}"
+    )
+    assert sum(1 for v in vs if v <= 1e-6) / n < 0.05
+    assert sum(1 for v in vs if v >= 1.0 - 1e-6) / n < 0.05

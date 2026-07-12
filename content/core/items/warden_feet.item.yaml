@@ -19,5 +19,5 @@ visual:
   icon: core:art.icon.item.warden_crest
   worn:
     models: [{ model: core:art.item.armor.warden_feet, mirror: none }]
-    hides: [feet, lower_legs]
+    hides: [feet]
     dye_channels: [primary, secondary]
