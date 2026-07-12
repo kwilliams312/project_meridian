@@ -8,7 +8,14 @@ map:                         # append-only; local index (SAD §2.4)
   core:amb.zone01.forest_day: 3
   core:appearance.ardent.male: 82
   core:art.char.ardent.male.base: 81
+  core:art.char.ardent.male.face_1: 83
+  core:art.char.ardent.male.face_2: 84
+  core:art.char.ardent.male.face_3: 85
+  core:art.char.ardent.male.face_4: 86
   core:art.char.ardent.male.skeleton: 80
+  core:art.char.ardent.male.skin_1: 87
+  core:art.char.ardent.male.skin_2: 88
+  core:art.char.ardent.male.skin_3: 89
   core:art.char.cindermaw: 38
   core:art.char.ember_wisp: 39
   core:art.char.human.female.warden: 40

@@ -149,10 +149,22 @@ STAGED_FILES=(pack.manifest.json pack.contents.jsonl pack.data.json)
 # copies are hand-staged like the pack JSON above and drift-gated the same way:
 # byte-identical to their content-tree source, refreshed by --update-golden.
 # Entry format: "<content-tree source>:<staged copy under $STAGED_DIR>".
+#
+# The ardent/male face/skin customization textures (spec ⑤/S1, story #568) are
+# staged the same way ahead of the material-application work (⑤/S3, S6) that
+# will consume their bytes, so the staged pack never has to play catch-up with
+# a batch of new customization assets landing at once.
 STAGED_ART=(
   "content/core/assets/art/char/sk_ardent_male_base.glb:art/char/ardent/male/base.glb"
   "content/core/assets/art/char/sk_ardent_male_skeleton.glb:art/char/ardent/male/skeleton.glb"
   "content/core/assets/art/item/weapon/pickaxe_rusty.glb:art/item/weapon/pickaxe_rusty.glb"
+  "content/core/assets/art/char/ardent/male/face_1_bc.png:art/char/ardent/male/face_1_bc.png"
+  "content/core/assets/art/char/ardent/male/face_2_bc.png:art/char/ardent/male/face_2_bc.png"
+  "content/core/assets/art/char/ardent/male/face_3_bc.png:art/char/ardent/male/face_3_bc.png"
+  "content/core/assets/art/char/ardent/male/face_4_bc.png:art/char/ardent/male/face_4_bc.png"
+  "content/core/assets/art/char/ardent/male/skin_1_bc.png:art/char/ardent/male/skin_1_bc.png"
+  "content/core/assets/art/char/ardent/male/skin_2_bc.png:art/char/ardent/male/skin_2_bc.png"
+  "content/core/assets/art/char/ardent/male/skin_3_bc.png:art/char/ardent/male/skin_3_bc.png"
 )
 
 # --- 2a. --update-golden: regenerate the checked-in golden and stop. ---------

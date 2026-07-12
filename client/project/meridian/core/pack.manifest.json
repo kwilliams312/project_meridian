@@ -6,10 +6,10 @@
   "content_schema_version": 1,
   "godot_version": "4.6",
   "id_band": 0,
-  "content_hash": "d518a7a618617f571a1b99162f68641cb43cf9f30e874d393309e957b465289d",
+  "content_hash": "951e6f5f41190f92ffb6be4f0731d5c43fdc2ad7967122110c0e60b8321e9fc0",
   "mcc_version": "0.0.0",
   "built_at": "1970-01-01 00:00:00",
-  "entry_count": 82,
+  "entry_count": 89,
   "entries": [
     { "id": "core:ability.minor_healing", "numeric_id": 1, "type": "ability", "resource": "res://meridian/core/tables/ability.bin", "hash": "35ae382345900ffc2bbeb694eecdaa478af6deafa843bbfc6fae1ead291643f6" },
     { "id": "core:ability.pickaxe_slam", "numeric_id": 2, "type": "ability", "resource": "res://meridian/core/tables/ability.bin", "hash": "2ed79132ca10a17e2dfde60f98becb70c420b4c5df387fea531ff2bcb28b0813" },
@@ -92,6 +92,13 @@
     { "id": "core:dye.slate", "numeric_id": 79, "type": "dye", "resource": "res://meridian/core/tables/dye.bin", "hash": "48a007e8acd84bde93a7c97b25373b0542fd348bbe683e8d4d3f1d4e56516ccf" },
     { "id": "core:art.char.ardent.male.skeleton", "numeric_id": 80, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/skeleton.scn", "hash": "3aa0ec51bfdb671fbca1f17b99ac865dfd3bac5f19785d18564fd25bc7ec6a6d" },
     { "id": "core:art.char.ardent.male.base", "numeric_id": 81, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/base.scn", "hash": "87372d6589e8bace058064f16d8431a360bca6072d8635ddbc36d459dc73bf93" },
-    { "id": "core:appearance.ardent.male", "numeric_id": 82, "type": "appearance", "resource": "res://meridian/core/tables/appearance.bin", "hash": "6675a8c3c568ac5f22fbcd9137b31900e8c617d13e46e44bda042cd7ae32e649" }
+    { "id": "core:appearance.ardent.male", "numeric_id": 82, "type": "appearance", "resource": "res://meridian/core/tables/appearance.bin", "hash": "6675a8c3c568ac5f22fbcd9137b31900e8c617d13e46e44bda042cd7ae32e649" },
+    { "id": "core:art.char.ardent.male.face_1", "numeric_id": 83, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/face_1.res", "hash": "2d2af2c13d0ab776398333380d851c048d1588d5c5a23f478f99c4d9d061c333" },
+    { "id": "core:art.char.ardent.male.face_2", "numeric_id": 84, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/face_2.res", "hash": "62ba3e9a849577d290fe3b0cba460e0606deb8e3228cb64f07870be0ff4c7dba" },
+    { "id": "core:art.char.ardent.male.face_3", "numeric_id": 85, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/face_3.res", "hash": "452aaa88f45659ca31452cd5ee48cfbe12019cfce56b14a0f8b076b424381b0b" },
+    { "id": "core:art.char.ardent.male.face_4", "numeric_id": 86, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/face_4.res", "hash": "41460f99766502efa4dd2bc385abf9d4bc3637c79a2a3bc57a47c3ee77d91ea3" },
+    { "id": "core:art.char.ardent.male.skin_1", "numeric_id": 87, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/skin_1.res", "hash": "4aa20ed0ed4aa9d80386116041e7d98f92a72aea7388cc616ccb87ef9526f2ab" },
+    { "id": "core:art.char.ardent.male.skin_2", "numeric_id": 88, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/skin_2.res", "hash": "02f9b0d8a3b89d8a24f9644aed39efff4266a169e827728a9a137f4ea121ed63" },
+    { "id": "core:art.char.ardent.male.skin_3", "numeric_id": 89, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/skin_3.res", "hash": "5f9bf31057dce6d7568be95823c5964bf9c1c5634a24a293fbf543732147260a" }
   ]
 }

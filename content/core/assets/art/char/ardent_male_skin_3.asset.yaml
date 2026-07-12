@@ -1,0 +1,16 @@
+# IF-8 sidecar (meridian/asset@1). Ardent/male skin palette 3 of 3 —
+# procedural stylized painterly tone ramp generated deterministically by
+# tools/art/generate_face_skin.py (spec ⑤ §2, story #568). Consumed by the
+# appearance catalog's `skin` preset list (spec ⑤/S6 wires the real id in).
+schema: meridian/asset@1
+id: core:art.char.ardent.male.skin_3
+class: texture_set
+source: assets/art/char/ardent/male/skin_3_bc.png
+license: CC-BY-4.0
+provenance:
+  source_tier: original
+  authors: [meridian-contributors]
+budget:
+  # 256x256 authored — far under the 2048 Art PRD §2.3 player-character-body
+  # texture_set cap (client/import-presets/presets.json size_caps_px.texture_set).
+  texture_max_px: 256
