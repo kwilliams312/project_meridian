@@ -220,6 +220,29 @@ func _verify_scene() -> void:
 		scene._selected_appearance()["version"] == MeridianAppearance.VERSION
 		and int(scene._selected_appearance()["hair"]) == MeridianAppearance.DEFAULT_HAIR_ID)
 
+	# #590 REGRESSION LOCK: the create UI must expose EVERY catalog preset, not a
+	# hardcoded 1-3 range. The S6 catalog upgrade added hair/face preset id 4 (S5
+	# hair_4, S1 face_4) — unreachable via the old hardcoded stub, reachable via the
+	# catalog-driven pickers (#546). Counts follow the ardent catalog (4 hair, 4 face,
+	# 3 skin), and id 4 is present in both channels that carry it. Driven off the mounted
+	# catalog, so these cannot silently pass on a stale 1-3 stub.
+	_check("hair picker exposes ALL catalog presets incl. id 4 (4 options, id 4 present)",
+		hair_opt != null and hair_opt.item_count == 4 and hair_opt.get_item_index(4) != -1)
+	_check("face picker exposes ALL catalog presets incl. id 4 (4 options, id 4 present)",
+		face_opt != null and face_opt.item_count == 4 and face_opt.get_item_index(4) != -1)
+	_check("skin picker exposes ALL catalog presets (3 options)",
+		skin_opt != null and skin_opt.item_count == 3)
+	# Selecting the formerly-unreachable id 4 flows into the create record verbatim —
+	# the stable ints the server validates. Proves id 4 now round-trips through the UI.
+	hair_opt.select(hair_opt.get_item_index(4))
+	face_opt.select(face_opt.get_item_index(4))
+	var look4: Dictionary = scene._selected_appearance()
+	_check("selecting hair/face preset id 4 yields a create record with hair=face=4",
+		int(look4["hair"]) == 4 and int(look4["face"]) == 4)
+	# Restore the default selection so the rest of the scene test runs from a known state.
+	hair_opt.select(hair_opt.get_item_index(MeridianAppearance.DEFAULT_HAIR_ID))
+	face_opt.select(face_opt.get_item_index(MeridianAppearance.DEFAULT_FACE_ID))
+
 	# Content-missing (spec §6): a race with NO catalog (Dolmen, id 2 — M1 ships only
 	# the ardent catalog) disables the pickers with a visible "(content missing)" state
 	# rather than empty lists, and the create record falls back to the default.

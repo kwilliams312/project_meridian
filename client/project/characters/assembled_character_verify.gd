@@ -241,9 +241,10 @@ func _verify_dye(ac, db, pickaxe: int) -> void:
 # real staged Warden's Kit slots at once, with a dye on the chest. Asserts every
 # slot mounts a mesh; the hide UNION leaves only the two uncovered regions
 # (forearms + waist) visible; the chest carries the mask-tint dye ShaderMaterial
-# in the composite; the real hair mesh is seated on the head; and the shoulders
-# plate skins geometry to an UpperArm bone (the arms-seam bridge — without it the
-# torso hide orphans the forearms geoset and the arms float, ⑤/S6).
+# in the composite; and the real hair mesh is seated on the head. (The round-1
+# shoulder-guard 'UpperArm bridge' was REMOVED in S6 round-2 and arms work is
+# deferred by #593 — with the full kit the arms float, an accepted S6 limitation
+# tracked in #587. This phase does NOT assert an arms bridge; see the NOTE below.)
 func _verify_full_kit(ac, db) -> void:
 	print(" ⑤/S6 full Warden's Kit composite — body + hair + 6 slots + dye:")
 	var russet: int = db.numeric_id_for("core:dye.russet")
