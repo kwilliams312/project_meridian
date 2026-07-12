@@ -27,22 +27,24 @@ test('cachePut/cacheGet honor a per-call directory so callers cannot collide', a
 test('clearing one cache dir never breaks concurrent writes to another', async () => {
   const writeDir = await mkdtemp(join(tmpdir(), 'strudel-write-'));
   const clearDir = await mkdtemp(join(tmpdir(), 'strudel-clear-'));
+  let stop = false;
+  // Mirror determinism.test.ts hammering rm on ITS cache dir...
+  const clearer = (async () => {
+    while (!stop) {
+      await rm(clearDir, { recursive: true, force: true });
+    }
+  })();
   try {
-    let stop = false;
-    // Mirror determinism.test.ts hammering rm on ITS cache dir...
-    const clearer = (async () => {
-      while (!stop) {
-        await rm(clearDir, { recursive: true, force: true });
-      }
-    })();
     // ...while render.e2e.test.ts writes to ITS own cache dir. Must never throw.
     const wav = Buffer.alloc(1024, 7);
     for (let i = 0; i < 200; i++) {
       await cachePut(`k${i}`.padEnd(64, '0'), wav, writeDir);
     }
+  } finally {
+    // Always halt and drain the clearer, even if a cachePut above threw —
+    // otherwise the loop spins forever and hangs the run instead of failing.
     stop = true;
     await clearer;
-  } finally {
     await rm(writeDir, { recursive: true, force: true });
     await rm(clearDir, { recursive: true, force: true });
   }
@@ -50,9 +52,13 @@ test('clearing one cache dir never breaks concurrent writes to another', async (
 
 test('an explicit cache dir is never the shared repo-level .render-cache', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'strudel-explicit-'));
+  const key = 'b'.repeat(64);
+  // Clear only this key's default-dir entry so a leftover from a prior run
+  // can't make the assertion below spuriously fail (hermetic, and this key is
+  // never produced by a real render so no concurrent test writes it).
+  await rm(resolve('.render-cache', `${key}.wav`), { force: true });
   try {
     expect(resolve(dir)).not.toBe(resolve('.render-cache'));
-    const key = 'b'.repeat(64);
     await cachePut(key, Buffer.from('x'), dir);
     // The shared default dir must be untouched by an explicit-dir write.
     expect(await cacheGet(key)).toBeNull();
