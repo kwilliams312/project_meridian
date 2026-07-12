@@ -189,6 +189,13 @@ ASSET_BUDGETS: dict[str, dict[str, tuple[int, str]]] = {
         "texture_max_px": (1024, "Art PRD §2.3 prop 512²-1024²"),
         "vram_mb": (4, "Art PRD §2.3 prop ≤ 4 MB"),
     },
+    "texture_set": {
+        "texture_max_px": (
+            2048,
+            "Art PRD §2.3 player character body 2048² set (customization textures "
+            "share the body's texture-set cap; presets.json size_caps_px.texture_set)",
+        ),
+    },
     "foliage": {
         "lod0_tris": (20_000, "Art PRD §2.1 foliage: tree 10-20k"),
     },
