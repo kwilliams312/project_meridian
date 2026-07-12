@@ -7,7 +7,8 @@
 # dyes), it builds the visible character from mounted pack content via
 # MeridianContentDB — body scene, single canonical Skeleton3D, skinned gear
 # bound by bone name, weapons on socket_* BoneAttachment3Ds, geoset hides,
-# M1 whole-piece dye tints.
+# and per-channel mask-tint dyes (⑤/S3 — a dye-mask shader replaces the M1
+# whole-piece albedo tint).
 #
 # MODEL BYTES (M0 boundary, honest): ContentDB.model_path() returns the
 # DECLARED imported-resource path (.scn) from pack.contents.jsonl — emit-pck is
@@ -35,7 +36,9 @@
 #
 # `appearance` carries preset ids: {hair: int, face: int, skin: int} (absent →
 # 1). `equipment` is an Array of {slot: int, item_template: int, dyes: Array}.
-# `dyes` is an Array of IF-9 dye numeric ids.
+# `dyes` is an Array of {channel: int, dye_id: int} (⑤/S3, #570 — the codec/pump
+# carry the dye `channel`: 0=primary, 1=secondary, 2=accent, selecting which RGB
+# region of the piece's dye mask the numeric dye_id tints).
 
 extends Node3D
 class_name AssembledCharacter
@@ -48,6 +51,15 @@ signal assembly_failed(reason: String)
 # global class_name can be unresolvable against a stale .godot class cache — the
 # exact trap T2's fix round banned (see content_db_verify.gd, char_select.gd:46).
 const ContentDbScript := preload("res://content/content_db.gd")
+
+# The dye mask-tint shader (⑤/S3): ONE parameterized variant of the Character
+# master material (Art PRD §2.3 — not a new master). Every dyed piece gets a
+# ShaderMaterial off this shader with its mask + per-channel colours.
+const DyeShader := preload("res://characters/dye_tint.gdshader")
+
+# A dyeable piece's dye mask asset id is its model content id + this suffix
+# (e.g. core:art.item.armor.warden_chest → ..._mask), staged as an RGB PNG.
+const _DYE_MASK_SUFFIX: String = "_mask"
 
 const _GEOSET_PREFIX: String = "geo_"
 const _SOCKET_BONE_PREFIX: String = "socket_"
@@ -177,7 +189,7 @@ func set_equipment_slot(slot: int, item_template: int, dyes: Array) -> void:
 		# A model that failed to mount already emitted assembly_failed — the
 		# piece (or that part of it) simply stays hidden (spec §6).
 
-	_apply_dyes(nodes, dyes)
+	_apply_dyes(nodes, dyes, w)
 	# Lead ruling (②/T4, #541): when an item DECLARES models but NONE of them mounted
 	# (every model failed to load), do NOT record its geoset hides — hiding a body region
 	# while the covering piece is invisible would leave that region uncovered ("hide-while-
@@ -436,31 +448,114 @@ func _region_of(node_name: String) -> String:
 	return s
 
 
-# M1 dye: whole-piece albedo tint (spec §4) — the first KNOWN dye id tints every
-# surface of the piece via a material override; unknown ids keep the item's
-# authored colors (spec §6). The per-channel dye-mask path arrives with real
-# textures (spec ⑤).
-func _apply_dyes(nodes: Array, dyes: Array) -> void:
+# Mask-tint dye (⑤/S3, spec §4 / ① §6): each dyed piece gets a ShaderMaterial
+# (DyeShader) that samples the piece's RGB dye mask and multiplies each channel's
+# region (R=primary, G=secondary, B=accent) by that channel's chosen dye colour,
+# preserving unmasked albedo. `dyes` is the wire shape [{channel:int, dye_id:int}]
+# (the codec/pump carry the channel — ⑤/S3). Fallbacks (spec §6 / ① §9):
+#   * a piece with no dye mask OR no worn.dye_channels → no tint (authored colours);
+#   * an unknown dye id → that channel stays untinted (+ assembly_failed once);
+#   * every dye unknown → no material override at all (piece keeps authored colours).
+func _apply_dyes(nodes: Array, dyes: Array, worn: Dictionary) -> void:
 	if dyes.is_empty() or nodes.is_empty():
 		return
-	var db = ContentDbScript.instance()
-	var tint: Color = ContentDbScript.UNKNOWN_DYE
-	for d in dyes:
-		var c: Color = db.dye_color(int(d))
-		if c != ContentDbScript.UNKNOWN_DYE:
-			tint = c
-			break
-		_fail("dye:%d" % int(d))
-	if tint == ContentDbScript.UNKNOWN_DYE:
+	# A piece must DECLARE itself dyeable (worn.dye_channels) to tint at all.
+	var channels: Array = worn.get("dye_channels", [])
+	if channels.is_empty():
 		return
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = tint
+	var db = ContentDbScript.instance()
+
+	# Resolve the chosen dye colour per RGB channel index from the wire choices.
+	# Only KNOWN dyes populate the map; unknown ids fall back to authored colours.
+	var channel_colors: Dictionary = {}  # int channel (0/1/2) -> Color
+	for d in dyes:
+		if typeof(d) != TYPE_DICTIONARY:
+			continue
+		var ch: int = int(d.get("channel", 0))
+		var dye_id: int = int(d.get("dye_id", 0))
+		var c: Color = db.dye_color(dye_id)
+		if c == ContentDbScript.UNKNOWN_DYE:
+			_fail("dye:%d" % dye_id)
+			continue
+		channel_colors[ch] = c
+	# No known dye resolved → keep the piece's authored colours (no override).
+	if channel_colors.is_empty():
+		return
+
 	for n in nodes:
 		if n is MeshInstance3D:
-			n.material_override = mat
+			_tint_mesh(n, channel_colors)
 		elif n is Node:
 			for mi in n.find_children("*", "MeshInstance3D", true, false):
-				mi.material_override = mat
+				_tint_mesh(mi, channel_colors)
+
+
+# Build and apply the mask-tint ShaderMaterial for ONE mesh. Resolves the mesh's
+# dye mask from its model id (model_id + _mask); a mesh with no resolvable mask
+# is left with its authored material (no tint). The authored albedo (colour +
+# texture) is copied into the shader so unmasked regions stay pixel-identical.
+func _tint_mesh(mi: MeshInstance3D, channel_colors: Dictionary) -> void:
+	var model_id: String = String(mi.get_meta("model_id", ""))
+	if model_id.is_empty():
+		return
+	var mask: Texture2D = _load_mask_texture(model_id + _DYE_MASK_SUFFIX)
+	if mask == null:
+		# The piece declares dye_channels but ships no mask → no tint (spec §4).
+		return
+
+	var sm := ShaderMaterial.new()
+	sm.shader = DyeShader
+	sm.set_shader_parameter("dye_mask", mask)
+
+	# Preserve the authored albedo (material_override REPLACES the material).
+	var base: Material = mi.get_active_material(0)
+	var bm := base as BaseMaterial3D
+	if bm != null:
+		sm.set_shader_parameter("albedo_color", bm.albedo_color)
+		if bm.albedo_texture != null:
+			sm.set_shader_parameter("albedo_tex", bm.albedo_texture)
+		sm.set_shader_parameter("roughness", bm.roughness)
+		sm.set_shader_parameter("metallic", bm.metallic)
+
+	# Bind each chosen channel colour + flip its use flag on (default off → the
+	# authored albedo shows through even where that channel's mask is painted).
+	if channel_colors.has(0):
+		sm.set_shader_parameter("dye_primary", channel_colors[0])
+		sm.set_shader_parameter("use_primary", 1.0)
+	if channel_colors.has(1):
+		sm.set_shader_parameter("dye_secondary", channel_colors[1])
+		sm.set_shader_parameter("use_secondary", 1.0)
+	if channel_colors.has(2):
+		sm.set_shader_parameter("dye_accent", channel_colors[2])
+		sm.set_shader_parameter("use_accent", 1.0)
+
+	mi.material_override = sm
+
+
+# Load a dye mask texture by asset id: prefer the DECLARED imported resource when
+# it exists, else runtime-load the staged source .png sibling (same MODEL BYTES
+# fallback as _load_model_scene). Returns null when the mask cannot be resolved
+# (→ the piece keeps its authored colours).
+func _load_mask_texture(mask_id: String) -> Texture2D:
+	if mask_id.is_empty():
+		return null
+	var db = ContentDbScript.instance()
+	var declared: String = db.model_path(mask_id)
+	if declared.is_empty():
+		return null
+	if ResourceLoader.exists(declared):
+		var res = load(declared)
+		if res is Texture2D:
+			return res
+		return null
+	var png_path: String = declared.get_basename() + ".png"
+	if not FileAccess.file_exists(png_path):
+		return null
+	var img := Image.new()
+	var err: int = img.load(png_path)
+	if err != OK:
+		return null
+	return ImageTexture.create_from_image(img)
 
 
 # Emit assembly_failed ONCE per failing asset id (instance lifetime) + a
