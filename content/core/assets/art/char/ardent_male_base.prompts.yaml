@@ -1,0 +1,11 @@
+task_id: 019f54a3-7605-7e13-8024-ad5cc061a91b
+model_version: meshy-5
+preview_task_id: 019f54a2-e03d-7dfc-b489-342a5389185d
+request:
+  mode: preview
+  prompt: a stylized low-poly adult male human warrior standing in a strict symmetric
+    T-pose, arms fully extended straight out to the sides horizontal, legs together
+    and straight, bald head, bare neutral muscular base body, stylized fantasy MMO
+    game character, clean even topology, front facing
+  ai_model: meshy-5
+  target_polycount: 30000

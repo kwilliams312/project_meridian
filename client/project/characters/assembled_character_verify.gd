@@ -112,6 +112,31 @@ func _verify_body(ac) -> void:
 			visible_count += 1
 	_check("all 8 geoset meshes instanced and visible", visible_count == 8)
 
+	# LOD-aware visibility (⑤/S4 real body ships an authored LOD0-3 chain): only
+	# the 8 LOD0 geosets render; the lod1-3 meshes exist but stay hidden for the
+	# deferred distance-based LOD system. Without this every character would draw
+	# 4x its geometry (all LODs stacked) — the regression the S4 GPU render found.
+	var all_geosets: Array = ac.body_geosets()
+	_check("body ships the full geoset LOD chain (8 regions x 4 LODs = 32)",
+		all_geosets.size() == 32)
+	var vis: int = 0
+	var hidden_lodn: int = 0
+	var all_visible_are_lod0: bool = true
+	for g2 in all_geosets:
+		if not (g2 is MeshInstance3D):
+			continue
+		var nm: String = String(g2.name)
+		var is_lod0: bool = not nm.contains("_lod") or nm.ends_with("_lod0")
+		if g2.visible:
+			vis += 1
+			if not is_lod0:
+				all_visible_are_lod0 = false
+		elif not is_lod0:
+			hidden_lodn += 1
+	_check("exactly 8 geoset meshes are VISIBLE (LOD0 only)", vis == 8)
+	_check("every visible geoset is LOD0", all_visible_are_lod0)
+	_check("the 24 lod1-3 geosets exist but are hidden", hidden_lodn == 24)
+
 
 # --- A2. pickaxe → BoneAttachment3D on socket_main_hand ------------------------
 func _verify_pickaxe_socket(ac, pickaxe: int) -> void:
@@ -199,10 +224,21 @@ func _verify_fixtures(ac, db) -> void:
 	var ok: bool = ac.assemble(1, 0, {}, [])
 	_check("assemble against the fixture pack", ok)
 
-	# worn.hides ["feet"] → geo_feet_lod0 hidden; unequip → restored.
+	# worn.hides ["feet"] → the feet region hidden at every LOD; unequip → restored.
+	var visible_before: int = _visible_geoset_count(ac)
+	_check("body-only assemble shows 8 visible geosets", visible_before == 8)
 	ac.set_equipment_slot(SLOT_FEET, FX_BOOTS, [])
 	var feet: MeshInstance3D = ac.geoset_node("feet")
 	_check("hides ['feet'] → geo_feet_lod0 hidden", feet != null and not feet.visible)
+	# Region hide is LOD-aware: every LOD of the hidden region goes dark, not just
+	# LOD0 (otherwise the region's lod1-3 would still draw under the boot).
+	var feet_lods_hidden: bool = true
+	for g3 in ac.body_geosets():
+		if g3 is MeshInstance3D and String(g3.name).begins_with("geo_feet_") and g3.visible:
+			feet_lods_hidden = false
+	_check("hides ['feet'] hides ALL feet LODs (geo_feet_lod0..3)", feet_lods_hidden)
+	_check("region-hiding item drops the visible geoset count (8 -> 7)",
+		_visible_geoset_count(ac) == visible_before - 1)
 	var others_visible: bool = true
 	for region in REGIONS:
 		if region == "feet":
@@ -213,6 +249,8 @@ func _verify_fixtures(ac, db) -> void:
 	_check("the other 7 geosets stay visible", others_visible)
 	ac.set_equipment_slot(SLOT_FEET, 0, [])
 	_check("unequip restores geo_feet_lod0", feet != null and feet.visible)
+	_check("unequip restores the visible geoset count to 8",
+		_visible_geoset_count(ac) == visible_before)
 
 	# race_overrides: the ardent override substitutes models wholesale — the
 	# bogus default model must never be touched.
@@ -226,17 +264,21 @@ func _verify_fixtures(ac, db) -> void:
 	ac.set_equipment_slot(SLOT_MAIN_HAND, 0, [])
 
 	# Skinned (socketless) gear: meshes re-parent onto the body skeleton and
-	# bind by bone name (the fixture reuses the skinned blockout body model).
+	# bind by bone name. The fixture reuses the real ardent body model, so the
+	# piece's mesh count tracks that model's geoset+LOD count — assert the
+	# BEHAVIOR (re-parented + bound by bone name), never a magic count, so this
+	# never breaks again when the model's mesh count changes.
 	var skel: Skeleton3D = ac.body_skeleton()
 	ac.set_equipment_slot(SLOT_CHEST, FX_SKINNED, [])
 	var gear: Array = ac.equipped_nodes(SLOT_CHEST)
-	_check("skinned gear re-parents its 8 meshes onto the body skeleton",
-		gear.size() == 8 and gear[0].get_parent() == skel)
+	_check("skinned gear mounts at least one mesh", gear.size() > 0)
 	var bound: bool = not gear.is_empty()
 	for mi in gear:
-		if not (mi is MeshInstance3D) or mi.skeleton != NodePath("..") or mi.skin == null:
+		if not (mi is MeshInstance3D) or mi.get_parent() != skel \
+				or mi.skeleton != NodePath("..") or mi.skin == null:
 			bound = false
-	_check("re-parented meshes point at the skeleton with their Skin kept", bound)
+	_check("every re-parented mesh is under the body skeleton, bound by bone name",
+		bound)
 	_check("Skin bone names resolve on the body skeleton (no skin: failure)",
 		not _failures.has("skin:core:art.char.ardent.male.base"))
 	ac.set_equipment_slot(SLOT_CHEST, 0, [])
@@ -265,6 +307,15 @@ func _verify_fixtures(ac, db) -> void:
 	_check("torso geoset STAYS visible — no hide-while-uncovered (T4 ruling)",
 		torso_after != null and torso_after.visible)
 	ac.set_equipment_slot(SLOT_CHEST, 0, [])
+
+
+# How many BODY geoset meshes are currently visible (LOD0-only at M1).
+func _visible_geoset_count(ac) -> int:
+	var n: int = 0
+	for g in ac.body_geosets():
+		if g is MeshInstance3D and g.visible:
+			n += 1
+	return n
 
 
 # The first MeshInstance3D of the piece mounted in `slot` (null when none).

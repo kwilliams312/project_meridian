@@ -107,6 +107,11 @@ func assemble(race: int, sex: int, appearance: Dictionary, equipment: Array) -> 
 	_skeleton = skeletons[0]
 	_body_geosets = body.find_children(_GEOSET_PREFIX + "*", "MeshInstance3D", true, false)
 	_assembled = true
+	# Establish the LOD0-only visibility invariant immediately (before any gear):
+	# a real body ships an authored LOD0-3 chain, and all levels import VISIBLE —
+	# without this a body-only assemble would draw all 4 LODs stacked. Equipment
+	# changes re-run _apply_hides, but a no-equipment assemble needs it here.
+	_apply_hides()
 
 	# Hair preset = mesh on the head (spec §4). The blockout catalog aliases every
 	# preset to the body model, so only a DISTINCT hair model mounts — the
@@ -231,12 +236,25 @@ func equipped_nodes(slot: int) -> Array:
 
 
 ## The body geoset MeshInstance3D for a region name (e.g. "feet" →
-## geo_feet_lod0), or null. Only BODY geosets — never worn-gear meshes.
+## geo_feet_lod0), or null. Only BODY geosets — never worn-gear meshes. Prefers
+## the LOD0 mesh (the one that renders at M1); falls back to any LOD of the
+## region if no LOD0 exists.
 func geoset_node(region: String) -> MeshInstance3D:
+	var fallback: MeshInstance3D = null
 	for g in _body_geosets:
 		if is_instance_valid(g) and _region_of(String(g.name)) == region:
-			return g
-	return null
+			if _is_lod0(String(g.name)):
+				return g
+			if fallback == null:
+				fallback = g
+	return fallback
+
+
+## Every BODY geoset MeshInstance3D across all LOD levels (worn gear is never
+## here). Diagnostics / headless verify only — visibility is owned by
+## _apply_hides (LOD0 only; see there).
+func body_geosets() -> Array:
+	return _body_geosets
 
 
 # --- Internals -----------------------------------------------------------------
@@ -388,7 +406,25 @@ func _apply_hides() -> void:
 			hidden[String(region)] = true
 	for g in _body_geosets:
 		if is_instance_valid(g):
-			g.visible = not hidden.has(_region_of(String(g.name)))
+			var region: String = _region_of(String(g.name))
+			# Only LOD0 geosets render at M1; the authored lod1-3 meshes are kept
+			# hidden for the DEFERRED distance-based LOD system (⑤ spec §8 / Art
+			# PRD §2.5 crowd perf). Drawing them would stack every authored LOD
+			# level on each character and blow the 50-player crowd budget. A LOD0
+			# geoset is visible unless an equipped piece's worn.hides covers its
+			# region — and because the hide test is region-keyed, hiding a region
+			# hides ALL its LODs, not just LOD0.
+			g.visible = _is_lod0(String(g.name)) and not hidden.has(region)
+
+
+# Whether a geoset mesh name is the base LOD that renders at M1. "geo_torso_lod0"
+# → true; "geo_torso_lod1".."lod3" → false; a name with no "_lod" suffix (the old
+# single-level blockout convention) counts as base/renderable.
+func _is_lod0(node_name: String) -> bool:
+	var lod_at: int = node_name.rfind("_lod")
+	if lod_at < 0:
+		return true
+	return node_name.substr(lod_at + 4) == "0"
 
 
 # "geo_<region>_lod<n>" -> "<region>" (tolerates any lod suffix / none).
