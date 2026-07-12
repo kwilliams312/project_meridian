@@ -11,11 +11,15 @@ from Meshy and fit them to the canonical rig:
   proud of the body surface (no void between plate and body) and extended UPWARD
   toward the neck/shoulders so a chest cuirass bridges the shoulder seam,
 * budget-cleaned to the Art PRD §2.1 armor band (3–8k tris/slot),
-* given a deterministic cylindrical UV unwrap (u = angle about the region's
-  vertical axis, v = normalized height) so the per-slot RGB dye mask
-  (``warden_<slot>_mask.png``) wraps the whole piece predictably regardless of the
-  arbitrary UVs Meshy emits — the chest still dyes russet exactly as the procedural
-  plate did (⑤/S6 dye finding),
+* given a deterministic cylindrical UV unwrap (u = angle about the mesh's vertical
+  axis, v = normalized height over the mesh's actual fitted span) replacing the
+  arbitrary UVs Meshy emits. The per-slot RGB dye masks (``warden_<slot>_mask.png``,
+  tools/art/generate_warden_kit.py) are horizontally uniform and banded purely by
+  HEIGHT (a dominant primary body, a secondary trim band, an accent piping edge),
+  so a v = normalized-height mapping tints the whole plate correctly — the chest
+  dyes russet as intended (⑤/S6 dye finding) — irrespective of the u convention
+  (the procedural plates used per-face planar box UVs; this is a cylindrical wrap,
+  but both agree on v = height, which is all the height-banded mask depends on),
 * single-influence skinned (weight 1.0 per vertex) to the canonical bones the piece
   rides — the chest binds Spine/Chest/UpperChest, the nearest owns each vertex — on
   the shared canonical armature, so the plate deforms with the torso,
@@ -292,12 +296,18 @@ def fit_region_transform(
 def cylindrical_uv(point: Vec3, region_lo: Vec3, region_hi: Vec3, up_axis: int = 2):
     """Deterministic cylindrical UV for a fitted armor vertex.
 
-    ``u`` = angle about the region's vertical (``up_axis``) axis through its
+    ``u`` = angle about the vertical (``up_axis``) axis through the bounds'
     cross-section centre, normalized to [0, 1); ``v`` = normalized height along
-    ``up_axis``. Mirrors ``generate_warden_kit``'s per-vertex cylindrical wrap so
-    the SAME dye mask (primary body / secondary trim band by v / accent piping)
-    maps across the whole piece — the chest dyes russet as before regardless of
-    Meshy's arbitrary source UVs. Pure: computed from geometry, no Blender.
+    ``up_axis``. ``region_lo``/``region_hi`` are the bounds v is normalized against;
+    callers pass the mesh's ACTUAL fitted AABB (not the pre-fit region box) so the
+    whole mesh — including the inflated margin and shoulder-bridge geometry — maps
+    across the mask's full 0..1 range rather than clamping at the extremes. The [0,
+    1] clamp here is only a defensive guard against float error at the extremes.
+
+    The dye masks (generate_warden_kit.py) are horizontally uniform and banded by
+    HEIGHT (primary body / secondary trim band / accent piping), so this v = height
+    mapping tints the whole piece correctly; the u convention is immaterial to the
+    height-banded mask. Pure: computed from geometry, no Blender.
     """
     cross = tuple(i for i in range(3) if i != up_axis)
     cu = (region_lo[cross[0]] + region_hi[cross[0]]) / 2.0
@@ -449,10 +459,12 @@ def _apply_cylindrical_uv(
 ):  # pragma: no cover - needs bpy
     """Replace the mesh's UVs with the deterministic cylindrical unwrap.
 
-    Meshy emits arbitrary UVs; the dye mask needs a predictable wrap. Build a
-    fresh UV layer whose per-loop coordinate is :func:`cylindrical_uv` of the
-    loop's vertex — so the per-slot RGB mask (primary/secondary/accent by v) maps
-    across the whole plate exactly as it did for the procedural piece.
+    Meshy emits arbitrary UVs; the dye mask needs a predictable wrap. Build a fresh
+    UV layer whose per-loop coordinate is :func:`cylindrical_uv` of the loop's
+    vertex. ``region_lo``/``region_hi`` MUST be the mesh's actual fitted bounds so
+    the height-banded dye mask (primary body / secondary trim / accent piping) maps
+    across the whole plate — margins and shoulder-bridge included — without the v
+    clamping that flattens the banding.
     """
     me = obj.data
     # Drop Meshy's own UV layer(s) so only the deterministic dye wrap remains as
@@ -631,9 +643,16 @@ def main(argv: list[str] | None = None) -> None:  # pragma: no cover - needs bpy
     src.name = ARMOR_MESH_NAME
     src.data.name = ARMOR_MESH_NAME
 
-    # Cylindrical dye-mask UV over the intended region envelope (stable regardless
-    # of decimation), so the committed warden_<slot>_mask.png wraps the plate.
-    _apply_cylindrical_uv(src, region_lo, region_hi, cfg.uv_axis)
+    # Dye-mask UV MUST be normalized against the mesh's ACTUAL post-fit bounds — the
+    # inflated + up-extended envelope it occupies — NOT the pre-fit region box. The
+    # fit expands the target by inflate (all axes) and up_extend (top of the up
+    # axis), so the outer margin and the shoulder-bridge geometry lie OUTSIDE the
+    # nominal region; normalizing v against the nominal box sent >50% of verts
+    # (concentrated in the bridge) outside [0,1] where they clamp, degenerating the
+    # mask's height banding to flat colour over that geometry. Using the real bounds
+    # maps the whole mesh — bridge included — across the mask's full 0..1 range.
+    fit_min, fit_max = _obj_bbox(src)
+    _apply_cylindrical_uv(src, fit_min, fit_max, cfg.uv_axis)
 
     # Replace Meshy's baked-texture material with the flat light-steel dye base so
     # the plate tints true and the multi-MB source texture never ships.

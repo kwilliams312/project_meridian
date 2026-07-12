@@ -815,6 +815,83 @@ def test_restyle_armor_cylindrical_uv_wraps_and_climbs():
         assert 0.0 <= uv[0] < 1.0 and 0.0 <= uv[1] <= 1.0
 
 
+def test_restyle_armor_uv_normalized_against_fitted_bounds_not_prefit_box():
+    """v must be normalized against the mesh's fitted bounds, not the pre-fit box.
+
+    The mesh occupies the region grown by inflate (all axes) + up_extend (top of the
+    up-axis). Normalizing v against the PRE-FIT box sends the margin + shoulder-bridge
+    geometry outside [0,1] where it CLAMPS (the shipped regression: >50% at v=0). This
+    guards the pure invariant: over the FITTED span, v climbs 0→1 with no clamped bulk.
+    """
+    lo, hi = restyle_armor.region_box("torso")
+    inflate, up_extend, up_axis = 0.06, 0.07, 2
+    fit_lo = tuple(lo[i] - inflate for i in range(3))
+    fit_hi = tuple(
+        hi[i] + inflate + (up_extend if i == up_axis else 0.0) for i in range(3)
+    )
+    cx = (fit_lo[0] + fit_hi[0]) / 2.0
+    cy = (fit_lo[1] + fit_hi[1]) / 2.0
+
+    # WRONG (pre-fit box): the fitted bottom + top land outside [0,1] → clamp.
+    wrong_bottom = restyle_armor.cylindrical_uv((cx, cy, fit_lo[2]), lo, hi, up_axis)
+    wrong_top = restyle_armor.cylindrical_uv((cx, cy, fit_hi[2]), lo, hi, up_axis)
+    assert wrong_bottom[1] == 0.0 and wrong_top[1] == 1.0  # both clamp (info lost)
+
+    # RIGHT (fitted bounds): the same physical extremes map to exactly 0 and 1, and
+    # every interior height maps strictly inside — no bulk clamping.
+    right_bottom = restyle_armor.cylindrical_uv(
+        (cx, cy, fit_lo[2]), fit_lo, fit_hi, up_axis
+    )
+    right_top = restyle_armor.cylindrical_uv(
+        (cx, cy, fit_hi[2]), fit_lo, fit_hi, up_axis
+    )
+    assert right_bottom[1] == pytest.approx(0.0, abs=1e-6)
+    assert right_top[1] == pytest.approx(1.0, abs=1e-6)
+    for frac in (0.1, 0.25, 0.5, 0.75, 0.9):  # interior heights are unclamped
+        z = fit_lo[2] + frac * (fit_hi[2] - fit_lo[2])
+        v = restyle_armor.cylindrical_uv((cx, cy, z), fit_lo, fit_hi, up_axis)[1]
+        assert v == pytest.approx(frac, abs=1e-6)
+
+
+@pytest.mark.integration
+def test_chest_glb_dye_uv_v_spans_full_range_without_bulk_clamp():
+    """The shipped cuirass dye UV v spans ~[0,1] with <5% clamped at either extreme.
+
+    Regression guard for the fit→UV integration bug (#595 review): v was normalized
+    against the pre-fit region box while the mesh occupies the inflated + up-extended
+    envelope, so 52.3% of verts (concentrated in the shoulder-bridge geometry) clamped
+    to v=0 and the height-banded dye mask degenerated to flat colour over half the
+    plate. Normalizing against the mesh's real fitted bounds fixes it — the whole mesh
+    maps across the mask's full 0..1 range.
+    """
+    if not _chest_present_and_smudged():
+        pytest.skip(f"{CHEST_GLB.name} missing or an unsmudged LFS pointer")
+    import struct
+
+    from pygltflib import GLTF2
+
+    g = GLTF2().load(str(CHEST_GLB))
+    blob = g.binary_blob()
+    prim = g.meshes[0].primitives[0]
+    acc = g.accessors[prim.attributes.TEXCOORD_0]
+    bv = g.bufferViews[acc.bufferView]
+    base = (bv.byteOffset or 0) + (acc.byteOffset or 0)
+    stride = bv.byteStride or 8
+    vs = [
+        struct.unpack_from("<2f", blob, base + i * stride)[1] for i in range(acc.count)
+    ]
+    n = len(vs)
+    clamp_lo = sum(1 for v in vs if v <= 1e-6) / n
+    clamp_hi = sum(1 for v in vs if v >= 1.0 - 1e-6) / n
+    assert min(vs) < 0.05 and max(vs) > 0.95, (
+        f"dye UV v does not span [0,1]: min={min(vs):.3f} max={max(vs):.3f}"
+    )
+    assert clamp_lo < 0.05, (
+        f"{clamp_lo:.1%} of verts clamp at v=0 (was 52.3% before the fix)"
+    )
+    assert clamp_hi < 0.05, f"{clamp_hi:.1%} of verts clamp at v=1"
+
+
 def test_restyle_armor_nearest_bind_bone_picks_by_height():
     """A point near the spine base binds Spine; near the top binds UpperChest."""
     bind = ("Spine", "Chest", "UpperChest")
