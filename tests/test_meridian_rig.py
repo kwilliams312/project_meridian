@@ -515,6 +515,33 @@ def test_restyle_nearest_region_picks_closest_anchor():
     assert restyle_body.nearest_region((0.0, 0.0, 0.1), anchors) == "feet"
 
 
+def test_restyle_upper_arm_belongs_to_forearms_not_torso():
+    """#587 regression: the whole upper arm (shoulder joint -> elbow) cuts into
+    the `forearms` geoset, not `torso`.
+
+    RightUpperArm spans x 0.17 -> 0.47 at the shoulder line (y=1.42, bones.py).
+    Before the geoset re-cut the only per-arm anchor sat near the elbow, so the
+    shoulder-line upper-arm surface fell to the nearer central `torso` anchor and
+    was erased whenever a torso-hiding chest was worn, orphaning the forearm.
+    Every sample along the upper arm must now resolve to `forearms` so hiding
+    `torso` can never touch arm geometry. Points are Y-up (table/glTF space) and
+    mapped to the Blender space the partition runs in, exactly as the cut does.
+    """
+    anchors = restyle_body.region_anchors()
+
+    def region_of(point_yup):
+        return restyle_body.nearest_region(
+            generate_rig.yup_to_blender(point_yup), anchors
+        )
+
+    # Upper arm, shoulder joint (0.17) through the elbow (0.47), both sides.
+    for x in (0.18, 0.25, 0.30, 0.40, 0.46):
+        assert region_of((x, 1.42, 0.0)) == "forearms", f"right upper arm x={x}"
+        assert region_of((-x, 1.42, 0.0)) == "forearms", f"left upper arm x={x}"
+    # The central chest stays torso — the fix must not pull the body core out.
+    assert region_of((0.0, 1.30, 0.05)) == "torso"
+
+
 def test_restyle_rig_bounds_z_spans_feet_to_head():
     lo, hi = restyle_body.rig_bounds_z()
     assert lo == pytest.approx(0.0, abs=0.05)  # feet on the floor
