@@ -111,8 +111,9 @@ naming/scale/pivot checks above, which only warn).
 | E100 | Every exported bone name is in the canonical `skeleton.defs.yaml` bone set (63 names: 56 profile + 7 sockets) | `character_model`, `armor_model` |
 | E101 | All 7 socket bones (`socket_main_hand`, `socket_off_hand`, `socket_shield`, `socket_back`, `socket_ranged`, `socket_hip_l`, `socket_hip_r`) are present | `character_model` only (gear binds a subset of canonical bones, never the socket mounts) |
 | E102 | Body meshes are named `geo_<region>_lod<N>`; all 8 geoset regions are covered at `lod0` | `character_model` with meshes (a skeleton-only export — the committed rig asset — carries no meshes and passes) |
-| E103 | ≤4 skin-weight influences per vertex, weights normalized (sum to 1.0) | `character_model`, `armor_model` |
+| E103 | ≤4 skin-weight influences per vertex, weights normalized (sum to 1.0) — message names the offending mesh | `character_model`, `armor_model` |
 | E104 | `geo_*`-named meshes must name a known geoset region; `armor_model` meshes must NOT be `geo_*`-named at all (gear binds whole pieces via item@2 `worn.hides`, it doesn't carry geoset names) | `character_model`, `armor_model` |
+| E105 | Every exported object (armature + meshes) has all object-level transforms applied (location/rotation/scale at identity), and the scene unit scale resolves to 1 Blender unit = 1 m — message names the offending object(s). Axis conversion is not re-checked here: it's forced by the exporter's `export_yup=True` setting, so there's nothing per-asset to validate | `character_model`, `armor_model` |
 
 Geoset regions (8, from `schema/content/skeleton.defs.yaml` `$defs.geosetRegion`):
 `head`, `hands`, `forearms`, `torso`, `waist`, `hips_legs`, `lower_legs`, `feet`.

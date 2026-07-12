@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -75,7 +75,7 @@ def _load_vocab() -> dict:
         }
     except (OSError, ImportError, KeyError, yaml.YAMLError) as exc:
         raise RuntimeError(
-            "meridian_export rig checks (E100-E104) require running Blender from "
+            "meridian_export rig checks (E100-E105) require running Blender from "
             "a Project Meridian repo checkout: could not load "
             f"{SKELETON_DEFS_PATH} and/or {RIG_DIR}/bones.py ({exc!r}). "
             "Non-skeletal export classes are unaffected."
@@ -91,11 +91,28 @@ def __getattr__(name: str):
 
 
 @dataclass
+class ObjectTransformState:
+    """Per-object transform snapshot for E105 (spec ④ §4's dropped blocking
+    promise): whether an exported object (armature or mesh) has any residual,
+    unapplied object-level transform (location/rotation/scale off identity)."""
+
+    name: str  # armature or mesh object name
+    transforms_applied: bool  # True when location/rotation/scale are identity
+
+
+@dataclass
 class RigData:
     """Plain snapshot of a skeletal export, extracted by the operator.
 
     The operator reads these off the real armature/mesh objects; tests construct
     them directly (no ``bpy`` types involved).
+
+    The fields below `weights_normalized` are additive extensions (#526): they
+    carry the same information the original aggregate fields do, but broken
+    down enough for E103/E105 to name the offending object. Old callers that
+    only set the aggregate fields keep working — the newer, more specific
+    fields default to "nothing to report" and the checks fall back to the
+    aggregate fields when they're empty.
     """
 
     asset_class: str  # "character_model" | "armor_model" (skeletal export classes)
@@ -104,6 +121,13 @@ class RigData:
     mesh_names: list[str]  # exported mesh object names
     max_influences: int  # max vertex-group influences per vertex, across all meshes
     weights_normalized: bool  # whether skin weights sum to 1.0 per vertex
+    # E103 mesh identity (#526, T3 review minor): per-mesh breakdown of the
+    # same influence data the aggregate fields above summarize.
+    mesh_max_influences: dict[str, int] = field(default_factory=dict)
+    unnormalized_meshes: list[str] = field(default_factory=list)
+    # E105 (#526): per-object transform state + scene unit scale.
+    object_transforms: list[ObjectTransformState] = field(default_factory=list)
+    unit_scale_ok: bool = True  # scene resolves to 1 Blender unit = 1 m
 
 
 def check_bone_set(data: RigData) -> list[str]:
@@ -154,14 +178,30 @@ def check_geoset_naming(data: RigData) -> list[str]:
 
 
 def check_influences(data: RigData) -> list[str]:
-    """E103 — at most 4 influences per vertex, and weights must be normalized."""
+    """E103 — at most 4 influences per vertex, and weights must be normalized.
+
+    Names the offending mesh when the operator supplies the per-mesh
+    breakdown (T3 review minor, #526); falls back to the aggregate
+    `max_influences`/`weights_normalized` fields otherwise.
+    """
     errors: list[str] = []
-    if data.max_influences > MAX_INFLUENCES:
+    if data.mesh_max_influences:
+        for name in sorted(data.mesh_max_influences):
+            count = data.mesh_max_influences[name]
+            if count > MAX_INFLUENCES:
+                errors.append(
+                    f"E103 mesh '{name}' has {count} influences/vertex, "
+                    f"exceeds the {MAX_INFLUENCES} ceiling"
+                )
+    elif data.max_influences > MAX_INFLUENCES:
         errors.append(
             f"E103 max {data.max_influences} influences/vertex exceeds the "
             f"{MAX_INFLUENCES} ceiling"
         )
-    if not data.weights_normalized:
+    if data.unnormalized_meshes:
+        for name in sorted(data.unnormalized_meshes):
+            errors.append(f"E103 mesh '{name}' vertex weights are not normalized")
+    elif not data.weights_normalized:
         errors.append("E103 vertex weights are not normalized")
     return errors
 
@@ -187,6 +227,35 @@ def check_geoset_regions(data: RigData) -> list[str]:
     return errors
 
 
+def check_transforms_and_scale(data: RigData) -> list[str]:
+    """E105 — transforms applied, correct unit scale (spec ④ §4's dropped
+    blocking promise: "transforms applied, unit scale, correct axes").
+
+    Axis conversion is not re-checked here: it is forced by the exporter's
+    ``export_yup=True`` setting baked into the addon operator (Art SAD
+    §2.1 — "contributors cannot get it wrong"), so there is no per-asset
+    data to validate. This rule blocks on the two things a contributor CAN
+    still get wrong before export: a residual object-level transform, and a
+    scene unit scale that isn't 1 Blender unit = 1 m.
+    """
+    errors: list[str] = []
+    unapplied = sorted(
+        obj.name for obj in data.object_transforms if not obj.transforms_applied
+    )
+    if unapplied:
+        errors.append(
+            "E105 unapplied transform(s) on: "
+            + ", ".join(unapplied)
+            + " — apply all transforms (Ctrl+A) before export"
+        )
+    if not data.unit_scale_ok:
+        errors.append(
+            "E105 scene unit scale is not 1 Blender unit = 1 m — set the scene "
+            "unit system to Metric with Unit Scale 1.0 before export"
+        )
+    return errors
+
+
 def check_rig(data: RigData) -> list[str]:
     """Run every E-rule for a skeletal export, in report order.
 
@@ -200,4 +269,5 @@ def check_rig(data: RigData) -> list[str]:
     errors += check_geoset_naming(data)
     errors += check_influences(data)
     errors += check_geoset_regions(data)
+    errors += check_transforms_and_scale(data)
     return errors

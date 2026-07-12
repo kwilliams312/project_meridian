@@ -104,17 +104,51 @@ def _find_armature(obj):  # pragma: no cover - needs bpy
 
 def _skin_influence_stats(
     mesh_objs,
-) -> tuple[int, bool]:  # pragma: no cover - needs bpy
-    """Max vertex-group influence count and whether weights are normalized (sum≈1)."""
+) -> tuple[int, bool, dict[str, int], list[str]]:  # pragma: no cover - needs bpy
+    """Max vertex-group influence count and normalization, overall AND per mesh.
+
+    The per-mesh breakdown feeds E103's mesh-identified error message (#526,
+    T3 review minor); the overall aggregate is kept for the additive
+    (backward-compatible) RigData fields.
+    """
     max_influences = 0
     normalized = True
+    mesh_max_influences: dict[str, int] = {}
+    unnormalized_meshes: list[str] = []
     for mesh_obj in mesh_objs:
+        mesh_max = 0
+        mesh_normalized = True
         for vertex in mesh_obj.data.vertices:
             groups = [g for g in vertex.groups if g.weight > 0.0]
-            max_influences = max(max_influences, len(groups))
+            mesh_max = max(mesh_max, len(groups))
             if groups and abs(sum(g.weight for g in groups) - 1.0) > 1e-3:
-                normalized = False
-    return max_influences, normalized
+                mesh_normalized = False
+        mesh_max_influences[mesh_obj.name] = mesh_max
+        if not mesh_normalized:
+            unnormalized_meshes.append(mesh_obj.name)
+        max_influences = max(max_influences, mesh_max)
+        normalized = normalized and mesh_normalized
+    return max_influences, normalized, mesh_max_influences, unnormalized_meshes
+
+
+def _transforms_applied(obj) -> bool:  # pragma: no cover - needs bpy
+    """No residual object-level transform: location/rotation/scale at identity.
+
+    Feeds E105 (#526, spec ④ §4's dropped blocking promise). Mirrors the
+    scale-only check `_mesh_info.transform_applied` already does for the
+    non-blocking SCALE warning, extended to location + rotation as well —
+    "apply all transforms" means all three, not just scale.
+    """
+    loc_ok = all(abs(v) < 1e-4 for v in obj.location)
+    rot_ok = all(abs(v) < 1e-4 for v in obj.rotation_euler)
+    scale_ok = all(abs(v - 1.0) < 1e-4 for v in obj.scale)
+    return loc_ok and rot_ok and scale_ok
+
+
+def _unit_scale_ok(context) -> bool:  # pragma: no cover - needs bpy
+    """Scene unit settings resolve to 1 Blender unit = 1 m (E105, spec ④ §4)."""
+    unit = context.scene.unit_settings
+    return unit.system == "METRIC" and abs(unit.scale_length - 1.0) < 1e-4
 
 
 def _build_rig_data(
@@ -125,7 +159,18 @@ def _build_rig_data(
     bone_names = list(armature.data.bones.keys()) if armature is not None else []
     socket_names = [n for n in bone_names if n.startswith("socket_")]
     mesh_objs = [o for o in context.selected_objects if o.type == "MESH"]
-    max_influences, normalized = _skin_influence_stats(mesh_objs)
+    max_influences, normalized, mesh_max_influences, unnormalized_meshes = (
+        _skin_influence_stats(mesh_objs)
+    )
+    transform_objs = list(mesh_objs)
+    if armature is not None:
+        transform_objs.append(armature)
+    object_transforms = [
+        _rig_checks.ObjectTransformState(
+            name=o.name, transforms_applied=_transforms_applied(o)
+        )
+        for o in transform_objs
+    ]
     return _rig_checks.RigData(
         asset_class=asset_class,
         bone_names=bone_names,
@@ -133,6 +178,10 @@ def _build_rig_data(
         mesh_names=[o.name for o in mesh_objs],
         max_influences=max_influences,
         weights_normalized=normalized,
+        mesh_max_influences=mesh_max_influences,
+        unnormalized_meshes=unnormalized_meshes,
+        object_transforms=object_transforms,
+        unit_scale_ok=_unit_scale_ok(context),
     )
 
 
