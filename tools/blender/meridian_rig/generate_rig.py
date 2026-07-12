@@ -18,8 +18,10 @@ import argparse
 import sys
 from pathlib import Path
 
-# The bones table is pure Python; keep it importable whether or not bpy exists.
+# The bones table + version-pin guard are pure Python; keep them importable
+# whether or not bpy exists.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import blender_pin  # noqa: E402
 import bones  # noqa: E402
 
 # Repo-root-relative default output path for the committed reference rig.
@@ -49,6 +51,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--out",
         default=DEFAULT_OUT,
         help="output .glb path (default: the committed reference-rig path)",
+    )
+    parser.add_argument(
+        "--allow-unpinned-blender",
+        action="store_true",
+        help=(
+            "DEVELOPMENT ONLY: proceed even though the running Blender does "
+            "not match blender_pin.PINNED_VERSION. Without it, an unpinned "
+            "Blender is refused so the export is never silently "
+            "non-byte-identical to the committed artifact."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -129,9 +141,35 @@ def reset_scene() -> None:  # pragma: no cover - requires bpy/Blender
     bpy.ops.object.delete(use_global=False)
 
 
+def enforce_blender_pin(
+    allow_unpinned: bool, tag: str = "generate_rig"
+) -> None:  # pragma: no cover - requires bpy
+    """Hard-error unless the running Blender matches ``blender_pin.PINNED_VERSION``.
+
+    Called by every bpy entry point in this repo (this module, plus
+    ``generate_blockout.py``, ``tools/meshy/convert_rig.py``, and
+    ``tests/fixtures/meshy/build_fixture.py``, each of which imports this
+    module) right after arg parsing — so an unpinned Blender never silently
+    produces a non-byte-identical export (spec ④ §9). Only the ``import bpy``
+    needed to read ``bpy.app.version`` distinguishes this from the pure,
+    unit-tested :func:`blender_pin.check_pin` comparison it wraps.
+    """
+    import bpy  # noqa: PLC0415 - Blender-only import
+
+    error = blender_pin.check_pin(bpy.app.version, blender_pin.PINNED_VERSION)
+    if error is None:
+        return
+    if allow_unpinned:
+        print(f"[{tag}] WARNING (--allow-unpinned-blender): {error}", file=sys.stderr)
+        return
+    print(f"[{tag}] refused: {error}", file=sys.stderr)
+    raise SystemExit(2)
+
+
 def main(argv: list[str] | None = None) -> None:  # pragma: no cover - requires bpy
     """Blender entry point: build the armature and write the .glb."""
     args = parse_args(argv_after_ddash(argv if argv is not None else sys.argv))
+    enforce_blender_pin(args.allow_unpinned_blender)
     reset_scene()
     build_armature(args.profile)
     export_glb(args.out)

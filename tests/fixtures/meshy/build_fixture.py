@@ -93,7 +93,18 @@ def main(argv):
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", required=True)
+    parser.add_argument(
+        "--allow-unpinned-blender",
+        action="store_true",
+        help=(
+            "DEVELOPMENT ONLY: proceed even though the running Blender does "
+            "not match blender_pin.PINNED_VERSION. Without it, an unpinned "
+            "Blender is refused so the fixture is never silently "
+            "non-byte-identical to what the pinned build would produce."
+        ),
+    )
     args = parser.parse_args(generate_rig.argv_after_ddash(argv))
+    generate_rig.enforce_blender_pin(args.allow_unpinned_blender, tag="build_fixture")
 
     # Data-API purge (not ops select+delete): the factory startup scene can
     # hold hidden objects that ops-selection never reaches (see convert_rig.py).

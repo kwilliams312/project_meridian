@@ -8,6 +8,7 @@ import yaml
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "tools" / "blender" / "meridian_rig"))
+import blender_pin  # noqa: E402
 import bones  # noqa: E402
 import generate_rig  # noqa: E402
 
@@ -102,6 +103,69 @@ def test_parse_args_reads_profile_and_out():
 def test_parse_args_rejects_unknown_profile():
     with pytest.raises(SystemExit):
         generate_rig.parse_args(["--profile", "dwarf_female"])
+
+
+def test_parse_args_allow_unpinned_blender_defaults_false():
+    ns = generate_rig.parse_args([])
+    assert ns.allow_unpinned_blender is False
+
+
+def test_parse_args_allow_unpinned_blender_flag():
+    ns = generate_rig.parse_args(["--allow-unpinned-blender"])
+    assert ns.allow_unpinned_blender is True
+
+
+# ---------------------------------------------------------------------------
+# blender_pin.check_pin — pure Blender version-pin comparison (spec ④ §9).
+# ---------------------------------------------------------------------------
+def test_check_pin_matching_version_returns_none():
+    assert blender_pin.check_pin((5, 0, 0), "5.0.0") is None
+
+
+def test_check_pin_uses_module_pinned_version_by_default():
+    # blender_pin.PINNED_VERSION is the single source of truth entry points
+    # actually enforce (tools/blender/README.md documents it, doesn't define it).
+    pinned = tuple(int(p) for p in blender_pin.PINNED_VERSION.split("."))
+    assert blender_pin.check_pin(pinned) is None
+
+
+def test_check_pin_mismatch_names_both_versions():
+    error = blender_pin.check_pin((4, 2, 1), "5.0.0")
+    assert error is not None
+    assert "5.0.0" in error
+    assert "4.2.1" in error
+
+
+def test_check_pin_mismatch_on_patch_version_only():
+    error = blender_pin.check_pin((5, 0, 1), "5.0.0")
+    assert error is not None
+    assert "5.0.0" in error
+    assert "5.0.1" in error
+
+
+def test_check_pin_malformed_pinned_string():
+    error = blender_pin.check_pin((5, 0, 0), "not-a-version")
+    assert error is not None
+    assert "malformed" in error
+    assert "not-a-version" in error
+
+
+def test_check_pin_malformed_pinned_wrong_arity():
+    error = blender_pin.check_pin((5, 0, 0), "5.0")
+    assert error is not None
+    assert "malformed" in error
+
+
+def test_check_pin_malformed_version_tuple():
+    error = blender_pin.check_pin(("a", "b", "c"), "5.0.0")
+    assert error is not None
+    assert "malformed" in error
+
+
+def test_check_pin_malformed_version_tuple_wrong_arity():
+    error = blender_pin.check_pin((5, 0), "5.0.0")
+    assert error is not None
+    assert "malformed" in error
 
 
 # ---------------------------------------------------------------------------
