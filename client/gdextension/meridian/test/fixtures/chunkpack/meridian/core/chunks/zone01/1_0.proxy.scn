@@ -1,0 +1,10 @@
+[gd_scene load_steps=2 format=3]
+
+[sub_resource type="BoxMesh" id="1"]
+size = Vector3(128.0000, 15.8650, 128.0000)
+subdivide_width = 0
+subdivide_depth = 0
+
+[node name="ChunkProxy_1_0" type="MeshInstance3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -192.0000, 37.0375, -320.0000)
+mesh = SubResource("1")

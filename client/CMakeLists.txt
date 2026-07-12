@@ -97,6 +97,17 @@ file(GLOB_RECURSE MERIDIAN_SOURCES CONFIGURE_DEPENDS
 
 target_sources(${TARGET_NAME} PRIVATE ${MERIDIAN_SOURCES})
 
+# --- Vendored BLAKE3 REUSED for the #554 chunk-pack integrity verify ---
+# chunk_pack_core.* recomputes each chunk's both-payloads BLAKE3 to match the IF-6
+# manifest hash. It REUSES the ONE vendored BLAKE3 the mcc emitter uses
+# (tools/mcc/src/hash) — there is no second BLAKE3 in the tree (issue #554
+# directive). Compile that source into the extension + expose its include dir so
+# `#include "hash/blake3.h"` resolves.
+get_filename_component(MERIDIAN_MCC_HASH_DIR
+	"${CMAKE_CURRENT_SOURCE_DIR}/../tools/mcc/src" ABSOLUTE)
+target_sources(${TARGET_NAME} PRIVATE "${MERIDIAN_MCC_HASH_DIR}/hash/blake3.cpp")
+target_include_directories(${TARGET_NAME} PRIVATE "${MERIDIAN_MCC_HASH_DIR}")
+
 target_link_libraries(${TARGET_NAME} PRIVATE godot-cpp)
 
 # --- Engine-agnostic client NET CORE, linked into the GDExtension (#97) ---

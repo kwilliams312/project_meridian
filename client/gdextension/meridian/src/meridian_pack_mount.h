@@ -52,6 +52,18 @@ public:
 		VERDICT_HASH_MISMATCH   = 4,
 	};
 
+	// The IF-6/IF-8 CHUNK-PACK verify verdict (#554). Matches
+	// chunkpack::ChunkPackVerdict ordinals exactly, so the boot / world-enter
+	// scene can branch on `r.verdict == MeridianPackMount.CHUNK_OK` and refuse to
+	// enter on any hard-fail class.
+	enum ChunkVerdict {
+		CHUNK_OK                 = 0,
+		CHUNK_MANIFEST_MALFORMED = 1,
+		CHUNK_UNRESOLVED_REF     = 2,
+		CHUNK_MISSING_ASSET      = 3,
+		CHUNK_HASH_MISMATCH      = 4,
+	};
+
 protected:
 	static void _bind_methods();
 
@@ -103,6 +115,43 @@ public:
 	// .pck, or a test). Same return Dictionary + same caching as mount_and_verify.
 	godot::Dictionary verify_manifest_json(const godot::String &manifest_json);
 
+	// ── Real `.pck` mount (#554 — the previously-unwired container mount) ──────
+	// Mount a Godot resource pack for real via ProjectSettings::load_resource_pack
+	// so its files appear under res:// for the completeness/integrity verify below
+	// (and for the streamer to load). This is the client half of the Q1(a)
+	// packaging decision — the pack ships the server `.chunk.bin` per chunk too.
+	// Returns true on a successful mount. The boot flow should gate this behind an
+	// already-OK pack.manifest.json verdict (mount_and_verify), then run
+	// verify_chunk_index() before entering the world. `replace_files` mirrors the
+	// engine arg (a later pack overrides an earlier file).
+	bool mount_resource_pack(const godot::String &pck_path, bool replace_files = true);
+
+	// ── IF-6/IF-8 fail-closed chunk-pack verify (#554) ────────────────────────
+	// The completeness + integrity gate the world-enter path blocks on. Reads the
+	// IF-6 zone manifest (`<zone>.chunks.json`) + the IF-8 asset-id table
+	// (`<zone>.assets.json`) from the given res:// (or user://) paths via
+	// FileAccess, resolves EVERY per-chunk ref (scene / proxy / server / deps)
+	// through the asset table, verifies every shipped payload is PRESENT in the
+	// mounted pack, and recomputes each chunk's BLAKE3 over BOTH payloads to match
+	// the manifest hash. Any missing / mismatched / unresolvable asset -> a HARD
+	// failure (never silently enters a broken map). Returns a Dictionary:
+	//   {
+	//     "verdict":         int (ChunkVerdict),
+	//     "ok":              bool (verdict == CHUNK_OK),
+	//     "hard_fail":       bool (true unless CHUNK_OK),
+	//     "reason":          String (one-line explanation for logs / boot UX),
+	//     "zone":            String (the manifest's zone id),
+	//     "format_version":  int,
+	//     "chunk_size_m":    int,
+	//     "chunk_count":     int (chunks declared in the manifest),
+	//     "verified_chunks": int (chunks that passed presence + integrity),
+	//   }
+	godot::Dictionary verify_chunk_index(const godot::String &chunks_json_path,
+	                                     const godot::String &assets_json_path);
+
+	// Human-readable name for a chunk verdict (logs / diagnostics; e.g. "missing-asset").
+	static godot::String chunk_verdict_name(int verdict);
+
 	// ── Resolved identity (read after a successful mount_and_verify) ──────────
 	bool          is_mounted() const;            // last verify was VERDICT_OK
 	godot::String get_content_hash() const;      // for IF-2 realm content-hash match
@@ -132,5 +181,6 @@ private:
 } // namespace meridian
 
 VARIANT_ENUM_CAST(meridian::MeridianPackMount::MountVerdict);
+VARIANT_ENUM_CAST(meridian::MeridianPackMount::ChunkVerdict);
 
 #endif // MERIDIAN_PACK_MOUNT_H

@@ -1,0 +1,100 @@
+{
+  "format_version": 1,
+  "zone": "core:zone.zone01",
+  "chunk_size_m": 128,
+  "origin": { "x": -384.0000, "z": -384.0000 },
+  "grid": { "min_cx": -1, "min_cz": -1, "max_cx": 1, "max_cz": 1 },
+  "far_ring": 6,
+  "chunks": [
+    {
+      "cx": -1, "cz": -1,
+      "hash": "blake3:32cd7902da378b811051c7e1589c8d492e30ec5bfdd377ddbea857e522247c77",
+      "scene": "core:chunk.zone01.n1_n1.scene",
+      "proxy": "core:chunk.zone01.n1_n1.proxy",
+      "server": "core:chunk.zone01.n1_n1.server",
+      "deps": ["core:art.terrain.zone01_ground"],
+      "priority": 1,
+      "aabb": { "min": { "x": -512.0000, "y": 14.2500, "z": -512.0000 }, "max": { "x": -384.0000, "y": 24.4900, "z": -384.0000 } }
+    },
+    {
+      "cx": 0, "cz": -1,
+      "hash": "blake3:91a45d2884ee16fce06deebf2a20df33c9c1c5944811e873539cacaec50cfe6d",
+      "scene": "core:chunk.zone01.0_n1.scene",
+      "proxy": "core:chunk.zone01.0_n1.proxy",
+      "server": "core:chunk.zone01.0_n1.server",
+      "deps": ["core:art.terrain.zone01_ground"],
+      "priority": 1,
+      "aabb": { "min": { "x": -384.0000, "y": 19.4900, "z": -512.0000 }, "max": { "x": -256.0000, "y": 34.7300, "z": -384.0000 } }
+    },
+    {
+      "cx": 1, "cz": -1,
+      "hash": "blake3:63f1f28bca1796ec0d0cc4274a334cb98d92ff96c56f220590c404bbca35b5e4",
+      "scene": "core:chunk.zone01.1_n1.scene",
+      "proxy": "core:chunk.zone01.1_n1.proxy",
+      "server": "core:chunk.zone01.1_n1.server",
+      "deps": ["core:art.terrain.zone01_ground"],
+      "priority": 1,
+      "aabb": { "min": { "x": -256.0000, "y": 29.7300, "z": -512.0000 }, "max": { "x": -128.0000, "y": 49.9700, "z": -384.0000 } }
+    },
+    {
+      "cx": -1, "cz": 0,
+      "hash": "blake3:06b3251b277566e1c25c130544a28edb2d7b3ba0120f3f1300ebf5a1cc2a8b97",
+      "scene": "core:chunk.zone01.n1_0.scene",
+      "proxy": "core:chunk.zone01.n1_0.proxy",
+      "server": "core:chunk.zone01.n1_0.server",
+      "deps": ["core:art.terrain.zone01_ground"],
+      "priority": 1,
+      "aabb": { "min": { "x": -512.0000, "y": 13.6250, "z": -384.0000 }, "max": { "x": -384.0000, "y": 19.4900, "z": -256.0000 } }
+    },
+    {
+      "cx": 0, "cz": 0,
+      "hash": "blake3:ff9047c3a89ddcd3050d352cc44d966b52e8dc2b9cd248c986ca7d477795c0d2",
+      "scene": "core:chunk.zone01.0_0.scene",
+      "proxy": "core:chunk.zone01.0_0.proxy",
+      "server": "core:chunk.zone01.0_0.server",
+      "deps": ["core:art.terrain.zone01_ground"],
+      "priority": 0,
+      "aabb": { "min": { "x": -384.0000, "y": 18.8650, "z": -384.0000 }, "max": { "x": -256.0000, "y": 29.7300, "z": -256.0000 } }
+    },
+    {
+      "cx": 1, "cz": 0,
+      "hash": "blake3:1d261c851ca52186b8e1f3365cf6aeb4df10994a258a432df31a637292ed9f4e",
+      "scene": "core:chunk.zone01.1_0.scene",
+      "proxy": "core:chunk.zone01.1_0.proxy",
+      "server": "core:chunk.zone01.1_0.server",
+      "deps": ["core:art.terrain.zone01_ground"],
+      "priority": 1,
+      "aabb": { "min": { "x": -256.0000, "y": 29.1050, "z": -384.0000 }, "max": { "x": -128.0000, "y": 44.9700, "z": -256.0000 } }
+    },
+    {
+      "cx": -1, "cz": 1,
+      "hash": "blake3:ada7e599ef57a20b72ac0cc5437d40745a0f106425fb5d3dd663479a94ae4e81",
+      "scene": "core:chunk.zone01.n1_1.scene",
+      "proxy": "core:chunk.zone01.n1_1.proxy",
+      "server": "core:chunk.zone01.n1_1.server",
+      "deps": ["core:art.terrain.zone01_ground"],
+      "priority": 1,
+      "aabb": { "min": { "x": -512.0000, "y": 14.2500, "z": -256.0000 }, "max": { "x": -384.0000, "y": 24.4900, "z": -128.0000 } }
+    },
+    {
+      "cx": 0, "cz": 1,
+      "hash": "blake3:58b9e195588b8dfafdf4c207093d2fdc653c3db71ddea8fc096d8edf354d15c5",
+      "scene": "core:chunk.zone01.0_1.scene",
+      "proxy": "core:chunk.zone01.0_1.proxy",
+      "server": "core:chunk.zone01.0_1.server",
+      "deps": ["core:art.terrain.zone01_ground"],
+      "priority": 1,
+      "aabb": { "min": { "x": -384.0000, "y": 19.4900, "z": -256.0000 }, "max": { "x": -256.0000, "y": 34.7300, "z": -128.0000 } }
+    },
+    {
+      "cx": 1, "cz": 1,
+      "hash": "blake3:4c3c7d996d04c66b312c3e907306979c4c9532dbc4fe4749e51a7319c9b2f6a9",
+      "scene": "core:chunk.zone01.1_1.scene",
+      "proxy": "core:chunk.zone01.1_1.proxy",
+      "server": "core:chunk.zone01.1_1.server",
+      "deps": ["core:art.terrain.zone01_ground"],
+      "priority": 1,
+      "aabb": { "min": { "x": -256.0000, "y": 29.7300, "z": -256.0000 }, "max": { "x": -128.0000, "y": 49.9700, "z": -128.0000 } }
+    }
+  ]
+}
