@@ -9,6 +9,6 @@ provenance:
   source_tier: original
   authors: [meridian-contributors]
 budget:
-  lod0_tris: 4704
+  lod0_tris: 4032
 import_hints:
   lod_policy: single

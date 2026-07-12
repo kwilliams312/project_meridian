@@ -137,10 +137,13 @@ class TestPlateLocality:
     """
 
     # Per-anatomy volume cap (metres): the largest allowed extent of ONE shell.
-    # Hands/feet are small; a leg guard legitimately runs the length of the leg.
+    # Conforming shells (#589) hug the REAL body surface, so a shell is as wide as
+    # the body region it covers: the torso cuirass spans the ~0.51 m shoulder
+    # width, a boot the shin+foot length. Caps are the body region extent + a
+    # small conform margin, not the old greybox-box sizes.
     _SHELL_CAP = {
-        "head": 0.30, "shoulders": 0.30, "chest": 0.50,
-        "hands": 0.25, "legs": 0.95, "feet": 0.40,
+        "head": 0.42, "shoulders": 0.32, "chest": 0.60,
+        "hands": 0.35, "legs": 0.55, "feet": 0.65,
     }
 
     @pytest.mark.parametrize("slot", SLOTS)
@@ -150,11 +153,12 @@ class TestPlateLocality:
             assert max(ext) <= cap, f"{slot} shell {i} extent {ext} exceeds {cap} m"
 
     def test_hands_gloves_are_hand_scale(self):
-        # The explicit #569 acceptance: each glove ≤ 0.25 m (hand-scale, not arm-span).
+        # Each glove wraps the hand+wrist along the arm — hand-scale (≤ 0.35 m),
+        # NOT one bar across the whole ~1.6 m T-pose arm span (#569 regression).
         extents = gwk.shell_extents("hands")
         assert len(extents) == 2
         for ext in extents:
-            assert max(ext) <= 0.25, f"glove extent {ext} is not hand-scale"
+            assert max(ext) <= 0.35, f"glove extent {ext} is not hand-scale"
 
     def test_hands_are_two_disjoint_gloves_not_a_bar(self):
         # The invisible-kit bug rendered as one bar across the arm span. The two
@@ -165,8 +169,9 @@ class TestPlateLocality:
         pos = build_shells(gwk.SLOTS["hands"])[0]
         near_mid = [p for p in pos if abs(p[0]) < 0.4]
         assert near_mid == [], f"hands has {len(near_mid)} verts near centre — a bar, not gloves"
-        # And each glove actually sits over its hand bone (~0.72-0.82 m out).
-        assert all(0.6 < abs(p[0]) < 0.9 for p in pos)
+        # And each glove actually sits far out over its hand (the hands geoset runs
+        # ~0.6-0.9 m out; the conform margin widens that band slightly).
+        assert all(0.5 < abs(p[0]) < 1.0 for p in pos)
 
     def test_hands_each_glove_skinned_to_its_own_hand_bone(self):
         # Left glove → LeftHand, right glove → RightHand (single influence, no collapse).
@@ -177,6 +182,58 @@ class TestPlateLocality:
         for p, bone in zip(pos, vjoints):
             expected = "RightHand" if p[0] > 0 else "LeftHand"
             assert bone == expected, f"vertex {p} bound to {bone}, expected {expected}"
+
+
+@pytest.mark.unit
+class TestPlateConformsToBody:
+    """Issue #589: plates conform to the real body so hiding a region leaves NO void.
+
+    The ⑤/S6 render showed blocky box plates that were NARROWER than the body
+    region their item ``worn.hides`` erases; the gap between the box edge and the
+    (now-hidden) body surface read as black voids. The fix lofts each plate to the
+    real body geoset surface (sampled from the committed base .glb) pushed out by a
+    small margin, so the plate's bounding volume fully CONTAINS the body region it
+    hides — the plate occupies exactly where the body was, no gap. This test is the
+    by-construction guarantee: for every plate that hides a body region, the plate
+    AABB must contain that region's AABB on all three axes.
+    """
+
+    # Each hiding plate -> the body geoset LOD0 mesh(es) its worn.hides erases.
+    # (Shoulders hides nothing after #589 — the pauldrons layer on top of the body.)
+    _HIDDEN_REGION_MESHES = {
+        "head": ["geo_head_lod0"],
+        "chest": ["geo_torso_lod0"],
+        "legs": ["geo_hips_legs_lod0"],
+        "feet": ["geo_lower_legs_lod0", "geo_feet_lod0"],
+        "hands": ["geo_hands_lod0"],
+    }
+
+    @pytest.mark.parametrize("slot", sorted(_HIDDEN_REGION_MESHES))
+    def test_plate_aabb_covers_hidden_body_region(self, slot):
+        meshes = self._HIDDEN_REGION_MESHES[slot]
+        body = [v for m in meshes for v in gwk._read_body_positions(m)]
+        b_lo = [min(v[a] for v in body) for a in range(3)]
+        b_hi = [max(v[a] for v in body) for a in range(3)]
+        plate = gwk.build_shells(gwk.SLOTS[slot])[0]
+        p_lo = [min(v[a] for v in plate) for a in range(3)]
+        p_hi = [max(v[a] for v in plate) for a in range(3)]
+        for a, name in enumerate("xyz"):
+            assert p_lo[a] <= b_lo[a] + 1e-6, (
+                f"{slot} plate {name}-min {p_lo[a]:.4f} does not cover body "
+                f"{b_lo[a]:.4f} — a void opens on the {name}- side"
+            )
+            assert p_hi[a] >= b_hi[a] - 1e-6, (
+                f"{slot} plate {name}-max {p_hi[a]:.4f} does not cover body "
+                f"{b_hi[a]:.4f} — a void opens on the {name}+ side"
+            )
+
+    def test_shoulders_conform_but_do_not_hide_torso(self):
+        # Pauldrons are deltoid caps sampled from the upper-outer torso; they sit
+        # over the shoulder region (~y≥1.33) and never reach the torso centreline.
+        for shell in gwk.SLOTS["shoulders"]:
+            assert shell.y_min is not None and shell.y_min >= 1.3
+        pos = gwk.build_shells(gwk.SLOTS["shoulders"])[0]
+        assert min(p[1] for p in pos) >= 1.25, "pauldron dips below the shoulder"
 
 
 @pytest.mark.unit

@@ -8,16 +8,24 @@ canonical Meridian rig so it deforms with the body, plus a per-piece RGB dye-mas
 texture (R/G/B == primary/secondary/accent, contract ① §6). It materialises the
 promise the six ``core:item.warden_*`` item@2 files declare in ``visual.worn``.
 
-Design (mirrors ``tools/art/generate_pickaxe_blockout.py`` and
-``tools/blender/meridian_rig/generate_blockout.py``): a script-generated ORIGINAL,
-no Blender and no third-party asset. Each plate is a subdivided box shell sized
-directly from the rig's ``BoneSpec`` spans (``tools/blender/meridian_rig/bones.py``
-— the single source of truth for bone rest positions), skinned with one influence
-per vertex (weight 1.0) to the nearest canonical bone the piece covers. The GLB is
-emitted directly as glTF 2.0 binary (stdlib only) and is byte-deterministic
-(sorted JSON keys, fixed float rounding, no timestamps), so re-running reproduces
-the committed bytes exactly. The dye masks are written by a minimal stdlib PNG
-writer (zlib + CRC, no PIL), equally deterministic.
+CONFORMING PLATES (issue #589). Each plate is NOT a floating box: it is a shell
+LOFTED to the real body surface it covers. The generator reads the committed
+stylized body mesh (``content/core/assets/art/char/sk_ardent_male_base.glb``, cut
+into ``geo_<region>_lod<N>`` geosets, ⑤/S4), samples the LOD0 surface of the
+body region the piece hides (``worn.hides``), and builds the plate as a radial
+loft that follows that surface pushed out by a thin ``margin``. Because the plate
+occupies exactly where the body geoset was (plus a hair), hiding the underlying
+region no longer leaves the blocky-plate voids/black gaps from the ⑤/S6 render —
+the plates read as armor ON the body, not disconnected boxes.
+
+Design (mirrors ``tools/art/generate_pickaxe_blockout.py``): a script-generated
+ORIGINAL, no Blender and no third-party asset. The loft is skinned with one
+influence per vertex (weight 1.0) to the nearest canonical bone the piece covers
+(``tools/blender/meridian_rig/bones.py`` — the single source of truth for bone
+rest positions). The GLB is emitted directly as glTF 2.0 binary (stdlib only) and
+is byte-deterministic on a given machine (sorted JSON keys, fixed float rounding,
+deterministic body-sample iteration, no timestamps). The dye masks are written by
+a minimal stdlib PNG writer (zlib + CRC, no PIL), equally deterministic.
 
 Budgets (Art PRD §2.1): each plate lands 3-8k tris; the full outfit's LOD0 total
 stays ≤ 40k added. Skin binds ONLY canonical bone names (import validator I021).
@@ -32,9 +40,11 @@ OUT_DIR defaults to content/core/assets/art/item/armor. Writes
 from __future__ import annotations
 
 import json
+import math
 import struct
 import sys
 import zlib
+from dataclasses import dataclass
 from pathlib import Path
 
 # Import the canonical bone table without requiring Blender (bones.py is pure-Python).
@@ -49,25 +59,90 @@ Vec3 = tuple[float, float, float]
 _BONE_HEAD: dict[str, Vec3] = {b.name: b.head_m for b in ALL_BONES}
 _BONE_TAIL: dict[str, Vec3] = {b.name: b.tail_m for b in ALL_BONES}
 
+# The committed real body whose surface every plate conforms to (⑤/S4). Sampled
+# read-only at generation time; its bytes are fixed content, so the sampling is
+# deterministic. This module NEVER writes it (that is generate_blockout.py / the
+# restyle pipeline) and NEVER touches the body geoset cut (issue #587).
+_BODY_GLB = _REPO_ROOT / "content/core/assets/art/char/sk_ardent_male_base.glb"
+
 
 def _bone_mid(name: str) -> Vec3:
     h, t = _BONE_HEAD[name], _BONE_TAIL[name]
     return ((h[0] + t[0]) / 2.0, (h[1] + t[1]) / 2.0, (h[2] + t[2]) / 2.0)
 
 
-# --- Plate configuration ------------------------------------------------------
-# One entry per equip slot. Each is a list of "shells" (a plate can be one central
-# shell — chest/head — or a mirrored left/right pair — shoulders/hands/legs/feet).
-# A shell: (center, size, subdivisions, [bind bone names]). Box sizes/centres are
-# read off the BoneSpec spans in bones.py (see the module docstring); `n` is chosen
-# so 12*n^2 tris per shell keeps every piece inside the 3-8k Art PRD §2.1 band and
-# the six-piece LOD0 total under 40k. Paired shells share `n` (2*12*n^2 total).
-#
-# Shape = (center: Vec3, size: Vec3, n: int, bones: tuple[str, ...]).
-Shell = tuple[Vec3, Vec3, int, tuple[str, ...]]
+# --- Body-mesh sampling (stdlib GLB reader) -----------------------------------
+_BODY_CACHE: dict[str, list[Vec3]] = {}
 
-# Right-side shells for the paired slots; the left side is auto-mirrored (x -> -x,
-# Right* -> Left*) so the two sides can never drift, exactly like bones.py.
+
+def _read_body_positions(mesh_name: str) -> list[Vec3]:
+    """Return the LOD0 vertex positions of a body geoset mesh (``geo_<region>_lod0``).
+
+    A minimal stdlib glTF-binary reader: parse the JSON + BIN chunks, find the
+    named mesh's first primitive, and read its (tightly-packed float VEC3)
+    POSITION accessor. Cached per mesh so a paired plate reads the file once.
+    """
+    if mesh_name in _BODY_CACHE:
+        return _BODY_CACHE[mesh_name]
+    glb = _BODY_GLB.read_bytes()
+    magic, _ver, total = struct.unpack_from("<4sII", glb, 0)
+    if magic != b"glTF":
+        raise ValueError(f"{_BODY_GLB} is not a glTF binary")
+    off, doc, bin_off = 12, None, None
+    while off < total:
+        clen, ctype = struct.unpack_from("<II", glb, off)
+        off += 8
+        if ctype == 0x4E4F534A:  # 'JSON'
+            doc = json.loads(glb[off:off + clen])
+        elif ctype == 0x004E4942:  # 'BIN\0'
+            bin_off = off
+        off += clen + ((4 - clen % 4) % 4)
+    if doc is None or bin_off is None:
+        raise ValueError(f"{_BODY_GLB} missing JSON or BIN chunk")
+    mesh = next(m for m in doc["meshes"] if m["name"] == mesh_name)
+    acc = doc["accessors"][mesh["primitives"][0]["attributes"]["POSITION"]]
+    bv = doc["bufferViews"][acc["bufferView"]]
+    base = bin_off + bv.get("byteOffset", 0) + acc.get("byteOffset", 0)
+    stride = bv.get("byteStride") or 12
+    out = [struct.unpack_from("<3f", glb, base + i * stride) for i in range(acc["count"])]
+    _BODY_CACHE[mesh_name] = out
+    return out
+
+
+# --- Plate configuration ------------------------------------------------------
+# One entry per equip slot: a list of conforming "shells". A plate is one central
+# shell (chest/head) or a mirrored left/right pair (shoulders/hands/legs/feet).
+# Each shell names the body geoset region(s) it covers and how to loft a shell to
+# that surface; `n_slices`/`n_sectors` are chosen so 2*n_sectors*n_slices tris per
+# shell keeps every piece inside the 3-8k Art PRD §2.1 band and the six-piece
+# LOD0 total under 40k. Paired shells split the tri budget between the two sides.
+
+
+@dataclass(frozen=True)
+class ConformShell:
+    """A plate shell lofted to the body surface of one region (issue #589).
+
+    ``meshes`` are the body geoset LOD0 meshes to sample; ``axis`` is the loft
+    (long) axis (0=X for the arm gloves, 1=Y for vertical torso/limb pieces);
+    ``side`` filters body verts to one half (+1: x>0, -1: x<0, 0: whole) so a
+    paired piece hugs its own limb; ``bones`` are the canonical bind bones (the
+    nearest owns each vertex). ``margin`` pushes the shell just proud of the body
+    so hiding the region leaves NO void; ``y_min``/``x_min_abs`` optionally crop
+    the sampled region (the shoulder pauldron takes only the upper-outer torso).
+    """
+
+    meshes: tuple[str, ...]
+    axis: int
+    side: int
+    n_slices: int
+    n_sectors: int
+    bones: tuple[str, ...]
+    margin: float = 0.02
+    min_radius: float = 0.03
+    y_min: float | None = None
+    x_min_abs: float | None = None
+
+
 _R = "Right"
 
 
@@ -75,40 +150,56 @@ def _mirror_bone_name(name: str) -> str:
     return "Left" + name[len(_R):] if name.startswith(_R) else name
 
 
-def _mirror_shell(shell: Shell) -> Shell:
-    (cx, cy, cz), size, n, bones = shell
-    return ((-cx, cy, cz), size, n, tuple(_mirror_bone_name(b) for b in bones))
+def _mirror_shell(shell: ConformShell) -> ConformShell:
+    """Mirror a right-side shell to the left (side flip + Right*->Left* bones)."""
+    return ConformShell(
+        meshes=shell.meshes,
+        axis=shell.axis,
+        side=-shell.side,
+        n_slices=shell.n_slices,
+        n_sectors=shell.n_sectors,
+        bones=tuple(_mirror_bone_name(b) for b in shell.bones),
+        margin=shell.margin,
+        min_radius=shell.min_radius,
+        y_min=shell.y_min,
+        x_min_abs=shell.x_min_abs,
+    )
 
 
-# Central (single-shell) plates.
-_HEAD: list[Shell] = [((0.0, 1.62, 0.0), (0.22, 0.26, 0.24), 18, ("Head",))]
-_CHEST: list[Shell] = [
-    ((0.0, 1.245, 0.0), (0.42, 0.42, 0.30), 22, ("Spine", "Chest", "UpperChest")),
-]
+# Central (single-shell) plates — a helmet dome and a torso cuirass.
+_HEAD = ConformShell(("geo_head_lod0",), axis=1, side=0,
+                     n_slices=46, n_sectors=34, bones=("Head",), margin=0.018)
+_CHEST = ConformShell(("geo_torso_lod0",), axis=1, side=0,
+                      n_slices=56, n_sectors=40,
+                      bones=("Spine", "Chest", "UpperChest"), margin=0.02)
 
 # Right shells for the paired plates (left mirrored below).
-_SHOULDERS_R: Shell = ((0.13, 1.44, 0.0), (0.20, 0.16, 0.22), 13, ("RightShoulder",))
-# NOTE: the "floating arms" seam (a torso-hiding plate erases the upper arm, which
-# lives in the `torso` geoset, orphaning the separate `forearms` geoset) is NOT
-# patched here. An upper-arm guard shell only masks the FULL-kit case and leaves a
-# torso-hiding chest-alone still broken; the real cure is a body geoset re-cut
-# (upper arm → forearms region), S4 territory — tracked as a known limitation in
-# follow-up #587. See the ⑤/S6 PR "arms seam" note.
-# Hands: a COMPACT hand-scale glove centred ON the RightHand bone (head 0.72 →
-# tail 0.82, mid ~0.77), single-influence-skinned to that bone so it follows the
-# hand — NOT one wide volume spanning both hands (that reads as a 1.5 m bar across
-# the T-pose arm span). Each glove's local extent is hand-scale (≤ 0.18 m); the
-# two gloves are disjoint (a gap across the torso), asserted in tests.
-_HANDS_R: Shell = ((0.76, 1.42, 0.0), (0.16, 0.15, 0.15), 13, ("RightHand",))
-_LEGS_R: Shell = ((0.09, 0.525, 0.0), (0.20, 0.90, 0.22), 15,
-                  ("RightUpperLeg", "RightLowerLeg"))
-_FEET_R: Shell = ((0.09, 0.12, 0.05), (0.18, 0.30, 0.34), 14,
-                  ("RightFoot", "RightLowerLeg"))
+# Shoulders: a pauldron over the upper-OUTER torso (deltoid cap), not the whole
+# torso — its ``worn.hides`` was reduced to [] (issue #589) so a shoulders-alone
+# equip can no longer erase the whole torso and void it; in the full kit the
+# chest cuirass hides+covers the torso and the pauldron layers on top.
+_SHOULDERS_R = ConformShell(("geo_torso_lod0",), axis=1, side=+1,
+                            n_slices=32, n_sectors=26, bones=("RightShoulder",),
+                            margin=0.022, y_min=1.33, x_min_abs=0.10)
+# Hands: a glove lofted along the arm axis over the ``hands`` geoset — hand-scale
+# and far out on the arm (~0.6-0.9 m), disjoint from the left glove with a wide
+# empty gap across the torso (asserted in tests), never a bar across the T-pose.
+_HANDS_R = ConformShell(("geo_hands_lod0",), axis=0, side=+1,
+                        n_slices=32, n_sectors=26, bones=("RightHand",),
+                        margin=0.014, min_radius=0.02)
+# Legs: a thigh guard over the ``hips_legs`` geoset (right half).
+_LEGS_R = ConformShell(("geo_hips_legs_lod0",), axis=1, side=+1,
+                       n_slices=40, n_sectors=28,
+                       bones=("RightUpperLeg", "RightLowerLeg"), margin=0.02)
+# Feet: a greave+boot over the ``lower_legs`` + ``feet`` geosets (right half).
+_FEET_R = ConformShell(("geo_lower_legs_lod0", "geo_feet_lod0"), axis=1, side=+1,
+                       n_slices=36, n_sectors=28,
+                       bones=("RightFoot", "RightLowerLeg"), margin=0.02)
 
-SLOTS: dict[str, list[Shell]] = {
-    "head": _HEAD,
+SLOTS: dict[str, list[ConformShell]] = {
+    "head": [_HEAD],
     "shoulders": [_SHOULDERS_R, _mirror_shell(_SHOULDERS_R)],
-    "chest": _CHEST,
+    "chest": [_CHEST],
     "hands": [_HANDS_R, _mirror_shell(_HANDS_R)],
     "legs": [_LEGS_R, _mirror_shell(_LEGS_R)],
     "feet": [_FEET_R, _mirror_shell(_FEET_R)],
@@ -122,17 +213,6 @@ SLOTS: dict[str, list[Shell]] = {
 # metal, not white plastic.
 BASE_COLOR = (0.74, 0.76, 0.80, 1.0)
 
-# One box face: (outward normal, 4 corners as +/-1 signs) — CCW seen from outside.
-_FACES = (
-    ((1, 0, 0), ((1, -1, -1), (1, 1, -1), (1, 1, 1), (1, -1, 1))),
-    ((-1, 0, 0), ((-1, -1, 1), (-1, 1, 1), (-1, 1, -1), (-1, -1, -1))),
-    ((0, 1, 0), ((-1, 1, -1), (-1, 1, 1), (1, 1, 1), (1, 1, -1))),
-    ((0, -1, 0), ((-1, -1, 1), (-1, -1, -1), (1, -1, -1), (1, -1, 1))),
-    ((0, 0, 1), ((-1, -1, 1), (1, -1, 1), (1, 1, 1), (-1, 1, 1))),
-    ((0, 0, -1), ((1, -1, -1), (-1, -1, -1), (-1, 1, -1), (1, 1, -1))),
-)
-
-
 def _dist2(a: Vec3, b: Vec3) -> float:
     return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2
 
@@ -142,57 +222,158 @@ def _nearest_bone(point: Vec3, bones: tuple[str, ...]) -> str:
     return min(bones, key=lambda name: _dist2(point, _bone_mid(name)))
 
 
-def _subdivided_face(normal, corners, center: Vec3, half: Vec3, n: int):
-    """Yield (position, normal, uv) for an n×n grid of quads on one box face.
+def _sample_region(shell: ConformShell) -> list[Vec3]:
+    """Body verts of the region this shell covers, filtered to its side/crop."""
+    verts: list[Vec3] = []
+    for mesh in shell.meshes:
+        verts += _read_body_positions(mesh)
+    if shell.side != 0:
+        verts = [v for v in verts if (v[0] > 0.0) == (shell.side > 0)]
+    if shell.y_min is not None:
+        verts = [v for v in verts if v[1] >= shell.y_min]
+    if shell.x_min_abs is not None:
+        verts = [v for v in verts if abs(v[0]) >= shell.x_min_abs]
+    if not verts:
+        raise ValueError(f"conform shell sampled no body verts: {shell}")
+    return verts
 
-    Returns (positions, normals, uvs, quads) where quads index into the returned
-    positions list (local to this face). Each face carries its OWN planar UV
-    (u, v = iu/n, iv/n across the face's two in-plane edges) so the piece's RGB
-    dye mask (S3) maps across the FULL surface of every face — without UVs the
-    mask would sample a single texel and a dye would tint only a stripe (⑤/S6).
+
+def _loft_rings(shell: ConformShell):
+    """Compute the loft's along-axis samples and per-(slice,sector) hull radii.
+
+    Buckets the sampled body verts into ``n_slices`` bands along ``axis``; in each
+    band, records the outward radius of the body surface per angular ``sector``
+    about the region's cross-plane centroid (a star-shaped hull that captures
+    asymmetric extents like the foot's toe or the head's crown). Empty sectors are
+    filled from their nearest angular neighbour (floored at ``min_radius``) so the
+    ring is always closed. Returns (a_lo, a_hi, cu, cw, cross_axes, rings).
     """
-    cx, cy, cz = center
-    hx, hy, hz = half
-    # Two in-plane edge vectors of the face (corner0->corner1, corner0->corner3).
-    c0, c1, _c2, c3 = corners
-    e_u = (c1[0] - c0[0], c1[1] - c0[1], c1[2] - c0[2])
-    e_v = (c3[0] - c0[0], c3[1] - c0[1], c3[2] - c0[2])
+    verts = _sample_region(shell)
+    axis = shell.axis
+    cross = tuple(i for i in range(3) if i != axis)
+    a_vals = [v[axis] for v in verts]
+    a_lo, a_hi = min(a_vals), max(a_vals)
+    span = a_hi - a_lo
+    cu = sum(v[cross[0]] for v in verts) / len(verts)
+    cw = sum(v[cross[1]] for v in verts) / len(verts)
+    S, A = shell.n_slices, shell.n_sectors
+    tau = 2.0 * math.pi
+    half_band = (span / (S - 1)) if S > 1 else max(span, 1e-4)
+    rings: list[list[float]] = []
+    for i in range(S):
+        a_i = a_lo + (span * i / (S - 1) if S > 1 else 0.0)
+        sect = [0.0] * A
+        for v in verts:
+            if abs(v[axis] - a_i) > half_band:
+                continue
+            du = v[cross[0]] - cu
+            dw = v[cross[1]] - cw
+            r = math.hypot(du, dw)
+            j = int((math.atan2(dw, du) % tau) / tau * A) % A
+            if r > sect[j]:
+                sect[j] = r
+        for j in range(A):  # angular neighbour fill for empty sectors
+            if sect[j] == 0.0:
+                best = 0.0
+                for d in range(1, A // 2 + 1):
+                    best = max(sect[(j - d) % A], sect[(j + d) % A])
+                    if best > 0.0:
+                        break
+                sect[j] = max(best, shell.min_radius)
+        rings.append(sect)
+    return a_lo, a_hi, cu, cw, cross, rings
+
+
+def _build_conform_shell(shell: ConformShell):
+    """Build one lofted shell's geometry, returning parallel per-vertex lists.
+
+    Returns (positions, normals, uvs, quad_indices, cap_tris, vjoints). Positions
+    lie on the body hull pushed out by ``margin`` (so hiding the region leaves no
+    void); UVs are cylindrical (u around, v along) so the RGB dye mask (⑤/S3)
+    wraps the whole piece; each vertex is single-influence-skinned to the nearest
+    bind bone. The two along-axis ends are extended by ``margin`` and capped so
+    the shell is a closed volume (no hollow interior showing at seams).
+    """
+    a_lo, a_hi, cu, cw, cross, rings = _loft_rings(shell)
+    S, A, axis, m = shell.n_slices, shell.n_sectors, shell.axis, shell.margin
+    tau = 2.0 * math.pi
+    span = a_hi - a_lo if a_hi > a_lo else 1e-4
+
+    def place(a: float, r: float, ang: float) -> Vec3:
+        p = [0.0, 0.0, 0.0]
+        p[axis] = a
+        p[cross[0]] = cu + r * math.cos(ang)
+        p[cross[1]] = cw + r * math.sin(ang)
+        return (round(p[0], 6), round(p[1], 6), round(p[2], 6))
+
+    def radial_normal(ang: float) -> Vec3:
+        n = [0.0, 0.0, 0.0]
+        n[cross[0]] = math.cos(ang)
+        n[cross[1]] = math.sin(ang)
+        return (round(n[0], 6), round(n[1], 6), round(n[2], 6))
+
     positions: list[Vec3] = []
+    normals: list[Vec3] = []
     uvs: list[tuple[float, float]] = []
-    for iu in range(n + 1):
-        u = iu / n
-        for iv in range(n + 1):
-            v = iv / n
-            sx = c0[0] + e_u[0] * u + e_v[0] * v
-            sy = c0[1] + e_u[1] * u + e_v[1] * v
-            sz = c0[2] + e_u[2] * u + e_v[2] * v
-            positions.append((
-                round(cx + sx * hx, 6),
-                round(cy + sy * hy, 6),
-                round(cz + sz * hz, 6),
-            ))
-            uvs.append((round(u, 6), round(v, 6)))
-    stride = n + 1
+    vjoints: list[str] = []
+    # Wall: S rings × (A+1) columns (the +1 column duplicates the seam for a clean UV).
+    for i in range(S):
+        # Extend the two ends outward by the margin so the plate overshoots the
+        # region and the seam to the adjacent body/plate can never gap.
+        a = a_lo + span * i / (S - 1) if S > 1 else a_lo
+        if i == 0:
+            a -= m
+        elif i == S - 1:
+            a += m
+        v = i / (S - 1) if S > 1 else 0.0
+        for j in range(A + 1):
+            ang = tau * j / A
+            r = rings[i][j % A] + m
+            p = place(a, r, ang)
+            positions.append(p)
+            normals.append(radial_normal(ang))
+            uvs.append((round(j / A, 6), round(v, 6)))
+            vjoints.append(_nearest_bone(p, shell.bones))
+    stride = A + 1
     quads: list[tuple[int, int, int, int]] = []
-    for iu in range(n):
-        for iv in range(n):
-            a = iu * stride + iv
-            b = a + 1
-            c = a + stride
-            d = c + 1
-            # CCW winding consistent with the face's outward normal.
-            quads.append((a, c, d, b))
-    norm = tuple(float(x) for x in normal)
-    return positions, norm, uvs, quads
+    for i in range(S - 1):
+        for j in range(A):
+            a0 = i * stride + j
+            quads.append((a0, a0 + stride, a0 + stride + 1, a0 + 1))
+    # Two end caps: a centre vertex fanned to the first A wall verts of the end ring.
+    cap_tris: list[tuple[int, int, int]] = []
+    for end, ring_base, a_end, nrm_sign in (
+        (0, 0, a_lo - m, -1.0), (1, (S - 1) * stride, a_hi + m, +1.0),
+    ):
+        c_idx = len(positions)
+        cp = [0.0, 0.0, 0.0]
+        cp[axis] = a_end
+        cp[cross[0]] = cu
+        cp[cross[1]] = cw
+        positions.append((round(cp[0], 6), round(cp[1], 6), round(cp[2], 6)))
+        cn = [0.0, 0.0, 0.0]
+        cn[axis] = nrm_sign
+        normals.append((round(cn[0], 6), round(cn[1], 6), round(cn[2], 6)))
+        uvs.append((round(0.5, 6), round(float(end), 6)))
+        vjoints.append(_nearest_bone(positions[c_idx], shell.bones))
+        for j in range(A):
+            r0 = ring_base + j
+            r1 = ring_base + (j + 1)
+            if nrm_sign < 0:  # keep outward-consistent winding per cap
+                cap_tris.append((c_idx, r1, r0))
+            else:
+                cap_tris.append((c_idx, r0, r1))
+    return positions, normals, uvs, quads, cap_tris, vjoints
 
 
-def build_shells(shells: list[Shell]):
-    """Build merged geometry for a plate's shells.
+def build_shells(shells: list[ConformShell]):
+    """Build merged geometry for a plate's conforming shells.
 
     Returns (positions, normals, indices, vjoints, used_bones, uvs) where
     `vjoints`[i] is the bone name owning vertex i (single influence, weight 1.0),
     `used_bones` is the sorted unique bone set (the skin's joint list), and
-    `uvs`[i] is the per-vertex planar UV that maps the dye mask across each face.
+    `uvs`[i] is the per-vertex cylindrical UV that wraps the dye mask over the
+    whole shell.
     """
     positions: list[Vec3] = []
     normals: list[Vec3] = []
@@ -200,19 +381,18 @@ def build_shells(shells: list[Shell]):
     indices: list[int] = []
     vjoints: list[str] = []
     used: set[str] = set()
-    for center, size, n, bones in shells:
-        half = (size[0] / 2.0, size[1] / 2.0, size[2] / 2.0)
-        used.update(bones)
-        for normal, corners in _FACES:
-            fpos, fnorm, fuvs, quads = _subdivided_face(normal, corners, center, half, n)
-            base = len(positions)
-            for p, uv in zip(fpos, fuvs):
-                positions.append(p)
-                normals.append(fnorm)
-                uvs.append(uv)
-                vjoints.append(_nearest_bone(p, bones))
-            for a, c, d, b in quads:
-                indices += [base + a, base + c, base + d, base + a, base + d, base + b]
+    for shell in shells:
+        used.update(shell.bones)
+        spos, snorm, suv, quads, cap_tris, svj = _build_conform_shell(shell)
+        base = len(positions)
+        positions += spos
+        normals += snorm
+        uvs += suv
+        vjoints += svj
+        for a, b, c, d in quads:
+            indices += [base + a, base + b, base + c, base + a, base + c, base + d]
+        for a, b, c in cap_tris:
+            indices += [base + a, base + b, base + c]
     return positions, normals, indices, vjoints, sorted(used), uvs
 
 
@@ -375,8 +555,8 @@ def build_plate_glb(slot: str) -> bytes:
 
 
 def plate_tri_count(slot: str) -> int:
-    """LOD0 triangle count for a plate (12 tris per box face × subdivisions)."""
-    return sum(6 * n * n * 2 for _c, _s, n, _b in SLOTS[slot])
+    """LOD0 triangle count for a plate: per shell, wall 2*A*(S-1) + 2 caps of A."""
+    return sum(2 * s.n_sectors * s.n_slices for s in SLOTS[slot])
 
 
 # --- Dye masks (RGB: R/G/B = primary/secondary/accent, contract ① §6) ---------

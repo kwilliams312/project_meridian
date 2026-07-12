@@ -17,6 +17,6 @@
     { "id": "core:item.warden_hands", "numeric_id": 104, "worn": { "models": [{ "model": "core:art.item.armor.warden_hands", "mirror": "none" }], "hides": ["hands"], "attach": {}, "dye_channels": ["primary", "secondary"], "race_overrides": {} } },
     { "id": "core:item.warden_head", "numeric_id": 105, "worn": { "models": [{ "model": "core:art.item.armor.warden_head", "mirror": "none" }], "hides": ["head"], "attach": {}, "dye_channels": ["primary", "secondary"], "race_overrides": {} } },
     { "id": "core:item.warden_legs", "numeric_id": 106, "worn": { "models": [{ "model": "core:art.item.armor.warden_legs", "mirror": "none" }], "hides": ["hips_legs"], "attach": {}, "dye_channels": ["primary", "secondary"], "race_overrides": {} } },
-    { "id": "core:item.warden_shoulders", "numeric_id": 107, "worn": { "models": [{ "model": "core:art.item.armor.warden_shoulders", "mirror": "none" }], "hides": ["torso"], "attach": {}, "dye_channels": ["primary", "secondary"], "race_overrides": {} } }
+    { "id": "core:item.warden_shoulders", "numeric_id": 107, "worn": { "models": [{ "model": "core:art.item.armor.warden_shoulders", "mirror": "none" }], "hides": [], "attach": {}, "dye_channels": ["primary", "secondary"], "race_overrides": {} } }
   ]
 }

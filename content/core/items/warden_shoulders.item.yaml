@@ -19,5 +19,10 @@ visual:
   icon: core:art.icon.item.warden_crest
   worn:
     models: [{ model: core:art.item.armor.warden_shoulders, mirror: none }]
-    hides: [torso]
+    # No hides (issue #589): the pauldrons are deltoid caps that conform to and
+    # sit ON the upper-outer torso — they do NOT cover the whole torso, so hiding
+    # `torso` here would erase body the pauldrons don't replace and open the
+    # blocky-plate void. In the full kit the chest cuirass hides+covers `torso`
+    # and the pauldrons layer on top; shoulders-alone leaves the body intact.
+    hides: []
     dye_channels: [primary, secondary]

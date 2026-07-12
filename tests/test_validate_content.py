@@ -1013,9 +1013,18 @@ class TestWardenKitItems:
         doc = yaml.safe_load(path.read_text(encoding="utf-8"))
         assert doc["item_class"] == "armor"
         assert doc["visual"]["worn"]["dye_channels"] == ["primary", "secondary"]
-        # No attach (armor skins onto the body); hides present.
+        # No attach (armor skins onto the body).
         assert "attach" not in doc["visual"]["worn"]
-        assert doc["visual"]["worn"]["hides"]
+        # Body-covering plates hide the geoset region they replace so the body
+        # does not clip through. The shoulders pauldrons are the exception (#589):
+        # they are deltoid caps that layer ON the body and hide nothing, so hiding
+        # `torso` would open the very blocky-plate void this kit's conform pass
+        # closed. Every OTHER slot must still declare a non-empty hides list.
+        hides = doc["visual"]["worn"]["hides"]
+        if doc["id"] == "core:item.warden_shoulders":
+            assert hides == []
+        else:
+            assert hides
         errors = check_worn(doc, path.name)
         assert errors == [], errors
 
