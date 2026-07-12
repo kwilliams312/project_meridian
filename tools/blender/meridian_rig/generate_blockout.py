@@ -63,8 +63,20 @@ def region_bone_groups() -> dict[str, list[list[str]]]:
     return {
         "head": [["Head", "Neck"]],
         "torso": [["Spine", "Chest", "UpperChest", "LeftShoulder", "RightShoulder"]],
+        # `forearms` is the WHOLE arm (shoulder joint -> wrist), elbow-agnostic:
+        # each arm carries TWO anchors so the geoset cut claims the entire arm and
+        # never leaves an upper-arm patch behind in `torso` (issue #587). Without
+        # the upper-arm anchor the only per-arm anchor sat near the elbow, so
+        # shoulder-line upper-arm surface fell to the nearer `torso` anchor and was
+        # erased whenever a torso-hiding chest was worn, orphaning the forearm.
+        #   * ``[<side>UpperArm]``            — anchor on the upper arm, claims the
+        #     shoulder-line surface for the arm (the #587 fix).
+        #   * ``[<side>UpperArm, <side>LowerArm]`` — the original elbow-centred
+        #     anchor, kept verbatim so the forearm/hand (wrist) seam is unchanged.
         "forearms": [
+            ["RightUpperArm"],
             ["RightUpperArm", "RightLowerArm"],
+            ["LeftUpperArm"],
             ["LeftUpperArm", "LeftLowerArm"],
         ],
         "hands": [
