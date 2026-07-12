@@ -1,0 +1,17 @@
+# Auditable Meshy generation record for the Warden's Kit chest cuirass (TD-09).
+# Auxiliary companion, NOT a content entity: validate_content.py + mcc discovery
+# exclude *.prompts.yaml from envelope checks (issue #410 precedent). The raw
+# text-to-3D sculpt this records is the non-deterministic half; the deterministic
+# restyle (restyle_armor.py, --region chest) turns it into the committed
+# warden_chest.glb. Regenerate the sculpt from this prompt + task id if ever needed.
+task_id: 019f5722-1571-7cd2-9b96-dd03f7366cf6
+model_version: meshy-5
+preview_task_id: 019f5721-2c0c-7085-8309-b4ed43b83b06
+request:
+  mode: preview
+  prompt: a stylized fantasy plate-armor breastplate cuirass, a single wearable steel
+    chest shell that wraps the torso front and back and rises over both shoulders,
+    ornate riveted trim, symmetric, front-facing, hollow open at neck and waist, low-poly
+    game asset, clean even topology
+  ai_model: meshy-5
+  target_polycount: 30000
