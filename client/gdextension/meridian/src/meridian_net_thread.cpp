@@ -360,7 +360,9 @@ Dictionary MeridianNetThread::decode_entity_frame(int opcode,
 		// codec sets has_appearance when the Appearance table rode the frame). NPCs /
 		// pre-#538 servers omit them, so world.gd's `d.has("appearance")` gate keeps the
 		// capsule path untouched (design §6). Shapes match AssembledCharacter.assemble():
-		// appearance {v,hair,face,skin}; equipment [{slot, item_template, dyes:[dye_id]}].
+		// appearance {v,hair,face,skin}; equipment [{slot, item_template,
+		// dyes:[{channel, dye_id}]}] — the per-channel dye shape (⑤/S3, #570) the
+		// mask-tint assembler needs to bind each RGB dye-mask region to its colour.
 		if (e->has_appearance) {
 			d["race"] = static_cast<int64_t>(e->race);
 			d["sex"] = static_cast<int64_t>(e->sex);
@@ -375,9 +377,18 @@ Dictionary MeridianNetThread::decode_entity_frame(int opcode,
 				Dictionary slot;
 				slot["slot"] = static_cast<int64_t>(ev.slot);
 				slot["item_template"] = static_cast<int64_t>(ev.item_template);
-				Array dyes;  // AssembledCharacter takes an Array of numeric dye ids
+				// AssembledCharacter._apply_dyes takes an Array of {channel, dye_id}
+				// dicts (⑤/S3, #570) — the dye `channel` (0=primary/1=secondary/
+				// 2=accent) selects which RGB region of the piece's dye mask this
+				// colour tints. Forwarding the channel (not a bare id) is the whole
+				// point of the mask-tint path; dropping it flattens every dye onto the
+				// primary region.
+				Array dyes;
 				for (const auto &dc : ev.dyes) {
-					dyes.push_back(static_cast<int64_t>(dc.dye_id));
+					Dictionary dye;
+					dye["channel"] = static_cast<int64_t>(dc.channel);
+					dye["dye_id"] = static_cast<int64_t>(dc.dye_id);
+					dyes.push_back(dye);
 				}
 				slot["dyes"] = dyes;
 				equipment.push_back(slot);

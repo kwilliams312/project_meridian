@@ -12,8 +12,10 @@
 #   A. The staged core pack (res://meridian/core): body instanced (8 geosets
 #      visible, 63 canonical bones incl. socket_*), pickaxe → BoneAttachment3D
 #      on socket_main_hand with the weapon mesh child, incremental
-#      set_equipment_slot idempotence, M1 dye tint (russet) + unknown-dye
-#      fallback, unknown-preset → preset 1, assemble() false on a catalog miss.
+#      set_equipment_slot idempotence, ⑤/S3 mask-tint dye on the Warden's Cuirass
+#      (russet on channel 0 → dye_tint.gdshader ShaderMaterial) + unknown-dye and
+#      non-dyeable-piece fallbacks, unknown-preset → preset 1, assemble() false on
+#      a catalog miss.
 #   B. A fixture pack (user://, same artifact shapes, models resolving to the
 #      REAL staged art): worn.hides ["feet"] → geo_feet_lod0 hidden + restored
 #      on unequip, race_overrides wholesale substitution, skinned gear
@@ -173,24 +175,56 @@ func _verify_idempotence(ac, pickaxe: int) -> void:
 		and skel.get_child_count() == children_before - 1)
 
 
-# --- A4. M1 dye: whole-piece albedo tint + unknown-dye fallback ----------------
+# --- A4. ⑤/S3 mask-tint dye: per-channel ShaderMaterial + fallbacks ------------
+# Equips the REAL staged Warden's Cuirass (a plate with an RGB dye mask +
+# worn.dye_channels [primary, secondary]) and drives the new wire shape
+# dyes:[{channel, dye_id}]. Proves: a known dye on channel 0 yields a
+# ShaderMaterial (dye_tint.gdshader) whose primary colour param == the russet
+# colour and whose mask is bound; an unknown dye id keeps the authored colours;
+# a piece with NO dye_channels (the pickaxe) never tints even with a valid dye.
 func _verify_dye(ac, db, pickaxe: int) -> void:
-	print(" M1 dye — whole-piece tint (russet) and unknown-dye fallback:")
+	print(" ⑤/S3 mask-tint dye — Warden's Cuirass, per-channel + fallbacks:")
 	var russet: int = db.numeric_id_for("core:dye.russet")
 	_check("russet resolves to a numeric id", russet != 0)
-	ac.set_equipment_slot(SLOT_MAIN_HAND, pickaxe, [russet])
-	var mesh: MeshInstance3D = _first_piece_mesh(ac, SLOT_MAIN_HAND)
-	var tinted: bool = false
+	var russet_color: Color = db.dye_color(russet)
+	var chest: int = db.numeric_id_for("core:item.warden_chest")
+	_check("warden_chest resolves to a numeric id", chest != 0)
+
+	ac.set_equipment_slot(SLOT_CHEST, chest, [{"channel": 0, "dye_id": russet}])
+	var mesh: MeshInstance3D = _first_piece_mesh(ac, SLOT_CHEST)
+	_check("dyed warden piece mounts a mesh", mesh != null)
+	var mat: ShaderMaterial = null
 	if mesh != null:
-		var override_mat: StandardMaterial3D = mesh.material_override as StandardMaterial3D
-		tinted = override_mat != null \
-			and override_mat.albedo_color.is_equal_approx(Color.html("8a4b2d"))
-	_check("known dye tints the whole piece (albedo == authored #8a4b2d)", tinted)
-	ac.set_equipment_slot(SLOT_MAIN_HAND, pickaxe, [999999999])
-	mesh = _first_piece_mesh(ac, SLOT_MAIN_HAND)
-	_check("unknown dye keeps the authored colors (no override)",
+		mat = mesh.material_override as ShaderMaterial
+	_check("known dye applies a ShaderMaterial override", mat != null)
+	if mat != null:
+		_check("the override uses the dye_tint mask shader",
+			mat.shader != null
+			and mat.shader.resource_path == "res://characters/dye_tint.gdshader")
+		var primary = mat.get_shader_parameter("dye_primary")
+		_check("primary-channel colour param == the russet dye colour",
+			primary is Color and (primary as Color).is_equal_approx(russet_color))
+		_check("primary channel is flagged active (use_primary == 1)",
+			float(mat.get_shader_parameter("use_primary")) == 1.0)
+		_check("secondary channel stays inactive (only channel 0 was dyed)",
+			float(mat.get_shader_parameter("use_secondary")) == 0.0)
+		_check("the piece's dye mask texture is bound",
+			mat.get_shader_parameter("dye_mask") is Texture2D)
+
+	# Unknown dye id → authored colours (no override), assembly_failed once.
+	ac.set_equipment_slot(SLOT_CHEST, chest, [{"channel": 0, "dye_id": 999999999}])
+	mesh = _first_piece_mesh(ac, SLOT_CHEST)
+	_check("unknown dye keeps the authored colours (no override)",
 		mesh != null and mesh.material_override == null)
 	_check("assembly_failed emitted for the unknown dye", _failures.has("dye:999999999"))
+	ac.set_equipment_slot(SLOT_CHEST, 0, [])
+
+	# A piece with no worn.dye_channels (the pickaxe) never tints, even with a
+	# valid dye — the mask-tint path gates on the item declaring itself dyeable.
+	ac.set_equipment_slot(SLOT_MAIN_HAND, pickaxe, [{"channel": 0, "dye_id": russet}])
+	mesh = _first_piece_mesh(ac, SLOT_MAIN_HAND)
+	_check("non-dyeable piece (no dye_channels) is never tinted",
+		mesh != null and mesh.material_override == null)
 	ac.set_equipment_slot(SLOT_MAIN_HAND, 0, [])
 
 

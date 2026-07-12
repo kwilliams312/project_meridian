@@ -370,21 +370,34 @@ void test_entity_codec() {
     codec::EquippedVisual chest;
     chest.slot = 5;
     chest.item_template = 88;        // no dyes (authored colors)
+    // ⑤/S3 (#570): a dyed WARDEN piece — the exact channel-decode contract the
+    // mask-tint assembler consumes. The dye `channel` (0=primary, 1=secondary) MUST
+    // survive the round-trip alongside its numeric dye_id (russet = IF-9 id 78); the
+    // GDExtension pump forwards {channel, dye_id} dicts (not bare ids) off the back
+    // of this so the shader can bind each RGB-mask region to its chosen colour.
+    codec::EquippedVisual legs;
+    legs.slot = 7;
+    legs.item_template = 102;        // core:item.warden_chest / warden plate id
+    legs.dyes.push_back(codec::DyeChoice{/*channel=secondary*/ 1, /*dye_id=russet*/ 78});
     av.equipment.push_back(weapon);
     av.equipment.push_back(chest);
+    av.equipment.push_back(legs);
     auto av_out = codec::decode_entity_enter(codec::encode_entity_enter(av));
     CHECK(av_out.has_value());
     CHECK(av_out->race == 1 && av_out->sex == 0);
     CHECK(av_out->has_appearance);
     CHECK(av_out->appearance.version == 1 && av_out->appearance.hair == 2);
     CHECK(av_out->appearance.face == 3 && av_out->appearance.skin == 1);
-    CHECK(av_out->equipment.size() == 2);
+    CHECK(av_out->equipment.size() == 3);
     CHECK(av_out->equipment[0].slot == 1 && av_out->equipment[0].item_template == 42);
     CHECK(av_out->equipment[0].dyes.size() == 2);
     CHECK(av_out->equipment[0].dyes[0].channel == 0 && av_out->equipment[0].dyes[0].dye_id == 7);
     CHECK(av_out->equipment[0].dyes[1].channel == 1 && av_out->equipment[0].dyes[1].dye_id == 9);
     CHECK(av_out->equipment[1].slot == 5 && av_out->equipment[1].item_template == 88);
     CHECK(av_out->equipment[1].dyes.empty());
+    // The story's canonical channel-decode assertion: {channel:1, dye_id:78} in, same out.
+    CHECK(av_out->equipment[2].dyes.size() == 1);
+    CHECK(av_out->equipment[2].dyes[0].channel == 1 && av_out->equipment[2].dyes[0].dye_id == 78);
 
     // #328/#430: char_class + vitals default to 0 / empty when a producer omits them —
     // additive fields are backward-compatible (a pre-#430 EntityEnter decodes to 0). An
