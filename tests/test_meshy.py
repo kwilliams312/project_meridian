@@ -843,6 +843,15 @@ def test_generate_refuses_invalid_ns_or_name_before_http(
 # passes the real validate_content gate end-to-end (review fix — this is the
 # blind spot that hid the *.prompts.yaml L001 bug: earlier tests validated
 # the sidecar dict in isolation, never the on-disk tree the CLI creates).
+#
+# Issue #525: this test used to assert `res.errors == []` outright — which was
+# itself the evidence cited in #525 that the restyle-quarantine lint (spec ④
+# §7.2 / tools/meshy/README.md's documented "raw Meshy output never ships")
+# didn't actually exist: a freshly generated, still-`pending` ai-tier sidecar
+# validated clean. Now that L024 is implemented, the correct end-to-end
+# assertion is the opposite — every OTHER layer (schema, L021 provenance,
+# budget, import presets) stays clean, and L024 is the one error a raw,
+# not-yet-restyled Meshy drop is expected to trip.
 # ============================================================================
 
 
@@ -900,7 +909,11 @@ def test_generate_output_tree_passes_validate_content_end_to_end(tmp_path, monke
     assert (asset_dir / "test_barrel.prompts.yaml").exists()
 
     # The full validate_content gate (schemas + lints + import presets) over
-    # the real on-disk tree — exactly what CI runs — must be error-free.
+    # the real on-disk tree — exactly what CI runs. Raw Meshy output lands with
+    # restyle_status: pending (tools/meshy/intake.py; README "Provenance
+    # shape") and issue #525's L024 restyle-quarantine lint now blocks it from
+    # merging as-is: every other layer must stay clean, but L024 MUST fire —
+    # that is the entire point of the lint this test exercises end-to-end.
     res = validate_content.validate(
         content_root,
         SCHEMA_DIR,
@@ -908,7 +921,12 @@ def test_generate_output_tree_passes_validate_content_end_to_end(tmp_path, monke
         imports_mode="error",
         presets_path=REPO / "client" / "import-presets" / "presets.json",
     )
-    assert res.errors == [], res.errors
+    other_errors = [e for e in res.errors if not e.startswith("L024")]
+    assert other_errors == [], other_errors
+    assert any(e.startswith("L024") for e in res.errors), (
+        "expected L024 (restyle quarantine) to fire on a freshly-generated, "
+        "still-pending ai-tier sidecar — see issue #525"
+    )
 
 
 # ============================================================================

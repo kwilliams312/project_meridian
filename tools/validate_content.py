@@ -22,6 +22,14 @@ Validates every YAML file under /content against the JSON Schemas in
   L023   a music_stem sidecar with a *.strudel extra_source has a sibling
          <name>.render.yaml manifest so its WAV source is reproducible (Strudel
          stem-render pipeline, issue #410) — always a hard error
+  L024   asset sidecar restyle quarantine (issue #525): source_tier != original
+         (ai/cc0/cc_by) cannot merge with restyle_status absent or 'pending' —
+         raw AI/CC-sourced geometry never ships as-is (Art PRD §3.4 "kitbash to
+         style"; Art SAD §3.2 "tier != original => restyle_status: done";
+         asset.schema.yaml's restyle_status comment; TD-09) — always a hard error
+  L025   provenance.ai.prompts_file names a file that exists on disk, sibling to
+         the sidecar (issue #464/#525: an ai-tier asset's generation request
+         must be auditable, Art PRD §3.2 prompt hygiene) — always a hard error
   L070   declared LOD0 tri count is within the Art PRD §2.1 class ceiling — error
   L071   declared texture dimension is within the Art PRD §2.3 class cap — error
   L072   declared material-set count is within the Art PRD §2.3/§2.4 cap — error
@@ -54,6 +62,14 @@ asset schema still enforces the conditional provenance fields where JSON Schema
 can — these lints add the semantic policy (allowlist, engine-locked-origin
 denylist, per-class budget rows) and named rule ids on top. Sidecar-source
 existence in LFS (the remaining L021 scope) still arrives with `mcc`.
+
+L024/L025 (issue #525) close a gap where spec ④ §7.2, the contract ① spec, and
+tools/meshy/README.md all described a restyle-quarantine lint that was never
+actually implemented — a pending ai/cc0/cc_by-tier asset validated with zero
+errors. Like L023/L080-L083, these are pure content-tree semantic checks with
+no LFS/binary dependency, so — following the L080 precedent — they are
+Python-only for now; `mcc` still only absorbs the structural band (L001-L003,
+L010, L011, tools/mcc/src/stages/validate.cpp).
 
 This is the stopgap CI gate until `mcc` (C++) subsumes it; keep rule ids stable
 (they match the Tools SAD §2.2 lint bands).
@@ -409,6 +425,70 @@ def check_stem_manifest(doc: dict, path: Path, rel_path: Path) -> list[str]:
     return errors
 
 
+def check_restyle_quarantine(doc: dict, rel_path: Path) -> list[str]:
+    """L024 — non-original-tier assets cannot merge with restyle_status pending.
+
+    Assets sourced from AI generation or CC libraries (provenance.source_tier
+    in {ai, cc0, cc_by}) must pass a human restyle pass before they ship — raw
+    AI/CC-sourced geometry never merges as-is (Art PRD §3.4 "kitbash to style";
+    Art SAD §3.2 "Conditional-field completeness: ... tier != original =>
+    restyle_status: done"; asset.schema.yaml's restyle_status comment "Tiers
+    ai/cc0/cc_by cannot merge as pending"; TD-09). Always a hard error — the
+    schema's `restyle_status` enum has no way to express "required unless tier
+    is original", so this lint carries the policy.
+
+    `source_tier: original` is exempt: original art has no restyle step, and an
+    absent/`pending` restyle_status on an original-tier asset is not a policy
+    violation. Runs on docs that already passed schema validation; a missing
+    `restyle_status` field (the common un-restyled state, since the field is
+    optional) is exactly what this lint exists to catch, same as `pending`.
+    """
+    errors: list[str] = []
+    tier = (doc.get("provenance") or {}).get("source_tier")
+    if tier is None or tier == "original":
+        return errors
+    status = doc.get("restyle_status")
+    if status is None or status == "pending":
+        errors.append(
+            f"L024 {rel_path}: ai-tier and CC-sourced assets cannot merge "
+            f"un-restyled — source_tier '{tier}' has restyle_status "
+            f"'{status}', must be 'done' before this asset ships "
+            f"(Art PRD §3.4, Art SAD §3.2, TD-09)"
+        )
+    return errors
+
+
+def check_prompts_file(doc: dict, path: Path, rel_path: Path) -> list[str]:
+    """L025 — provenance.ai.prompts_file must exist on disk (issue #464).
+
+    AI-tier provenance requires an auditable prompts file so a reviewer can
+    inspect the exact generation request behind the asset (Art PRD §3.2 prompt
+    hygiene). L021 already checks the field is *named*; this lint checks the
+    named file actually exists, resolved relative to the sidecar's own
+    directory — the Meshy intake CLI (tools/meshy/intake.py) writes
+    `prompts_file` as a bare filename sibling to the sidecar it describes, the
+    same layout L023's render-manifest sibling check assumes.
+
+    Inert unless source_tier is ai and prompts_file is actually declared —
+    L021 already reports a missing/empty field, so this only checks a value
+    that is present but dangling.
+    """
+    errors: list[str] = []
+    prov = doc.get("provenance") or {}
+    if prov.get("source_tier") != "ai":
+        return errors
+    prompts_file = (prov.get("ai") or {}).get("prompts_file")
+    if not prompts_file:
+        return errors
+    if not (path.parent / prompts_file).exists():
+        errors.append(
+            f"L025 {rel_path}: provenance.ai.prompts_file '{prompts_file}' has "
+            f"no file at that path next to the sidecar — the AI generation "
+            f"request is not auditable (Art PRD §3.2 prompt hygiene, issue #464)"
+        )
+    return errors
+
+
 def check_worn(doc: dict, rel_path: Path) -> list[str]:
     """L080/L081 — the visual.worn presence + attach-vs-skinned rules (contract ①).
 
@@ -626,6 +706,9 @@ def validate(
             res.errors.extend(check_provenance(doc, rel(path)))
             res.errors.extend(check_budget(doc, rel(path)))
             res.errors.extend(check_stem_manifest(doc, path, rel(path)))
+            # L024/L025 restyle quarantine + prompts-file existence (issue #525).
+            res.errors.extend(check_restyle_quarantine(doc, rel(path)))
+            res.errors.extend(check_prompts_file(doc, path, rel(path)))
             continue  # sidecar-internal refs (stem_set, variation_group) are metadata, not L011/L020 refs
 
         content_ids.add(doc_id)

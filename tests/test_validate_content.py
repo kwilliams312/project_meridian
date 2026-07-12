@@ -655,6 +655,193 @@ class TestStemManifestLint:
 
 
 @pytest.mark.unit
+class TestRestyleQuarantineLint:
+    """L024 — source_tier != original cannot merge with restyle_status pending
+    (issue #525; Art PRD §3.4, Art SAD §3.2 "tier != original => restyle_status:
+    done", asset.schema.yaml's restyle_status comment)."""
+
+    # A fully-valid, already-restyled ai-tier sidecar; individual tests mutate
+    # source_tier / restyle_status. prompts_file is declared but its existence
+    # (L025) is exercised separately — write the sibling file in build() so
+    # these tests isolate L024 from L025 noise.
+    AI_DONE = """\
+    schema: meridian/asset@1
+    id: tp:art.char.hero
+    class: character_model
+    source: assets/art/char/hero.glb
+    license: CC-BY-4.0
+    provenance:
+      source_tier: ai
+      authors: [tester]
+      origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/abc123
+      ai:
+        tool: meshy@meshy-5
+        prompts_file: hero.prompts.yaml
+    restyle_status: done
+    """
+
+    CC0_DONE = """\
+    schema: meridian/asset@1
+    id: tp:art.prop.rock
+    class: prop
+    source: assets/art/prop/rock.glb
+    license: CC0-1.0
+    provenance:
+      source_tier: cc0
+      authors: [tester]
+      origin_url: https://polyhaven.com/a/rock_01
+      license_verified_on: "2026-01-01"
+    restyle_status: done
+    """
+
+    CC_BY_DONE = """\
+    schema: meridian/asset@1
+    id: tp:art.prop.plant
+    class: prop
+    source: assets/art/prop/plant.glb
+    license: CC-BY-4.0
+    provenance:
+      source_tier: cc_by
+      authors: [tester]
+      origin_url: https://ambientcg.com/plant01
+      attribution: "Plant01 by ambientCG"
+      license_verified_on: "2026-01-01"
+    restyle_status: done
+    """
+
+    def _tree(self, **extra):
+        return {
+            "tp/assets/art/hero.asset.yaml": self.AI_DONE,
+            "tp/assets/art/hero.prompts.yaml": "# prompts\n",
+            **extra,
+        }
+
+    def test_ai_tier_restyle_done_passes(self, tmp_path):
+        res = run(tmp_path, self._tree())
+        assert "L024" not in codes(res.errors)
+
+    def test_l024_ai_tier_restyle_absent_errors(self, tmp_path):
+        sidecar = self.AI_DONE.replace("restyle_status: done\n", "")
+        res = run(
+            tmp_path,
+            {
+                "tp/assets/art/hero.asset.yaml": sidecar,
+                "tp/assets/art/hero.prompts.yaml": "# prompts\n",
+            },
+        )
+        assert "L024" in codes(res.errors)
+
+    def test_l024_ai_tier_restyle_pending_errors(self, tmp_path):
+        sidecar = self.AI_DONE.replace(
+            "restyle_status: done", "restyle_status: pending"
+        )
+        res = run(
+            tmp_path,
+            {
+                "tp/assets/art/hero.asset.yaml": sidecar,
+                "tp/assets/art/hero.prompts.yaml": "# prompts\n",
+            },
+        )
+        assert "L024" in codes(res.errors)
+
+    def test_l024_cc0_tier_restyle_pending_errors(self, tmp_path):
+        sidecar = self.CC0_DONE.replace(
+            "restyle_status: done", "restyle_status: pending"
+        )
+        res = run(tmp_path, {"tp/assets/art/rock.asset.yaml": sidecar})
+        assert "L024" in codes(res.errors)
+
+    def test_l024_cc_by_tier_restyle_absent_errors(self, tmp_path):
+        sidecar = self.CC_BY_DONE.replace("restyle_status: done\n", "")
+        res = run(tmp_path, {"tp/assets/art/plant.asset.yaml": sidecar})
+        assert "L024" in codes(res.errors)
+
+    def test_l024_original_tier_restyle_pending_is_inert(self, tmp_path):
+        # original-tier art has no restyle step; an explicit pending/absent
+        # restyle_status on it is not a policy violation.
+        sidecar = ASSET + "restyle_status: pending\n"
+        res = run(tmp_path, {"tp/assets/art/hero.asset.yaml": sidecar})
+        assert "L024" not in codes(res.errors)
+
+    def test_l024_lint_directly_absent_status(self):
+        from validate_content import check_restyle_quarantine  # noqa: E402
+
+        doc = {"provenance": {"source_tier": "ai", "authors": ["t"]}}
+        errors = check_restyle_quarantine(doc, Path("x.asset.yaml"))
+        assert any(e.startswith("L024") for e in errors)
+
+    def test_l024_lint_directly_original_tier_is_inert(self):
+        from validate_content import check_restyle_quarantine  # noqa: E402
+
+        doc = {"provenance": {"source_tier": "original", "authors": ["t"]}}
+        errors = check_restyle_quarantine(doc, Path("x.asset.yaml"))
+        assert errors == []
+
+
+@pytest.mark.unit
+class TestPromptsFileLint:
+    """L025 — provenance.ai.prompts_file must exist on disk (issue #464/#525)."""
+
+    AI_DONE = TestRestyleQuarantineLint.AI_DONE
+    CC0_DONE = TestRestyleQuarantineLint.CC0_DONE
+
+    def test_l025_prompts_file_missing_errors(self, tmp_path):
+        # prompts_file is declared but no sibling file is written to disk.
+        res = run(tmp_path, {"tp/assets/art/hero.asset.yaml": self.AI_DONE})
+        assert "L025" in codes(res.errors)
+
+    def test_l025_prompts_file_present_passes(self, tmp_path):
+        res = run(
+            tmp_path,
+            {
+                "tp/assets/art/hero.asset.yaml": self.AI_DONE,
+                "tp/assets/art/hero.prompts.yaml": "# prompts\n",
+            },
+        )
+        assert "L025" not in codes(res.errors)
+
+    def test_l025_non_ai_tier_is_inert(self, tmp_path):
+        # cc0 tier has no provenance.ai block at all — nothing to check.
+        res = run(tmp_path, {"tp/assets/art/rock.asset.yaml": self.CC0_DONE})
+        assert "L025" not in codes(res.errors)
+
+    def test_l025_lint_directly_missing_file(self, tmp_path):
+        from validate_content import check_prompts_file  # noqa: E402
+
+        sidecar_dir = tmp_path / "tp" / "assets" / "art"
+        sidecar_dir.mkdir(parents=True)
+        doc = {
+            "provenance": {
+                "source_tier": "ai",
+                "authors": ["t"],
+                "ai": {"tool": "meshy@meshy-5", "prompts_file": "hero.prompts.yaml"},
+            }
+        }
+        errors = check_prompts_file(
+            doc, sidecar_dir / "hero.asset.yaml", Path("x.asset.yaml")
+        )
+        assert any(e.startswith("L025") for e in errors)
+
+    def test_l025_lint_directly_present_file(self, tmp_path):
+        from validate_content import check_prompts_file  # noqa: E402
+
+        sidecar_dir = tmp_path / "tp" / "assets" / "art"
+        sidecar_dir.mkdir(parents=True)
+        (sidecar_dir / "hero.prompts.yaml").write_text("# prompts\n", encoding="utf-8")
+        doc = {
+            "provenance": {
+                "source_tier": "ai",
+                "authors": ["t"],
+                "ai": {"tool": "meshy@meshy-5", "prompts_file": "hero.prompts.yaml"},
+            }
+        }
+        errors = check_prompts_file(
+            doc, sidecar_dir / "hero.asset.yaml", Path("x.asset.yaml")
+        )
+        assert errors == []
+
+
+@pytest.mark.unit
 class TestItem2Worn:
     """meridian/item@2 — visual.worn modular-gear contract + L080/L081 (contract ①/T2).
 
@@ -826,7 +1013,9 @@ class TestAppearanceCatalog:
     """
 
     def test_catalog_valid_passes(self, tmp_path):
-        res = run(tmp_path, {"tp/appearance/ardent_male.appearance.yaml": self.CATALOG_OK})
+        res = run(
+            tmp_path, {"tp/appearance/ardent_male.appearance.yaml": self.CATALOG_OK}
+        )
         assert res.errors == []
 
     def test_l082_duplicate_preset_id(self, tmp_path):
