@@ -127,6 +127,59 @@ class TestPlateBudgets:
 
 
 @pytest.mark.unit
+class TestPlateLocality:
+    """Each armor VOLUME is anatomy-scale and localized to its bone(s).
+
+    Regression for the invisible/rail hands bug (#569): the hands piece must be two
+    compact hand-scale gloves at the hand bones — not one wide bar spanning the whole
+    T-pose arm span. A plate's COMBINED bbox can be wide (two hands sit ~1.6 m apart
+    in the T-pose), but no single volume may be, and paired plates must be disjoint.
+    """
+
+    # Per-anatomy volume cap (metres): the largest allowed extent of ONE shell.
+    # Hands/feet are small; a leg guard legitimately runs the length of the leg.
+    _SHELL_CAP = {
+        "head": 0.30, "shoulders": 0.30, "chest": 0.50,
+        "hands": 0.25, "legs": 0.95, "feet": 0.40,
+    }
+
+    @pytest.mark.parametrize("slot", SLOTS)
+    def test_each_shell_is_anatomy_scale(self, slot):
+        cap = self._SHELL_CAP[slot]
+        for i, ext in enumerate(gwk.shell_extents(slot)):
+            assert max(ext) <= cap, f"{slot} shell {i} extent {ext} exceeds {cap} m"
+
+    def test_hands_gloves_are_hand_scale(self):
+        # The explicit #569 acceptance: each glove ≤ 0.25 m (hand-scale, not arm-span).
+        extents = gwk.shell_extents("hands")
+        assert len(extents) == 2
+        for ext in extents:
+            assert max(ext) <= 0.25, f"glove extent {ext} is not hand-scale"
+
+    def test_hands_are_two_disjoint_gloves_not_a_bar(self):
+        # The invisible-kit bug rendered as one bar across the arm span. The two
+        # gloves must be far out on the arms with a wide empty gap across the torso —
+        # NO geometry anywhere near the centreline (|x| < 0.4 m).
+        from tools.art.generate_warden_kit import build_shells
+
+        pos = build_shells(gwk.SLOTS["hands"])[0]
+        near_mid = [p for p in pos if abs(p[0]) < 0.4]
+        assert near_mid == [], f"hands has {len(near_mid)} verts near centre — a bar, not gloves"
+        # And each glove actually sits over its hand bone (~0.72-0.82 m out).
+        assert all(0.6 < abs(p[0]) < 0.9 for p in pos)
+
+    def test_hands_each_glove_skinned_to_its_own_hand_bone(self):
+        # Left glove → LeftHand, right glove → RightHand (single influence, no collapse).
+        from tools.art.generate_warden_kit import build_shells
+
+        pos, _n, _i, vjoints, used = build_shells(gwk.SLOTS["hands"])
+        assert set(used) == {"LeftHand", "RightHand"}
+        for p, bone in zip(pos, vjoints):
+            expected = "RightHand" if p[0] > 0 else "LeftHand"
+            assert bone == expected, f"vertex {p} bound to {bone}, expected {expected}"
+
+
+@pytest.mark.unit
 class TestPlateRig:
     """Each plate is skinned and binds ONLY canonical bones (import validator I021)."""
 

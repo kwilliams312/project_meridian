@@ -88,7 +88,12 @@ _CHEST: list[Shell] = [
 
 # Right shells for the paired plates (left mirrored below).
 _SHOULDERS_R: Shell = ((0.13, 1.44, 0.0), (0.20, 0.16, 0.22), 13, ("RightShoulder",))
-_HANDS_R: Shell = ((0.66, 1.42, 0.0), (0.24, 0.14, 0.14), 13, ("RightHand",))
+# Hands: a COMPACT hand-scale glove centred ON the RightHand bone (head 0.72 →
+# tail 0.82, mid ~0.77), single-influence-skinned to that bone so it follows the
+# hand — NOT one wide volume spanning both hands (that reads as a 1.5 m bar across
+# the T-pose arm span). Each glove's local extent is hand-scale (≤ 0.18 m); the
+# two gloves are disjoint (a gap across the torso), asserted in tests.
+_HANDS_R: Shell = ((0.76, 1.42, 0.0), (0.16, 0.15, 0.15), 13, ("RightHand",))
 _LEGS_R: Shell = ((0.09, 0.525, 0.0), (0.20, 0.90, 0.22), 15,
                   ("RightUpperLeg", "RightLowerLeg"))
 _FEET_R: Shell = ((0.09, 0.12, 0.05), (0.18, 0.30, 0.34), 14,
@@ -191,6 +196,24 @@ def build_shells(shells: list[Shell]):
             for a, c, d, b in quads:
                 indices += [base + a, base + c, base + d, base + a, base + d, base + b]
     return positions, normals, indices, vjoints, sorted(used)
+
+
+def shell_extents(slot: str) -> list[tuple[float, float, float]]:
+    """Per-shell local AABB size (dx, dy, dz) for a plate — one entry per shell.
+
+    Each shell is one contiguous armor volume (a glove, a boot, a pauldron). A
+    paired plate returns two entries. Used to assert each piece is anatomy-scale
+    (e.g. a glove is hand-scale) independent of how far apart the two sides sit in
+    the T-pose — the six-piece plate can be wide, but no single volume should be.
+    """
+    out: list[tuple[float, float, float]] = []
+    for shell in SLOTS[slot]:
+        pos, *_ = build_shells([shell])
+        out.append(tuple(  # type: ignore[arg-type]
+            round(max(p[a] for p in pos) - min(p[a] for p in pos), 6)
+            for a in range(3)
+        ))
+    return out
 
 
 def _pad4(buf: bytes, fill: bytes = b"\x00") -> bytes:
