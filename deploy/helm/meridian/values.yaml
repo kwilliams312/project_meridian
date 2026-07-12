@@ -34,6 +34,14 @@ fullnameOverride: ""
 commonLabels: {}
 commonAnnotations: {}
 
+# How many old ReplicaSets (Deployments) / ControllerRevisions (StatefulSets) the
+# controller retains for rollback. Kubernetes defaults to 10; because cd.yml
+# rewrites the image tag on every branch push (issue #380), each push mints a new
+# pod template and a new ReplicaSet, so the default piles up ~10 dead ReplicaSets
+# per daemon in every realm. 3 keeps enough history for `kubectl rollout undo`
+# without the pileup. Override per-daemon via `<daemon>.revisionHistoryLimit`.
+revisionHistoryLimit: 3
+
 # ── TLS (IF-1 authd, IF-2 worldd — both TLS listeners at M0) ─────────────────
 # Both daemons read a server cert + key, mounted read-only at /certs, exactly as
 # the compose does (server.crt / server.key). By default the chart renders a

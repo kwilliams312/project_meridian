@@ -28,6 +28,7 @@ metadata:
   {{- end }}
 spec:
   replicas: {{ $cfg.replicaCount | default 1 }}
+  revisionHistoryLimit: {{ $cfg.revisionHistoryLimit | default $root.Values.revisionHistoryLimit | default 3 }}
   selector:
     matchLabels:
       {{- include "meridian.selectorLabels" $root | nindent 6 }}
