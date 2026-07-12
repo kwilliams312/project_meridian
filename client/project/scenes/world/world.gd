@@ -84,6 +84,30 @@ const NameplateManagerScript := preload("res://scenes/world/nameplate_manager.gd
 # which don't populate the global class cache, resolve it identically to the running app.
 const AssembledCharacterScript := preload("res://characters/assembled_character.gd")
 
+# Enter-world terrain streaming (WLD-01, Epic #22 Story E, #558). The full chain —
+# fail-closed pack mount+verify (A/#554), the MeridianChunkStream chunk root (B/#555)
+# fed the predicted player position, its proxy far-ring + hitch gate (C/#556), and the
+# HeightfieldWorldQuery movement ground-sample (D/#557) — replaces the M0 flat bootstrap
+# box so the client spawns on STREAMED terrain. The loading screen (below) holds until
+# the spawn chunks are resident, then reveals; seamless thereafter (client-prd §M1:
+# a loading screen only on a map change). When NO zone pack is configured/present (the
+# default today, until the content pipeline ships real Zone-01 — Forge #26/#315), the
+# scene falls back to the flat bootstrap so the networked demo keeps working.
+const WorldLoadingScreenScript := preload("res://scenes/world/world_loading_screen.gd")
+
+# Where the zone pack lives by default (overridable by env for dev / the headless
+# verify, and — later — by the char-select → enter-world session handoff). The chunk
+# manifest is `<dir>/<id>.chunks.json` + the asset table `<dir>/<id>.assets.json`
+# (IF-6). res:// today resolves nothing here (no shipped chunk content yet), so the
+# scene falls back to the flat bootstrap; a dev/verify points MERIDIAN_ZONE_DIR at a
+# staged pack. The `.chunk.bin` server heightfield per cell (Q1(a)) feeds the mover.
+const ZONE_DEFAULT_DIR := "res://meridian/core/chunks/zone01"
+const ZONE_DEFAULT_ID := "zone01"
+
+# The per-frame chunk instancing budget the streamer honours (Story C hitch gate:
+# ≤ 50 ms streaming/frame). Conservative default until the perf fleet (#31) tunes it.
+const ZONE_INSTANCE_BUDGET := 4
+
 var _session: Dictionary = {}
 var _character: Dictionary = {}
 
@@ -104,6 +128,21 @@ var _camera: Node3D
 
 var _remotes: Node3D                       # container for remote-player nodes
 var _remote_nodes: Dictionary = {}         # guid:int -> Node3D
+
+# --- Enter-world terrain streaming (WLD-01, Story E, #558) --------------------
+# The streamer node whose children ARE the resident chunks (replaces the flat
+# ground box), the loading overlay, and the zone bookkeeping that ties the render
+# residency to the movement heightfield residency so nothing falls through.
+var _chunk_stream: MeridianChunkStream     # the streamed chunk root (null in the flat-bootstrap fallback)
+var _loading_screen: MeridianWorldLoadingScreen
+var _zone_active := false                  # a zone pack mounted + streaming (else flat bootstrap)
+var _zone_loading := false                 # still holding the loading screen (spawn chunks not yet resident)
+var _zone_id := ""                         # display id for the loading screen
+var _zone_origin := Vector3.ZERO           # IF-6 zone origin (x, _, z) — grid geometry
+var _zone_chunk_size := 128.0              # IF-6 chunk_size_m
+var _zone_spawn := SPAWN                   # where the local player enters this zone (server-authoritative in production)
+var _zone_server_paths: Dictionary = {}    # Vector2i(cx,cz) -> res://…/<cell>.chunk.bin (the heightfield payload)
+var _hf_loaded_cells: Dictionary = {}      # Vector2i(cx,cz) -> true once its heightfield is resident on the mover
 
 # Floating combat text (CMB-04, #530): the pooled billboarded-number system, spawned
 # over a target guid on cast_result_received. World-space child (never reparented).
@@ -162,8 +201,11 @@ func _ready() -> void:
 	if _move_debug:
 		print("[world.move] MERIDIAN_MOVE_DEBUG on — logging local-player input/render once per second")
 	_build_environment()
-	_build_ground()
-	_build_landmarks()
+	# Enter-world terrain (Story E, #558): stream the zone's chunks when a pack is
+	# configured/present, else fall back to the M0 flat bootstrap box. Built BEFORE
+	# the player so the chunk root + loading screen exist when the mover is wired.
+	_build_loading_screen()
+	_build_world_terrain()
 	_build_player_and_camera()
 	_remotes = Node3D.new()
 	_remotes.name = "Remotes"
@@ -234,6 +276,10 @@ func _ready() -> void:
 	_interp = MeridianRemoteInterpolator.new()
 	_mover = MeridianMovementController.new()
 	_mover.reset(SPAWN, 0.0)
+	# Story E (#558): now that the mover exists, swap its ground-sample backend to the
+	# HeightfieldWorldQuery over the mounted zone (D/#557). No-op in the flat-bootstrap
+	# fallback (FlatWorldQuery stays). Loads the spawn-area heightfields as they stream.
+	_apply_zone_to_mover()
 
 	if _net_preconnected and _net != null:
 		_attach_preconnected()
@@ -321,6 +367,12 @@ func _physics_process(delta: float) -> void:
 		_mover.advance_smoothing(int(delta * 1000.0))
 		if _player != null:
 			_player.position = _mover.get_render_position()
+
+	# 4b. Terrain streaming (Story E, #558): feed the streamer the PREDICTED player
+	# position, instance up to the hitch-gated budget, keep the movement heightfield
+	# resident with the render residency, and reveal once the spawn chunks are in.
+	if _zone_active:
+		_tick_world_stream()
 
 	# 5. Corpse-run (CMB-03, #532): while a ghost, feed the local player's position to the bus
 	# so it measures the run to the corpse and fires RESURRECT_REQUEST once within range. The
@@ -1321,6 +1373,248 @@ func _build_environment() -> void:
 	env.ambient_light_energy = 0.7
 	we.environment = env
 	add_child(we)
+
+
+# --- Enter-world terrain streaming (WLD-01, Story E, #558) --------------------
+# The full chain wired end to end: a fail-closed pack verify (A/#554) gates entry;
+# a MeridianChunkStream (B/#555, C/#556) becomes the chunk root fed the PREDICTED
+# player position; the mover's ground sample switches to the per-chunk heightfield
+# (D/#557). The loading screen holds until the spawn chunks are resident, then
+# reveals; seamless thereafter (client-prd §M1). When no zone pack is configured or
+# present (today's default, until real Zone-01 content ships — Forge #26/#315), the
+# scene falls back to the M0 flat bootstrap so the networked demo keeps working.
+
+func _build_loading_screen() -> void:
+	_loading_screen = WorldLoadingScreenScript.new()
+	_loading_screen.name = "LoadingScreen"
+	add_child(_loading_screen)
+
+
+# Enter a streamed zone when a pack is configured/present, else the flat bootstrap.
+func _build_world_terrain() -> void:
+	var zone := _resolve_zone_paths()
+	var chunks_json := String(zone.get("chunks", ""))
+	var assets_json := String(zone.get("assets", ""))
+	if chunks_json.is_empty() or assets_json.is_empty() \
+			or not FileAccess.file_exists(chunks_json) or not FileAccess.file_exists(assets_json):
+		# No zone pack -> the M0 flat bootstrap box + landmark grid (today's default,
+		# until real Zone-01 content ships). The mover keeps its FlatWorldQuery backend.
+		print("[world] no zone pack at %s — flat bootstrap" % String(zone.get("dir", ZONE_DEFAULT_DIR)))
+		_build_ground()
+		_build_landmarks()
+		return
+	var spawn: Vector3 = zone.get("spawn", SPAWN)
+	var res: Dictionary = enter_streamed_zone(chunks_json, assets_json, spawn,
+		String(zone.get("id", ZONE_DEFAULT_ID)))
+	if not bool(res.get("ok", false)):
+		# Fail-closed (A/#554): a present-but-broken pack must NEVER drop the player onto
+		# a guessed map. Surface the reason; build NO terrain and do NOT spawn on it.
+		var reason := String(res.get("reason", "chunk pack verify failed"))
+		_conn_text = "zone verify failed: %s" % reason
+		push_error("[world] ENTER-WORLD BLOCKED (fail-closed) — %s" % reason)
+		print("[world] ENTER-WORLD BLOCKED (fail-closed): %s" % reason)
+
+
+# Resolve the zone manifest paths, in priority: the session handoff (production,
+# future), env overrides (dev / headless verify), then the built-in default. Returns
+# { "dir", "id", "chunks", "assets"[, "spawn": Vector3] }.
+func _resolve_zone_paths() -> Dictionary:
+	var zsession: Dictionary = _session.get("zone", {}) if _session.get("zone", null) is Dictionary else {}
+	var dir := String(zsession.get("dir", ""))
+	var id := String(zsession.get("id", ""))
+	if dir.is_empty():
+		dir = OS.get_environment("MERIDIAN_ZONE_DIR")
+	if id.is_empty():
+		id = OS.get_environment("MERIDIAN_ZONE_ID")
+	if dir.is_empty():
+		dir = ZONE_DEFAULT_DIR
+	if id.is_empty():
+		id = ZONE_DEFAULT_ID
+	dir = dir.trim_suffix("/")
+	var out := {
+		"dir": dir,
+		"id": id,
+		"chunks": "%s/%s.chunks.json" % [dir, id],
+		"assets": "%s/%s.assets.json" % [dir, id],
+	}
+	if zsession.get("spawn", null) is Vector3:
+		out["spawn"] = zsession.get("spawn")
+	return out
+
+
+# The reusable enter-a-streamed-zone seam (the production _ready path AND the headless
+# verify drive it). Fail-closed: it verifies the chunk pack FIRST (A/#554) and refuses
+# to build anything on a hard-fail. Returns { "ok", "reason", "verdict" }.
+func enter_streamed_zone(chunks_json: String, assets_json: String, spawn: Vector3,
+		zone_id: String = "") -> Dictionary:
+	# 1. Fail-closed completeness + integrity gate (Story A, #554). BLOCK on any hard-fail.
+	var mount := MeridianPackMount.new()
+	var verdict: Dictionary = mount.verify_chunk_index(chunks_json, assets_json)
+	if not bool(verdict.get("ok", false)):
+		return {"ok": false, "reason": String(verdict.get("reason", "chunk pack verify failed")),
+			"verdict": int(verdict.get("verdict", -1))}
+
+	# 2. Parse the IF-6 chunk manifest for the zone grid geometry + resolve each cell's
+	# server `.chunk.bin` heightfield path (via the IF-8 asset table).
+	var geom := _parse_zone_manifest(chunks_json, assets_json)
+	if not bool(geom.get("ok", false)):
+		return {"ok": false, "reason": String(geom.get("reason", "could not parse zone manifest")),
+			"verdict": int(verdict.get("verdict", 0))}
+
+	_zone_origin = Vector3(float(geom.get("origin_x", 0.0)), 0.0, float(geom.get("origin_z", 0.0)))
+	_zone_chunk_size = float(geom.get("chunk_size_m", 128.0))
+	_zone_server_paths = geom.get("server_paths", {})
+	_zone_id = zone_id if not zone_id.is_empty() else String(geom.get("zone", ZONE_DEFAULT_ID))
+	_zone_spawn = spawn
+
+	# 3. Stand up the streamer as the CHUNK ROOT (replaces _build_ground/_build_landmarks).
+	_chunk_stream = MeridianChunkStream.new()
+	_chunk_stream.name = "ChunkStream"
+	if not _chunk_stream.load_zone(chunks_json, assets_json):
+		_chunk_stream.free()
+		_chunk_stream = null
+		return {"ok": false, "reason": "streamer load_zone failed to resolve the manifest",
+			"verdict": int(verdict.get("verdict", 0))}
+	_chunk_stream.set_instancing_budget(ZONE_INSTANCE_BUDGET)
+	_chunk_stream.set_player_position(_zone_spawn)
+	add_child(_chunk_stream)
+
+	_zone_active = true
+	_zone_loading = true
+	_hf_loaded_cells.clear()
+	if _loading_screen != null:
+		_loading_screen.begin(_zone_id)
+
+	# 4. Wire the mover's ground backend now if it already exists (the verify enters
+	# AFTER _ready); the _ready path applies it right after the mover is created.
+	if _mover != null:
+		_apply_zone_to_mover()
+	print("[world] entered streamed zone '%s' (%d chunks, origin (%.1f,%.1f), %.0f m cells)"
+		% [_zone_id, int(geom.get("chunk_count", 0)), _zone_origin.x, _zone_origin.z, _zone_chunk_size])
+	return {"ok": true, "reason": "", "verdict": int(verdict.get("verdict", 0))}
+
+
+# Read + parse the IF-6 chunk manifest and IF-8 asset table into the zone geometry
+# plus a Vector2i(cx,cz) -> server `.chunk.bin` resource-path map. { "ok", ["reason"] }.
+func _parse_zone_manifest(chunks_json: String, assets_json: String) -> Dictionary:
+	var cf := FileAccess.get_file_as_string(chunks_json)
+	var af := FileAccess.get_file_as_string(assets_json)
+	if cf.is_empty() or af.is_empty():
+		return {"ok": false, "reason": "empty chunk manifest / asset table"}
+	var chunks: Variant = JSON.parse_string(cf)
+	var assets: Variant = JSON.parse_string(af)
+	if not (chunks is Dictionary) or not (assets is Dictionary):
+		return {"ok": false, "reason": "chunk manifest / asset table is not JSON"}
+
+	# id -> resource path (IF-8 asset table).
+	var id_to_res: Dictionary = {}
+	for e in assets.get("entries", []):
+		if e is Dictionary:
+			id_to_res[String(e.get("id", ""))] = String(e.get("resource", ""))
+
+	var origin: Dictionary = chunks.get("origin", {})
+	var server_paths: Dictionary = {}
+	var count := 0
+	for c in chunks.get("chunks", []):
+		if not (c is Dictionary):
+			continue
+		count += 1
+		var cx := int(c.get("cx", 0))
+		var cz := int(c.get("cz", 0))
+		var server_ref := String(c.get("server", ""))
+		var res_path := String(id_to_res.get(server_ref, ""))
+		if not res_path.is_empty():
+			server_paths[Vector2i(cx, cz)] = res_path
+	return {
+		"ok": true,
+		"zone": String(chunks.get("zone", "")),
+		"origin_x": float(origin.get("x", 0.0)),
+		"origin_z": float(origin.get("z", 0.0)),
+		"chunk_size_m": float(chunks.get("chunk_size_m", 128.0)),
+		"chunk_count": count,
+		"server_paths": server_paths,
+	}
+
+
+# Swap the mover's ground query to the heightfield backend over the active zone, then
+# seed the spawn. No-op unless a zone is active and the mover exists.
+func _apply_zone_to_mover() -> void:
+	if not _zone_active or _mover == null:
+		return
+	_mover.use_heightfield_zone(_zone_origin.x, _zone_origin.z, _zone_chunk_size)
+	# Seed the mover at the spawn XZ. The Y is corrected to the real terrain height once
+	# the spawn chunk's heightfield is resident (in _tick_world_stream); until then the
+	# mover HOLDS (never drops through) via the non-resident-ground guard (#557/#558).
+	_mover.reset(_zone_spawn, 0.0)
+	if _player != null:
+		_player.position = _mover.get_render_position()
+
+
+# Per-frame streaming drive (Story E). Feed the streamer the predicted player position,
+# instance up to the hitch-gated budget, keep the movement heightfield resident WITH the
+# render residency (so a step onto a fresh chunk never precedes its ground), and reveal
+# the world once the spawn chunks are in.
+func _tick_world_stream() -> void:
+	if _chunk_stream == null:
+		return
+	var ppos: Vector3 = _player.position if _player != null else _zone_spawn
+	_chunk_stream.set_player_position(ppos)
+	_chunk_stream.tick()   # instances up to the configured budget (Story C hitch gate)
+	_ensure_heightfield_for_desired()
+	if _zone_loading:
+		_try_reveal_world()
+
+
+# Load the shipped `.chunk.bin` heightfield for every DESIRED cell not yet resident on
+# the mover, so the ground under the player (and the ring around it) is authoritative
+# before the player can walk onto it — the no-fall-through guarantee (#558).
+func _ensure_heightfield_for_desired() -> void:
+	if _mover == null or not _mover.is_heightfield_active():
+		return
+	for cell in _chunk_stream.get_desired_cells():
+		var v := cell as Vector2i
+		if _hf_loaded_cells.has(v):
+			continue
+		var path: String = _zone_server_paths.get(v, "")
+		if path.is_empty() or not FileAccess.file_exists(path):
+			continue
+		var bytes := FileAccess.get_file_as_bytes(path)
+		if bytes.size() > 0 and _mover.add_heightfield_chunk(v.x, v.y, bytes):
+			_hf_loaded_cells[v] = true
+
+
+# Reveal the world once the cell under the spawn is INSTANCED (mesh resident) and its
+# heightfield is loaded, standing the player ON the terrain (sampled height, not y=0)
+# the instant the world appears. Idempotent — runs only while _zone_loading.
+func _try_reveal_world() -> void:
+	var cell: Vector2i = _chunk_stream.world_to_cell(_zone_spawn)
+	if _loading_screen != null:
+		_loading_screen.set_progress("%d chunks resident" % _chunk_stream.get_instanced_count())
+	var resident: bool = _chunk_stream.state_at(cell.x, cell.y) == MeridianChunkStream.STATE_INSTANCED
+	if not (resident and _hf_loaded_cells.has(cell)):
+		return
+	# Stand the player ON the terrain (heightfield height) before revealing.
+	if _mover != null:
+		var g: Dictionary = _mover.sample_ground(_zone_spawn.x, _zone_spawn.z)
+		if bool(g.get("walkable", false)):
+			_mover.reset(Vector3(_zone_spawn.x, float(g.get("height", 0.0)), _zone_spawn.z), 0.0)
+			if _player != null:
+				_player.position = _mover.get_render_position()
+	_zone_loading = false
+	if _loading_screen != null:
+		_loading_screen.finish()
+	print("[world] spawn chunks resident — world revealed (player stands on terrain)")
+
+
+# --- Terrain accessors (headless verify / diagnostics) ------------------------
+func is_zone_active() -> bool:
+	return _zone_active
+
+func is_zone_loading() -> bool:
+	return _zone_loading
+
+func get_chunk_stream() -> MeridianChunkStream:
+	return _chunk_stream
 
 
 func _build_ground() -> void:
