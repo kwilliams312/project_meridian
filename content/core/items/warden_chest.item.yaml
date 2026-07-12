@@ -1,0 +1,23 @@
+schema: meridian/item@2
+id: core:item.warden_chest
+name: Warden's Cuirass
+flavor_text: The breastplate of the Deep Watch — dented, re-forged, never surrendered.
+item_class: armor
+subclass: plate
+slot: chest
+rarity: rare
+required_level: 10
+item_level: 14
+binding: on_equip
+armor: 80
+stats:
+  - stat: stamina
+    amount: 3
+price:
+  sell: 960
+visual:
+  icon: core:art.icon.item.warden_crest
+  worn:
+    models: [{ model: core:art.item.armor.warden_chest, mirror: none }]
+    hides: [torso]
+    dye_channels: [primary, secondary]

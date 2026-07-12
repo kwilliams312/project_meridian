@@ -1,0 +1,23 @@
+schema: meridian/item@2
+id: core:item.warden_head
+name: Warden's Helm
+flavor_text: Full steel, cheek to crown. The Wardens see everything and show nothing.
+item_class: armor
+subclass: plate
+slot: head
+rarity: rare
+required_level: 10
+item_level: 12
+binding: on_equip
+armor: 40
+stats:
+  - stat: stamina
+    amount: 3
+price:
+  sell: 480
+visual:
+  icon: core:art.icon.item.warden_crest
+  worn:
+    models: [{ model: core:art.item.armor.warden_head, mirror: none }]
+    hides: [head]
+    dye_channels: [primary, secondary]

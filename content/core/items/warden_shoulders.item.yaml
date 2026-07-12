@@ -1,0 +1,23 @@
+schema: meridian/item@2
+id: core:item.warden_shoulders
+name: Warden's Pauldrons
+flavor_text: Twin plates that shrug off a kobold's overhand as if it were rain.
+item_class: armor
+subclass: plate
+slot: shoulders
+rarity: rare
+required_level: 10
+item_level: 12
+binding: on_equip
+armor: 45
+stats:
+  - stat: stamina
+    amount: 3
+price:
+  sell: 540
+visual:
+  icon: core:art.icon.item.warden_crest
+  worn:
+    models: [{ model: core:art.item.armor.warden_shoulders, mirror: none }]
+    hides: [torso]
+    dye_channels: [primary, secondary]

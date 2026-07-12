@@ -1,0 +1,14 @@
+# IF-8 sidecar (meridian/asset@1). Warden's Kit plate for the 'head' slot,
+# a scripted-original skinned blockout (tools/art/generate_warden_kit.py, #569).
+schema: meridian/asset@1
+id: core:art.item.armor.warden_head
+class: armor_model
+source: assets/art/item/armor/warden_head.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: original
+  authors: [meridian-contributors]
+budget:
+  lod0_tris: 3888
+import_hints:
+  lod_policy: single

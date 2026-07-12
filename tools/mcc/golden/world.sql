@@ -8,7 +8,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 INSERT INTO world_manifest
   (pack_namespace, pack_version, id_band, content_hash, schema_version, mcc_version, built_at)
 VALUES
-  ('core', '0.1.0', 0, '951e6f5f41190f92ffb6be4f0731d5c43fdc2ad7967122110c0e60b8321e9fc0', 1, '0.0.0', '1970-01-01 00:00:00');
+  ('core', '0.1.0', 0, 'b7c3d9a6773f38adcb6a8eb0d860b2e7dfdd596f0b68cf2da923eb0f2ec26011', 1, '0.0.0', '1970-01-01 00:00:00');
 
 -- npc_template (8 rows)
 INSERT INTO npc_template (id, name, subtitle, level_min, level_max, creature_type, `rank`, faction, stat_health, stat_mana, stat_armor, stat_damage_min, stat_damage_max, stat_attack_speed_ms, ai_behavior, ai_aggro_radius_m, ai_leash_radius_m, ai_call_for_help_radius_m, ai_flee_at_health_pct, move_walk_speed_mps, move_run_speed_mps, vendor_ref_id, loot_table_ref_id, loot_money_min, loot_money_max, visual_model_id, visual_scale, visual_sound_set_id) VALUES
@@ -36,7 +36,7 @@ INSERT INTO npc_trainer_ability (npc_id, ability_id, cost_copper, required_class
   (64, 1, 500, NULL, 4),
   (64, 2, 1200, 'vanguard', 8);
 
--- item_template (13 rows)
+-- item_template (19 rows)
 INSERT INTO item_template (id, name, flavor_text, item_class, subclass, slot, rarity, required_level, item_level, is_unique, binding, stack_size, weapon_damage_min, weapon_damage_max, weapon_speed_ms, weapon_school, armor, effect_on_use_id, price_sell, price_buy, visual_icon_id, visual_model_id) VALUES
   (16, 'Bren''s Signet', 'The quartermaster''s seal, good for a discount he''ll deny offering.', 'armor', 'misc', 'finger', 'uncommon', 4, 9, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 380, NULL, 12, NULL),
   (17, 'Kobold Ear', 'Proof of a culling. Bren doesn''t ask how you got it.', 'quest', NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 20, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 8, NULL),
@@ -50,9 +50,15 @@ INSERT INTO item_template (id, name, flavor_text, item_class, subclass, slot, ra
   (53, 'Emberforged Pick', 'Reforged in the vent-heat of Cinderdeep. It bites where rust only bruised.', 'weapon', 'mace_1h', 'main_hand', 'uncommon', 6, 12, FALSE, 'on_equip', 1, 12, 18, 2600, NULL, NULL, NULL, 720, NULL, 45, NULL),
   (54, 'Charm of the Hollow', 'Braided ash-reed and river-glass. The wardens give them to those who come back.', 'armor', 'misc', 'neck', 'uncommon', 5, 11, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 560, NULL, 46, NULL),
   (55, 'Spare Miner''s Lamp', 'Trimmed, filled, and lit. Someone in the dark will bless you for it.', 'quest', NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 5, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 9, NULL),
-  (56, 'Warden''s Crest', 'Sela''s own crest, pressed into your hand. It opens doors in Emberfall.', 'armor', 'misc', 'trinket', 'rare', 7, 14, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 1050, NULL, 48, NULL);
+  (56, 'Warden''s Crest', 'Sela''s own crest, pressed into your hand. It opens doors in Emberfall.', 'armor', 'misc', 'trinket', 'rare', 7, 14, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 1050, NULL, 48, NULL),
+  (102, 'Warden''s Cuirass', 'The breastplate of the Deep Watch — dented, re-forged, never surrendered.', 'armor', 'plate', 'chest', 'rare', 10, 14, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 80, NULL, 960, NULL, 48, NULL),
+  (103, 'Warden''s Sabatons', 'Iron-shod boots that grip wet stone and hot ash alike.', 'armor', 'plate', 'feet', 'rare', 10, 11, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 40, NULL, 480, NULL, 48, NULL),
+  (104, 'Warden''s Gauntlets', 'Articulated steel. Still closes on a haft without a thought.', 'armor', 'plate', 'hands', 'rare', 10, 11, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 35, NULL, 420, NULL, 48, NULL),
+  (105, 'Warden''s Helm', 'Full steel, cheek to crown. The Wardens see everything and show nothing.', 'armor', 'plate', 'head', 'rare', 10, 12, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 40, NULL, 480, NULL, 48, NULL),
+  (106, 'Warden''s Greaves', 'Leg guards cut for the long descent into the Cinderdeep.', 'armor', 'plate', 'legs', 'rare', 10, 13, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 60, NULL, 720, NULL, 48, NULL),
+  (107, 'Warden''s Pauldrons', 'Twin plates that shrug off a kobold''s overhand as if it were rain.', 'armor', 'plate', 'shoulders', 'rare', 10, 12, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 45, NULL, 540, NULL, 48, NULL);
 
--- item_stat (9 rows)
+-- item_stat (15 rows)
 INSERT INTO item_stat (item_id, stat, amount) VALUES
   (16, 'intellect', 2),
   (16, 'spirit', 2),
@@ -62,7 +68,13 @@ INSERT INTO item_stat (item_id, stat, amount) VALUES
   (54, 'spirit', 3),
   (54, 'stamina', 2),
   (56, 'agility', 4),
-  (56, 'stamina', 3);
+  (56, 'stamina', 3),
+  (102, 'stamina', 3),
+  (103, 'stamina', 3),
+  (104, 'stamina', 3),
+  (105, 'stamina', 3),
+  (106, 'stamina', 3),
+  (107, 'stamina', 3);
 
 -- ability (2 rows)
 INSERT INTO ability (id, name, description, school, target, range_m, cast_time_ms, cast_channel_ms, cooldown_ms, triggers_gcd, resource_type, resource_amount, av_cast_anim, av_cast_vfx_id, av_cast_sfx_id, av_impact_vfx_id, av_impact_sfx_id) VALUES

@@ -154,6 +154,14 @@ STAGED_FILES=(pack.manifest.json pack.contents.jsonl pack.data.json)
 # staged the same way ahead of the material-application work (⑤/S3, S6) that
 # will consume their bytes, so the staged pack never has to play catch-up with
 # a batch of new customization assets landing at once.
+#
+# The Warden's Kit plates + RGB dye masks (spec ⑤/S2, story #569): the assembler
+# loads each worn plate .glb via ContentDB.model_path → res://meridian/core/... ,
+# and the ⑤/S3 dye shader samples the sibling _mask.png — both need staged bytes,
+# or every plate hits _load_model_scene's _fail path (invisible kit). Staged at the
+# by-ID layout (id dots → path, source extension). The check_staged_models gate
+# below independently fails if a committed model has bytes but no staged copy, so
+# a future forgotten entry can't silently ship an unrenderable piece again.
 STAGED_ART=(
   "content/core/assets/art/char/sk_ardent_male_base.glb:art/char/ardent/male/base.glb"
   "content/core/assets/art/char/sk_ardent_male_skeleton.glb:art/char/ardent/male/skeleton.glb"
@@ -165,6 +173,18 @@ STAGED_ART=(
   "content/core/assets/art/char/ardent/male/skin_1_bc.png:art/char/ardent/male/skin_1_bc.png"
   "content/core/assets/art/char/ardent/male/skin_2_bc.png:art/char/ardent/male/skin_2_bc.png"
   "content/core/assets/art/char/ardent/male/skin_3_bc.png:art/char/ardent/male/skin_3_bc.png"
+  "content/core/assets/art/item/armor/warden_head.glb:art/item/armor/warden_head.glb"
+  "content/core/assets/art/item/armor/warden_shoulders.glb:art/item/armor/warden_shoulders.glb"
+  "content/core/assets/art/item/armor/warden_chest.glb:art/item/armor/warden_chest.glb"
+  "content/core/assets/art/item/armor/warden_hands.glb:art/item/armor/warden_hands.glb"
+  "content/core/assets/art/item/armor/warden_legs.glb:art/item/armor/warden_legs.glb"
+  "content/core/assets/art/item/armor/warden_feet.glb:art/item/armor/warden_feet.glb"
+  "content/core/assets/art/item/armor/warden_head_mask.png:art/item/armor/warden_head_mask.png"
+  "content/core/assets/art/item/armor/warden_shoulders_mask.png:art/item/armor/warden_shoulders_mask.png"
+  "content/core/assets/art/item/armor/warden_chest_mask.png:art/item/armor/warden_chest_mask.png"
+  "content/core/assets/art/item/armor/warden_hands_mask.png:art/item/armor/warden_hands_mask.png"
+  "content/core/assets/art/item/armor/warden_legs_mask.png:art/item/armor/warden_legs_mask.png"
+  "content/core/assets/art/item/armor/warden_feet_mask.png:art/item/armor/warden_feet_mask.png"
 )
 
 # --- 2a. --update-golden: regenerate the checked-in golden and stop. ---------
@@ -252,5 +272,20 @@ if [ "$stale" -ne 0 ]; then
   die "staged client pack is STALE — regenerate it with 'scripts/check-golden.sh --update-golden' and commit $STAGED_DIR/ together with tools/mcc/golden/."
 fi
 ok "Staged client pack matches the fresh emit (+ staged model sources match their content-tree sources)"
+
+# --- 6. STAGED-MODEL COVERAGE: every committed model a renderable doc references
+# has staged bytes. The STAGED_ART drift check above only guards the entries it
+# LISTS; this independent gate catches the class of bug where a model's .glb is
+# committed to content/ but the STAGED_ART entry was forgotten — the client would
+# _fail to load it (story #569, the invisible-Warden's-Kit regression) while every
+# other gate stayed green. Placeholders (no committed source bytes) are skipped.
+log "Staged-model coverage: every committed referenced model has staged bytes"
+if command -v python3 >/dev/null 2>&1; then
+  python3 "$REPO_ROOT/tools/check_staged_models.py" \
+      --content "$REPO_ROOT/$CONTENT_DIR" --staged "$REPO_ROOT/$STAGED_DIR" \
+    || die "staged-model coverage FAILED — add the missing model(s) to STAGED_ART in $(basename "${BASH_SOURCE[0]}") and re-run --update-golden."
+else
+  warn "python3 not found — skipping staged-model coverage gate (tools/check_staged_models.py)"
+fi
 
 log "${_B}Determinism gate passed.${_R} Golden corpus, staged client pack, and mcc output are all current and deterministic."

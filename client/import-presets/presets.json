@@ -117,9 +117,10 @@
         "_n": "linear",
         "_normal": "linear",
         "_rough": "linear",
-        "_metal": "linear"
+        "_metal": "linear",
+        "_mask": "linear"
       },
-      "cite": "Art SAD §2.3 texture-std preset — BC-class VRAM compression, mipmaps on, source at 2× target (PRD §2.3); UI icons lossless + no mipmaps (screen-space)"
+      "cite": "Art SAD §2.3 texture-std preset — BC-class VRAM compression, mipmaps on, source at 2× target (PRD §2.3); UI icons lossless + no mipmaps (screen-space). _mask = RGB dye-selection mask, linear data (contract ① §6)"
     },
     "vfx-texture": {
       "importer": "texture",
