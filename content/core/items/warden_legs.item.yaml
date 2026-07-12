@@ -1,0 +1,23 @@
+schema: meridian/item@2
+id: core:item.warden_legs
+name: Warden's Greaves
+flavor_text: Leg guards cut for the long descent into the Cinderdeep.
+item_class: armor
+subclass: plate
+slot: legs
+rarity: rare
+required_level: 10
+item_level: 13
+binding: on_equip
+armor: 60
+stats:
+  - stat: stamina
+    amount: 3
+price:
+  sell: 720
+visual:
+  icon: core:art.icon.item.warden_crest
+  worn:
+    models: [{ model: core:art.item.armor.warden_legs, mirror: none }]
+    hides: [hips_legs]
+    dye_channels: [primary, secondary]

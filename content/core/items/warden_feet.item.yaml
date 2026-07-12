@@ -1,0 +1,23 @@
+schema: meridian/item@2
+id: core:item.warden_feet
+name: Warden's Sabatons
+flavor_text: Iron-shod boots that grip wet stone and hot ash alike.
+item_class: armor
+subclass: plate
+slot: feet
+rarity: rare
+required_level: 10
+item_level: 11
+binding: on_equip
+armor: 40
+stats:
+  - stat: stamina
+    amount: 3
+price:
+  sell: 480
+visual:
+  icon: core:art.icon.item.warden_crest
+  worn:
+    models: [{ model: core:art.item.armor.warden_feet, mirror: none }]
+    hides: [feet, lower_legs]
+    dye_channels: [primary, secondary]

@@ -1,0 +1,13 @@
+# IF-8 sidecar (meridian/asset@1). RGB dye mask for the Warden's Kit 'shoulders'
+# plate (R/G/B = primary/secondary/accent, contract (1) section 6). Scripted-original
+# (tools/art/generate_warden_kit.py, #569).
+schema: meridian/asset@1
+id: core:art.item.armor.warden_shoulders_mask
+class: texture_set
+source: assets/art/item/armor/warden_shoulders_mask.png
+license: CC-BY-4.0
+provenance:
+  source_tier: original
+  authors: [meridian-contributors]
+budget:
+  texture_max_px: 64

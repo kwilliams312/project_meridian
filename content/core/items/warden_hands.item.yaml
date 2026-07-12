@@ -1,0 +1,23 @@
+schema: meridian/item@2
+id: core:item.warden_hands
+name: Warden's Gauntlets
+flavor_text: Articulated steel. Still closes on a haft without a thought.
+item_class: armor
+subclass: plate
+slot: hands
+rarity: rare
+required_level: 10
+item_level: 11
+binding: on_equip
+armor: 35
+stats:
+  - stat: stamina
+    amount: 3
+price:
+  sell: 420
+visual:
+  icon: core:art.icon.item.warden_crest
+  worn:
+    models: [{ model: core:art.item.armor.warden_hands, mirror: none }]
+    hides: [hands]
+    dye_channels: [primary, secondary]

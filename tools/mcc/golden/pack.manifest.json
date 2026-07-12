@@ -6,10 +6,10 @@
   "content_schema_version": 1,
   "godot_version": "4.6",
   "id_band": 0,
-  "content_hash": "951e6f5f41190f92ffb6be4f0731d5c43fdc2ad7967122110c0e60b8321e9fc0",
+  "content_hash": "b7c3d9a6773f38adcb6a8eb0d860b2e7dfdd596f0b68cf2da923eb0f2ec26011",
   "mcc_version": "0.0.0",
   "built_at": "1970-01-01 00:00:00",
-  "entry_count": 89,
+  "entry_count": 107,
   "entries": [
     { "id": "core:ability.minor_healing", "numeric_id": 1, "type": "ability", "resource": "res://meridian/core/tables/ability.bin", "hash": "35ae382345900ffc2bbeb694eecdaa478af6deafa843bbfc6fae1ead291643f6" },
     { "id": "core:ability.pickaxe_slam", "numeric_id": 2, "type": "ability", "resource": "res://meridian/core/tables/ability.bin", "hash": "2ed79132ca10a17e2dfde60f98becb70c420b4c5df387fea531ff2bcb28b0813" },
@@ -99,6 +99,24 @@
     { "id": "core:art.char.ardent.male.face_4", "numeric_id": 86, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/face_4.res", "hash": "41460f99766502efa4dd2bc385abf9d4bc3637c79a2a3bc57a47c3ee77d91ea3" },
     { "id": "core:art.char.ardent.male.skin_1", "numeric_id": 87, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/skin_1.res", "hash": "4aa20ed0ed4aa9d80386116041e7d98f92a72aea7388cc616ccb87ef9526f2ab" },
     { "id": "core:art.char.ardent.male.skin_2", "numeric_id": 88, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/skin_2.res", "hash": "02f9b0d8a3b89d8a24f9644aed39efff4266a169e827728a9a137f4ea121ed63" },
-    { "id": "core:art.char.ardent.male.skin_3", "numeric_id": 89, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/skin_3.res", "hash": "5f9bf31057dce6d7568be95823c5964bf9c1c5634a24a293fbf543732147260a" }
+    { "id": "core:art.char.ardent.male.skin_3", "numeric_id": 89, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/skin_3.res", "hash": "5f9bf31057dce6d7568be95823c5964bf9c1c5634a24a293fbf543732147260a" },
+    { "id": "core:art.item.armor.warden_chest", "numeric_id": 90, "type": "asset", "resource": "res://meridian/core/art/item/armor/warden_chest.res", "hash": "88c4b320eb3606baed3fc467143269e4465d1ce7c12f60b06eded77e1cf8086a" },
+    { "id": "core:art.item.armor.warden_chest_mask", "numeric_id": 91, "type": "asset", "resource": "res://meridian/core/art/item/armor/warden_chest_mask.res", "hash": "a9ceac46fa67c70c89d60c5558e9e8fd91539198cb40c5e2958d34fe8e81a537" },
+    { "id": "core:art.item.armor.warden_feet", "numeric_id": 92, "type": "asset", "resource": "res://meridian/core/art/item/armor/warden_feet.res", "hash": "1c5892cae1d9afb5a03bcae54442522163a792b294dc2894a42e4880f644119d" },
+    { "id": "core:art.item.armor.warden_feet_mask", "numeric_id": 93, "type": "asset", "resource": "res://meridian/core/art/item/armor/warden_feet_mask.res", "hash": "534011114fb4fe941ca64dbc570b6e6f5033258e97e4cd43a4cf9d1875a5a6be" },
+    { "id": "core:art.item.armor.warden_hands", "numeric_id": 94, "type": "asset", "resource": "res://meridian/core/art/item/armor/warden_hands.res", "hash": "2e9f6e128675fdccb795e89f0d1feb5e3cbd0bc7fd5de9d7def107fbf5d9e680" },
+    { "id": "core:art.item.armor.warden_hands_mask", "numeric_id": 95, "type": "asset", "resource": "res://meridian/core/art/item/armor/warden_hands_mask.res", "hash": "6a9e89adfb6556032457dec553ad4839396a5bb582e081505aa30b30f8a59c69" },
+    { "id": "core:art.item.armor.warden_head", "numeric_id": 96, "type": "asset", "resource": "res://meridian/core/art/item/armor/warden_head.res", "hash": "ce73eee10f4779ac88d7b2f8ce6b8562d1f110a88598b1a4671f292af4b71a45" },
+    { "id": "core:art.item.armor.warden_head_mask", "numeric_id": 97, "type": "asset", "resource": "res://meridian/core/art/item/armor/warden_head_mask.res", "hash": "30e468e266dfd3cd20177e41d4e9ff9be73b9dda9f824aaa6dbab722a56869a3" },
+    { "id": "core:art.item.armor.warden_legs", "numeric_id": 98, "type": "asset", "resource": "res://meridian/core/art/item/armor/warden_legs.res", "hash": "f8ac600de79418e55d9b18771bafd1cb01a2ec6f1b9c4e6986998bac47d25554" },
+    { "id": "core:art.item.armor.warden_legs_mask", "numeric_id": 99, "type": "asset", "resource": "res://meridian/core/art/item/armor/warden_legs_mask.res", "hash": "ac8b596432f2fc275c102a3694aee29fc1ba699cbb070d33b0675ce8535f397a" },
+    { "id": "core:art.item.armor.warden_shoulders", "numeric_id": 100, "type": "asset", "resource": "res://meridian/core/art/item/armor/warden_shoulders.res", "hash": "a59af39334a023180fea929c1bed6ce343df8ae2787f10449c32fff7e4c1c806" },
+    { "id": "core:art.item.armor.warden_shoulders_mask", "numeric_id": 101, "type": "asset", "resource": "res://meridian/core/art/item/armor/warden_shoulders_mask.res", "hash": "21f1159cd8ac029941b08d35183d8f448ce81911aac39ff3c5140d7f2e817a2c" },
+    { "id": "core:item.warden_chest", "numeric_id": 102, "type": "item", "resource": "res://meridian/core/tables/item.bin", "hash": "7bf5976726a734d73a3d69807b5e74c2b0bcd32ff8890c00c4753ad1d2fd68f5" },
+    { "id": "core:item.warden_feet", "numeric_id": 103, "type": "item", "resource": "res://meridian/core/tables/item.bin", "hash": "4cb3bbb503e31980570a6761113c1f32a1457e1f6c7aad471ccddff5ee4c2aa7" },
+    { "id": "core:item.warden_hands", "numeric_id": 104, "type": "item", "resource": "res://meridian/core/tables/item.bin", "hash": "0a50cee6315005d45f6667286fb729660ab79e663041814c78c836b19d3883c5" },
+    { "id": "core:item.warden_head", "numeric_id": 105, "type": "item", "resource": "res://meridian/core/tables/item.bin", "hash": "7d7b01cd2777fd996dc503756823d4104abd017decc1e27e3ed54345e785bf64" },
+    { "id": "core:item.warden_legs", "numeric_id": 106, "type": "item", "resource": "res://meridian/core/tables/item.bin", "hash": "7945363f0968824d86248e9ba977f943d0f674687b46bdf098ddfce8bb2db7a5" },
+    { "id": "core:item.warden_shoulders", "numeric_id": 107, "type": "item", "resource": "res://meridian/core/tables/item.bin", "hash": "20d039161c30a906f1c142b5cb7ff339f0e45f0bfc52b5a773870cca7b2d8de8" }
   ]
 }

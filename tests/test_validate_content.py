@@ -804,6 +804,36 @@ class TestItem2Worn:
 
 
 @pytest.mark.unit
+class TestWardenKitItems:
+    """The six committed Warden's Kit item@2 files (story #569) — armor worn blocks
+    pass L080/L081 (visible-slot armor: worn present, hides valid, no attach)."""
+
+    EXPECTED_SLOTS = {"head", "shoulders", "chest", "hands", "legs", "feet"}
+    WARDEN_ITEMS = sorted(
+        (REPO / "content" / "core" / "items") / f"warden_{s}.item.yaml"
+        for s in EXPECTED_SLOTS
+    )
+
+    def test_all_six_kit_files_present(self):
+        assert all(p.is_file() for p in self.WARDEN_ITEMS)
+        assert len(self.WARDEN_ITEMS) == 6
+
+    @pytest.mark.parametrize("path", WARDEN_ITEMS, ids=lambda p: p.stem)
+    def test_kit_item_passes_worn_lints(self, path):
+        import yaml
+        from validate_content import check_worn
+
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert doc["item_class"] == "armor"
+        assert doc["visual"]["worn"]["dye_channels"] == ["primary", "secondary"]
+        # No attach (armor skins onto the body); hides present.
+        assert "attach" not in doc["visual"]["worn"]
+        assert doc["visual"]["worn"]["hides"]
+        errors = check_worn(doc, path.name)
+        assert errors == [], errors
+
+
+@pytest.mark.unit
 class TestAppearanceCatalog:
     """meridian/appearance_catalog@1 — per race/sex customization catalog +
     L082/L083 (contract ①/T3). One valid fixture; each negative case copies it

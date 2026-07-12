@@ -36,6 +36,18 @@ map:                         # append-only; local index (SAD §2.4)
   core:art.icon.item.potion_red_small: 11
   core:art.icon.item.signet_bronze: 12
   core:art.icon.item.warden_crest: 48
+  core:art.item.armor.warden_chest: 90
+  core:art.item.armor.warden_chest_mask: 91
+  core:art.item.armor.warden_feet: 92
+  core:art.item.armor.warden_feet_mask: 93
+  core:art.item.armor.warden_hands: 94
+  core:art.item.armor.warden_hands_mask: 95
+  core:art.item.armor.warden_head: 96
+  core:art.item.armor.warden_head_mask: 97
+  core:art.item.armor.warden_legs: 98
+  core:art.item.armor.warden_legs_mask: 99
+  core:art.item.armor.warden_shoulders: 100
+  core:art.item.armor.warden_shoulders_mask: 101
   core:art.item.weapon.emberforged_pick: 76
   core:art.item.weapon.pickaxe_rusty: 13
   core:art.vfx.heal.sparkle_small: 14
@@ -55,7 +67,13 @@ map:                         # append-only; local index (SAD §2.4)
   core:item.minor_healing_potion: 19
   core:item.rusty_pickaxe: 20
   core:item.spare_lamp: 55
+  core:item.warden_chest: 102
   core:item.warden_crest: 56
+  core:item.warden_feet: 103
+  core:item.warden_hands: 104
+  core:item.warden_head: 105
+  core:item.warden_legs: 106
+  core:item.warden_shoulders: 107
   core:loot.cindermaw: 57
   core:loot.ember_wisp: 58
   core:loot.kobold_firecaller: 59
