@@ -303,6 +303,37 @@ endif()
 
 add_test(NAME pack-manifest-core COMMAND pack-manifest-core-test)
 
+# --- IF-6/IF-8 fail-closed CHUNK-PACK verify core (#554) ---
+# The engine-free packaging system that sits on top of the #107 pack-manifest
+# verify: it loads the IF-6 zone chunk index (`<zone>.chunks.json`), resolves
+# every per-chunk ref through the IF-8 asset-id table (`<zone>.assets.json`), and
+# proves the pack is COMPLETE + INTACT (presence + per-chunk both-payloads BLAKE3)
+# before the world-enter path proceeds. Same engine-free discipline: no godot-cpp,
+# plain C++17. It REUSES the ONE vendored BLAKE3 the mcc emitter uses
+# (tools/mcc/src/hash/blake3.*) — no second BLAKE3 in the tree (#554 directive) —
+# so the recomputed per-chunk hash and the manifest hash agree byte-for-byte. The
+# golden fixture (test/fixtures/chunkpack/) is Story-0's `mcc chunk-emit` output.
+get_filename_component(MERIDIAN_MCC_HASH_DIR
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../../tools/mcc/src" ABSOLUTE)
+add_executable(chunk-pack-core-test
+  chunk_pack_core_test.cpp
+  "${SRC}/chunk_pack_core.cpp"
+  "${MERIDIAN_MCC_HASH_DIR}/hash/blake3.cpp"
+)
+target_include_directories(chunk-pack-core-test PRIVATE "${SRC}" "${MERIDIAN_MCC_HASH_DIR}")
+set_target_properties(chunk-pack-core-test PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+if(MSVC)
+  target_compile_options(chunk-pack-core-test PRIVATE /W4)
+else()
+  target_compile_options(chunk-pack-core-test PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME chunk-pack-core COMMAND chunk-pack-core-test)
+
 # --- IF-1/IF-2 client login core (#99) ---
 # The engine-free client login core (login_core.*, srp_client_core.*): the CLIENT
 # side of the IF-1 login state machine authd drives (#79) + the IF-2 WorldHello

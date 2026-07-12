@@ -6,10 +6,13 @@
 
 #include "meridian_pack_mount.h"
 
+#include "chunk_pack_core.h"
 #include "pack_manifest_core.h"
 
 #include <godot_cpp/classes/file_access.hpp>
+#include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include <string>
@@ -34,6 +37,26 @@ String manifest_path_for(const String &pack_dir) {
 	}
 	return d + "/pack.manifest.json";
 }
+
+// Engine-free-core file seam implemented over Godot FileAccess: the chunk-pack
+// verifier reads pack bytes through this, res:// aware (so a mounted `.pck`'s
+// files resolve). exists() is the presence check; read() returns the full bytes
+// for the integrity re-hash.
+struct GodotFileProvider final : chunkpack::IPackFileProvider {
+	bool exists(const std::string &res_path) const override {
+		return FileAccess::file_exists(String::utf8(res_path.c_str()));
+	}
+	bool read(const std::string &res_path, std::string &out) const override {
+		const String p = String::utf8(res_path.c_str());
+		if (!FileAccess::file_exists(p)) {
+			return false;
+		}
+		const PackedByteArray bytes = FileAccess::get_file_as_bytes(p);
+		out.assign(reinterpret_cast<const char *>(bytes.ptr()),
+		           static_cast<std::size_t>(bytes.size()));
+		return true;
+	}
+};
 
 } // namespace
 
@@ -158,6 +181,90 @@ int MeridianPackMount::get_content_schema_version() const {
 	return content_schema_version_;
 }
 
+bool MeridianPackMount::mount_resource_pack(const String &pck_path, bool replace_files) {
+	ProjectSettings *ps = ProjectSettings::get_singleton();
+	if (ps == nullptr) {
+		UtilityFunctions::push_error(
+			"MeridianPackMount: ProjectSettings singleton unavailable — cannot mount pack");
+		return false;
+	}
+	const bool ok = ps->load_resource_pack(pck_path, replace_files);
+	if (!ok) {
+		UtilityFunctions::push_error(
+			String("MeridianPackMount: load_resource_pack FAILED for ") + pck_path +
+			" — pack missing / not a valid .pck (refusing to enter)");
+	}
+	return ok;
+}
+
+Dictionary MeridianPackMount::verify_chunk_index(const String &chunks_json_path,
+                                                 const String &assets_json_path) {
+	Dictionary d;
+
+	auto hard_fail = [&d](int verdict, const String &reason) -> Dictionary {
+		d["verdict"] = verdict;
+		d["ok"] = false;
+		d["hard_fail"] = true;
+		d["reason"] = reason;
+		d["zone"] = String();
+		d["format_version"] = 0;
+		d["chunk_size_m"] = 0;
+		d["chunk_count"] = 0;
+		d["verified_chunks"] = 0;
+		UtilityFunctions::push_error(String("MeridianPackMount: chunk-pack verify FAILED — ") + reason);
+		return d;
+	};
+
+	// Read both manifests via FileAccess (res:// / user:// aware). A missing /
+	// unreadable manifest is itself a hard fail — the client cannot verify content
+	// it cannot even read.
+	if (!FileAccess::file_exists(chunks_json_path)) {
+		return hard_fail(CHUNK_MANIFEST_MALFORMED,
+			String("chunk manifest not found: ") + chunks_json_path);
+	}
+	if (!FileAccess::file_exists(assets_json_path)) {
+		return hard_fail(CHUNK_MANIFEST_MALFORMED,
+			String("asset-id table not found: ") + assets_json_path);
+	}
+	Ref<FileAccess> cf = FileAccess::open(chunks_json_path, FileAccess::READ);
+	Ref<FileAccess> af = FileAccess::open(assets_json_path, FileAccess::READ);
+	if (cf.is_null() || af.is_null()) {
+		return hard_fail(CHUNK_MANIFEST_MALFORMED,
+			String("could not open chunk manifest / asset table for reading"));
+	}
+	const std::string chunks_json = to_std(cf->get_as_text());
+	const std::string assets_json = to_std(af->get_as_text());
+	cf->close();
+	af->close();
+
+	const GodotFileProvider files;
+	const chunkpack::ChunkPackReport rep =
+		chunkpack::verify_chunk_pack(chunks_json, assets_json, files);
+
+	d["verdict"] = static_cast<int>(rep.verdict);
+	d["ok"] = rep.ok;
+	d["hard_fail"] = rep.hard_fail;
+	d["reason"] = String::utf8(rep.reason.c_str());
+	d["zone"] = String::utf8(rep.index.zone.c_str());
+	d["format_version"] = rep.index.format_version;
+	d["chunk_size_m"] = rep.index.chunk_size_m;
+	d["chunk_count"] = static_cast<int64_t>(rep.chunk_count);
+	d["verified_chunks"] = static_cast<int64_t>(rep.verified_chunks);
+
+	if (!rep.ok) {
+		UtilityFunctions::push_error(
+			String("MeridianPackMount: chunk-pack verify FAILED [") +
+			String(chunkpack::chunk_pack_verdict_name(rep.verdict)) + "] — " +
+			String::utf8(rep.reason.c_str()));
+	}
+	return d;
+}
+
+String MeridianPackMount::chunk_verdict_name(int verdict) {
+	return String(chunkpack::chunk_pack_verdict_name(
+		static_cast<chunkpack::ChunkPackVerdict>(verdict)));
+}
+
 String MeridianPackMount::verdict_name(int verdict) {
 	return String(pack::pack_verdict_name(static_cast<pack::PackVerdict>(verdict)));
 }
@@ -177,6 +284,14 @@ void MeridianPackMount::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("verify_manifest_json", "manifest_json"),
 	                     &MeridianPackMount::verify_manifest_json);
 
+	ClassDB::bind_method(D_METHOD("mount_resource_pack", "pck_path", "replace_files"),
+	                     &MeridianPackMount::mount_resource_pack, DEFVAL(true));
+	ClassDB::bind_method(D_METHOD("verify_chunk_index", "chunks_json_path", "assets_json_path"),
+	                     &MeridianPackMount::verify_chunk_index);
+	ClassDB::bind_static_method("MeridianPackMount",
+	                            D_METHOD("chunk_verdict_name", "verdict"),
+	                            &MeridianPackMount::chunk_verdict_name);
+
 	ClassDB::bind_method(D_METHOD("is_mounted"), &MeridianPackMount::is_mounted);
 	ClassDB::bind_method(D_METHOD("get_content_hash"), &MeridianPackMount::get_content_hash);
 	ClassDB::bind_method(D_METHOD("get_content_version"),
@@ -192,6 +307,12 @@ void MeridianPackMount::_bind_methods() {
 	BIND_ENUM_CONSTANT(VERDICT_SCHEMA_MISMATCH);
 	BIND_ENUM_CONSTANT(VERDICT_ENGINE_MISMATCH);
 	BIND_ENUM_CONSTANT(VERDICT_HASH_MISMATCH);
+
+	BIND_ENUM_CONSTANT(CHUNK_OK);
+	BIND_ENUM_CONSTANT(CHUNK_MANIFEST_MALFORMED);
+	BIND_ENUM_CONSTANT(CHUNK_UNRESOLVED_REF);
+	BIND_ENUM_CONSTANT(CHUNK_MISSING_ASSET);
+	BIND_ENUM_CONSTANT(CHUNK_HASH_MISMATCH);
 }
 
 } // namespace meridian
