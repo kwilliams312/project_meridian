@@ -12,10 +12,12 @@ export function cacheKey(p: RenderParams, deps: Record<string, string>): string 
   }));
   return h.digest('hex');
 }
-const DIR = resolve('.render-cache');
-export async function cacheGet(key: string): Promise<Buffer | null> {
-  try { return await readFile(resolve(DIR, `${key}.wav`)); } catch { return null; }
+/** Default content-addressed cache root (cwd-relative, gitignored). */
+export const DEFAULT_CACHE_DIR = '.render-cache';
+export async function cacheGet(key: string, cacheDir: string = DEFAULT_CACHE_DIR): Promise<Buffer | null> {
+  try { return await readFile(resolve(cacheDir, `${key}.wav`)); } catch { return null; }
 }
-export async function cachePut(key: string, wav: Buffer): Promise<void> {
-  await mkdir(DIR, { recursive: true }); await writeFile(resolve(DIR, `${key}.wav`), wav);
+export async function cachePut(key: string, wav: Buffer, cacheDir: string = DEFAULT_CACHE_DIR): Promise<void> {
+  const dir = resolve(cacheDir);
+  await mkdir(dir, { recursive: true }); await writeFile(resolve(dir, `${key}.wav`), wav);
 }
