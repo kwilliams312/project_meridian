@@ -18,6 +18,9 @@
 // #109 adds the client crash channel (MeridianCrashReporter, D-29): a minimal
 // fatal-signal handler writes a report at crash time, shipped on the next launch
 // through the SAME #167/#168 telemetry transport (Crashpad seam left for later).
+// #555 adds the runtime chunk STREAMER (MeridianChunkStream, Epic #22 Story B): the
+// desired-ring-per-tier + priority threaded-load + time-sliced instancing + pooled
+// unload node that streams the baked-mesh chunks resolved by #554's chunk-pack index.
 // Later issues add the remaining net / stream / datastore classes (Client SAD §2).
 
 #include "register_types.h"
@@ -28,6 +31,7 @@
 #include <godot_cpp/core/defs.hpp>
 #include <godot_cpp/godot.hpp>
 
+#include "meridian_chunk_stream.h"
 #include "meridian_client.h"
 #include "meridian_crash_reporter.h"
 #include "meridian_login.h"
@@ -56,6 +60,7 @@ void initialize_meridian_module(ModuleInitializationLevel p_level) {
 	GDREGISTER_CLASS(meridian::MeridianTpsCamera);
 	GDREGISTER_CLASS(meridian::MeridianSettings);
 	GDREGISTER_CLASS(meridian::MeridianCrashReporter);
+	GDREGISTER_CLASS(meridian::MeridianChunkStream);
 }
 
 void uninitialize_meridian_module(ModuleInitializationLevel p_level) {
