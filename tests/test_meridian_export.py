@@ -368,6 +368,26 @@ def test_unnormalized_weights_flagged_e103():
     assert any(e.startswith("E103") for e in errors), errors
 
 
+def test_five_influences_flagged_e103_names_offending_mesh():
+    """T3 review minor (bundled with #526): E103's message must carry mesh
+    identity, not just an aggregate count. The per-mesh breakdown
+    (`mesh_max_influences`) takes priority over the aggregate `max_influences`
+    field, which stays supported as a fallback (additive API change)."""
+    data = _rig_data(mesh_max_influences={"geo_torso_lod0": 5})
+    errors = rig_checks.check_rig(data)
+    assert any(
+        e.startswith("E103") and "geo_torso_lod0" in e and "5" in e for e in errors
+    ), errors
+
+
+def test_unnormalized_weights_flagged_e103_names_offending_mesh():
+    data = _rig_data(unnormalized_meshes=["geo_hips_legs_lod0"])
+    errors = rig_checks.check_rig(data)
+    assert any(e.startswith("E103") and "geo_hips_legs_lod0" in e for e in errors), (
+        errors
+    )
+
+
 def test_unknown_geoset_region_flagged_e104():
     data = _rig_data(mesh_names=[*_rig_data().mesh_names, "geo_tail_lod0"])
     errors = rig_checks.check_rig(data)
@@ -413,6 +433,26 @@ def test_skeleton_only_character_model_passes_e102():
     (covered by test_body_missing_geo_waist_lod0_flagged_e102)."""
     data = _rig_data(mesh_names=[], max_influences=0)
     assert rig_checks.check_rig(data) == []
+
+
+def test_unapplied_transform_flagged_e105_names_object():
+    """E105 (spec ④ §4's dropped blocking promise): a residual object-level
+    transform on any exported object blocks the export and names it."""
+    data = _rig_data(
+        object_transforms=[
+            rig_checks.ObjectTransformState("sk_ardent_male_skeleton", True),
+            rig_checks.ObjectTransformState("geo_torso_lod0", False),
+        ]
+    )
+    errors = rig_checks.check_rig(data)
+    assert any(e.startswith("E105") and "geo_torso_lod0" in e for e in errors), errors
+
+
+def test_scene_unit_scale_not_1bu_1m_flagged_e105():
+    """E105: scene unit scale must resolve to 1 Blender unit = 1 m."""
+    data = _rig_data(unit_scale_ok=False)
+    errors = rig_checks.check_rig(data)
+    assert any(e.startswith("E105") for e in errors), errors
 
 
 def test_rig_checks_imports_lazily_and_raises_actionable_error_without_repo(
