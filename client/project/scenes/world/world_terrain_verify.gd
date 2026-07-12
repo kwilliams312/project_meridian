@@ -139,10 +139,15 @@ func _initialize() -> void:
 
 	# --- 1. Stage the checked-in fixture into user://. ---
 	var src := OS.get_environment("MERIDIAN_ZONE_FIXTURE_DIR")
-	_check("MERIDIAN_ZONE_FIXTURE_DIR set", not src.is_empty()
-		and FileAccess.file_exists("%s/zone01.chunks.json" % src))
 	if src.is_empty():
-		print("  set MERIDIAN_ZONE_FIXTURE_DIR to the checked-in chunkpack zone01 dir")
+		# Default to the checked-in fixture so a bare run works with no env var.
+		# (The env var still overrides, e.g. to point at a freshly `mcc chunk-emit`ed pack.)
+		src = ProjectSettings.globalize_path("res://").path_join(
+			"../gdextension/meridian/test/fixtures/chunkpack/meridian/core/chunks/zone01").simplify_path()
+	_check("zone fixture dir resolved (%s)" % src,
+		not src.is_empty() and FileAccess.file_exists("%s/zone01.chunks.json" % src))
+	if not FileAccess.file_exists("%s/zone01.chunks.json" % src):
+		print("  fixture not found; set MERIDIAN_ZONE_FIXTURE_DIR to the checked-in chunkpack zone01 dir")
 		_finish()
 		return
 	_check("staged good pack into user://", _stage_pack(src, STAGE_GOOD))
