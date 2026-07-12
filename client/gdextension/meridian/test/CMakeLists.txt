@@ -334,6 +334,32 @@ endif()
 
 add_test(NAME chunk-pack-core COMMAND chunk-pack-core-test)
 
+# --- CHUNK STREAMER core (#555, Epic #22 Story B) ---
+# The engine-free runtime streamer (chunk_stream_core.*): world→cell math, the
+# desired ring per TIER radius (Q3 config), priority-ordered threaded-load dispatch,
+# the per-frame time-sliced instancing budget, and pooled unload. Same engine-free
+# discipline: no godot-cpp, plain C++17, ZERO extra deps (the async load / instancing
+# / pooling are driven through a deterministic fake backend in the test). Drives a
+# synthetic player path across the fixture-shaped 3×3 grid and asserts the desired-set
+# enter/leave transitions, the budget cap, and pool recycle+reuse.
+add_executable(chunk-stream-core-test
+  chunk_stream_core_test.cpp
+  "${SRC}/chunk_stream_core.cpp"
+)
+target_include_directories(chunk-stream-core-test PRIVATE "${SRC}")
+set_target_properties(chunk-stream-core-test PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+if(MSVC)
+  target_compile_options(chunk-stream-core-test PRIVATE /W4)
+else()
+  target_compile_options(chunk-stream-core-test PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME chunk-stream-core COMMAND chunk-stream-core-test)
+
 # --- IF-1/IF-2 client login core (#99) ---
 # The engine-free client login core (login_core.*, srp_client_core.*): the CLIENT
 # side of the IF-1 login state machine authd drives (#79) + the IF-2 WorldHello
