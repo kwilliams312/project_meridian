@@ -1,0 +1,11 @@
+task_id: 019f54d5-efff-7392-93a2-a25f4d83301f
+model_version: meshy-5
+preview_task_id: 019f54d5-07a3-7bbc-bd4b-d4f9fc4afecb
+request:
+  mode: preview
+  prompt: 'a stylized low-poly hairpiece wig shell for a fantasy MMO character: long
+    flowing straight shoulder-length hair parted in the middle, a hollow shell draping
+    over a bald head, symmetric, front facing, clean even topology, NO face, NO head,
+    NO skin, hair only'
+  ai_model: meshy-5
+  target_polycount: 30000

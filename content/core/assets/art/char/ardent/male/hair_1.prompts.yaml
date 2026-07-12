@@ -1,0 +1,11 @@
+task_id: 019f54d5-2c10-7329-ac2c-7439cf2e128d
+model_version: meshy-5
+preview_task_id: 019f54d4-3007-7daa-a4d1-4db144414352
+request:
+  mode: preview
+  prompt: 'a stylized low-poly hairpiece wig shell for a fantasy MMO character: short
+    cropped tapered warrior haircut, a hollow cap that sits on top of a bald head,
+    symmetric, front facing, clean even topology, NO face, NO head, NO skin, hair
+    only'
+  ai_model: meshy-5
+  target_polycount: 30000

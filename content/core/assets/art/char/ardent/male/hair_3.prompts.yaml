@@ -1,0 +1,10 @@
+task_id: 019f54d6-4662-7726-8a1d-a1183aaa6dcb
+model_version: meshy-5
+preview_task_id: 019f54d5-20ed-7bc5-ac11-d0f9cee3e627
+request:
+  mode: preview
+  prompt: 'a stylized low-poly hairpiece wig shell for a fantasy MMO warrior: a top-knot
+    bun with shaved undercut sides, a hollow shell sitting on a bald head, symmetric,
+    front facing, clean even topology, NO face, NO head, NO skin, hair only'
+  ai_model: meshy-5
+  target_polycount: 30000

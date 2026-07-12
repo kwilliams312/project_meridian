@@ -12,6 +12,10 @@ map:                         # append-only; local index (SAD §2.4)
   core:art.char.ardent.male.face_2: 84
   core:art.char.ardent.male.face_3: 85
   core:art.char.ardent.male.face_4: 86
+  core:art.char.ardent.male.hair_1: 108
+  core:art.char.ardent.male.hair_2: 109
+  core:art.char.ardent.male.hair_3: 110
+  core:art.char.ardent.male.hair_4: 111
   core:art.char.ardent.male.skeleton: 80
   core:art.char.ardent.male.skin_1: 87
   core:art.char.ardent.male.skin_2: 88
