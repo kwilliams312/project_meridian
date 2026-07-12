@@ -1,0 +1,16 @@
+# Auditable Meshy generation record for the Warden's Kit gauntlets (hands slot, TD-09).
+# Auxiliary companion, NOT a content entity: validate_content.py + mcc discovery
+# exclude *.prompts.yaml from envelope checks (issue #410 precedent). The raw
+# text-to-3D sculpt this records is the non-deterministic half; the deterministic
+# restyle (restyle_armor.py, --region hands) turns it into the committed
+# warden_hands.glb. Regenerate the sculpt from this prompt + task id if ever needed.
+task_id: 019f574c-c585-7c49-b5e3-4b4c40fb633d
+model_version: meshy-5
+preview_task_id: 019f574b-9f27-7bf3-994f-c0cb22032515
+request:
+  mode: preview
+  prompt: a pair of stylized fantasy plate-armor gauntlets, articulated steel hand
+    and forearm guards with knuckle plates, symmetric, front-facing, hollow open at
+    the wrist, low-poly game asset, clean even topology
+  ai_model: meshy-5
+  target_polycount: 30000
