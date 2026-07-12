@@ -168,6 +168,27 @@ if(TARGET flatbuffers::flatbuffers)
 endif()
 target_link_libraries(${TARGET_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
+# --- IF-6 chunk heightfield decode deps (#557, Epic #22 Story D) ---
+# heightfield_chunk_decode.* decodes the Heightfield out of a shipped `.chunk.bin`
+# (schema/chunk/chunk.fbs) so the M1 HeightfieldWorldQuery samples the SAME bytes
+# worldd validates against (Q1(a)). It #includes the flatc-generated chunk_generated.h,
+# so — like the net codegen above — generate it into the build tree and expose the dir.
+# The flatbuffers runtime is already linked above (login core).
+set(MERIDIAN_SCHEMA_CHUNK_FBS "${MERIDIAN_REPO_ROOT}/schema/chunk/chunk.fbs")
+set(MERIDIAN_CHUNK_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated-chunk")
+file(MAKE_DIRECTORY "${MERIDIAN_CHUNK_GEN_DIR}")
+set(MERIDIAN_CHUNK_GENERATED "${MERIDIAN_CHUNK_GEN_DIR}/chunk_generated.h")
+add_custom_command(
+	OUTPUT ${MERIDIAN_CHUNK_GENERATED}
+	COMMAND ${MERIDIAN_FLATC} --cpp --scoped-enums -o "${MERIDIAN_CHUNK_GEN_DIR}"
+			"${MERIDIAN_SCHEMA_CHUNK_FBS}"
+	DEPENDS "${MERIDIAN_SCHEMA_CHUNK_FBS}"
+	COMMENT "meridian client: flatc --cpp on schema/chunk/chunk.fbs (#557)"
+	VERBATIM)
+add_custom_target(meridian-chunk-codegen DEPENDS ${MERIDIAN_CHUNK_GENERATED})
+add_dependencies(${TARGET_NAME} meridian-chunk-codegen)
+target_include_directories(${TARGET_NAME} PRIVATE "${MERIDIAN_CHUNK_GEN_DIR}")
+
 # Reuse godot-cpp's computed filename suffix (e.g.
 # ".windows.template_debug.x86_64") so the output matches the paths declared in
 # project/meridian.gdextension.

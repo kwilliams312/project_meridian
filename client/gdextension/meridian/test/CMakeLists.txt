@@ -34,6 +34,32 @@ endif()
 
 add_test(NAME movement-controller COMMAND movement-controller-test)
 
+# --- M1 heightfield ground-sample core (#557, Epic #22 Story D) ---
+# The engine-free `IWorldQuery` backend that replaces the M0 flat stub: it bilinear-
+# samples the per-chunk heightfield (schema/chunk/chunk.fbs §3.2) the pack ships, so
+# client movement matches the server's validation of the SAME bytes by construction
+# (Q1(a); movement_constants.h §7). Zero deps (no godot-cpp, no FlatBuffers): it
+# operates on an already-decoded grid, so it always builds in a plain ctest. The test
+# rebuilds Story-0's known non-flat ramp+bowl surface in memory and asserts bilinear
+# parity, the documented-formula parity, NaN holes/OOB, and the shared-edge seam.
+add_executable(heightfield-query-test
+  heightfield_query_test.cpp
+  "${SRC}/heightfield_query.cpp"
+)
+target_include_directories(heightfield-query-test PRIVATE "${SRC}")
+set_target_properties(heightfield-query-test PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+if(MSVC)
+  target_compile_options(heightfield-query-test PRIVATE /W4)
+else()
+  target_compile_options(heightfield-query-test PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME heightfield-query COMMAND heightfield-query-test)
+
 # --- Schema/protocol VERSION COMPAT core (#98) ---
 # The engine-free version-compare rule (version_compat.*): pure logic, ZERO deps (no
 # godot-cpp, no OpenSSL, no flatc), so it always builds in a plain ctest. Proves the
@@ -526,4 +552,51 @@ if(TARGET meridian-clientnet)
 else()
   message(STATUS
     "net-thread-core-test SKIPPED: needs meridian-clientnet (-DMERIDIAN_CLIENT_NET=ON).")
+endif()
+
+# --- Heightfield SAME-BYTES decode proof (#557) ---
+# The Q1(a) closing test: decode the Heightfield straight out of the REAL shipped
+# `<cx>_<cz>.chunk.bin` (Story-0 fixture, test/fixtures/chunkpack/) via the flatc-
+# generated chunk.fbs bindings, then bilinear-sample the decoded grid — proving the
+# client reads the SAME bytes worldd validates against. It needs a `flatc` + the
+# FlatBuffers runtime, so (like login-core) it is gated on their availability; the
+# pure heightfield-query-test above always runs regardless. Reuses MERIDIAN_FLATC /
+# MERIDIAN_REPO_ROOT resolved by the login-core block above.
+if(DEFINED MERIDIAN_FLATC)
+  set(MERIDIAN_CHUNK_FBS "${MERIDIAN_REPO_ROOT}/schema/chunk/chunk.fbs")
+  set(MERIDIAN_CHUNK_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated-chunk")
+  file(MAKE_DIRECTORY "${MERIDIAN_CHUNK_GEN_DIR}")
+  set(MERIDIAN_CHUNK_GENERATED "${MERIDIAN_CHUNK_GEN_DIR}/chunk_generated.h")
+  add_custom_command(
+    OUTPUT ${MERIDIAN_CHUNK_GENERATED}
+    COMMAND ${MERIDIAN_FLATC} --cpp --scoped-enums -o "${MERIDIAN_CHUNK_GEN_DIR}"
+            "${MERIDIAN_CHUNK_FBS}"
+    DEPENDS "${MERIDIAN_CHUNK_FBS}"
+    COMMENT "heightfield-decode-test: flatc --cpp on schema/chunk/chunk.fbs"
+    VERBATIM)
+  add_custom_target(heightfield-chunk-codegen DEPENDS ${MERIDIAN_CHUNK_GENERATED})
+
+  add_executable(heightfield-decode-test
+    heightfield_decode_test.cpp
+    "${SRC}/heightfield_query.cpp"
+    "${SRC}/heightfield_chunk_decode.cpp"
+  )
+  add_dependencies(heightfield-decode-test heightfield-chunk-codegen)
+  target_include_directories(heightfield-decode-test PRIVATE
+    "${SRC}" "${MERIDIAN_CHUNK_GEN_DIR}")
+  if(TARGET flatbuffers::flatbuffers)
+    target_link_libraries(heightfield-decode-test PRIVATE flatbuffers::flatbuffers)
+  endif()
+  set_target_properties(heightfield-decode-test PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+  if(MSVC)
+    target_compile_options(heightfield-decode-test PRIVATE /W4)
+  else()
+    target_compile_options(heightfield-decode-test PRIVATE -Wall -Wextra)
+  endif()
+
+  add_test(NAME heightfield-decode COMMAND heightfield-decode-test)
+else()
+  message(STATUS
+    "heightfield-decode-test SKIPPED: needs flatc (schema/chunk/chunk.fbs codegen).")
 endif()
