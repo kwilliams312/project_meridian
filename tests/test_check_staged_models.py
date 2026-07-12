@@ -51,6 +51,29 @@ visual:
     hides: [torso]
 """
 
+NPC_SIDECAR = """\
+schema: meridian/asset@1
+id: tp:art.char.kobold.miner
+class: character_model
+source: assets/art/char/kobold/miner.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: original
+  authors: [tester]
+"""
+
+NPC_DOC = """\
+schema: meridian/npc@1
+id: tp:npc.kobold_miner
+name: Kobold Miner
+level: { min: 1, max: 2 }
+creature_type: humanoid
+rank: normal
+faction: hostile
+visual:
+  model: tp:art.char.kobold.miner
+"""
+
 
 def _tree(tmp_path: Path, *, with_source: bool, staged: bool) -> tuple[Path, Path]:
     content = tmp_path / "content"
@@ -90,6 +113,44 @@ def test_placeholder_without_committed_bytes_is_skipped(tmp_path):
     # Referenced model, but its source .glb is NOT committed → known M0 placeholder,
     # unavailable everywhere; not a staging regression.
     content, staged = _tree(tmp_path, with_source=False, staged=False)
+    assert check(content, staged) == []
+
+
+def _npc_tree(tmp_path: Path, *, with_source: bool, staged: bool) -> tuple[Path, Path]:
+    """A pack whose ONLY renderable ref is an NPC visual.model (no items/appearance)."""
+    content = tmp_path / "content"
+    pack = content / "tp"
+    (pack / "assets" / "art" / "char" / "kobold").mkdir(parents=True)
+    (pack / "npcs").mkdir(parents=True)
+    (pack / "pack.yaml").write_text(PACK)
+    (pack / "assets" / "art" / "kobold.asset.yaml").write_text(NPC_SIDECAR)
+    (pack / "npcs" / "kobold_miner.npc.yaml").write_text(NPC_DOC)
+    if with_source:
+        (pack / "assets" / "art" / "char" / "kobold" / "miner.glb").write_bytes(b"glTF-bytes")
+    staged_dir = tmp_path / "staged"
+    if staged:
+        dst = staged_dir / "art" / "char" / "kobold" / "miner.glb"
+        dst.parent.mkdir(parents=True)
+        dst.write_bytes(b"glTF-bytes")
+    return content, staged_dir
+
+
+@pytest.mark.unit
+def test_npc_committed_but_unstaged_model_fails(tmp_path):
+    # An NPC's visual.model is collected the same as an item's: committed source
+    # bytes with no staged copy must fail the gate (issue #583 — the gap this closes).
+    content, staged = _npc_tree(tmp_path, with_source=True, staged=False)
+    failures = check(content, staged)
+    assert len(failures) == 1
+    assert "tp:art.char.kobold.miner" in failures[0]
+    assert "NOT staged" in failures[0]
+
+
+@pytest.mark.unit
+def test_npc_placeholder_without_committed_bytes_is_skipped(tmp_path):
+    # The M0 reality: every NPC/creature model is a byteless placeholder → skipped,
+    # so extending the collector to NPCs is inert today (no behaviour change).
+    content, staged = _npc_tree(tmp_path, with_source=False, staged=False)
     assert check(content, staged) == []
 
 

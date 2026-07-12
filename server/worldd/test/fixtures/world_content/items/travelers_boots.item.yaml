@@ -11,3 +11,11 @@ price:
   sell: 100
 visual:
   icon: itm1:art.icon.item.boots_leather
+  # L080 requires a visual.worn block for visible-slot armor (feet is visible).
+  # Minimal skinned-armor worn: a model + the body geosets boots occupy (feet and
+  # lower_legs). Kept so this fixture stays lint-clean once L080/L081 port from
+  # tools/validate_content.py into mcc's Validate stage (issue #464). worn ships in
+  # the client pck only, so it does not affect the worldd emit-sql load path.
+  worn:
+    models: [{ model: itm1:art.item.armor.travelers_boots, mirror: none }]
+    hides: [feet, lower_legs]

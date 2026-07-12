@@ -63,7 +63,12 @@ properties:
       additionalProperties: false
       required: [id, name, blendshape, min, max]
       properties:
-        id: { type: integer, minimum: 1 }
+        # id is the stable per-catalog morph index the per-character appearance
+        # record stores on the wire as a uint8 — bound it to the u8 range so an
+        # out-of-range id is rejected at authoring time, matching the preset ids
+        # above. (min/max below are the blendshape's float weight range, not wire
+        # bytes, so they carry no such bound.)
+        id: { type: integer, minimum: 1, maximum: 255 }
         name: { $ref: "#/$defs/displayName" }
         blendshape: { type: string, minLength: 1 }
         min: { type: number }
