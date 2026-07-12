@@ -31,11 +31,11 @@ std::string to_std(const String &s) {
 } // namespace
 
 // ── The Godot-backed engine seam ─────────────────────────────────────────────
-void MeridianChunkStream::GodotBackend::request_load(int, const std::string &scene_path) {
+void MeridianChunkStream::GodotBackend::request_load(int, stream::Rep, const std::string &scene_path) {
 	ResourceLoader::get_singleton()->load_threaded_request(String::utf8(scene_path.c_str()));
 }
 
-stream::LoadPoll MeridianChunkStream::GodotBackend::poll_load(int, const std::string &scene_path) {
+stream::LoadPoll MeridianChunkStream::GodotBackend::poll_load(int, stream::Rep, const std::string &scene_path) {
 	const ResourceLoader::ThreadLoadStatus st =
 			ResourceLoader::get_singleton()->load_threaded_get_status(String::utf8(scene_path.c_str()));
 	switch (st) {
@@ -50,21 +50,23 @@ stream::LoadPoll MeridianChunkStream::GodotBackend::poll_load(int, const std::st
 	}
 }
 
-void MeridianChunkStream::GodotBackend::instantiate(int chunk_id, const std::string &scene_path) {
+void MeridianChunkStream::GodotBackend::instantiate(int chunk_id, stream::Rep rep, const std::string &scene_path) {
 	const String p = String::utf8(scene_path.c_str());
+	const long key = inst_key(chunk_id, rep);
 
-	// Re-attach a recycled instance for this chunk if one is pooled — the whole
-	// point of pooled unload: re-entering a just-left chunk skips instantiation.
-	auto pooled = owner->pool_.find(chunk_id);
+	// Re-attach a recycled instance for this (chunk, representation) if one is pooled —
+	// the whole point of pooled unload: re-entering a just-left chunk (or swapping
+	// back to a representation it held before) skips instantiation.
+	auto pooled = owner->pool_.find(key);
 	if (pooled != owner->pool_.end()) {
-		// The core (which does not know the backend pooled this chunk) issued a
-		// fresh load_threaded_request for it on re-entry; DRAIN it so the completed
-		// resource is not orphaned in the loader's threaded-load cache — then reuse
-		// the pooled node instead of instancing anew.
+		// The core (which does not know the backend pooled this rep) issued a fresh
+		// load_threaded_request for it on re-entry; DRAIN it so the completed resource
+		// is not orphaned in the loader's threaded-load cache — then reuse the pooled
+		// node instead of instancing anew.
 		ResourceLoader::get_singleton()->load_threaded_get(p);
 		Node *n = pooled->second;
 		owner->pool_.erase(pooled);
-		owner->instances_[chunk_id] = n;
+		owner->instances_[key] = n;
 		owner->call_deferred("add_child", n);
 		++owner->pool_reuse_count_;
 		return;
@@ -82,12 +84,13 @@ void MeridianChunkStream::GodotBackend::instantiate(int chunk_id, const std::str
 		UtilityFunctions::push_warning("MeridianChunkStream: instantiate() returned null: " + p);
 		return;
 	}
-	owner->instances_[chunk_id] = inst;
+	owner->instances_[key] = inst;
 	owner->call_deferred("add_child", inst);
 }
 
-void MeridianChunkStream::GodotBackend::recycle(int chunk_id) {
-	auto it = owner->instances_.find(chunk_id);
+void MeridianChunkStream::GodotBackend::recycle(int chunk_id, stream::Rep rep) {
+	const long key = inst_key(chunk_id, rep);
+	auto it = owner->instances_.find(key);
 	if (it == owner->instances_.end()) {
 		return;
 	}
@@ -96,15 +99,26 @@ void MeridianChunkStream::GodotBackend::recycle(int chunk_id) {
 	if (n != nullptr) {
 		// Detach but KEEP the node — pooled, not freed (recycle, don't churn-free).
 		owner->call_deferred("remove_child", n);
-		owner->pool_[chunk_id] = n;
+		owner->pool_[key] = n;
 		++owner->recycle_count_;
 	}
 }
 
-void MeridianChunkStream::GodotBackend::release_load(int, const std::string &) {
-	// A requested/ready-but-never-instanced load. Godot's ResourceLoader has no
-	// cancel; the load simply completes into the resource cache (bounded — a chunk
-	// pack is small). Nothing attached to the tree, so nothing to detach here.
+void MeridianChunkStream::GodotBackend::release_load(int, stream::Rep, const std::string &scene_path) {
+	// A requested/ready-but-never-instanced load (the chunk left its band, or a swap
+	// reversed, before this representation was instanced). Godot's ResourceLoader has
+	// no cancel. If the threaded load has already COMPLETED, DRAIN it with
+	// load_threaded_get so the finished PackedScene is not left orphaned in the
+	// loader's cache (an ObjectDB leak at exit); the local Ref drops it immediately.
+	// A still-in-flight load can't be cancelled — it lands in the (bounded) cache and
+	// is reused if the chunk returns. Nothing is attached to the tree, so nothing to
+	// detach here.
+	const String p = String::utf8(scene_path.c_str());
+	ResourceLoader *rl = ResourceLoader::get_singleton();
+	if (rl->load_threaded_get_status(p) == ResourceLoader::THREAD_LOAD_LOADED) {
+		Ref<Resource> drained = rl->load_threaded_get(p);
+		(void)drained;
+	}
 }
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
@@ -190,7 +204,23 @@ bool MeridianChunkStream::load_zone(const String &chunks_json_path, const String
 		sc.cz = rc.cz;
 		sc.priority = rc.priority;   // 0 when absent — treated as most urgent
 		sc.scene_path = rc.scene.res_path;
+		// Story C: the proxy far-ring band. Story A resolved the proxy ref (or marked
+		// the explicit `proxy: null` chunk has_proxy=false, amendment C3).
+		sc.has_proxy = rc.has_proxy;
+		if (rc.has_proxy) sc.proxy_path = rc.proxy.res_path;
 		z.chunks.push_back(std::move(sc));
+	}
+	// Adopt the manifest's zone-level baked far-ring as the default proxy far-ring
+	// for every tier when the pack declares one, so the streamer never asks for a
+	// proxy ring wider than the pack baked. Per-tier overrides (Q3) still apply via
+	// set_tier_far_ring(); a zone far_ring of 0 leaves the built-in Q3 defaults.
+	if (idx.far_ring > 0) {
+		stream::TierRadiiConfig cfg = streamer_.tier_radii();
+		for (int t = 0; t < stream::kTierCount; ++t) {
+			const stream::Tier tier = static_cast<stream::Tier>(t);
+			if (cfg.far_ring_for(tier) > idx.far_ring) cfg.set_far_ring(tier, idx.far_ring);
+		}
+		streamer_.set_tier_radii(cfg);
 	}
 	reset_streamed();   // drop any prior zone's instances/pool before re-configuring
 	streamer_.configure(z);
@@ -218,6 +248,13 @@ void MeridianChunkStream::configure(const Dictionary &zone) {
 		sc.cz = as_int(c.get("cz", 0));
 		sc.priority = as_int(c.get("priority", 0));
 		sc.scene_path = to_std(String(c.get("scene", String())));
+		// Story C: an optional "proxy" res:// path. Absent or empty ⇒ no proxy (the
+		// far-ring band shows nothing for this chunk — the explicit proxy:null case).
+		const String proxy = c.get("proxy", String());
+		if (!proxy.is_empty()) {
+			sc.has_proxy = true;
+			sc.proxy_path = to_std(proxy);
+		}
 		z.chunks.push_back(std::move(sc));
 	}
 	reset_streamed();   // drop any prior zone's instances/pool before re-configuring
@@ -240,11 +277,30 @@ int MeridianChunkStream::get_tier_radius(int tier) const {
 int MeridianChunkStream::get_active_radius() const {
 	return streamer_.active_radius();
 }
+void MeridianChunkStream::set_tier_far_ring(int tier, int rings) {
+	streamer_.set_tier_far_ring(static_cast<stream::Tier>(tier), rings);
+}
+int MeridianChunkStream::get_tier_far_ring(int tier) const {
+	return streamer_.tier_radii().far_ring_for(static_cast<stream::Tier>(tier));
+}
+int MeridianChunkStream::get_active_far_ring() const {
+	return streamer_.active_far_ring();
+}
 
 void MeridianChunkStream::set_instancing_budget(int budget) { budget_ = budget; }
 int  MeridianChunkStream::get_instancing_budget() const { return budget_; }
 void MeridianChunkStream::set_auto_tick(bool enabled) { auto_tick_ = enabled; }
 bool MeridianChunkStream::get_auto_tick() const { return auto_tick_; }
+
+// ── Hitch gate (Story C) ─────────────────────────────────────────────────────
+void   MeridianChunkStream::set_instance_cost_ms(double ms) { streamer_.set_instance_cost_ms(ms); }
+double MeridianChunkStream::get_instance_cost_ms() const { return streamer_.instance_cost_ms(); }
+double MeridianChunkStream::get_last_stream_frame_cost_ms() const {
+	return streamer_.last_stream_frame_cost_ms();
+}
+int MeridianChunkStream::budget_for_hitch_gate(double instance_cost_ms) const {
+	return stream::ChunkStreamer::budget_for_hitch_gate(instance_cost_ms);
+}
 
 // ── Drive ────────────────────────────────────────────────────────────────────
 void MeridianChunkStream::set_player_position(const Vector3 &world_pos) {
@@ -268,12 +324,24 @@ int MeridianChunkStream::state_at(int cx, int cz) const {
 bool MeridianChunkStream::is_desired(int cx, int cz) const {
 	return streamer_.is_desired(cx, cz);
 }
+int MeridianChunkStream::shown_rep_at(int cx, int cz) const {
+	return static_cast<int>(streamer_.shown_rep_at(cx, cz));
+}
+int MeridianChunkStream::desired_rep_at(int cx, int cz) const {
+	return static_cast<int>(streamer_.desired_rep_at(cx, cz));
+}
+bool MeridianChunkStream::is_proxy_desired(int cx, int cz) const {
+	return streamer_.is_proxy_desired(cx, cz);
+}
 
 int MeridianChunkStream::get_chunk_count() const { return static_cast<int>(streamer_.chunk_count()); }
 int MeridianChunkStream::get_desired_count() const { return static_cast<int>(streamer_.desired_count()); }
+int MeridianChunkStream::get_proxy_desired_count() const { return static_cast<int>(streamer_.proxy_desired_count()); }
 int MeridianChunkStream::get_loading_count() const { return static_cast<int>(streamer_.loading_count()); }
 int MeridianChunkStream::get_ready_count() const { return static_cast<int>(streamer_.ready_count()); }
 int MeridianChunkStream::get_instanced_count() const { return static_cast<int>(streamer_.instanced_count()); }
+int MeridianChunkStream::get_proxy_instanced_count() const { return static_cast<int>(streamer_.proxy_instanced_count()); }
+int MeridianChunkStream::get_full_instanced_count() const { return static_cast<int>(streamer_.full_instanced_count()); }
 int MeridianChunkStream::get_resident_count() const { return static_cast<int>(streamer_.resident_count()); }
 int MeridianChunkStream::get_last_instanced_this_tick() const { return streamer_.last_instanced_this_tick(); }
 
@@ -301,7 +369,27 @@ TypedArray<Vector2i> MeridianChunkStream::get_instanced_cells() const {
 	TypedArray<Vector2i> out;
 	for (std::size_t i = 0; i < streamer_.chunk_count(); ++i) {
 		const stream::ChunkStreamer::ChunkView v = streamer_.view(i);
-		if (v.state == stream::ChunkState::Instanced) {
+		if (v.shown != stream::Rep::None) {
+			out.push_back(Vector2i(v.cx, v.cz));
+		}
+	}
+	return out;
+}
+TypedArray<Vector2i> MeridianChunkStream::get_proxy_instanced_cells() const {
+	TypedArray<Vector2i> out;
+	for (std::size_t i = 0; i < streamer_.chunk_count(); ++i) {
+		const stream::ChunkStreamer::ChunkView v = streamer_.view(i);
+		if (v.shown == stream::Rep::Proxy) {
+			out.push_back(Vector2i(v.cx, v.cz));
+		}
+	}
+	return out;
+}
+TypedArray<Vector2i> MeridianChunkStream::get_full_instanced_cells() const {
+	TypedArray<Vector2i> out;
+	for (std::size_t i = 0; i < streamer_.chunk_count(); ++i) {
+		const stream::ChunkStreamer::ChunkView v = streamer_.view(i);
+		if (v.shown == stream::Rep::Full) {
 			out.push_back(Vector2i(v.cx, v.cz));
 		}
 	}
@@ -311,6 +399,7 @@ TypedArray<Vector2i> MeridianChunkStream::get_instanced_cells() const {
 int MeridianChunkStream::get_pool_size() const { return static_cast<int>(pool_.size()); }
 int MeridianChunkStream::get_pool_reuse_count() const { return pool_reuse_count_; }
 int MeridianChunkStream::get_recycle_count() const { return recycle_count_; }
+int MeridianChunkStream::get_swap_count() const { return static_cast<int>(streamer_.total_swaps()); }
 int MeridianChunkStream::get_total_loads_requested() const {
 	return static_cast<int>(streamer_.total_loads_requested());
 }
@@ -329,11 +418,19 @@ void MeridianChunkStream::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_tier_radius", "tier", "rings"), &MeridianChunkStream::set_tier_radius);
 	ClassDB::bind_method(D_METHOD("get_tier_radius", "tier"), &MeridianChunkStream::get_tier_radius);
 	ClassDB::bind_method(D_METHOD("get_active_radius"), &MeridianChunkStream::get_active_radius);
+	ClassDB::bind_method(D_METHOD("set_tier_far_ring", "tier", "rings"), &MeridianChunkStream::set_tier_far_ring);
+	ClassDB::bind_method(D_METHOD("get_tier_far_ring", "tier"), &MeridianChunkStream::get_tier_far_ring);
+	ClassDB::bind_method(D_METHOD("get_active_far_ring"), &MeridianChunkStream::get_active_far_ring);
 
 	ClassDB::bind_method(D_METHOD("set_instancing_budget", "budget"), &MeridianChunkStream::set_instancing_budget);
 	ClassDB::bind_method(D_METHOD("get_instancing_budget"), &MeridianChunkStream::get_instancing_budget);
 	ClassDB::bind_method(D_METHOD("set_auto_tick", "enabled"), &MeridianChunkStream::set_auto_tick);
 	ClassDB::bind_method(D_METHOD("get_auto_tick"), &MeridianChunkStream::get_auto_tick);
+
+	ClassDB::bind_method(D_METHOD("set_instance_cost_ms", "ms"), &MeridianChunkStream::set_instance_cost_ms);
+	ClassDB::bind_method(D_METHOD("get_instance_cost_ms"), &MeridianChunkStream::get_instance_cost_ms);
+	ClassDB::bind_method(D_METHOD("get_last_stream_frame_cost_ms"), &MeridianChunkStream::get_last_stream_frame_cost_ms);
+	ClassDB::bind_method(D_METHOD("budget_for_hitch_gate", "instance_cost_ms"), &MeridianChunkStream::budget_for_hitch_gate);
 
 	ClassDB::bind_method(D_METHOD("set_player_position", "world_pos"), &MeridianChunkStream::set_player_position);
 	ClassDB::bind_method(D_METHOD("tick"), &MeridianChunkStream::tick);
@@ -343,22 +440,31 @@ void MeridianChunkStream::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_player_cell"), &MeridianChunkStream::get_player_cell);
 	ClassDB::bind_method(D_METHOD("state_at", "cx", "cz"), &MeridianChunkStream::state_at);
 	ClassDB::bind_method(D_METHOD("is_desired", "cx", "cz"), &MeridianChunkStream::is_desired);
+	ClassDB::bind_method(D_METHOD("shown_rep_at", "cx", "cz"), &MeridianChunkStream::shown_rep_at);
+	ClassDB::bind_method(D_METHOD("desired_rep_at", "cx", "cz"), &MeridianChunkStream::desired_rep_at);
+	ClassDB::bind_method(D_METHOD("is_proxy_desired", "cx", "cz"), &MeridianChunkStream::is_proxy_desired);
 
 	ClassDB::bind_method(D_METHOD("get_chunk_count"), &MeridianChunkStream::get_chunk_count);
 	ClassDB::bind_method(D_METHOD("get_desired_count"), &MeridianChunkStream::get_desired_count);
+	ClassDB::bind_method(D_METHOD("get_proxy_desired_count"), &MeridianChunkStream::get_proxy_desired_count);
 	ClassDB::bind_method(D_METHOD("get_loading_count"), &MeridianChunkStream::get_loading_count);
 	ClassDB::bind_method(D_METHOD("get_ready_count"), &MeridianChunkStream::get_ready_count);
 	ClassDB::bind_method(D_METHOD("get_instanced_count"), &MeridianChunkStream::get_instanced_count);
+	ClassDB::bind_method(D_METHOD("get_proxy_instanced_count"), &MeridianChunkStream::get_proxy_instanced_count);
+	ClassDB::bind_method(D_METHOD("get_full_instanced_count"), &MeridianChunkStream::get_full_instanced_count);
 	ClassDB::bind_method(D_METHOD("get_resident_count"), &MeridianChunkStream::get_resident_count);
 	ClassDB::bind_method(D_METHOD("get_last_instanced_this_tick"), &MeridianChunkStream::get_last_instanced_this_tick);
 
 	ClassDB::bind_method(D_METHOD("get_desired_cells"), &MeridianChunkStream::get_desired_cells);
 	ClassDB::bind_method(D_METHOD("get_loading_cells"), &MeridianChunkStream::get_loading_cells);
 	ClassDB::bind_method(D_METHOD("get_instanced_cells"), &MeridianChunkStream::get_instanced_cells);
+	ClassDB::bind_method(D_METHOD("get_proxy_instanced_cells"), &MeridianChunkStream::get_proxy_instanced_cells);
+	ClassDB::bind_method(D_METHOD("get_full_instanced_cells"), &MeridianChunkStream::get_full_instanced_cells);
 
 	ClassDB::bind_method(D_METHOD("get_pool_size"), &MeridianChunkStream::get_pool_size);
 	ClassDB::bind_method(D_METHOD("get_pool_reuse_count"), &MeridianChunkStream::get_pool_reuse_count);
 	ClassDB::bind_method(D_METHOD("get_recycle_count"), &MeridianChunkStream::get_recycle_count);
+	ClassDB::bind_method(D_METHOD("get_swap_count"), &MeridianChunkStream::get_swap_count);
 	ClassDB::bind_method(D_METHOD("get_total_loads_requested"), &MeridianChunkStream::get_total_loads_requested);
 	ClassDB::bind_method(D_METHOD("get_total_load_failures"), &MeridianChunkStream::get_total_load_failures);
 
@@ -377,6 +483,10 @@ void MeridianChunkStream::_bind_methods() {
 	BIND_ENUM_CONSTANT(TIER_MEDIUM);
 	BIND_ENUM_CONSTANT(TIER_HIGH);
 	BIND_ENUM_CONSTANT(TIER_EPIC);
+
+	BIND_ENUM_CONSTANT(REP_NONE);
+	BIND_ENUM_CONSTANT(REP_PROXY);
+	BIND_ENUM_CONSTANT(REP_FULL);
 }
 
 } // namespace meridian
