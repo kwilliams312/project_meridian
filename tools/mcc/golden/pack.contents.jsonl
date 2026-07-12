@@ -100,7 +100,7 @@
 {"id":"core:art.item.armor.warden_shoulders","numeric_id":100,"resource":"res://meridian/core/art/item/armor/warden_shoulders.res","hash":"5dba5ae212d2a3b97f26546ce775582d994dea53b426815e46c81b2d14063e10"}
 {"id":"core:art.item.armor.warden_shoulders_mask","numeric_id":101,"resource":"res://meridian/core/art/item/armor/warden_shoulders_mask.res","hash":"21f1159cd8ac029941b08d35183d8f448ce81911aac39ff3c5140d7f2e817a2c"}
 {"id":"core:item.warden_chest","numeric_id":102,"resource":"res://meridian/core/tables/item.bin","hash":"7bf5976726a734d73a3d69807b5e74c2b0bcd32ff8890c00c4753ad1d2fd68f5"}
-{"id":"core:item.warden_feet","numeric_id":103,"resource":"res://meridian/core/tables/item.bin","hash":"4cb3bbb503e31980570a6761113c1f32a1457e1f6c7aad471ccddff5ee4c2aa7"}
+{"id":"core:item.warden_feet","numeric_id":103,"resource":"res://meridian/core/tables/item.bin","hash":"6ae48ebabc34ec9806acbd68a8a2ec143b4398eacbeb9e1bf74b63494e807462"}
 {"id":"core:item.warden_hands","numeric_id":104,"resource":"res://meridian/core/tables/item.bin","hash":"0a50cee6315005d45f6667286fb729660ab79e663041814c78c836b19d3883c5"}
 {"id":"core:item.warden_head","numeric_id":105,"resource":"res://meridian/core/tables/item.bin","hash":"7d7b01cd2777fd996dc503756823d4104abd017decc1e27e3ed54345e785bf64"}
 {"id":"core:item.warden_legs","numeric_id":106,"resource":"res://meridian/core/tables/item.bin","hash":"7945363f0968824d86248e9ba977f943d0f674687b46bdf098ddfce8bb2db7a5"}
