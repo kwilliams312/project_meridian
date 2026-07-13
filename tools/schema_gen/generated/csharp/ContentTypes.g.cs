@@ -20,8 +20,10 @@ public readonly record struct NpcRef(string Id);
 public readonly record struct ZoneRef(string Id);
 public readonly record struct QuestRef(string Id);
 public readonly record struct ItemRef(string Id);
-public readonly record struct AppearanceRef(string Id);
 public readonly record struct AttributeRef(string Id);
+public readonly record struct RaceRef(string Id);
+public readonly record struct TalentTreeRef(string Id);
+public readonly record struct AppearanceRef(string Id);
 public readonly record struct TalentRef(string Id);
 public readonly record struct ArtRef(string Id);
 public readonly record struct SfxRef(string Id);
@@ -195,6 +197,22 @@ public enum AttributeKind
 {
     Primary,
     Derived,
+}
+
+public enum ClassHybrid
+{
+    Healer,
+    DpsMelee,
+    DpsRanged,
+    Tank,
+}
+
+public enum ClassRole
+{
+    Healer,
+    DpsMelee,
+    DpsRanged,
+    Tank,
 }
 
 public enum DyeChannel
@@ -1065,6 +1083,35 @@ public sealed record Attribute
     public string? Description { get; init; }
 }
 
+public sealed record AttributeMod
+{
+    public required AttributeRef Attribute { get; init; }
+    public required long Value { get; init; }
+}
+
+public sealed record Class
+{
+    public required ContentId Id { get; init; }
+    public required string Name { get; init; }
+    public string? Description { get; init; }
+    /// <summary>The class spellbook — meridian/ability@1 ids (L011-resolved).</summary>
+    public required IReadOnlyList<AbilityRef> Abilities { get; init; }
+    /// <summary>Armor categories this class may equip, by equip_type id (category=armor, spec §2.1). The category-match check is a sub-project 2 semantic gate; this round resolves the ref (L011). Empty = wears no armor category.</summary>
+    public required IReadOnlyList<EquipTypeRef> UsableArmorTypes { get; init; }
+    /// <summary>Weapon types this class may wield, by equip_type id (category=weapon, spec §2.1). Category-match is deferred to sub-project 2; ref resolves via L011 this round. Empty = wields no weapon type.</summary>
+    public required IReadOnlyList<EquipTypeRef> UsableWeaponTypes { get; init; }
+    /// <summary>The class's single combat role. Mutually exclusive with `hybrid` (a class is one OR the other — see the top-level oneOf).</summary>
+    public ClassRole? Role { get; init; }
+    /// <summary>A hybrid class's set of roles (2-4 of the role vocabulary). Mutually exclusive with `role`.</summary>
+    public IReadOnlyList<ClassHybrid>? Hybrid { get; init; }
+    /// <summary>Optional flat per-class attribute tuning (attributeMods, spec §2.2/§2.4). Each entry references a meridian/attribute@1 id (L011-resolved).</summary>
+    public IReadOnlyList<AttributeMod>? AttributeMods { get; init; }
+    /// <summary>Optional content/lore gate: the meridian/race@1 ids allowed to play this class (L011-resolved). Omitted or empty = all races (not a stat gate).</summary>
+    public IReadOnlyList<RaceRef>? RaceLimits { get; init; }
+    /// <summary>Optional tiered talent tree for this class, by talent_tree id (spec §2.5, L011-resolved).</summary>
+    public TalentTreeRef? TalentTree { get; init; }
+}
+
 public sealed record Dye
 {
     public required ContentId Id { get; init; }
@@ -1082,12 +1129,6 @@ public sealed record EquipType
     public required EquipTypeCategory Category { get; init; }
     /// <summary>Informational grouping — armor: helm/chest/…; weapon: main/off/two_hand. Not enforced by the kernel in sub-project 1; a free-form lowercase token.</summary>
     public string? SlotClass { get; init; }
-}
-
-public sealed record AttributeMod
-{
-    public required AttributeRef Attribute { get; init; }
-    public required long Value { get; init; }
 }
 
 public sealed record Race

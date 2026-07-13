@@ -2157,6 +2157,308 @@ class TestTalentTree:
         assert "SCHEMA" in codes(res.errors)
 
 
+@pytest.mark.unit
+class TestClass:
+    """meridian/class@1 — the 7-field integrator (spec §2.4). A class ties together
+    abilities, usable armor/weapon equip_types, a single role XOR a hybrid role
+    list, optional attribute_mods, race_limits, and a talent_tree. Every id ref is
+    resolved at the tree level (L011, spec §3); role XOR hybrid is enforced by the
+    schema's top-level oneOf. One valid fixture; each negative case copies it and
+    mutates one field (one-negative-fixture-per-lint convention, Tools PRD §11.1)."""
+
+    # An appearance_catalog the supporting race resolves its `appearance` ref
+    # against (art refs stay unresolved — assets_mode defaults to "ignore").
+    APPEARANCE = """\
+    schema: meridian/appearance_catalog@1
+    id: tp:appearance.ardent.male
+    race: ardent
+    sex: male
+    skeleton: art.char.ardent.male.skeleton
+    body_model: art.char.ardent.male.base
+    presets:
+      hair: [{ id: 1, model: art.char.ardent.male.hair_short }]
+      face: [{ id: 1, texture: art.char.ardent.male.face_a }]
+      skin: [{ id: 1, palette: art.char.ardent.male.skin_pale }]
+    morphs: []
+    """
+
+    ABILITY = """\
+    schema: meridian/ability@1
+    id: tp:ability.power_strike
+    name: Power Strike
+    target: enemy
+    school: physical
+    effects:
+      - kind: damage
+        amount: { min: 5, max: 10 }
+    """
+
+    ARMOR = """\
+    schema: meridian/equip_type@1
+    id: tp:equip_type.plate
+    name: Plate
+    category: armor
+    slot_class: chest
+    """
+
+    WEAPON = """\
+    schema: meridian/equip_type@1
+    id: tp:equip_type.sword
+    name: Sword
+    category: weapon
+    slot_class: main
+    """
+
+    RACE = """\
+    schema: meridian/race@1
+    id: tp:race.human
+    name: Human
+    appearance: appearance.ardent.male
+    """
+
+    TALENT = """\
+    schema: meridian/talent@1
+    id: tp:talent.blade_focus
+    name: Blade Focus
+    grants:
+      - kind: buff
+        attribute: attribute.strength
+        amount: 5
+    """
+
+    TALENT_TREE = """\
+    schema: meridian/talent_tree@1
+    id: tp:talent_tree.warrior
+    name: Warrior Tree
+    tiers:
+      - required_points: 0
+        talents:
+          - talent.blade_focus
+    """
+
+    # A fully-valid class (single role): every ref resolves against _supporting().
+    CLASS_OK = """\
+    schema: meridian/class@1
+    id: tp:class.warrior
+    name: Warrior
+    description: A stalwart melee fighter.
+    abilities:
+      - ability.power_strike
+    usable_armor_types:
+      - equip_type.plate
+    usable_weapon_types:
+      - equip_type.sword
+    role: tank
+    attribute_mods:
+      - attribute: attribute.strength
+        value: 5
+    race_limits:
+      - race.human
+    talent_tree: talent_tree.warrior
+    """
+
+    def _supporting(self) -> dict[str, str]:
+        return {
+            "tp/appearance/ardent_male.appearance.yaml": self.APPEARANCE,
+            "tp/abilities/power_strike.ability.yaml": self.ABILITY,
+            "tp/equip_types/plate.equip_type.yaml": self.ARMOR,
+            "tp/equip_types/sword.equip_type.yaml": self.WEAPON,
+            "tp/races/human.race.yaml": self.RACE,
+            "tp/talents/blade_focus.talent.yaml": self.TALENT,
+            "tp/talent_trees/warrior.talent_tree.yaml": self.TALENT_TREE,
+            "tp/attributes/strength.attribute.yaml": ATTR_STRENGTH,
+        }
+
+    def _tree(self, klass: str) -> dict[str, str]:
+        files = {"tp/classes/warrior.class.yaml": klass}
+        files.update(self._supporting())
+        return files
+
+    # -- valid shapes --------------------------------------------------------
+
+    def test_valid_class_passes(self, tmp_path):
+        # All ability/equip_type/race/talent_tree/attribute refs resolve -> clean.
+        res = run(tmp_path, self._tree(self.CLASS_OK))
+        assert res.errors == [], res.errors
+
+    def test_valid_hybrid_class_passes(self, tmp_path):
+        # A hybrid (2+ roles) instead of a single role also validates.
+        klass = self.CLASS_OK.replace(
+            "    role: tank\n", "    hybrid: [tank, healer]\n"
+        )
+        res = run(tmp_path, self._tree(klass))
+        assert res.errors == [], res.errors
+
+    def test_description_optional(self, tmp_path):
+        klass = self.CLASS_OK.replace(
+            "    description: A stalwart melee fighter.\n", ""
+        )
+        res = run(tmp_path, self._tree(klass))
+        assert res.errors == [], res.errors
+
+    def test_optional_fields_omitted_passes(self, tmp_path):
+        # attribute_mods, race_limits, and talent_tree are all optional.
+        klass = """\
+        schema: meridian/class@1
+        id: tp:class.warrior
+        name: Warrior
+        abilities:
+          - ability.power_strike
+        usable_armor_types:
+          - equip_type.plate
+        usable_weapon_types:
+          - equip_type.sword
+        role: tank
+        """
+        res = run(tmp_path, self._tree(klass))
+        assert res.errors == [], res.errors
+
+    def test_empty_race_limits_passes(self, tmp_path):
+        # Empty race_limits = all races (a content gate, not a stat) — spec §2.4.
+        klass = self.CLASS_OK.replace(
+            "    race_limits:\n      - race.human\n", "    race_limits: []\n"
+        )
+        res = run(tmp_path, self._tree(klass))
+        assert res.errors == [], res.errors
+
+    # -- cross-reference resolution (L011), one dangling ref per kind ---------
+
+    def test_dangling_ability_ref_rejected_L011(self, tmp_path):
+        klass = self.CLASS_OK.replace("ability.power_strike", "ability.ghost")
+        res = run(tmp_path, self._tree(klass))
+        assert "L011" in codes(res.errors), res.errors
+
+    def test_dangling_usable_armor_type_ref_rejected_L011(self, tmp_path):
+        klass = self.CLASS_OK.replace("equip_type.plate", "equip_type.ghost")
+        res = run(tmp_path, self._tree(klass))
+        assert "L011" in codes(res.errors), res.errors
+
+    def test_dangling_usable_weapon_type_ref_rejected_L011(self, tmp_path):
+        klass = self.CLASS_OK.replace("equip_type.sword", "equip_type.ghost")
+        res = run(tmp_path, self._tree(klass))
+        assert "L011" in codes(res.errors), res.errors
+
+    def test_dangling_race_limit_ref_rejected_L011(self, tmp_path):
+        klass = self.CLASS_OK.replace("race.human", "race.ghost")
+        res = run(tmp_path, self._tree(klass))
+        assert "L011" in codes(res.errors), res.errors
+
+    def test_dangling_talent_tree_ref_rejected_L011(self, tmp_path):
+        klass = self.CLASS_OK.replace("talent_tree.warrior", "talent_tree.ghost")
+        res = run(tmp_path, self._tree(klass))
+        assert "L011" in codes(res.errors), res.errors
+
+    def test_dangling_attribute_mod_ref_rejected_L011(self, tmp_path):
+        klass = self.CLASS_OK.replace("attribute.strength", "attribute.ghost")
+        res = run(tmp_path, self._tree(klass))
+        assert "L011" in codes(res.errors), res.errors
+
+    # -- role XOR hybrid (top-level oneOf) ------------------------------------
+
+    def test_both_role_and_hybrid_rejected(self, tmp_path):
+        # Both present -> the oneOf matches both branches -> rejected (spec §2.4).
+        klass = self.CLASS_OK.replace(
+            "    role: tank\n", "    role: tank\n    hybrid: [tank, healer]\n"
+        )
+        res = run(tmp_path, self._tree(klass))
+        assert "SCHEMA" in codes(res.errors), res.errors
+
+    def test_neither_role_nor_hybrid_rejected(self, tmp_path):
+        # Neither present -> the oneOf matches no branch -> rejected (spec §2.4).
+        klass = self.CLASS_OK.replace("    role: tank\n", "")
+        res = run(tmp_path, self._tree(klass))
+        assert "SCHEMA" in codes(res.errors), res.errors
+
+    # -- schema-shape guards --------------------------------------------------
+
+    def test_missing_name_fails_schema(self, tmp_path):
+        klass = self.CLASS_OK.replace("    name: Warrior\n", "")
+        res = run(tmp_path, self._tree(klass))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_missing_abilities_fails_schema(self, tmp_path):
+        klass = self.CLASS_OK.replace(
+            "    abilities:\n      - ability.power_strike\n", ""
+        )
+        res = run(tmp_path, self._tree(klass))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_missing_usable_armor_types_fails_schema(self, tmp_path):
+        klass = self.CLASS_OK.replace(
+            "    usable_armor_types:\n      - equip_type.plate\n", ""
+        )
+        res = run(tmp_path, self._tree(klass))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_empty_abilities_fails_schema(self, tmp_path):
+        # abilities has minItems 1 — a class has a spellbook.
+        klass = self.CLASS_OK.replace(
+            "    abilities:\n      - ability.power_strike\n", "    abilities: []\n"
+        )
+        res = run(tmp_path, self._tree(klass))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_duplicate_ability_fails_schema(self, tmp_path):
+        # uniqueItems — the same ability must not appear twice in the spellbook.
+        klass = self.CLASS_OK.replace(
+            "    abilities:\n      - ability.power_strike\n",
+            "    abilities:\n      - ability.power_strike\n      - ability.power_strike\n",
+        )
+        res = run(tmp_path, self._tree(klass))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_bad_role_enum_fails_schema(self, tmp_path):
+        klass = self.CLASS_OK.replace("role: tank", "role: superhero")
+        res = run(tmp_path, self._tree(klass))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_bad_hybrid_role_value_fails_schema(self, tmp_path):
+        klass = self.CLASS_OK.replace(
+            "    role: tank\n", "    hybrid: [tank, superhero]\n"
+        )
+        res = run(tmp_path, self._tree(klass))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_hybrid_single_role_fails_schema(self, tmp_path):
+        # hybrid has minItems 2 — a single role belongs in `role`.
+        klass = self.CLASS_OK.replace("    role: tank\n", "    hybrid: [tank]\n")
+        res = run(tmp_path, self._tree(klass))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_bad_ability_ref_shape_fails_schema(self, tmp_path):
+        # abilityRef requires an `ability.` segment; a non-ability shape is a
+        # SCHEMA failure before L011 even runs.
+        klass = self.CLASS_OK.replace("ability.power_strike", "npc.dummy")
+        res = run(tmp_path, self._tree(klass))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_extra_field_rejected(self, tmp_path):
+        # additionalProperties: false — no fields beyond the 7-field record.
+        klass = self.CLASS_OK.replace(
+            "    name: Warrior\n", "    name: Warrior\n    health: 100\n"
+        )
+        res = run(tmp_path, self._tree(klass))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_id_wrong_type_segment_fails_schema(self, tmp_path):
+        # The strict classId pattern requires a `class.` type segment.
+        klass = self.CLASS_OK.replace("id: tp:class.warrior", "id: tp:item.warrior")
+        res = run(tmp_path, self._tree(klass))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_contentid_class_segment_not_in_shared_contentid(self):
+        # class uses a LOCAL classId def, not common.defs contentId — assert the
+        # shared contentId still does NOT admit a class id (the local def owns it),
+        # and the local classId does (same guarantee equip_type/race make).
+        import re
+
+        from validate_content import load_schemas
+
+        defs = load_schemas(SCHEMA_DIR)["class"].schema["$defs"]
+        assert not re.compile(defs["classId"]["pattern"]).match("core:item.warrior")
+        assert re.compile(defs["classId"]["pattern"]).match("core:class.warrior")
+
+
 @pytest.mark.integration
 class TestRepoContent:
     def test_repo_content_validates_clean(self):

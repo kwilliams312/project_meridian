@@ -42,6 +42,7 @@ myzone:quest.welcome_to_emberfall     ← community pack
     equip_types/ *.equip_type.yaml  # armor/weapon-type catalog (meridian/equip_type@1)
     talents/  *.talent.yaml         # talent catalog (meridian/talent@1)
     talent_trees/ *.talent_tree.yaml  # tiered talent trees (meridian/talent_tree@1)
+    classes/  *.class.yaml          # playable classes (meridian/class@1)
     assets/   **/*.asset.yaml  # IF-8 sidecars (meridian/asset@1), one per asset ID
   ```
 - Units are always suffixed: `_ms`, `_m` (meters), `_mps`, `_pct`, `_deg`, `_seconds`. Money is always integer **copper** (100c = 1s, 10 000c = 1g).
@@ -63,6 +64,7 @@ myzone:quest.welcome_to_emberfall     ← community pack
 | `meridian/equip_type@1` | [equip_type.schema.yaml](equip_type.schema.yaml) | Armor/weapon-type catalog (pack-contract spec §2.1): `category: armor\|weapon` distinguishes the armor materials (Cloth/Leather/Mail/Plate) from the weapon types (Two-Hand/One-Hand/Wand/Staff). Items reference one via `item.equip_type`; class proficiencies gate on it in sub-project 2 |
 | `meridian/talent@1` | [talent.schema.yaml](talent.schema.yaml) | A talent (pack-contract spec §2.5): `grants` a bundle of active abilities (by id) and/or passive buff/debuff effects over an attribute id (reusing the ability effect-primitive palette). Rules-data; kernel consumption is sub-project 2 |
 | `meridian/talent_tree@1` | [talent_tree.schema.yaml](talent_tree.schema.yaml) | A simple tiered row-unlock talent tree (pack-contract spec §2.5): `tiers[]` of `{required_points, talents:[<talent id>]}`. No arbitrary prerequisite graph in v1. A class references one via `class.talent_tree` (sub-project 2) |
+| `meridian/class@1` | [class.schema.yaml](class.schema.yaml) | A playable class — the 7-field integrator (pack-contract spec §2.4): `abilities` (spellbook), `usable_armor_types`/`usable_weapon_types` (equip_type ids), `role` XOR `hybrid`, optional `attribute_mods`/`race_limits`/`talent_tree`. Every ref is L011-resolved; the equip_type category-match (armor/weapon) is a sub-project 2 semantic gate. Rules-data; kernel consumption is sub-project 2 |
 
 Deferred to M2 (do not invent early): `statprofile` (class/level stat tables), `faction` (v1 uses a simple friendly/neutral/hostile enum on NPCs), `recipe` (ECO-02), `gossip` graphs (v1 uses a single `gossip_text`).
 

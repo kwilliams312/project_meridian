@@ -231,6 +231,15 @@ _CONTENT_REF_DEFS = {
     "talentId": "content",
     "talentTreeId": "content",
     "talentRef": "talent",
+    # class (pack-contract spec §2.4) is the 7-field integrator; like the other
+    # newer content types its ref defs live locally in class.schema.yaml. classId
+    # is the class entity's own id (generic self-id, like contentId). raceRef /
+    # talentTreeRef are references TO a race / talent_tree, first consumed by a
+    # class's race_limits / talent_tree (spec §2.4) — the reference-def counterparts
+    # to race's raceId / talent_tree's talentTreeId self-ids.
+    "classId": "content",
+    "raceRef": "race",
+    "talentTreeRef": "talent_tree",
 }
 _ASSET_REF_DEFS = {
     "artRef": "art",

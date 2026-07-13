@@ -1,0 +1,135 @@
+# meridian/class@1 — a playable class: the 7-field integrator (spec §2.4,
+# 2026-07-13 pack-contract/content-schema design). A class ties the rules-data
+# catalogs together into a playable archetype:
+#   - `abilities`            — the class spellbook (ability ids, spec §2.6).
+#   - `usable_armor_types`   — armor categories it may equip (equip_type ids,
+#                              category=armor, spec §2.1).
+#   - `usable_weapon_types`  — weapon types it may wield (equip_type ids,
+#                              category=weapon, spec §2.1).
+#   - `role` XOR `hybrid`    — a single combat role OR a hybrid list of roles.
+#   - `attribute_mods?`      — optional per-class stat tuning (attributeMods).
+#   - `race_limits?`         — a content/lore race gate (race ids; empty/omitted
+#                              = all races).
+#   - `talent_tree?`         — the class's tiered talent tree (talent_tree id).
+# Rules-data only: kernel consumption (equip-gating, roster loading, applying the
+# spellbook / talent tree) is sub-project 2. No `content/core` seed classes ship
+# here — the seed roster arrives with the seed pack (story 1.8), keeping this
+# story idmap-free.
+#
+# `role` XOR `hybrid`: exactly one is present. Enforced by the top-level `oneOf`
+# of mutually-exclusive `required` keys (the same presence-XOR idiom loot entries
+# use for item-vs-table) — both-present matches BOTH branches (oneOf demands
+# exactly one → rejected), neither-present matches NEITHER (→ rejected). schema_gen
+# lowers the record from `properties` alone, so it emits `role` and `hybrid` as two
+# optional members and leaves the XOR to the validators, exactly as intended.
+#
+# Cross-references (`abilities`/`usable_*_types`/`race_limits`/`talent_tree`) carry
+# only a SHAPE check here; that each id resolves to a defined entity is a
+# content-level check (L011, spec §3) run by validate_content.py + mcc. NOTE:
+# matching the referenced equip_type's CATEGORY (usable_armor_types → category
+# armor, usable_weapon_types → category weapon) is a cross-entity SEMANTIC check
+# beyond simple ref resolution; it is deferred to sub-project 2 (where the kernel
+# consumes proficiencies and equip-gates), per spec §2.4 — this round resolves the
+# ref (the equip_type exists) in both validators.
+#
+# Local $defs (classId self-id + equipTypeRef/raceRef/talentTreeRef references)
+# follow the pattern equip_type/race/talent_tree use: contentId's type alternation
+# in common.defs.yaml does not list `class`, and reference defs for the newer
+# content types live locally in the schema that first needs them — a uniquely-named
+# local def survives the validators' `$defs.update(common)` merge. `abilityRef`,
+# `displayName` and `attributeMods` come from the merged common.defs.yaml.
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/class.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, id, name, abilities, usable_armor_types, usable_weapon_types]
+properties:
+  schema: { const: "meridian/class@1" }
+  id: { $ref: "#/$defs/classId" }
+  name: { $ref: "#/$defs/displayName" }
+  description:
+    type: string
+    maxLength: 500
+  abilities:
+    description: The class spellbook — meridian/ability@1 ids (L011-resolved).
+    type: array
+    minItems: 1
+    maxItems: 300
+    uniqueItems: true
+    items: { $ref: "#/$defs/abilityRef" }
+  usable_armor_types:
+    description: >-
+      Armor categories this class may equip, by equip_type id (category=armor,
+      spec §2.1). The category-match check is a sub-project 2 semantic gate; this
+      round resolves the ref (L011). Empty = wears no armor category.
+    type: array
+    maxItems: 20
+    uniqueItems: true
+    items: { $ref: "#/$defs/equipTypeRef" }
+  usable_weapon_types:
+    description: >-
+      Weapon types this class may wield, by equip_type id (category=weapon,
+      spec §2.1). Category-match is deferred to sub-project 2; ref resolves via
+      L011 this round. Empty = wields no weapon type.
+    type: array
+    maxItems: 20
+    uniqueItems: true
+    items: { $ref: "#/$defs/equipTypeRef" }
+  role:
+    description: >-
+      The class's single combat role. Mutually exclusive with `hybrid` (a class is
+      one OR the other — see the top-level oneOf).
+    enum: [healer, dps_melee, dps_ranged, tank]
+  hybrid:
+    description: >-
+      A hybrid class's set of roles (2-4 of the role vocabulary). Mutually
+      exclusive with `role`.
+    type: array
+    minItems: 2
+    maxItems: 4
+    uniqueItems: true
+    items:
+      enum: [healer, dps_melee, dps_ranged, tank]
+  attribute_mods:
+    description: >-
+      Optional flat per-class attribute tuning (attributeMods, spec §2.2/§2.4).
+      Each entry references a meridian/attribute@1 id (L011-resolved).
+    $ref: "#/$defs/attributeMods"
+  race_limits:
+    description: >-
+      Optional content/lore gate: the meridian/race@1 ids allowed to play this
+      class (L011-resolved). Omitted or empty = all races (not a stat gate).
+    type: array
+    maxItems: 50
+    uniqueItems: true
+    items: { $ref: "#/$defs/raceRef" }
+  talent_tree:
+    description: >-
+      Optional tiered talent tree for this class, by talent_tree id (spec §2.5,
+      L011-resolved).
+    $ref: "#/$defs/talentTreeRef"
+
+# role XOR hybrid — exactly one present (spec §2.4). oneOf of mutually-exclusive
+# required keys: role-only matches branch 1 only, hybrid-only matches branch 2
+# only, both matches both (oneOf → rejected), neither matches none (→ rejected).
+oneOf:
+  - required: [role]
+  - required: [hybrid]
+
+$defs:
+  classId:
+    description: Fully-qualified class id owned by this file (namespace required).
+    type: string
+    pattern: "^[a-z][a-z0-9_]{1,31}:class\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+  equipTypeRef:
+    description: Reference to a meridian/equip_type@1 entity (armor or weapon type).
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?equip_type\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+  raceRef:
+    description: Reference to a meridian/race@1 entity (a playable race).
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?race\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+  talentTreeRef:
+    description: Reference to a meridian/talent_tree@1 entity (a tiered talent tree).
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?talent_tree\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"

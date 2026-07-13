@@ -26,8 +26,10 @@ struct NpcRef { std::string id; };
 struct ZoneRef { std::string id; };
 struct QuestRef { std::string id; };
 struct ItemRef { std::string id; };
-struct AppearanceRef { std::string id; };
 struct AttributeRef { std::string id; };
+struct RaceRef { std::string id; };
+struct TalentTreeRef { std::string id; };
+struct AppearanceRef { std::string id; };
 struct TalentRef { std::string id; };
 struct ArtRef { std::string id; };
 struct SfxRef { std::string id; };
@@ -181,6 +183,20 @@ enum class AttachSocket {
 enum class AttributeKind {
     Primary,
     Derived,
+};
+
+enum class ClassHybrid {
+    Healer,
+    DpsMelee,
+    DpsRanged,
+    Tank,
+};
+
+enum class ClassRole {
+    Healer,
+    DpsMelee,
+    DpsRanged,
+    Tank,
 };
 
 enum class DyeChannel {
@@ -867,6 +883,25 @@ struct Attribute {
     std::optional<std::string> description;  // optional
 };
 
+struct AttributeMod {
+    AttributeRef attribute;
+    std::int64_t value;
+};
+
+struct Class {
+    ContentId id;
+    std::string name;
+    std::optional<std::string> description;  // optional
+    std::vector<AbilityRef> abilities;  // The class spellbook — meridian/ability@1 ids (L011-resolved).
+    std::vector<EquipTypeRef> usable_armor_types;  // Armor categories this class may equip, by equip_type id (category=armor, spec §2.1). The category-match check is a sub-project 2 semantic gate; this round resolves the ref (L011). Empty = wears no armor category.
+    std::vector<EquipTypeRef> usable_weapon_types;  // Weapon types this class may wield, by equip_type id (category=weapon, spec §2.1). Category-match is deferred to sub-project 2; ref resolves via L011 this round. Empty = wields no weapon type.
+    std::optional<ClassRole> role;  // The class's single combat role. Mutually exclusive with `hybrid` (a class is one OR the other — see the top-level oneOf).
+    std::vector<ClassHybrid> hybrid;  // A hybrid class's set of roles (2-4 of the role vocabulary). Mutually exclusive with `role`.
+    std::vector<AttributeMod> attribute_mods;  // Optional flat per-class attribute tuning (attributeMods, spec §2.2/§2.4). Each entry references a meridian/attribute@1 id (L011-resolved).
+    std::vector<RaceRef> race_limits;  // Optional content/lore gate: the meridian/race@1 ids allowed to play this class (L011-resolved). Omitted or empty = all races (not a stat gate).
+    std::optional<TalentTreeRef> talent_tree;  // Optional tiered talent tree for this class, by talent_tree id (spec §2.5, L011-resolved).
+};
+
 struct Dye {
     ContentId id;
     std::string name;
@@ -880,11 +915,6 @@ struct EquipType {
     std::optional<std::string> description;  // optional
     EquipTypeCategory category;  // armor = a wearable-armor material class (Cloth/Leather/Mail/Plate); weapon = a weapon type (Two-Hand/One-Hand/Wand/Staff). Class proficiencies (sub-project 2) gate equipping by this category.
     std::optional<std::string> slot_class;  // Informational grouping — armor: helm/chest/…; weapon: main/off/two_hand. Not enforced by the kernel in sub-project 1; a free-form lowercase token.
-};
-
-struct AttributeMod {
-    AttributeRef attribute;
-    std::int64_t value;
 };
 
 struct Race {

@@ -24,14 +24,17 @@ namespace {
 // (rules-data referenced by items and, in sub-project 2, class proficiencies).
 // `talent` + `talent_tree` (pack-contract spec §2.5) are the talent catalog and
 // its tiered row-unlock tree — rules-data referenced by a class's talent_tree
-// (sub-project 2). Like the other non-server-emitting types they classify + flow
-// into the client pck but emit NO world.sql this round. A registered type with
-// zero content entities is fine (no seed talents ship in sub-project 1).
+// (sub-project 2). `class` (pack-contract spec §2.4) is the 7-field integrator
+// tying abilities/equip_types/race_limits/talent_tree into a playable archetype —
+// rules-data referenced by (sub-project 2) roster loading. Like the other
+// non-server-emitting types they classify + flow into the client pck but emit NO
+// world.sql this round. A registered type with zero content entities is fine (no
+// seed classes/talents ship in sub-project 1).
 // Mirrors validate_content.py's CONTENT_TYPES (the reference validator).
-constexpr std::array<std::string_view, 15> kContentTypes = {
-    "npc",        "item",       "quest",  "ability",     "loot",
-    "vendor",     "spawn",      "zone",   "appearance",  "dye",
-    "attribute",  "equip_type", "race",   "talent",      "talent_tree"};
+constexpr std::array<std::string_view, 16> kContentTypes = {
+    "npc",        "item",       "quest", "ability",     "loot",  "vendor",
+    "spawn",      "zone",       "appearance", "dye",    "attribute",
+    "equip_type", "race",       "talent", "talent_tree", "class"};
 
 // Split `s` on '.' into its dot-separated parts.
 std::vector<std::string> split_dots(const std::string& s) {
