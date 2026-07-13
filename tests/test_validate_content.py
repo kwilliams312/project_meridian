@@ -940,6 +940,62 @@ class TestItem2Worn:
         res = run(tmp_path, {"tp/items/hauberk.item.yaml": armor})
         assert "L081" in codes(res.errors)
 
+    def test_item2_non_shield_armor_subclass_with_attach_still_fails_L081(
+        self, tmp_path
+    ):
+        # Regression (issue #460): a non-shield subclass on armor keeps the
+        # original rule — attach stays FORBIDDEN. Only subclass:shield is exempt.
+        armor = self.WORN_OK_ARMOR.replace(
+            "    item_class: armor\n",
+            "    item_class: armor\n    subclass: plate\n",
+        ).replace(
+            "        hides: [torso, forearms]\n",
+            "        attach: { socket: back }\n",
+        )
+        res = run(tmp_path, {"tp/items/hauberk.item.yaml": armor})
+        assert "L081" in codes(res.errors)
+
+    # A valid item@2 shield: armor + subclass shield is bone-attached like a
+    # weapon (issue #460) — attach REQUIRED, hides FORBIDDEN, same as a weapon,
+    # even though it lives under item_class: armor.
+    WORN_OK_SHIELD = """\
+    schema: meridian/item@2
+    id: tp:item.buckler
+    name: Buckler
+    item_class: armor
+    subclass: shield
+    slot: off_hand
+    rarity: common
+    visual:
+      icon: art.ui.icon.buckler
+      worn:
+        models: [{ model: art.armor.tp.buckler, mirror: none }]
+        attach: { socket: off_hand }
+    """
+
+    def test_item2_shield_with_attach_passes(self, tmp_path):
+        res = run(tmp_path, {"tp/items/buckler.item.yaml": self.WORN_OK_SHIELD})
+        assert res.errors == []
+
+    def test_item2_shield_without_attach_fails_L081(self, tmp_path):
+        # Shield worn without attach → L081 (shields follow the weapon path:
+        # attach is REQUIRED, issue #460).
+        shield = self.WORN_OK_SHIELD.replace(
+            "        attach: { socket: off_hand }\n", ""
+        )
+        res = run(tmp_path, {"tp/items/buckler.item.yaml": shield})
+        assert "L081" in codes(res.errors)
+
+    def test_item2_shield_with_hides_fails_L081(self, tmp_path):
+        # Shield worn with hides → L081 (attach XOR skinned; a shield covers no
+        # body region, so hides is FORBIDDEN too, issue #460).
+        shield = self.WORN_OK_SHIELD.replace(
+            "        attach: { socket: off_hand }\n",
+            "        hides: [torso]\n        attach: { socket: off_hand }\n",
+        )
+        res = run(tmp_path, {"tp/items/buckler.item.yaml": shield})
+        assert "L081" in codes(res.errors)
+
     def test_item2_non_equippable_with_worn_fails_L080(self, tmp_path):
         # A non-weapon/armor item (quest) must not carry worn.
         quest_item = (

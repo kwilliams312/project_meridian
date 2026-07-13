@@ -152,7 +152,15 @@ Rules:
 
 - **Skinned vs attached:** armor entries in `models` are skinned meshes bound to
   the shared skeleton; weapons use `attach` and ship static meshes (art-prd §2.1).
-  A worn block has `attach` XOR is skinned — schema-enforced by `item_class`.
+  A worn block has `attach` XOR is skinned — lint-enforced by `item_class` (L081).
+  **Shield exception (issue #460):** a shield (`item_class: armor`,
+  `subclass: shield`) is physically bone-attached like a weapon, not skinned to
+  the body — it covers no body region, so `hides` is meaningless for it. L081
+  therefore treats `subclass: shield` as the weapon path: it REQUIRES
+  `worn.attach` (`socket: off_hand` or `socket: shield` — both in
+  `skeleton.defs.attach_sockets`) and FORBIDS `worn.hides`, same as a weapon.
+  All other armor (`subclass != shield`) keeps the original rule: skinned,
+  `attach` forbidden.
 - `race_overrides` keys are roster race ids; an override replaces `models` (and
   may replace `hides`) for that race only. Everything absent falls through to the
   default. **M1 authors zero overrides.**
