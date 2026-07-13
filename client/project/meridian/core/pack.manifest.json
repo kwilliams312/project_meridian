@@ -6,10 +6,10 @@
   "content_schema_version": 1,
   "godot_version": "4.6",
   "id_band": 0,
-  "content_hash": "82c3d5989bfce59a17e44b0fa3a4b0c2ccb5b418a56a9816e5e9fbb7b2c946ea",
+  "content_hash": "be83b4d6c7baf4d72fe344911ef966a8e20f0f17b31ea79d5539c751b77e24e6",
   "mcc_version": "0.0.0",
   "built_at": "1970-01-01 00:00:00",
-  "entry_count": 111,
+  "entry_count": 114,
   "entries": [
     { "id": "core:ability.minor_healing", "numeric_id": 1, "type": "ability", "resource": "res://meridian/core/tables/ability.bin", "hash": "35ae382345900ffc2bbeb694eecdaa478af6deafa843bbfc6fae1ead291643f6" },
     { "id": "core:ability.pickaxe_slam", "numeric_id": 2, "type": "ability", "resource": "res://meridian/core/tables/ability.bin", "hash": "2ed79132ca10a17e2dfde60f98becb70c420b4c5df387fea531ff2bcb28b0813" },
@@ -121,6 +121,9 @@
     { "id": "core:art.char.ardent.male.hair_1", "numeric_id": 108, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/hair_1.res", "hash": "25b53f4c13fe5c7204233cf21d912cfcd0efeb90a2e6721e1fd1eb47046447be" },
     { "id": "core:art.char.ardent.male.hair_2", "numeric_id": 109, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/hair_2.res", "hash": "0628227e4aa34db661f7f7f6d752d557fe9f40bdd57a4fa7860654bf73106be9" },
     { "id": "core:art.char.ardent.male.hair_3", "numeric_id": 110, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/hair_3.res", "hash": "21e7c24f052478a110fb4d7c140c9ae1849672e07c9c3ac5b52832f26a431e52" },
-    { "id": "core:art.char.ardent.male.hair_4", "numeric_id": 111, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/hair_4.res", "hash": "4eefad84182090776dfb003523f44880c9db923c390c02d970b6f12b9779bbb8" }
+    { "id": "core:art.char.ardent.male.hair_4", "numeric_id": 111, "type": "asset", "resource": "res://meridian/core/art/char/ardent/male/hair_4.res", "hash": "4eefad84182090776dfb003523f44880c9db923c390c02d970b6f12b9779bbb8" },
+    { "id": "core:art.icon.item.iron_sword", "numeric_id": 112, "type": "asset", "resource": "res://meridian/core/art/icon/item/iron_sword.ctex", "hash": "6acfb79668402372c83937ce7e01b5d2adf92c6c0758619d3ab42a0c18df84c6" },
+    { "id": "core:art.item.weapon.iron_sword", "numeric_id": 113, "type": "asset", "resource": "res://meridian/core/art/item/weapon/iron_sword.scn", "hash": "bbdf15c510179b5d04790aaba056758ad2a7d391a20aeaff743af5d0946d16f7" },
+    { "id": "core:item.iron_sword", "numeric_id": 114, "type": "item", "resource": "res://meridian/core/tables/item.bin", "hash": "2d9b097598a857a486e9e67cc8feb21ae4b1d582a8be5d460b8cfaa60f7517c6" }
   ]
 }

@@ -1,0 +1,37 @@
+# IF-8 sidecar (meridian/asset@1). Iron Sword — a real Meshy text-to-3D sword
+# sculpt (model meshy-5) restyled to the canonical socketed-weapon pose via
+# tools/blender/meridian_rig/restyle_weapon.py (#605): oriented so the blade runs
+# up the socket axis (Blender +Z → glTF +Y under export_yup, "up" out of the fist),
+# the crossguard along X and the blade flat along Y — the exact pose the proven
+# rusty_pickaxe ships in — with the grip/guard seated at the bottom (pommel at
+# ~−0.06, matching the pickaxe) so the fist closes around the grip, uniform-scaled
+# to a plausible ~0.9 m one-handed length, decimated into the Art PRD §2.1 weapon
+# band, and its Meshy photo-texture stripped for a flat steel base so the shipped
+# .glb stays a small STATIC single mesh (no skin, no armature, no animations) —
+# identical in structure to the pickaxe, so the assembler's _mount_socketed attaches
+# it on socket_main_hand exactly the same way. A weapon is socket-attached, NOT
+# skinned/fit-to-body, so there is no body-fit, no dye UV, no skinning (simpler than
+# the Warden armor restyle). source_tier: ai — the restyle pass is complete, so
+# restyle_status: done (the #525 quarantine lint blocks 'pending'). PROVES the
+# Meshy-weapon pipeline (first real WEAPON on the hand socket).
+schema: meridian/asset@1
+id: core:art.item.weapon.iron_sword
+class: weapon_model
+source: assets/art/item/weapon/iron_sword.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors: [meridian-contributors]
+  origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/019f58ca-b832-7e99-8fcc-97d8813b5a64
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: item_weapon_iron_sword.prompts.yaml
+budget:
+  # Single static weapon mesh, decimated to the middle of the Art PRD §2.1 weapon
+  # band (6–12k for a one-hander), well under the 15k weapon_model L070 ceiling.
+  lod0_tris: 9999
+import_hints:
+  # A weapon ships a single authored static mesh mounted on a bone socket — no LOD
+  # chain, no rig (matches the rusty_pickaxe weapon_model).
+  lod_policy: authored
+restyle_status: done

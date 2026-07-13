@@ -1,0 +1,22 @@
+schema: meridian/item@2
+id: core:item.iron_sword
+name: Iron Sword
+flavor_text: A plain arming sword of forge-black iron — honest steel, no frills.
+item_class: weapon
+subclass: sword_1h
+slot: main_hand
+rarity: common
+required_level: 1
+item_level: 5
+binding: none
+weapon:
+  damage: { min: 6, max: 11 }
+  speed_ms: 2400
+price:
+  sell: 120
+visual:
+  icon: core:art.icon.item.iron_sword
+  model: core:art.item.weapon.iron_sword
+  worn:
+    models: [{ model: core:art.item.weapon.iron_sword, mirror: none }]
+    attach: { socket: main_hand, sheath_socket: back }
