@@ -1185,6 +1185,55 @@ class TestDye:
         assert "SCHEMA" in codes(res.errors)
 
 
+CLEAN_IDMAP = """\
+schema: meridian/idmap@1
+namespace: tp
+band: 0
+released_watermark: 0
+map:
+  tp:npc.dummy: 1
+  tp:zone.z1: 2
+"""
+
+
+@pytest.mark.unit
+class TestL016AppendOnly:
+    """L016 — idmap.lock append-only discipline: an id never changes meaning, ids
+    are never renumbered/reused (spec §3, formalizes the roster.h rule as a lint)."""
+
+    def test_clean_idmap_passes(self, tmp_path):
+        res = run(
+            tmp_path, {"tp/idmap.lock": CLEAN_IDMAP, "tp/npcs/dummy.npc.yaml": NPC}
+        )
+        assert "L016" not in codes(res.errors), res.errors
+
+    def test_renumber_collision_is_error(self, tmp_path):
+        # A renumber that lands an id on an index another id already owns: the
+        # canonical footprint of a hand-edited renumber. Two ids share index 1.
+        idmap = CLEAN_IDMAP.replace("tp:zone.z1: 2", "tp:zone.z1: 1")
+        res = run(tmp_path, {"tp/idmap.lock": idmap})
+        assert "L016" in codes(res.errors), res.errors
+        joined = " ".join(res.errors)
+        assert "tp:npc.dummy" in joined and "tp:zone.z1" in joined
+
+    def test_reuse_of_retired_index_is_error(self, tmp_path):
+        idmap = CLEAN_IDMAP + "retired:\n  tp:npc.old: 1\n"
+        res = run(tmp_path, {"tp/idmap.lock": idmap})
+        # index 1 is live (npc.dummy) but also frozen in retired (npc.old): reuse.
+        assert "L016" in codes(res.errors), res.errors
+        assert "tp:npc.dummy" in " ".join(e for e in res.errors if "L016" in e)
+
+    def test_id_in_both_map_and_retired_is_error(self, tmp_path):
+        idmap = CLEAN_IDMAP + "retired:\n  tp:npc.dummy: 9\n"
+        res = run(tmp_path, {"tp/idmap.lock": idmap})
+        assert "L016" in codes(res.errors), res.errors
+
+    def test_reserved_zero_index_is_error(self, tmp_path):
+        idmap = CLEAN_IDMAP.replace("tp:zone.z1: 2", "tp:zone.z1: 0")
+        res = run(tmp_path, {"tp/idmap.lock": idmap})
+        assert "L016" in codes(res.errors), res.errors
+
+
 @pytest.mark.unit
 class TestEquipType:
     """meridian/equip_type@1 — the armor/weapon-type catalog + item.equip_type

@@ -355,6 +355,16 @@ public enum StatKey
     Spirit,
 }
 
+public sealed record PackTheme
+{
+    /// <summary>Human-facing theme name shown in a realm/pack picker.</summary>
+    public string? DisplayName { get; init; }
+    /// <summary>One-line theme tagline.</summary>
+    public string? Tagline { get; init; }
+    /// <summary>Optional art-registry id for a preview image.</summary>
+    public ArtRef? PreviewAsset { get; init; }
+}
+
 public sealed record PackEngine
 {
     public required string Godot { get; init; }
@@ -376,6 +386,10 @@ public sealed record Pack
     public required string Version { get; init; }
     /// <summary>Major schema version this pack is authored against.</summary>
     public required long ContentSchemaVersion { get; init; }
+    /// <summary>Pack CONTRACT version — distinct from the semver `version`. Bumps ONLY on a breaking (non-additive) id change (a removed/renumbered id or removed capability, per the §3 breaking-change rules `mcc diff` classifies). Additive changes (new ids, new optional fields) never bump it. A realm records the value it booted with; a higher pack with a breaking diff refuses to boot until an operator migration runs (boot-gate contract, enforced in sub-project 2). Optional at rest — an absent value is treated as the baseline 1.</summary>
+    public long? CompatibilityVersion { get; init; }
+    /// <summary>Thin theme metadata (sub-project 1 slice). The full UI-theme/audio manifest folding + realm selection lands in sub-project 4; here it is display-only.</summary>
+    public PackTheme? Theme { get; init; }
     /// <summary>Engine pin — .pck packs are validated against this Godot version (Tools PRD R8).</summary>
     public required PackEngine Engine { get; init; }
     /// <summary>Other packs whose IDs this pack may reference.</summary>

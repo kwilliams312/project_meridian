@@ -29,6 +29,7 @@
 #define MCC_STAGES_CONTENT_HASH_H
 
 #include <map>
+#include <ostream>
 #include <string>
 
 #include "stages/model.h"
@@ -42,6 +43,19 @@ namespace mcc::stages {
 // tree hashed to nothing. Deterministic: input files are sorted by rel_path, so
 // the same source tree always yields the same digest on every platform.
 std::map<std::string, std::string> compute_pack_hashes(const model::ContentModel& model);
+
+// `mcc content-hash [dir] [--json]` — surface the per-pack content_hash on stdout
+// (the pack-level digest over the canonicalized content set, spec §3, the
+// client<->server agreement token). Runs discover + parse over `content_dir`,
+// then prints one namespace -> 64-hex-digest line per pack (or a JSON object with
+// --json). This is the same digest emit-sql/emit-pck stamp into their manifests
+// (the three-way tie), exposed directly so it can be diffed/pinned. Because the
+// pack manifest is part of the hashed tree, a change to any pack field — including
+// the new compatibility_version / theme — flows into the digest. Deterministic:
+// stable across runs on unchanged content, and changes iff the content changes.
+// Returns 0 on success, 2 when `content_dir` cannot be scanned.
+int content_hash_report(const std::string& content_dir, bool as_json, std::ostream& out,
+                        std::ostream& err);
 
 }  // namespace mcc::stages
 

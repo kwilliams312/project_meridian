@@ -324,6 +324,12 @@ enum class StatKey {
     Spirit,
 };
 
+struct PackTheme {
+    std::optional<std::string> display_name;  // Human-facing theme name shown in a realm/pack picker.
+    std::optional<std::string> tagline;  // One-line theme tagline.
+    std::optional<ArtRef> preview_asset;  // Optional art-registry id for a preview image.
+};
+
 struct PackEngine {
     std::string godot;
 };
@@ -339,6 +345,8 @@ struct Pack {
     std::optional<std::string> description;  // optional
     std::string version;  // Semver of this content pack.
     std::int64_t content_schema_version;  // Major schema version this pack is authored against.
+    std::optional<std::int64_t> compatibility_version;  // Pack CONTRACT version — distinct from the semver `version`. Bumps ONLY on a breaking (non-additive) id change (a removed/renumbered id or removed capability, per the §3 breaking-change rules `mcc diff` classifies). Additive changes (new ids, new optional fields) never bump it. A realm records the value it booted with; a higher pack with a breaking diff refuses to boot until an operator migration runs (boot-gate contract, enforced in sub-project 2). Optional at rest — an absent value is treated as the baseline 1.
+    std::optional<PackTheme> theme;  // Thin theme metadata (sub-project 1 slice). The full UI-theme/audio manifest folding + realm selection lands in sub-project 4; here it is display-only.
     PackEngine engine;  // Engine pin — .pck packs are validated against this Godot version (Tools PRD R8).
     std::vector<PackDependency> dependencies;  // Other packs whose IDs this pack may reference.
     std::vector<std::string> authors;  // optional
