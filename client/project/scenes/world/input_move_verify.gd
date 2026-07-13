@@ -1,20 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Project Meridian — headless runtime verification for WASD-follows-facing
-# (CHR-02, issue #619). NOT a shipped scene: run under
+# Project Meridian — headless runtime verification for WASD-follows-the-VIEW
+# (CHR-02). NOT a shipped scene: run under
 # `godot --headless --path project --script res://scenes/world/input_move_verify.gd`
 # so CI / a dev box can PROVE, with no human at a mouse, that keyboard "forward"
-# tracks the character's actual facing for every yaw — the exact defect #619 fixed.
+# tracks the camera's LOOK direction (camera_yaw) for every yaw — including the
+# case where the view has been orbited AWAY from the character's committed facing.
 #
-# It drives the REAL pieces: a MeridianTpsCamera fed a synthetic RMB-steer turns
-# a real Body node (yaw_target = ../Body), then the SHARED production basis
-# (movement_basis.gd, the same code world.gd _tick_local_player calls) maps WASD
-# into world space. The asserts compare that move vector against the Body node's
-# ACTUAL transform basis — so "W = +facing, S = -facing, D = +right, A = -right"
-# is measured against what the player literally sees, at several non-zero yaws.
-# It also feeds the real MeridianMovementController to confirm the core still
-# normalizes diagonals (W+D is not faster than W). Exits 0 on success, 1 on any
-# failed assertion.
+# world.gd _tick_local_player uses `_camera.get_camera_yaw()` (the VIEW) and the
+# shared basis (movement_basis.gd). So this drives the REAL MeridianTpsCamera:
+#   * RMB-steer turns the view AND the character together (camera_yaw==character_yaw)
+#     — W must drive along the view, which here equals the visible Body facing.
+#   * LMB-orbit turns ONLY the view (camera_yaw != character_yaw) — W must follow
+#     the VIEW, NOT the Body facing. This is the assertion that distinguishes
+#     view-relative from the old facing-relative behaviour.
+# Exits 0 on success, 1 on any failed assertion.
 
 extends SceneTree
 
@@ -38,8 +38,31 @@ func _wait(frames: int) -> void:
 		await physics_frame
 
 
+# The look direction (forward/right on the XZ plane) for a view yaw. Godot forward
+# is local -Z, right is local +X; both rotated by the yaw about UP.
+func _view_forward(yaw: float) -> Vector3:
+	return Vector3(0.0, 0.0, -1.0).rotated(Vector3.UP, yaw)
+
+
+func _view_right(yaw: float) -> Vector3:
+	return Vector3(1.0, 0.0, 0.0).rotated(Vector3.UP, yaw)
+
+
+func _assert_wasd_follows(view_yaw: float, tag: String) -> void:
+	var fwd := _view_forward(view_yaw)
+	var right := _view_right(view_yaw)
+	var mW := MovementBasis.character_relative_move(1.0, 0.0, view_yaw).normalized()
+	var mS := MovementBasis.character_relative_move(-1.0, 0.0, view_yaw).normalized()
+	var mD := MovementBasis.character_relative_move(0.0, 1.0, view_yaw).normalized()
+	var mA := MovementBasis.character_relative_move(0.0, -1.0, view_yaw).normalized()
+	_check("%s: W drives ALONG the view (dot=%.4f)" % [tag, mW.dot(fwd)], _approx(mW.dot(fwd), 1.0))
+	_check("%s: S backpedals opposite the view (dot=%.4f)" % [tag, mS.dot(fwd)], _approx(mS.dot(fwd), -1.0))
+	_check("%s: D strafes view-RIGHT (dot=%.4f)" % [tag, mD.dot(right)], _approx(mD.dot(right), 1.0))
+	_check("%s: A strafes view-LEFT (dot=%.4f)" % [tag, mA.dot(right)], _approx(mA.dot(right), -1.0))
+
+
 func _initialize() -> void:
-	print("meridian WASD-follows-facing RUNTIME verify (#619)")
+	print("meridian WASD-follows-the-VIEW runtime verify")
 
 	var loaded := ClassDB.class_exists("MeridianTpsCamera")
 	_check("MeridianTpsCamera class registered", loaded)
@@ -65,69 +88,59 @@ func _initialize() -> void:
 	player.add_child(cam)
 	await _wait(2)
 
-	# Drive several distinct facings by RMB-steering, and at EACH one prove the
-	# emitted WASD vectors line up with the Body's real forward/right. A single
-	# yaw could hide a sign error that only bites in one quadrant; sweeping both
-	# directions (and past +/-90 deg) exercises all four.
+	# 1) RMB-steer sweep: view and character turn TOGETHER; W follows the view,
+	#    which here equals the visible Body facing (no divergence).
 	var steers: Array = [60.0, 90.0, -140.0, 120.0]
 	for step_dx in steers:
 		cam.feed_mouse_motion(step_dx, 0.0, 1)  # 1 = Steer (RMB)
 		await _wait(1)
 		var st: Dictionary = cam.get_state()
-		var yaw: float = st["character_yaw"]
+		var cam_yaw: float = st["camera_yaw"]
+		var char_yaw: float = st["character_yaw"]
+		_check("steer keeps view==facing (cam=%.3f char=%.3f)" % [cam_yaw, char_yaw],
+			_approx(cam_yaw, char_yaw))
+		_check("Body.rotation.y tracks facing @ %.3f" % char_yaw, _approx(body.rotation.y, char_yaw))
+		_assert_wasd_follows(cam_yaw, "steer@%.2f" % cam_yaw)
 
-		# (a) steer updates character_yaw, and (b) the Body node is actually there.
-		_check("steer updated character_yaw (yaw=%.3f)" % yaw, abs(yaw) > 1e-4)
-		_check("Body.rotation.y tracks character_yaw @ yaw=%.3f" % yaw,
-			_approx(body.rotation.y, yaw))
+	# 2) LMB-orbit divergence: orbit turns ONLY the view. W must follow the VIEW,
+	#    NOT the (unchanged) Body facing — the view-relative assertion.
+	var before: Dictionary = cam.get_state()
+	var char_locked: float = before["character_yaw"]
+	cam.feed_mouse_motion(110.0, 0.0, 2)  # 2 = Orbit (LMB)
+	await _wait(1)
+	var after: Dictionary = cam.get_state()
+	var view_yaw: float = after["camera_yaw"]
+	_check("orbit moved the VIEW (cam %.3f -> %.3f)" % [before["camera_yaw"], view_yaw],
+		not _approx(view_yaw, before["camera_yaw"]))
+	_check("orbit did NOT turn the character (still %.3f)" % char_locked,
+		_approx(after["character_yaw"], char_locked))
+	_check("view has DIVERGED from facing (cam=%.3f char=%.3f)" % [view_yaw, char_locked],
+		not _approx(view_yaw, char_locked))
+	# W follows the orbited view...
+	_assert_wasd_follows(view_yaw, "orbit-view")
+	# ...and is DISTINCT from the character facing (proves it's the view, not the body).
+	var mW_view := MovementBasis.character_relative_move(1.0, 0.0, view_yaw).normalized()
+	var body_fwd := _view_forward(char_locked)
+	_check("W follows the VIEW, not the body facing (dot=%.4f < 0.99)" % mW_view.dot(body_fwd),
+		mW_view.dot(body_fwd) < 0.99)
 
-		# Ground-truth facing/right from the Body's REAL transform (what the player
-		# sees). Godot forward = local -Z, right = local +X.
-		var basis := body.global_transform.basis
-		var facing := (-basis.z)
-		facing.y = 0.0
-		facing = facing.normalized()
-		var right := basis.x
-		right.y = 0.0
-		right = right.normalized()
-
-		# (c) the SHARED production basis maps WASD to world space; compare to facing.
-		var mW := MovementBasis.character_relative_move(1.0, 0.0, yaw).normalized()
-		var mS := MovementBasis.character_relative_move(-1.0, 0.0, yaw).normalized()
-		var mD := MovementBasis.character_relative_move(0.0, 1.0, yaw).normalized()
-		var mA := MovementBasis.character_relative_move(0.0, -1.0, yaw).normalized()
-		_check("W drives ALONG the Body facing @ yaw=%.3f (dot=%.4f)" % [yaw, mW.dot(facing)],
-			_approx(mW.dot(facing), 1.0, 1e-3))
-		_check("S backpedals opposite the facing @ yaw=%.3f (dot=%.4f)" % [yaw, mS.dot(facing)],
-			_approx(mS.dot(facing), -1.0, 1e-3))
-		_check("D strafes to the Body RIGHT @ yaw=%.3f (dot=%.4f)" % [yaw, mD.dot(right)],
-			_approx(mD.dot(right), 1.0, 1e-3))
-		_check("A strafes to the Body LEFT @ yaw=%.3f (dot=%.4f)" % [yaw, mA.dot(right)],
-			_approx(mA.dot(right), -1.0, 1e-3))
-
-	# --- Diagonal speed: the controller core must normalize so W+D is not faster.
-	# Feed the REAL MeridianMovementController the world-space move for W and for
-	# W+D at a non-zero yaw and compare predicted horizontal speed.
+	# 3) Diagonal speed: the controller core must normalize so W+D is not faster.
 	var mover := MeridianMovementController.new()
 	mover.reset(Vector3.ZERO, 0.0)
-	var yaw2: float = cam.get_state()["character_yaw"]
 	var t := 0
-	var moveW: Vector3 = MovementBasis.character_relative_move(1.0, 0.0, yaw2)
-	mover.predict(moveW, false, false, yaw2, t)
+	var moveW: Vector3 = MovementBasis.character_relative_move(1.0, 0.0, view_yaw)
+	mover.predict(moveW, false, false, view_yaw, t)
 	t += 50
-	mover.predict(moveW, false, false, yaw2, t)
-	var vW: Vector3 = mover.get_predicted_velocity()
-	var spW := Vector2(vW.x, vW.z).length()
-
+	mover.predict(moveW, false, false, view_yaw, t)
+	var spW := Vector2(mover.get_predicted_velocity().x, mover.get_predicted_velocity().z).length()
 	var mover2 := MeridianMovementController.new()
 	mover2.reset(Vector3.ZERO, 0.0)
-	var moveWD: Vector3 = MovementBasis.character_relative_move(1.0, 1.0, yaw2)
+	var moveWD: Vector3 = MovementBasis.character_relative_move(1.0, 1.0, view_yaw)
 	t = 0
-	mover2.predict(moveWD, false, false, yaw2, t)
+	mover2.predict(moveWD, false, false, view_yaw, t)
 	t += 50
-	mover2.predict(moveWD, false, false, yaw2, t)
-	var vWD: Vector3 = mover2.get_predicted_velocity()
-	var spWD := Vector2(vWD.x, vWD.z).length()
+	mover2.predict(moveWD, false, false, view_yaw, t)
+	var spWD := Vector2(mover2.get_predicted_velocity().x, mover2.get_predicted_velocity().z).length()
 	print("  W speed=%.4f  W+D speed=%.4f" % [spW, spWD])
 	_check("diagonal (W+D) is NOT faster than W (core normalizes)",
 		_approx(spWD, spW, 1e-2) and spW > 0.0)
