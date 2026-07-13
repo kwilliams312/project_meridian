@@ -29,6 +29,7 @@ scripts/dev/post-update.sh <event> "<message>" [url]
   events:  epic-open | story-dispatch | story-close | pr-merged | note
   flags:   --dry-run   print the JSON payload instead of POSTing
            --help      show this help
+           --          end of flags (use before a message starting with "-")
 EOF
 }
 
@@ -98,7 +99,7 @@ if [ -z "$webhook" ]; then
 fi
 
 # POST to Discord; capture the HTTP status.
-http_code="$(curl -sS -o /dev/null -w '%{http_code}' \
+http_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
   -H 'Content-Type: application/json' \
   -X POST -d "$payload" "$webhook" || true)"
 

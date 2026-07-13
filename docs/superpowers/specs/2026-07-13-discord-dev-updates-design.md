@@ -59,7 +59,7 @@ scripts/dev/post-update.sh <event> "<message>" [url]
            --help      usage
 ```
 
-- `<message>` becomes the embed description.
+- `<message>` becomes the embed title (as `<emoji> <prefix> — <message>`).
 - `[url]` (optional) makes the embed title a clickable link to the issue/PR.
 - `note` is a generic freeform update for anything not covered by the named events.
 - Unknown event → usage error, exit 2.
