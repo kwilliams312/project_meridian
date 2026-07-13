@@ -148,12 +148,13 @@ public:
         : std::runtime_error("character name already exists: " + name) {}
 };
 
-// Maximum number of characters a single account may own (issue #329). M0.5 caps
-// this at 1 for concurrency testing — one account controls one character at a
-// time. It is a NAMED constant (not a magic 1) precisely so it can be raised
-// later without touching the enforcement logic. Enforced server-side inside the
-// create transaction (characters.cpp) so the check-then-insert cannot race.
-inline constexpr std::uint64_t kMaxCharactersPerAccount = 1;
+// Maximum number of characters a single account may own (issue #329). Set to 8
+// so a player can maintain a small roster — decoupled from the "one character
+// in-world at a time" slot (#326), which is enforced separately. It is a NAMED
+// constant (not a magic number) precisely so it can be tuned without touching
+// the enforcement logic. Enforced server-side inside the create transaction
+// (characters.cpp) so the check-then-insert cannot race.
+inline constexpr std::uint64_t kMaxCharactersPerAccount = 8;
 
 // Account is already at kMaxCharactersPerAccount (issue #329). A create is
 // refused server-side — mirrors DuplicateName as a typed, machine-readable

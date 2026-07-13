@@ -251,9 +251,9 @@ int main() {
     const int salt = std::rand();
     const std::uint64_t account_a = 4'000'000'000ULL + static_cast<unsigned>(salt);
     const std::uint64_t account_b = 4'100'000'000ULL + static_cast<unsigned>(salt);
-    // account_c / account_d exercise the one-character-per-account cap (#329):
-    // account_c creates one then is refused a second; account_d (a different
-    // account) can still create its first.
+    // account_c / account_d exercise the per-account character cap (#329, 8):
+    // account_c fills to the cap then is refused one past it; account_d (a
+    // different account) can still create its first.
     const std::uint64_t account_c = 4'200'000'000ULL + static_cast<unsigned>(salt);
     const std::uint64_t account_d = 4'300'000'000ULL + static_cast<unsigned>(salt);
     // account_e / account_f exercise the appearance bounds rule (contract ① §9):
@@ -420,37 +420,45 @@ int main() {
                   listed_big.size() == 1 && listed_big[0].account_id == account_big);
         }
 
-        // ---- 8. one-character-per-account cap (#329) -----------------------
-        // (a) the 1st create for a fresh account succeeds; (b) a 2nd create for
-        // the SAME account is refused with the cap reason (CharacterLimitReached),
-        // and the account still owns exactly one character; (c) a DIFFERENT
-        // account can still create its 1st character.
+        // ---- 8. per-account cap (#329, raised to 8 in #629) ----------------
+        // (a) an account may create up to kMaxCharactersPerAccount characters;
+        // (b) the create ONE PAST the cap for the SAME account is refused with
+        // the cap reason (CharacterLimitReached), and the account still owns
+        // exactly kMaxCharactersPerAccount; (c) a DIFFERENT account can still
+        // create its 1st character. Driven off the constant so the test tracks
+        // any future retune of the cap.
         {
-            characters::CreateRequest first;
-            first.account_id = account_c;
-            first.name = name_c1;
-            first.race = static_cast<std::uint8_t>(characters::Race::kArdent);
-            first.char_class = static_cast<std::uint8_t>(characters::Class::kVanguard);
-            characters::CreateResult r1 = characters::create_character(db, first);
-            check("cap: 1st create for the account succeeds", r1.character_id > 0);
+            bool all_filled = true;
+            for (std::uint64_t i = 0; i < characters::kMaxCharactersPerAccount; ++i) {
+                characters::CreateRequest fill;
+                fill.account_id = account_c;
+                fill.name = name_c1 + "_" + std::to_string(i);  // unique per create
+                fill.race = static_cast<std::uint8_t>(characters::Race::kArdent);
+                fill.char_class =
+                    static_cast<std::uint8_t>(characters::Class::kVanguard);
+                characters::CreateResult rf = characters::create_character(db, fill);
+                all_filled = all_filled && rf.character_id > 0;
+            }
+            check("cap: account may create up to kMaxCharactersPerAccount characters",
+                  all_filled);
 
-            characters::CreateRequest second;
-            second.account_id = account_c;   // same account -> over the cap
-            second.name = name_c2;           // unique name: the refusal is the cap
-            second.race = static_cast<std::uint8_t>(characters::Race::kSylvane);
-            second.char_class = static_cast<std::uint8_t>(characters::Class::kMender);
+            characters::CreateRequest over;
+            over.account_id = account_c;     // same account -> one past the cap
+            over.name = name_c2;             // unique name: the refusal is the cap
+            over.race = static_cast<std::uint8_t>(characters::Race::kSylvane);
+            over.char_class = static_cast<std::uint8_t>(characters::Class::kMender);
             bool capped = false;
             try {
-                characters::create_character(db, second);
+                characters::create_character(db, over);
             } catch (const characters::CharacterLimitReached&) {
                 capped = true;
             }
-            check("cap: 2nd create for same account refused (CharacterLimitReached)",
-                  capped);
+            check("cap: create past the cap refused (CharacterLimitReached)", capped);
 
             std::vector<characters::CharacterSummary> owned =
                 characters::list_characters(db, account_c);
-            check("cap: account still owns exactly one character", owned.size() == 1);
+            check("cap: account still owns exactly kMaxCharactersPerAccount",
+                  owned.size() == characters::kMaxCharactersPerAccount);
 
             characters::CreateRequest other;
             other.account_id = account_d;    // different account -> allowed

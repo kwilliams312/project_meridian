@@ -30,8 +30,8 @@
 //   1b. a name already owned by another account is rejected (DUPLICATE_NAME) —
 //      tested while the session account is still empty (below the #329 cap).
 //   2. create -> OK + a minted id; list then shows exactly that character.
-//   3. a 2nd create for the SAME account is rejected (LIMIT_REACHED, #329) — the
-//      one-character-per-account cap, enforced server-side.
+//   3. after filling the account to the cap, one more create is rejected
+//      (LIMIT_REACHED, #329) — the per-account character cap (8), server-side.
 //   4. an invalid race id is rejected (INVALID_RACE).
 //   5. an invalid class id is rejected (INVALID_CLASS).
 //   6. deleting ANOTHER account's character is REFUSED (ownership predicate) and
@@ -382,8 +382,11 @@ int main() {
         // is global, so a leftover name_a from an aborted run would otherwise make
         // the create in step 2 fail as a duplicate.
         auto cleanup_chars = [&] {
-            db.execute("DELETE FROM `character` WHERE name IN (?, ?)",
-                       {db::Param{name_a}, db::Param{name_other}});
+            // LIKE the per-run "Cm_<salt>_" prefix so the cap-fill fillers
+            // (#629) and name_a/name_other are all cleared, including any left
+            // over by a prior aborted run.
+            db.execute("DELETE FROM `character` WHERE name LIKE ?",
+                       {db::Param{"Cm_" + std::to_string(salt) + "_%"}});
         };
         cleanup_chars();  // clear any stray rows from a prior aborted run
 
@@ -619,18 +622,41 @@ int main() {
             check("2c: got an EnterWorldResponse (owned)", false);
         }
 
-        // 3. second create for the SAME account -> LIMIT_REACHED (#329). The
-        // session account already owns name_a (step 2); the one-character-per-
-        // account cap refuses a second create. A fresh, unique name is used so
-        // the refusal is unambiguously the cap and not a name collision.
+        // 3. per-account cap (#329, raised to 8 in #629). The session account
+        // already owns name_a (step 2, id `minted`); fill it up to
+        // kMaxCharactersPerAccount, then the create ONE PAST the cap is refused
+        // with LIMIT_REACHED. Fresh, unique names are used so the refusal is
+        // unambiguously the cap and not a name collision. The fillers are drained
+        // in step 7. Driven off the constant so the test tracks any cap retune.
+        std::vector<std::uint64_t> filler_ids;
+        bool fill_ok = true;
+        for (std::uint64_t i = 1; i < chr::kMaxCharactersPerAccount; ++i) {
+            std::optional<Bytes> pl = round_trip(
+                c, mn::Opcode::CHAR_CREATE_REQUEST,
+                enc_char_create_request(
+                    "Cm_" + std::to_string(salt) + "_f" + std::to_string(i),
+                    static_cast<std::uint8_t>(chr::Race::kArdent),
+                    static_cast<std::uint8_t>(chr::Class::kVanguard)),
+                mn::Opcode::CHAR_CREATE_RESPONSE, seq++);
+            const auto* m = pl ? decode<mn::CharCreateResponse>(*pl) : nullptr;
+            if (m && m->status() == mn::CharCreateStatus::OK) {
+                filler_ids.push_back(m->character_id());
+            } else {
+                fill_ok = false;
+            }
+        }
+        check("3: account may fill up to kMaxCharactersPerAccount characters",
+              fill_ok &&
+                  filler_ids.size() == chr::kMaxCharactersPerAccount - 1);
+
         if (std::optional<Bytes> pl = round_trip(
                 c, mn::Opcode::CHAR_CREATE_REQUEST,
-                enc_char_create_request("Cm_" + std::to_string(salt) + "_2nd",
+                enc_char_create_request("Cm_" + std::to_string(salt) + "_over",
                                         static_cast<std::uint8_t>(chr::Race::kArdent),
                                         static_cast<std::uint8_t>(chr::Class::kVanguard)),
                 mn::Opcode::CHAR_CREATE_RESPONSE, seq++)) {
             const auto* m = decode<mn::CharCreateResponse>(*pl);
-            check("3: second character for the account rejected (LIMIT_REACHED)",
+            check("3: create past the cap rejected (LIMIT_REACHED)",
                   m != nullptr && m->status() == mn::CharCreateStatus::LIMIT_REACHED);
         } else {
             check("3: got a CharCreateResponse", false);
@@ -731,7 +757,8 @@ int main() {
                        "ADD COLUMN appearance JSON NULL AFTER `class`");
         }
 
-        // 7. delete your OWN character -> OK; list is empty again.
+        // 7. delete your OWN character -> OK; then drain the #629 cap fillers so
+        // the list is empty again.
         if (std::optional<Bytes> pl = round_trip(c, mn::Opcode::CHAR_DELETE_REQUEST,
                                                  enc_char_delete_request(minted),
                                                  mn::Opcode::CHAR_DELETE_RESPONSE, seq++)) {
@@ -741,6 +768,16 @@ int main() {
         } else {
             check("7: got a CharDeleteResponse", false);
         }
+        bool fillers_drained = true;
+        for (std::uint64_t fid : filler_ids) {
+            std::optional<Bytes> pl = round_trip(c, mn::Opcode::CHAR_DELETE_REQUEST,
+                                                 enc_char_delete_request(fid),
+                                                 mn::Opcode::CHAR_DELETE_RESPONSE, seq++);
+            const auto* m = pl ? decode<mn::CharDeleteResponse>(*pl) : nullptr;
+            fillers_drained = fillers_drained && m != nullptr &&
+                              m->status() == mn::CharDeleteStatus::OK;
+        }
+        check("7: draining the cap fillers succeeds (OK)", fillers_drained);
         if (std::optional<Bytes> pl = round_trip(c, mn::Opcode::CHAR_LIST_REQUEST,
                                                  enc_char_list_request(),
                                                  mn::Opcode::CHAR_LIST_RESPONSE, seq++)) {

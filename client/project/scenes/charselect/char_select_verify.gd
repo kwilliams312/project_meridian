@@ -324,6 +324,34 @@ func _verify_scene() -> void:
 	scene._refresh_preview(MeridianRoster.DEFAULT_RACE_ID,
 		MeridianAppearance.default_appearance(), [])
 
+	# #629 REGRESSION LOCK: the create-result status→message map MUST mirror
+	# schema/net/world.fbs CharCreateStatus 1:1. The raw wire status reaches this
+	# handler verbatim (meridian_net_thread emits msg.char_create.status), so a
+	# scrambled map silently mislabels rejections — the reported bug was
+	# LIMIT_REACHED (6) falling through to the generic "server error". Drive the
+	# error path directly (status != OK never touches _net) and assert the exact
+	# text, keyed by the wire value. If world.fbs renumbers, these must be updated.
+	var create_msgs := {
+		1: "Cannot create: that name is taken.",                              # DUPLICATE_NAME
+		2: "Cannot create: invalid race.",                                    # INVALID_RACE
+		3: "Cannot create: invalid class.",                                   # INVALID_CLASS
+		4: "Cannot create: invalid name.",                                    # INVALID_NAME
+		5: "Cannot create: server error.",                                    # INTERNAL
+		6: "Cannot create: you already have the maximum number of characters.",  # LIMIT_REACHED
+	}
+	for wire_status: int in create_msgs:
+		scene._on_net_char_create_result(wire_status, 0)
+		_check("create result %d maps to world.fbs message" % wire_status,
+			scene._status.text == create_msgs[wire_status])
+	# The exact regression: LIMIT_REACHED must be honest, NOT the generic fallback.
+	scene._on_net_char_create_result(6, 0)
+	_check("LIMIT_REACHED (6) is not the generic 'server error' fallback",
+		scene._status.text != "Cannot create: server error.")
+	# A truly-unknown code still falls back to the generic message.
+	scene._on_net_char_create_result(99, 0)
+	_check("unknown create status falls back to 'server error'",
+		scene._status.text == "Cannot create: server error.")
+
 	# Enter World emits the intent for the SELECTED character. Detach the scene first so
 	# the enter guard (is_inside_tree()) skips the real change_scene_to_file — we are
 	# asserting the signal contract, not loading the world map (which needs the C++ camera).
