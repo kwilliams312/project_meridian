@@ -78,30 +78,30 @@ func _fixture_height(wx: float, wz: float) -> float:
 func _stage_pack(src_dir: String, dst_dir: String, drop: String = "") -> bool:
 	DirAccess.make_dir_recursive_absolute(dst_dir)
 	var ok := true
-	# Copy every payload (skip a dropped file to fabricate a broken pack). The fixture's
-	# baked scenes are TEXT-format but carry the `.scn` extension, which binds Godot's
-	# BINARY scene loader (it rejects them: "Unrecognized binary resource file"). Stage
-	# them as `.tscn` so the TEXT loader handles them. The BYTES are unchanged, so the
-	# manifest's per-chunk integrity hash (over the payload bytes) still matches — a
-	# rename only; the real pipeline ships binary `.scn` the loader reads directly.
+	# Copy every payload as-shipped (skip a dropped file to fabricate a broken pack).
+	# The fixture ships its baked TEXT scenes with the `.tscn` extension (#579), so the
+	# streamer's ResourceLoader instances them directly — no rename staging. We still
+	# copy into user:// only to rewrite the IF-8 res:// prefix to the staged dir and to
+	# drop a payload for the broken-pack case. (The real pipeline ships binary `.scn`
+	# the loader reads directly; this fixture is text `.tscn`, loadable as-shipped.)
 	for c in CELLS:
-		for pair in [[".scn", ".tscn"], [".proxy.scn", ".proxy.tscn"], [".chunk.bin", ".chunk.bin"]]:
-			var src_name := "%s%s" % [c, pair[0]]
-			if src_name == drop:
+		for ext in [".tscn", ".proxy.tscn", ".chunk.bin"]:
+			var name := "%s%s" % [c, ext]
+			if name == drop:
 				continue
-			if not _copy_bytes("%s/%s" % [src_dir, src_name], "%s/%s%s" % [dst_dir, c, pair[1]]):
+			if not _copy_bytes("%s/%s" % [src_dir, name], "%s/%s" % [dst_dir, name]):
 				ok = false
 	# chunks.json rides by value (references chunks by id, no res:// paths to rewrite).
 	if not _copy_bytes("%s/zone01.chunks.json" % src_dir, "%s/zone01.chunks.json" % dst_dir):
 		ok = false
-	# assets.json: rewrite the res:// chunk prefix to the staged dir AND the `.scn` scene
-	# extension to `.tscn` (matching the renamed files) so the verifier + streamer resolve
-	# them. `.chunk.bin` is untouched (it does not end in `.scn`).
+	# assets.json: rewrite ONLY the res:// chunk prefix to the staged dir so the verifier
+	# + streamer resolve the staged files. The `.tscn` extensions are already loadable —
+	# no extension rewrite (that staging workaround is gone with #579).
 	var assets := FileAccess.get_file_as_string("%s/zone01.assets.json" % src_dir)
 	if assets.is_empty():
 		ok = false
 	else:
-		assets = assets.replace(RES_PREFIX, "%s/" % dst_dir).replace(".scn\"", ".tscn\"")
+		assets = assets.replace(RES_PREFIX, "%s/" % dst_dir)
 		var f := FileAccess.open("%s/zone01.assets.json" % dst_dir, FileAccess.WRITE)
 		if f == null:
 			ok = false
@@ -152,7 +152,7 @@ func _initialize() -> void:
 		return
 	_check("staged good pack into user://", _stage_pack(src, STAGE_GOOD))
 	# A broken pack: identical but missing chunk (0,0)'s baked scene payload.
-	_check("staged broken pack (0_0.scn dropped)", _stage_pack(src, STAGE_BROKEN, "0_0.scn"))
+	_check("staged broken pack (0_0.tscn dropped)", _stage_pack(src, STAGE_BROKEN, "0_0.tscn"))
 
 	var good_chunks := "%s/zone01.chunks.json" % STAGE_GOOD
 	var good_assets := "%s/zone01.assets.json" % STAGE_GOOD

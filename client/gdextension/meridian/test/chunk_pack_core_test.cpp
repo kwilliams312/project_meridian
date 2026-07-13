@@ -144,8 +144,10 @@ int main() {
 			    c.server.res_path.rfind(".chunk.bin") == std::string::npos) {
 				paths_ok = false;
 			}
-			if (c.scene.res_path.rfind(".scn") == std::string::npos) paths_ok = false;
-			if (!c.has_proxy || c.proxy.res_path.rfind(".proxy.scn") == std::string::npos) {
+			// Client scenes ship as loadable TEXT `.tscn` (not `.scn`, which Godot
+			// routes to the BINARY loader that rejects a text payload — #579).
+			if (c.scene.res_path.rfind(".tscn") == std::string::npos) paths_ok = false;
+			if (!c.has_proxy || c.proxy.res_path.rfind(".proxy.tscn") == std::string::npos) {
 				paths_ok = false;
 			}
 			// Every chunk prefetches the one shared ground dep (resolves in the table).
@@ -155,7 +157,7 @@ int main() {
 			if (!c.has_priority) paths_ok = false;  // fixture stamps a priority on all
 		}
 		check("resolve: negative chunk coords present", saw_negative);
-		check("resolve: server .chunk.bin / scene .scn / proxy .proxy.scn paths resolved",
+		check("resolve: server .chunk.bin / scene .tscn / proxy .proxy.tscn paths resolved",
 		      paths_ok);
 		check("resolve: shared ground dep resolved on every chunk", deps_ok);
 	}
@@ -164,8 +166,8 @@ int main() {
 	{
 		std::string sv, sc, px;
 		const bool ok = read_file(zone_dir() + "/n1_n1.chunk.bin", sv) &&
-		                read_file(zone_dir() + "/n1_n1.scn", sc) &&
-		                read_file(zone_dir() + "/n1_n1.proxy.scn", px);
+		                read_file(zone_dir() + "/n1_n1.tscn", sc) &&
+		                read_file(zone_dir() + "/n1_n1.proxy.tscn", px);
 		check("hash: read chunk (-1,-1) payloads", ok);
 		const std::string h = cp::recompute_chunk_hash(sv, sc, px);
 		check("hash: recomputed == manifest golden for (-1,-1)",
@@ -217,7 +219,7 @@ int main() {
 		check("missing: temp copy made", !tmp.empty(), tmp);
 		if (!tmp.empty()) {
 			std::error_code ec;
-			const std::string victim = tmp + "/meridian/core/chunks/zone01/0_0.scn";
+			const std::string victim = tmp + "/meridian/core/chunks/zone01/0_0.tscn";
 			fs::remove(victim, ec);
 			check("missing: victim deleted", !fs::exists(victim, ec));
 
@@ -228,7 +230,7 @@ int main() {
 			      cp::chunk_pack_verdict_name(r.verdict) + std::string(" / ") + r.reason);
 			check("missing: hard_fail true, ok false", r.hard_fail && !r.ok);
 			check("missing: reason names the missing path",
-			      r.reason.find("0_0.scn") != std::string::npos, r.reason);
+			      r.reason.find("0_0.tscn") != std::string::npos, r.reason);
 			fs::remove_all(tmp, ec);
 		}
 	}

@@ -323,9 +323,16 @@ ChunkEmitResult chunk_emit(const ChunkEmitOptions& opts, diag::Diagnostics& diag
     for (const ChunkRecord& rec : result.chunks) {
         asset_meta[rec.server_ref] = {"chunk_server", res_root + rec.tag + ".chunk.bin",
                                       blake3_bare(rec.chunk_bin)};
-        asset_meta[rec.scene_ref] = {"chunk_scene", res_root + rec.tag + ".scn",
+        // Godot routes `.scn` to the BINARY scene loader, which rejects our
+        // TEXT-format payloads ("Unrecognized binary resource file", #579). mcc
+        // is C++ and cannot emit Godot's binary `.scn`, so the fixture ships the
+        // text scenes with the `.tscn` extension the TEXT loader reads directly —
+        // making the fixture loadable as-shipped (no staging rename). The payload
+        // BYTES are unchanged (build_scene already renders a valid `.tscn`), so the
+        // per-resource BLAKE3 and the per-chunk hash are identical to before.
+        asset_meta[rec.scene_ref] = {"chunk_scene", res_root + rec.tag + ".tscn",
                                      blake3_bare(rec.scn)};
-        asset_meta[rec.proxy_ref] = {"chunk_proxy", res_root + rec.tag + ".proxy.scn",
+        asset_meta[rec.proxy_ref] = {"chunk_proxy", res_root + rec.tag + ".proxy.tscn",
                                      blake3_bare(rec.proxy_scn)};
     }
     // Shared logical deps (no on-disk payload at v0): a stable id-derived hash so
@@ -527,8 +534,8 @@ int chunk_emit_run(const ChunkEmitOptions& opts, const std::string& out_dir,
     if (!write(chunk_dir / "pack.contents.jsonl", res.pack_contents_jsonl)) return 2;
     for (const ChunkRecord& r : res.chunks) {
         if (!write(chunk_dir / (r.tag + ".chunk.bin"), r.chunk_bin)) return 2;
-        if (!write(chunk_dir / (r.tag + ".scn"), r.scn)) return 2;
-        if (!write(chunk_dir / (r.tag + ".proxy.scn"), r.proxy_scn)) return 2;
+        if (!write(chunk_dir / (r.tag + ".tscn"), r.scn)) return 2;
+        if (!write(chunk_dir / (r.tag + ".proxy.tscn"), r.proxy_scn)) return 2;
     }
 
     out << "  chunk-emit: wrote " << res.chunks.size() << "-chunk fixture -> "

@@ -171,10 +171,13 @@ For the default `core:zone.zone01`, a **3×3** grid centred on negative indices
   deliberately **non-flat** (a ramp + shallow bowl, a pure function of zone-local
   world coords so shared edges join exactly) — the contract-critical artifact the
   client reads the heightfield from (Q1(a)); a flat-vs-sloped bug is catchable.
-- **`<cx>_<cz>.scn` + `<cx>_<cz>.proxy.scn`** — minimal but valid Godot text
+- **`<cx>_<cz>.tscn` + `<cx>_<cz>.proxy.tscn`** — minimal but valid Godot text
   scenes (a `MeshInstance3D` whose box Y-extent tracks the chunk's height span, so
-  the placeholder is visibly non-flat per chunk). A full baked terrain mesh is
-  Forge/#315 real-content work, out of scope for the v0 fixture.
+  the placeholder is visibly non-flat per chunk). They carry the `.tscn` extension
+  (not `.scn`) so Godot's ResourceLoader routes them to the TEXT loader and can
+  instance them as-shipped — a text payload under a `.scn` name is rejected by the
+  BINARY loader (#579). A full baked terrain mesh is Forge/#315 real-content work,
+  out of scope for the v0 fixture.
 - **`zone01.assets.json`** — the IF-8 asset-ID table so the C2 refs resolve
   (id → band-0 local index → IF-9 numeric id, allocated lexicographically).
 - **`pack.manifest.json` + `pack.contents.jsonl`** — the IF-5 client pack (same

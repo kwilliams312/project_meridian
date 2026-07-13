@@ -138,7 +138,7 @@ static st::StreamZone make_zone() {
 			c.priority = (cx == 0 && cz == 0) ? 0 : 1;
 			c.scene_path = "res://meridian/core/chunks/zone01/" +
 					std::string(cx < 0 ? "n" : "") + std::to_string(cx < 0 ? -cx : cx) + "_" +
-					std::string(cz < 0 ? "n" : "") + std::to_string(cz < 0 ? -cz : cz) + ".scn";
+					std::string(cz < 0 ? "n" : "") + std::to_string(cz < 0 ? -cz : cz) + ".tscn";
 			z.chunks.push_back(std::move(c));
 		}
 	}
@@ -147,7 +147,7 @@ static st::StreamZone make_zone() {
 
 // ── A 5×5 fixture-shaped zone WITH proxies (Story C, #556). Origin -384, size 128,
 //    coords -2..2. Centre (0,0) priority 0, the rest priority 1. Every chunk carries
-//    a `.proxy.scn` EXCEPT (2,2), which is the explicit `proxy: null` case
+//    a `.proxy.tscn` EXCEPT (2,2), which is the explicit `proxy: null` case
 //    (chunk-pack amendment C3) — the far-ring band must show NOTHING for it. ───────
 static constexpr int kNullProxyCx = 2;
 static constexpr int kNullProxyCz = 2;
@@ -164,12 +164,12 @@ static st::StreamZone make_proxy_zone() {
 			c.priority = (cx == 0 && cz == 0) ? 0 : 1;
 			const std::string sx = std::string(cx < 0 ? "n" : "") + std::to_string(cx < 0 ? -cx : cx);
 			const std::string sz = std::string(cz < 0 ? "n" : "") + std::to_string(cz < 0 ? -cz : cz);
-			c.scene_path = "res://meridian/core/chunks/zone01/" + sx + "_" + sz + ".scn";
+			c.scene_path = "res://meridian/core/chunks/zone01/" + sx + "_" + sz + ".tscn";
 			if (cx == kNullProxyCx && cz == kNullProxyCz) {
 				c.has_proxy = false;                       // explicit proxy: null (C3)
 			} else {
 				c.has_proxy = true;
-				c.proxy_path = "res://meridian/core/chunks/zone01/" + sx + "_" + sz + ".proxy.scn";
+				c.proxy_path = "res://meridian/core/chunks/zone01/" + sx + "_" + sz + ".proxy.tscn";
 			}
 			z.chunks.push_back(std::move(c));
 		}
