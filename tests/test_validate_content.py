@@ -1878,6 +1878,285 @@ class TestAbilityEffectPalette:
         assert "SCHEMA" in codes(res.errors)
 
 
+@pytest.mark.unit
+class TestTalent:
+    """meridian/talent@1 — a talent's grants (ability ids + passive buff/debuff
+    effects), spec §2.5. One valid fixture; each negative case mutates one field
+    (one-negative-fixture-per-lint, Tools PRD §11.1)."""
+
+    # An ability the talent's `ability` grant resolves against (L011).
+    ABILITY = """\
+    schema: meridian/ability@1
+    id: tp:ability.power_strike
+    name: Power Strike
+    target: enemy
+    school: physical
+    effects:
+      - kind: damage
+        amount: { min: 5, max: 10 }
+    """
+
+    # A valid talent: one ability grant + one passive buff over an attribute.
+    TALENT_OK = """\
+    schema: meridian/talent@1
+    id: tp:talent.blade_focus
+    name: Blade Focus
+    description: Sharpens your strikes.
+    rank_max: 3
+    grants:
+      - kind: ability
+        ability: ability.power_strike
+      - kind: buff
+        attribute: attribute.strength
+        amount: 5
+        modifier: flat
+    """
+
+    def _supporting(self) -> dict[str, str]:
+        return {
+            "tp/abilities/power_strike.ability.yaml": self.ABILITY,
+            "tp/attributes/strength.attribute.yaml": ATTR_STRENGTH,
+        }
+
+    def test_valid_talent_passes(self, tmp_path):
+        files = {"tp/talents/blade_focus.talent.yaml": self.TALENT_OK}
+        files.update(self._supporting())
+        res = run(tmp_path, files)
+        assert res.errors == [], res.errors
+
+    def test_ability_only_grant_passes(self, tmp_path):
+        talent = """\
+        schema: meridian/talent@1
+        id: tp:talent.quick_draw
+        name: Quick Draw
+        grants:
+          - kind: ability
+            ability: ability.power_strike
+        """
+        files = {"tp/talents/quick_draw.talent.yaml": talent}
+        files.update(self._supporting())
+        res = run(tmp_path, files)
+        assert res.errors == [], res.errors
+
+    def test_debuff_grant_passes(self, tmp_path):
+        talent = """\
+        schema: meridian/talent@1
+        id: tp:talent.sunder
+        name: Sunder
+        grants:
+          - kind: debuff
+            attribute: attribute.strength
+            amount: -3
+        """
+        files = {"tp/talents/sunder.talent.yaml": talent}
+        files.update(self._supporting())
+        res = run(tmp_path, files)
+        assert res.errors == [], res.errors
+
+    def test_rank_max_optional(self, tmp_path):
+        talent = self.TALENT_OK.replace("    rank_max: 3\n", "")
+        files = {"tp/talents/blade_focus.talent.yaml": talent}
+        files.update(self._supporting())
+        res = run(tmp_path, files)
+        assert res.errors == [], res.errors
+
+    def test_dangling_ability_grant_rejected_L011(self, tmp_path):
+        # The `ability` grant is defined but no ability entity backs it — L011.
+        res = run(
+            tmp_path,
+            {
+                "tp/talents/blade_focus.talent.yaml": self.TALENT_OK,
+                "tp/attributes/strength.attribute.yaml": ATTR_STRENGTH,
+            },
+        )
+        assert "L011" in codes(res.errors)
+
+    def test_dangling_attribute_grant_rejected_L011(self, tmp_path):
+        # The buff references an attribute id no entity defines — L011.
+        res = run(
+            tmp_path,
+            {
+                "tp/talents/blade_focus.talent.yaml": self.TALENT_OK,
+                "tp/abilities/power_strike.ability.yaml": self.ABILITY,
+            },
+        )
+        assert "L011" in codes(res.errors)
+
+    def test_unknown_grant_kind_fails_schema(self, tmp_path):
+        bad = self.TALENT_OK.replace("kind: ability", "kind: teleport")
+        files = {"tp/talents/blade_focus.talent.yaml": bad}
+        files.update(self._supporting())
+        res = run(tmp_path, files)
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_buff_missing_amount_fails_schema(self, tmp_path):
+        bad = self.TALENT_OK.replace("        amount: 5\n", "")
+        files = {"tp/talents/blade_focus.talent.yaml": bad}
+        files.update(self._supporting())
+        res = run(tmp_path, files)
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_empty_grants_fails_schema(self, tmp_path):
+        bad = """\
+        schema: meridian/talent@1
+        id: tp:talent.empty
+        name: Empty
+        grants: []
+        """
+        res = run(tmp_path, {"tp/talents/empty.talent.yaml": bad})
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_extra_field_rejected(self, tmp_path):
+        bad = self.TALENT_OK + "    cost: 5\n"
+        files = {"tp/talents/blade_focus.talent.yaml": bad}
+        files.update(self._supporting())
+        res = run(tmp_path, files)
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_id_wrong_type_segment_fails_schema(self, tmp_path):
+        # The strict talentId pattern requires a `talent.` type segment.
+        bad = self.TALENT_OK.replace(
+            "id: tp:talent.blade_focus", "id: tp:item.blade_focus"
+        )
+        files = {"tp/talents/blade_focus.talent.yaml": bad}
+        files.update(self._supporting())
+        res = run(tmp_path, files)
+        assert "SCHEMA" in codes(res.errors)
+
+
+@pytest.mark.unit
+class TestTalentTree:
+    """meridian/talent_tree@1 — the tiered row-unlock tree over talents, spec §2.5."""
+
+    TALENT = """\
+    schema: meridian/talent@1
+    id: tp:talent.blade_focus
+    name: Blade Focus
+    grants:
+      - kind: buff
+        attribute: attribute.strength
+        amount: 5
+    """
+
+    TALENT2 = """\
+    schema: meridian/talent@1
+    id: tp:talent.iron_skin
+    name: Iron Skin
+    grants:
+      - kind: buff
+        attribute: attribute.strength
+        amount: 2
+    """
+
+    TREE_OK = """\
+    schema: meridian/talent_tree@1
+    id: tp:talent_tree.warrior
+    name: Warrior Tree
+    description: The path of the blade.
+    tiers:
+      - required_points: 0
+        talents:
+          - talent.blade_focus
+      - required_points: 5
+        talents:
+          - talent.iron_skin
+    """
+
+    def _supporting(self) -> dict[str, str]:
+        return {
+            "tp/talents/blade_focus.talent.yaml": self.TALENT,
+            "tp/talents/iron_skin.talent.yaml": self.TALENT2,
+            "tp/attributes/strength.attribute.yaml": ATTR_STRENGTH,
+        }
+
+    def test_valid_talent_tree_passes(self, tmp_path):
+        files = {"tp/talent_trees/warrior.talent_tree.yaml": self.TREE_OK}
+        files.update(self._supporting())
+        res = run(tmp_path, files)
+        assert res.errors == [], res.errors
+
+    def test_single_tier_passes(self, tmp_path):
+        tree = """\
+        schema: meridian/talent_tree@1
+        id: tp:talent_tree.warrior
+        name: Warrior Tree
+        tiers:
+          - required_points: 0
+            talents:
+              - talent.blade_focus
+        """
+        files = {
+            "tp/talent_trees/warrior.talent_tree.yaml": tree,
+            "tp/talents/blade_focus.talent.yaml": self.TALENT,
+            "tp/attributes/strength.attribute.yaml": ATTR_STRENGTH,
+        }
+        res = run(tmp_path, files)
+        assert res.errors == [], res.errors
+
+    def test_dangling_talent_ref_rejected_L011(self, tmp_path):
+        # A tier lists a talent id no talent entity defines — L011.
+        tree = self.TREE_OK.replace("talent.iron_skin", "talent.missing")
+        files = {
+            "tp/talent_trees/warrior.talent_tree.yaml": tree,
+            "tp/talents/blade_focus.talent.yaml": self.TALENT,
+            "tp/attributes/strength.attribute.yaml": ATTR_STRENGTH,
+        }
+        res = run(tmp_path, files)
+        assert "L011" in codes(res.errors)
+
+    def test_tier_missing_required_points_fails_schema(self, tmp_path):
+        bad = self.TREE_OK.replace("      - required_points: 0\n", "      - \n")
+        files = {"tp/talent_trees/warrior.talent_tree.yaml": bad}
+        files.update(self._supporting())
+        res = run(tmp_path, files)
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_empty_tiers_fails_schema(self, tmp_path):
+        bad = """\
+        schema: meridian/talent_tree@1
+        id: tp:talent_tree.warrior
+        name: Warrior Tree
+        tiers: []
+        """
+        res = run(tmp_path, {"tp/talent_trees/warrior.talent_tree.yaml": bad})
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_empty_talents_in_tier_fails_schema(self, tmp_path):
+        bad = """\
+        schema: meridian/talent_tree@1
+        id: tp:talent_tree.warrior
+        name: Warrior Tree
+        tiers:
+          - required_points: 0
+            talents: []
+        """
+        res = run(tmp_path, {"tp/talent_trees/warrior.talent_tree.yaml": bad})
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_talent_tree_id_not_accepted_as_talent_ref(self, tmp_path):
+        # A tier's `talents` must be talent ids; a talent_tree id has the wrong
+        # shape for talentRef and fails schema validation.
+        bad = self.TREE_OK.replace("talent.blade_focus", "talent_tree.other")
+        files = {"tp/talent_trees/warrior.talent_tree.yaml": bad}
+        files.update(self._supporting())
+        res = run(tmp_path, files)
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_extra_field_rejected(self, tmp_path):
+        bad = self.TREE_OK + "    cost: 5\n"
+        files = {"tp/talent_trees/warrior.talent_tree.yaml": bad}
+        files.update(self._supporting())
+        res = run(tmp_path, files)
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_id_wrong_type_segment_fails_schema(self, tmp_path):
+        bad = self.TREE_OK.replace("id: tp:talent_tree.warrior", "id: tp:item.warrior")
+        files = {"tp/talent_trees/warrior.talent_tree.yaml": bad}
+        files.update(self._supporting())
+        res = run(tmp_path, files)
+        assert "SCHEMA" in codes(res.errors)
+
+
 @pytest.mark.integration
 class TestRepoContent:
     def test_repo_content_validates_clean(self):

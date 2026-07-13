@@ -22,12 +22,16 @@ namespace {
 // but emits no world.sql this round (kernel formulas are sub-project 2).
 // `equip_type` (pack-contract spec §2.1) is the armor/weapon-type CATALOG
 // (rules-data referenced by items and, in sub-project 2, class proficiencies).
-// Like the other non-server-emitting types it classifies + flows into the client
-// pck but emits NO world.sql this round.
+// `talent` + `talent_tree` (pack-contract spec §2.5) are the talent catalog and
+// its tiered row-unlock tree — rules-data referenced by a class's talent_tree
+// (sub-project 2). Like the other non-server-emitting types they classify + flow
+// into the client pck but emit NO world.sql this round. A registered type with
+// zero content entities is fine (no seed talents ship in sub-project 1).
 // Mirrors validate_content.py's CONTENT_TYPES (the reference validator).
-constexpr std::array<std::string_view, 13> kContentTypes = {
-    "npc", "item", "quest", "ability", "loot", "vendor", "spawn",
-    "zone", "appearance", "dye", "attribute", "equip_type", "race"};
+constexpr std::array<std::string_view, 15> kContentTypes = {
+    "npc",        "item",       "quest",  "ability",     "loot",
+    "vendor",     "spawn",      "zone",   "appearance",  "dye",
+    "attribute",  "equip_type", "race",   "talent",      "talent_tree"};
 
 // Split `s` on '.' into its dot-separated parts.
 std::vector<std::string> split_dots(const std::string& s) {

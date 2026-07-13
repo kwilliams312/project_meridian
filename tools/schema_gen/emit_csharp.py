@@ -49,6 +49,7 @@ _REF_TYPE_NAME = {
     "equip_type": "EquipTypeRef",
     "appearance": "AppearanceRef",
     "attribute": "AttributeRef",
+    "talent": "TalentRef",
     "asset": "AssetId",
     "art": "ArtRef",
     "mus": "MusRef",

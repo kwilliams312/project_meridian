@@ -191,6 +191,8 @@ def test_real_schema_generates_all_root_types():
         "attribute",
         "equip_type",
         "race",
+        "talent",
+        "talent_tree",
     }
 
 

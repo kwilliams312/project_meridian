@@ -224,6 +224,13 @@ _CONTENT_REF_DEFS = {
     "raceId": "content",
     "appearanceRef": "appearance",
     "attributeRef": "attribute",
+    # talent + talent_tree (pack-contract spec §2.5) follow the same local-def
+    # pattern as equip_type. talentId/talentTreeId are the entities' own ids
+    # (generic self-id, like contentId); talentRef references a talent (e.g.
+    # talent_tree.tiers[].talents[]).
+    "talentId": "content",
+    "talentTreeId": "content",
+    "talentRef": "talent",
 }
 _ASSET_REF_DEFS = {
     "artRef": "art",
