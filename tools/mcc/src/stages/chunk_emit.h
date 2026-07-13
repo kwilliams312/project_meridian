@@ -27,9 +27,14 @@
 //       — the contract-critical artifact the client reads the heightfield from
 //       (Q1(a)); a flat-vs-sloped bug in HeightfieldWorldQuery / visuals is
 //       catchable against it.
-//     * per chunk <cx>_<cz>.scn + <cx>_<cz>.proxy.scn — minimal but VALID Godot
-//       text scenes the streamer can instance; the box mesh's Y extent is derived
-//       from the chunk's own height span so it is visibly non-flat per chunk.
+//     * per chunk <cx>_<cz>.tscn + <cx>_<cz>.proxy.tscn — minimal but VALID Godot
+//       TEXT scenes the streamer can instance directly. They carry the `.tscn`
+//       extension (not `.scn`) so Godot's ResourceLoader routes them to the TEXT
+//       loader — a text payload under a `.scn` name is rejected by the BINARY
+//       loader ("Unrecognized binary resource file", #579). The box mesh's Y
+//       extent is derived from the chunk's own height span so it is visibly
+//       non-flat per chunk. (The real content pipeline — Forge/#315 — ships binary
+//       `.scn` the loader reads directly; this is a FIXTURE-correctness choice.)
 //     * <zone>.assets.json — the IF-8 asset-ID table so the C2 refs resolve
 //       (id → local index → IF-9 numeric id, band 0, allocated lexicographically).
 //     * a client pack (pack.manifest.json + M0 pack.contents.jsonl, the same
@@ -37,8 +42,8 @@
 //       the server `.chunk.bin` per chunk (Q1(a)) alongside the scene/proxy/deps.
 //
 // PER-CHUNK HASH FRAMING (deterministic, documented): the manifest `hash` is
-//   BLAKE3( "server\0" <chunk.bin bytes> "\0" "scene\0" <.scn bytes> "\0"
-//           "proxy\0"  <.proxy.scn bytes> "\0" )
+//   BLAKE3( "server\0" <chunk.bin bytes> "\0" "scene\0" <.tscn bytes> "\0"
+//           "proxy\0"  <.proxy.tscn bytes> "\0" )
 // i.e. it covers BOTH the server payload and the client scene payloads, framed
 // with a label + NUL after each so no concatenation collision is possible. Any
 // change to any payload invalidates the entry (walk C5/C8). Rendered `blake3:<hex>`.
@@ -102,8 +107,8 @@ struct ChunkRecord {
     int priority = 0;        // load-order hint (lower first; 0 = grid centre)
 
     std::string chunk_bin;   // ServerChunk FlatBuffer bytes (<cx>_<cz>.chunk.bin)
-    std::string scn;         // client scene text (<cx>_<cz>.scn)
-    std::string proxy_scn;   // proxy scene text (<cx>_<cz>.proxy.scn)
+    std::string scn;         // client scene text (<cx>_<cz>.tscn)
+    std::string proxy_scn;   // proxy scene text (<cx>_<cz>.proxy.tscn)
 
     std::string entry_hash;  // "blake3:<64hex>" over BOTH payloads (manifest `hash`)
 
@@ -135,8 +140,8 @@ ChunkEmitResult chunk_emit(const ChunkEmitOptions& opts, diag::Diagnostics& diag
 
 // CLI wrapper: run chunk_emit then, when `out_dir` is non-empty, write the whole
 // fixture pack under <out_dir>/meridian/<ns>/chunks/<zone>/ (manifest, asset
-// table, pack manifest + M0 pack, and every per-chunk .chunk.bin / .scn /
-// .proxy.scn). With an empty `out_dir` the manifest goes to `out` (diagnostics to
+// table, pack manifest + M0 pack, and every per-chunk .chunk.bin / .tscn /
+// .proxy.tscn). With an empty `out_dir` the manifest goes to `out` (diagnostics to
 // `err`). Returns 0 on success, 1 on any error, 2 when `out_dir` cannot be written.
 int chunk_emit_run(const ChunkEmitOptions& opts, const std::string& out_dir,
                    DiagFormat format, std::ostream& out, std::ostream& err);

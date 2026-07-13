@@ -285,6 +285,19 @@ void test_pack_completeness() {
     }
     report(all_refs_present, "every manifest scene/proxy/server ref resolves to a pack entry");
 
+    // Client scenes ship as TEXT `.tscn` (not `.scn`): a text payload under a
+    // `.scn` name is routed to Godot's BINARY loader and rejected (#579). Assert
+    // the asset-table resource paths carry the loadable extension.
+    auto ends_with = [](const std::string& s, const std::string& suf) {
+        return s.size() >= suf.size() && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
+    };
+    bool ext_ok = true;
+    for (const auto& a : res.assets) {
+        if (a.type == "chunk_scene") ext_ok &= ends_with(a.res_path, ".tscn") && !ends_with(a.res_path, ".proxy.tscn");
+        if (a.type == "chunk_proxy") ext_ok &= ends_with(a.res_path, ".proxy.tscn");
+    }
+    report(ext_ok, "chunk_scene -> .tscn and chunk_proxy -> .proxy.tscn (loadable text scenes, #579)");
+
     // The IF-8 asset table covers exactly the same ids with band-0 numeric ids.
     const YAML::Node assets = YAML::Load(res.assets_json);
     bool numeric_ok = !res.assets.empty();
@@ -327,10 +340,10 @@ void test_determinism_and_disk() {
     bool triples = true;
     for (const auto& rec : a.chunks) {
         triples &= fs::exists(chunk_dir / (rec.tag + ".chunk.bin"));
-        triples &= fs::exists(chunk_dir / (rec.tag + ".scn"));
-        triples &= fs::exists(chunk_dir / (rec.tag + ".proxy.scn"));
+        triples &= fs::exists(chunk_dir / (rec.tag + ".tscn"));
+        triples &= fs::exists(chunk_dir / (rec.tag + ".proxy.tscn"));
     }
-    report(triples, "wrote every per-chunk .chunk.bin/.scn/.proxy.scn");
+    report(triples, "wrote every per-chunk .chunk.bin/.tscn/.proxy.tscn");
 
     std::ifstream f(chunk_dir / "zone01.chunks.json", std::ios::binary);
     std::stringstream ss;

@@ -374,7 +374,7 @@ int cmd_emit_pck(const std::vector<std::string>& args) {
 //   real chunk.fbs `ServerChunk` schema + chunk-manifest.schema.yaml + real BLAKE3
 //   so the pack is byte-shaped like production. Without --out the IF-6 manifest
 //   goes to stdout; with --out <dir> the whole fixture (manifest, IF-8 asset
-//   table, IF-5 pack, per-chunk .chunk.bin/.scn/.proxy.scn) lands under
+//   table, IF-5 pack, per-chunk .chunk.bin/.tscn/.proxy.tscn) lands under
 //   <dir>/meridian/<ns>/chunks/<zone>/. Deliberately non-flat heightfields so
 //   downstream flat-vs-sloped bugs are catchable.
 int cmd_chunk_emit(const std::vector<std::string>& args) {
@@ -692,8 +692,8 @@ void print_help() {
            "  --origin-x/-z <m>    zone-local grid origin in metres (default -384).\n"
            "  --out <dir>          write the whole fixture under\n"
            "                       <dir>/meridian/<ns>/chunks/<zone>/ (manifest, IF-8\n"
-           "                       asset table, IF-5 pack, per-chunk .chunk.bin/.scn/\n"
-           "                       .proxy.scn). Without --out the IF-6 manifest is on\n"
+           "                       asset table, IF-5 pack, per-chunk .chunk.bin/.tscn/\n"
+           "                       .proxy.tscn). Without --out the IF-6 manifest is on\n"
            "                       stdout. Heightfields are deliberately NON-FLAT so\n"
            "                       downstream flat-vs-sloped bugs are catchable.\n"
            "  --built-at \"<ts>\"    pack.manifest.json built_at (fixed epoch default).\n"
