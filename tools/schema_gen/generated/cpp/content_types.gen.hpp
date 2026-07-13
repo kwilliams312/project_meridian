@@ -26,6 +26,7 @@ struct NpcRef { std::string id; };
 struct ZoneRef { std::string id; };
 struct QuestRef { std::string id; };
 struct ItemRef { std::string id; };
+struct TalentRef { std::string id; };
 struct ArtRef { std::string id; };
 struct SfxRef { std::string id; };
 struct MusRef { std::string id; };
@@ -327,6 +328,17 @@ enum class StatKey {
     Stamina,
     Intellect,
     Spirit,
+};
+
+enum class TalentGrantKind {
+    Ability,
+    Buff,
+    Debuff,
+};
+
+enum class TalentGrantModifier {
+    Flat,
+    Percent,
 };
 
 struct PackTheme {
@@ -866,6 +878,37 @@ struct EquipType {
     std::optional<std::string> description;  // optional
     EquipTypeCategory category;  // armor = a wearable-armor material class (Cloth/Leather/Mail/Plate); weapon = a weapon type (Two-Hand/One-Hand/Wand/Staff). Class proficiencies (sub-project 2) gate equipping by this category.
     std::optional<std::string> slot_class;  // Informational grouping — armor: helm/chest/…; weapon: main/off/two_hand. Not enforced by the kernel in sub-project 1; a free-form lowercase token.
+};
+
+// Tagged union (schema oneOf); `kind` selects the active variant.
+struct TalentGrant {
+    TalentGrantKind kind;  // Discriminator.
+    std::optional<AbilityRef> ability;  // An active ability this talent grants access to, by id.
+    std::optional<std::string> attribute;  // The attribute this passive modifies, referenced by contentId (`<ns>:attribute.<name>`). Resolution against the attribute catalog is validated at the content level (L011), not here — mirrors ability.schema.yaml's buff/debuff `attribute`.
+    std::optional<std::int64_t> amount;  // Signed modifier. flat = raw units; percent = hundredths of a percent-point.
+    std::optional<TalentGrantModifier> modifier;  // How amount is applied to the attribute (server-authoritative).
+    std::optional<std::int64_t> duration_ms;  // Omit for a permanent passive; set for a timed proc.
+    std::optional<std::int64_t> max_stacks;  // optional
+};
+
+struct Talent {
+    ContentId id;
+    std::string name;
+    std::optional<std::string> description;  // optional
+    std::optional<std::int64_t> rank_max;  // Maximum points a player may sink into this talent (a multi-rank talent scales its grants per point in sub-project 2). Omit for a single-rank talent.
+    std::vector<TalentGrant> grants;
+};
+
+struct TalentTreeTier {
+    std::int64_t required_points;  // Points that must be spent in this tree before this row unlocks (0 = the opening row).
+    std::vector<TalentRef> talents;  // The talents this row offers, by id.
+};
+
+struct TalentTree {
+    ContentId id;
+    std::string name;
+    std::optional<std::string> description;  // optional
+    std::vector<TalentTreeTier> tiers;  // Ordered rows. Row N unlocks once the player has spent `required_points` in this tree; each row offers its `talents` for selection. Simple row-unlock, no cross-talent prerequisite edges (spec §2.5).
 };
 
 }  // namespace mcc::content

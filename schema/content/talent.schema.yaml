@@ -1,0 +1,110 @@
+# meridian/talent@1 — a talent: one perk a talent_tree awards (spec §2.5,
+# 2026-07-13 pack-contract/content-schema design). A talent `grants` a bundle of
+# active abilities (by id) and/or PASSIVE stat effects. The passive effects reuse
+# the ability effect-primitive palette (buff/debuff over an attribute id, spec
+# §2.6) — but a talent passive is permanent while talented, so `duration_ms` is
+# OPTIONAL here (absent = permanent), unlike an ability's timed aura where it is
+# required. This is rules-data only: kernel consumption (applying the grants) is
+# sub-project 2. No `content/core` seed talents ship here — real talents arrive
+# with the chibi theme / seed pack (story 1.8).
+#
+# The `id` uses a LOCAL $defs (talentId), like equip_type's equipTypeId: the
+# shared common.defs.yaml#/$defs/contentId type-alternation does not list
+# `talent`, and common.defs.yaml is owned by a sibling story — a uniquely-named
+# local def survives the validators' `$defs.update(common)` merge. `abilityRef`
+# (grants) comes from the merged common.defs.yaml; the buff/debuff `attribute`
+# field mirrors ability.schema.yaml's inline pattern (not a $ref) for exact
+# parity with how abilities reference an attribute id.
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/talent.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, id, name, grants]
+properties:
+  schema: { const: "meridian/talent@1" }
+  id: { $ref: "#/$defs/talentId" }
+  name: { $ref: "#/$defs/displayName" }
+  description:
+    type: string
+    maxLength: 500
+  rank_max:
+    description: >-
+      Maximum points a player may sink into this talent (a multi-rank talent
+      scales its grants per point in sub-project 2). Omit for a single-rank
+      talent.
+    type: integer
+    minimum: 1
+    maximum: 20
+    default: 1
+  grants:
+    # What taking this talent awards. Each entry is EITHER an `ability` grant (an
+    # ability id the talent unlocks) OR a passive stat effect reusing the ability
+    # effect-primitive shapes. A tagged union (discriminated by `kind`) rather than
+    # a bare id-or-object array so the generated struct (schema_gen) and the
+    # validators stay unambiguous.
+    type: array
+    minItems: 1
+    maxItems: 12
+    items:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [kind, ability]
+          properties:
+            kind: { const: ability }
+            ability:
+              description: An active ability this talent grants access to, by id.
+              $ref: "#/$defs/abilityRef"
+        - type: object
+          additionalProperties: false
+          required: [kind, attribute, amount]
+          properties:
+            kind: { const: buff }
+            attribute:
+              description: >-
+                The attribute this passive modifies, referenced by contentId
+                (`<ns>:attribute.<name>`). Resolution against the attribute
+                catalog is validated at the content level (L011), not here —
+                mirrors ability.schema.yaml's buff/debuff `attribute`.
+              type: string
+              pattern: "^([a-z][a-z0-9_]{1,31}:)?attribute\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+            amount:
+              description: Signed modifier. flat = raw units; percent = hundredths of a percent-point.
+              type: integer
+            modifier:
+              description: How amount is applied to the attribute (server-authoritative).
+              enum: [flat, percent]
+              default: flat
+            duration_ms:
+              description: Omit for a permanent passive; set for a timed proc.
+              type: integer
+              minimum: 100
+              maximum: 3600000
+            max_stacks: { type: integer, minimum: 1, maximum: 20, default: 1 }
+        - type: object
+          additionalProperties: false
+          required: [kind, attribute, amount]
+          properties:
+            kind: { const: debuff }
+            attribute:
+              description: Attribute this passive modifies, referenced by contentId (see `buff`).
+              type: string
+              pattern: "^([a-z][a-z0-9_]{1,31}:)?attribute\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+            amount:
+              description: Signed modifier (typically negative). flat = raw units; percent = hundredths of a percent-point.
+              type: integer
+            modifier:
+              enum: [flat, percent]
+              default: flat
+            duration_ms:
+              description: Omit for a permanent passive; set for a timed proc.
+              type: integer
+              minimum: 100
+              maximum: 3600000
+            max_stacks: { type: integer, minimum: 1, maximum: 20, default: 1 }
+
+$defs:
+  talentId:
+    description: Fully-qualified talent id owned by this file (namespace required).
+    type: string
+    pattern: "^[a-z][a-z0-9_]{1,31}:talent\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"

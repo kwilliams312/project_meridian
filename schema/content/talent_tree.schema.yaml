@@ -1,0 +1,59 @@
+# meridian/talent_tree@1 — a simple tiered (row-unlock-by-points) talent tree
+# (spec §2.5, 2026-07-13 pack-contract/content-schema design). `tiers[]` are
+# ordered rows; a tier unlocks once the player has spent `required_points` in
+# earlier tiers of this tree, and offers a set of `talents` (by id). Deliberately
+# a flat row-unlock model — NO arbitrary prerequisite graph in v1 (YAGNI, spec
+# §2.5). A class references a talent_tree via `class.talent_tree` (sub-project 2).
+# Rules-data only; no seed trees ship here (real trees arrive with the seed pack).
+#
+# Like talent.schema.yaml / equip_type.schema.yaml, the `id` and the talent
+# reference use LOCAL $defs (talentTreeId / talentRef): common.defs.yaml's
+# contentId does not list `talent_tree`, and common.defs.yaml is owned by a
+# sibling story — uniquely-named local defs survive the `$defs.update(common)`
+# merge the validators and schema_gen perform.
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/talent_tree.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, id, name, tiers]
+properties:
+  schema: { const: "meridian/talent_tree@1" }
+  id: { $ref: "#/$defs/talentTreeId" }
+  name: { $ref: "#/$defs/displayName" }
+  description:
+    type: string
+    maxLength: 500
+  tiers:
+    description: >-
+      Ordered rows. Row N unlocks once the player has spent `required_points` in
+      this tree; each row offers its `talents` for selection. Simple row-unlock,
+      no cross-talent prerequisite edges (spec §2.5).
+    type: array
+    minItems: 1
+    maxItems: 20
+    items:
+      type: object
+      additionalProperties: false
+      required: [required_points, talents]
+      properties:
+        required_points:
+          description: Points that must be spent in this tree before this row unlocks (0 = the opening row).
+          type: integer
+          minimum: 0
+          maximum: 1000
+        talents:
+          description: The talents this row offers, by id.
+          type: array
+          minItems: 1
+          maxItems: 20
+          items: { $ref: "#/$defs/talentRef" }
+
+$defs:
+  talentTreeId:
+    description: Fully-qualified talent_tree id owned by this file (namespace required).
+    type: string
+    pattern: "^[a-z][a-z0-9_]{1,31}:talent_tree\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+  talentRef:
+    description: Reference to a meridian/talent@1 entity (a single talent by id).
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?talent\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"

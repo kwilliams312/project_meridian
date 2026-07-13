@@ -20,6 +20,7 @@ public readonly record struct NpcRef(string Id);
 public readonly record struct ZoneRef(string Id);
 public readonly record struct QuestRef(string Id);
 public readonly record struct ItemRef(string Id);
+public readonly record struct TalentRef(string Id);
 public readonly record struct ArtRef(string Id);
 public readonly record struct SfxRef(string Id);
 public readonly record struct MusRef(string Id);
@@ -359,6 +360,19 @@ public enum StatKey
     Stamina,
     Intellect,
     Spirit,
+}
+
+public enum TalentGrantKind
+{
+    Ability,
+    Buff,
+    Debuff,
+}
+
+public enum TalentGrantModifier
+{
+    Flat,
+    Percent,
 }
 
 public sealed record PackTheme
@@ -1066,5 +1080,50 @@ public sealed record EquipType
     public required EquipTypeCategory Category { get; init; }
     /// <summary>Informational grouping — armor: helm/chest/…; weapon: main/off/two_hand. Not enforced by the kernel in sub-project 1; a free-form lowercase token.</summary>
     public string? SlotClass { get; init; }
+}
+
+/// <summary>Tagged union (schema oneOf); kind selects the active variant.</summary>
+public sealed record TalentGrant
+{
+    /// <summary>Discriminator.</summary>
+    public required TalentGrantKind Kind { get; init; }
+    /// <summary>An active ability this talent grants access to, by id.</summary>
+    public AbilityRef? Ability { get; init; }
+    /// <summary>The attribute this passive modifies, referenced by contentId (`&lt;ns&gt;:attribute.&lt;name&gt;`). Resolution against the attribute catalog is validated at the content level (L011), not here — mirrors ability.schema.yaml's buff/debuff `attribute`.</summary>
+    public string? Attribute { get; init; }
+    /// <summary>Signed modifier. flat = raw units; percent = hundredths of a percent-point.</summary>
+    public long? Amount { get; init; }
+    /// <summary>How amount is applied to the attribute (server-authoritative).</summary>
+    public TalentGrantModifier? Modifier { get; init; }
+    /// <summary>Omit for a permanent passive; set for a timed proc.</summary>
+    public long? DurationMs { get; init; }
+    public long? MaxStacks { get; init; }
+}
+
+public sealed record Talent
+{
+    public required ContentId Id { get; init; }
+    public required string Name { get; init; }
+    public string? Description { get; init; }
+    /// <summary>Maximum points a player may sink into this talent (a multi-rank talent scales its grants per point in sub-project 2). Omit for a single-rank talent.</summary>
+    public long? RankMax { get; init; }
+    public required IReadOnlyList<TalentGrant> Grants { get; init; }
+}
+
+public sealed record TalentTreeTier
+{
+    /// <summary>Points that must be spent in this tree before this row unlocks (0 = the opening row).</summary>
+    public required long RequiredPoints { get; init; }
+    /// <summary>The talents this row offers, by id.</summary>
+    public required IReadOnlyList<TalentRef> Talents { get; init; }
+}
+
+public sealed record TalentTree
+{
+    public required ContentId Id { get; init; }
+    public required string Name { get; init; }
+    public string? Description { get; init; }
+    /// <summary>Ordered rows. Row N unlocks once the player has spent `required_points` in this tree; each row offers its `talents` for selection. Simple row-unlock, no cross-talent prerequisite edges (spec §2.5).</summary>
+    public required IReadOnlyList<TalentTreeTier> Tiers { get; init; }
 }
 
