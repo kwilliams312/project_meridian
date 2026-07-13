@@ -188,6 +188,7 @@ def test_real_schema_generates_all_root_types():
         "asset",
         "appearance",
         "dye",
+        "attribute",
         "equip_type",
     }
 

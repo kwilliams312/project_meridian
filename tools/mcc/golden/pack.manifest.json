@@ -6,10 +6,10 @@
   "content_schema_version": 1,
   "godot_version": "4.6",
   "id_band": 0,
-  "content_hash": "315806400f5485c25eee6e72bd0f0a82fed6e516dea20955dd55589744220656",
+  "content_hash": "4ba543a6052c19b11f48d93c2b0bfcdf7a2c63112821c4420df6ba6cd5593c09",
   "mcc_version": "0.0.0",
   "built_at": "1970-01-01 00:00:00",
-  "entry_count": 125,
+  "entry_count": 132,
   "entries": [
     { "id": "core:ability.minor_healing", "numeric_id": 1, "type": "ability", "resource": "res://meridian/core/tables/ability.bin", "hash": "35ae382345900ffc2bbeb694eecdaa478af6deafa843bbfc6fae1ead291643f6" },
     { "id": "core:ability.pickaxe_slam", "numeric_id": 2, "type": "ability", "resource": "res://meridian/core/tables/ability.bin", "hash": "2ed79132ca10a17e2dfde60f98becb70c420b4c5df387fea531ff2bcb28b0813" },
@@ -135,6 +135,13 @@
     { "id": "core:equip_type.plate", "numeric_id": 122, "type": "equip_type", "resource": "res://meridian/core/tables/equip_type.bin", "hash": "3b2e175db5f5f2968b071b841eb34f9e523095abaa390e0a2c0f2b7df842e66c" },
     { "id": "core:equip_type.staff", "numeric_id": 123, "type": "equip_type", "resource": "res://meridian/core/tables/equip_type.bin", "hash": "6a7cc3e63e0be91f687d9cf4c56a580dce5d55aed779605ebd05fe82ae1ee66a" },
     { "id": "core:equip_type.two_hand", "numeric_id": 124, "type": "equip_type", "resource": "res://meridian/core/tables/equip_type.bin", "hash": "50fd57d4a7c28b167f841d40e56b528176a5079f02d319529ea89cae6d3b9e73" },
-    { "id": "core:equip_type.wand", "numeric_id": 125, "type": "equip_type", "resource": "res://meridian/core/tables/equip_type.bin", "hash": "0d4ef40b0a9927fa0fbb923be75429ecb40911eab809be23bf118c1c1a119c56" }
+    { "id": "core:equip_type.wand", "numeric_id": 125, "type": "equip_type", "resource": "res://meridian/core/tables/equip_type.bin", "hash": "0d4ef40b0a9927fa0fbb923be75429ecb40911eab809be23bf118c1c1a119c56" },
+    { "id": "core:attribute.agility", "numeric_id": 126, "type": "attribute", "resource": "res://meridian/core/tables/attribute.bin", "hash": "4da83cce26e20ea9a5610d25ff2ee61eb425caac11d0f0dc36cf438186626c23" },
+    { "id": "core:attribute.armor", "numeric_id": 127, "type": "attribute", "resource": "res://meridian/core/tables/attribute.bin", "hash": "ea49ec4e6ec6a7e99d26b62d618b09dc6965a6412d3e97c29f7f4b13554529a7" },
+    { "id": "core:attribute.crit", "numeric_id": 128, "type": "attribute", "resource": "res://meridian/core/tables/attribute.bin", "hash": "dc62f64934060307d0bf8df3afff3ca11f299e9d3044f1bfcecc67742536a2e0" },
+    { "id": "core:attribute.haste", "numeric_id": 129, "type": "attribute", "resource": "res://meridian/core/tables/attribute.bin", "hash": "a9f55fda9a793f5e2b3ebd06d6a5a79b219bf810404a44d05dcedd0844df7b56" },
+    { "id": "core:attribute.intellect", "numeric_id": 130, "type": "attribute", "resource": "res://meridian/core/tables/attribute.bin", "hash": "b5d4aa50f934f2ebb7695de9c93222e510a8a853b9d1f2a2b089fc21301450aa" },
+    { "id": "core:attribute.stamina", "numeric_id": 131, "type": "attribute", "resource": "res://meridian/core/tables/attribute.bin", "hash": "5943a0ec8d3230d635b65055494c89d9bac337138bd8260882ca42b9928cf3de" },
+    { "id": "core:attribute.strength", "numeric_id": 132, "type": "attribute", "resource": "res://meridian/core/tables/attribute.bin", "hash": "c93f949d308cdeccb0e5d5d8eaed36d4a09bc3f2cef486020530466343377f17" }
   ]
 }

@@ -123,3 +123,10 @@
 {"id":"core:equip_type.staff","numeric_id":123,"resource":"res://meridian/core/tables/equip_type.bin","hash":"6a7cc3e63e0be91f687d9cf4c56a580dce5d55aed779605ebd05fe82ae1ee66a"}
 {"id":"core:equip_type.two_hand","numeric_id":124,"resource":"res://meridian/core/tables/equip_type.bin","hash":"50fd57d4a7c28b167f841d40e56b528176a5079f02d319529ea89cae6d3b9e73"}
 {"id":"core:equip_type.wand","numeric_id":125,"resource":"res://meridian/core/tables/equip_type.bin","hash":"0d4ef40b0a9927fa0fbb923be75429ecb40911eab809be23bf118c1c1a119c56"}
+{"id":"core:attribute.agility","numeric_id":126,"resource":"res://meridian/core/tables/attribute.bin","hash":"4da83cce26e20ea9a5610d25ff2ee61eb425caac11d0f0dc36cf438186626c23"}
+{"id":"core:attribute.armor","numeric_id":127,"resource":"res://meridian/core/tables/attribute.bin","hash":"ea49ec4e6ec6a7e99d26b62d618b09dc6965a6412d3e97c29f7f4b13554529a7"}
+{"id":"core:attribute.crit","numeric_id":128,"resource":"res://meridian/core/tables/attribute.bin","hash":"dc62f64934060307d0bf8df3afff3ca11f299e9d3044f1bfcecc67742536a2e0"}
+{"id":"core:attribute.haste","numeric_id":129,"resource":"res://meridian/core/tables/attribute.bin","hash":"a9f55fda9a793f5e2b3ebd06d6a5a79b219bf810404a44d05dcedd0844df7b56"}
+{"id":"core:attribute.intellect","numeric_id":130,"resource":"res://meridian/core/tables/attribute.bin","hash":"b5d4aa50f934f2ebb7695de9c93222e510a8a853b9d1f2a2b089fc21301450aa"}
+{"id":"core:attribute.stamina","numeric_id":131,"resource":"res://meridian/core/tables/attribute.bin","hash":"5943a0ec8d3230d635b65055494c89d9bac337138bd8260882ca42b9928cf3de"}
+{"id":"core:attribute.strength","numeric_id":132,"resource":"res://meridian/core/tables/attribute.bin","hash":"c93f949d308cdeccb0e5d5d8eaed36d4a09bc3f2cef486020530466343377f17"}

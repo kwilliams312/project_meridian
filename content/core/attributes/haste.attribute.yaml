@@ -1,0 +1,5 @@
+schema: meridian/attribute@1
+id: core:attribute.haste
+name: Haste
+kind: derived
+description: Increases attack speed and reduces cast time.

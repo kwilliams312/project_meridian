@@ -1,0 +1,16 @@
+# meridian/attribute@1 — the kernel-blessed base attribute vocabulary (spec §2.2,
+# 2026-07-13-pack-contract-content-schema-design). Declares the fixed set of
+# primary/derived stats the kernel formulas understand. Entries are kernel-blessed:
+# operators reference & tune them (via $defs/attributeMods on race/class), they do
+# not add primaries here — new attributes are a later extension (umbrella §5).
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/attribute.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, id, name, kind]
+properties:
+  schema: { const: "meridian/attribute@1" }
+  id: { $ref: "#/$defs/contentId" }
+  name: { $ref: "#/$defs/displayName" }
+  kind: { enum: [primary, derived] }
+  description: { type: string, maxLength: 2000 }

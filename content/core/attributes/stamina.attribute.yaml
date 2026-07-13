@@ -1,0 +1,5 @@
+schema: meridian/attribute@1
+id: core:attribute.stamina
+name: Stamina
+kind: primary
+description: Vitality and endurance — scales maximum health.
