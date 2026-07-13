@@ -22,8 +22,8 @@ struct AbilityRef { std::string id; };
 struct VendorRef { std::string id; };
 struct LootRef { std::string id; };
 struct EquipTypeRef { std::string id; };
-struct ZoneRef { std::string id; };
 struct NpcRef { std::string id; };
+struct ZoneRef { std::string id; };
 struct QuestRef { std::string id; };
 struct ItemRef { std::string id; };
 struct ArtRef { std::string id; };
@@ -37,11 +37,48 @@ enum class AbilityEffectKind {
     Heal,
     Aura,
     Threat,
+    Dot,
+    Hot,
+    Buff,
+    Debuff,
+    Shield,
+    Cc,
+    Resource,
+    Movement,
+    Summon,
+};
+
+enum class AbilityEffectModifier {
+    Flat,
+    Percent,
+};
+
+enum class AbilityEffectMotion {
+    Knockback,
+    Pull,
+    Dash,
+};
+
+enum class AbilityEffectOperation {
+    Grant,
+    Drain,
 };
 
 enum class AbilityEffectPeriodicKind {
     Damage,
     Heal,
+};
+
+enum class AbilityEffectPool {
+    Mana,
+    Rage,
+    Energy,
+};
+
+enum class AbilityEffectType {
+    Stun,
+    Root,
+    Silence,
 };
 
 enum class AbilityResourceType {
@@ -483,6 +520,16 @@ struct AbilityEffect {
     std::optional<std::int64_t> max_stacks;  // optional
     std::optional<AbilityEffectPeriodic> periodic;  // optional
     std::vector<AbilityEffectStatMod> stat_mods;  // optional
+    std::optional<std::int64_t> tick_ms;  // Interval between damage ticks; min 500 (server tick budget).
+    std::optional<std::string> attribute;  // The attribute this modifies, referenced by contentId (`<ns>:attribute.<name>`). Resolution against the attribute catalog is validated where the ability is consumed, not here.
+    std::optional<AbilityEffectModifier> modifier;  // How amount is applied to the attribute (server-authoritative).
+    std::optional<AbilityEffectType> type;  // Crowd-control category applied for duration_ms.
+    std::optional<AbilityEffectPool> pool;  // Which resource pool is affected.
+    std::optional<AbilityEffectOperation> operation;  // grant restores the pool; drain removes from it.
+    std::optional<AbilityEffectMotion> motion;  // Forced movement relative to caster/target. knockback pushes the target away, pull drags it toward the caster, dash moves the caster.
+    std::optional<double> distance_m;  // Displacement in meters (server resolves the destination against collision).
+    std::optional<NpcRef> npc;  // The NPC to summon, referenced by contentId.
+    std::optional<std::int64_t> count;  // optional
 };
 
 struct AbilityAudioVisual {

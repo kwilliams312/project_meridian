@@ -48,9 +48,15 @@ properties:
       amount: { type: integer, minimum: 0 }
 
   effects:
+    # Tier-1 effect-primitive palette (SP1.3). Every kind is a deterministic,
+    # server-authoritative recipe — NO scripting (that is Tier-2, sub-project 6).
+    # maxItems bumped 4 -> 6: the richer palette (damage/dot/debuff/cc/movement/…)
+    # lets a single signature ability legitimately chain up to ~5 primitives
+    # (e.g. a boss slam: damage + knockback + stun + dot + armor-debuff); 6 gives
+    # one slot of headroom without becoming an unbounded effect script.
     type: array
     minItems: 1
-    maxItems: 4
+    maxItems: 6
     items:
       oneOf:
         - type: object
@@ -103,6 +109,134 @@ properties:
             amount:
               description: Flat threat added (taunts/detaunts use server-side special-casing later).
               type: integer
+        # --- Tier-1 palette extension (SP1.3) --------------------------------
+        - type: object
+          additionalProperties: false
+          required: [kind, amount, duration_ms, tick_ms]
+          properties:
+            kind: { const: dot }
+            amount:
+              description: Damage applied per tick (rolled server-side each tick).
+              $ref: "#/$defs/intRange"
+            duration_ms: { type: integer, minimum: 100, maximum: 3600000 }
+            tick_ms:
+              description: Interval between damage ticks; min 500 (server tick budget).
+              type: integer
+              minimum: 500
+              maximum: 3600000
+            max_stacks: { type: integer, minimum: 1, maximum: 20, default: 1 }
+            coefficient: { type: number, minimum: 0, maximum: 2 }
+        - type: object
+          additionalProperties: false
+          required: [kind, amount, duration_ms, tick_ms]
+          properties:
+            kind: { const: hot }
+            amount:
+              description: Healing applied per tick.
+              $ref: "#/$defs/intRange"
+            duration_ms: { type: integer, minimum: 100, maximum: 3600000 }
+            tick_ms: { type: integer, minimum: 500, maximum: 3600000 }
+            max_stacks: { type: integer, minimum: 1, maximum: 20, default: 1 }
+            coefficient: { type: number, minimum: 0, maximum: 2 }
+        - type: object
+          additionalProperties: false
+          required: [kind, attribute, amount, duration_ms]
+          properties:
+            kind: { const: buff }
+            attribute:
+              description: >-
+                The attribute this modifies, referenced by contentId
+                (`<ns>:attribute.<name>`). Resolution against the attribute
+                catalog is validated where the ability is consumed, not here.
+              type: string
+              pattern: "^([a-z][a-z0-9_]{1,31}:)?attribute\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+            amount:
+              description: Signed modifier. flat = raw units; percent = hundredths of a percent-point.
+              type: integer
+            modifier:
+              description: How amount is applied to the attribute (server-authoritative).
+              enum: [flat, percent]
+              default: flat
+            duration_ms: { type: integer, minimum: 100, maximum: 3600000 }
+            max_stacks: { type: integer, minimum: 1, maximum: 20, default: 1 }
+        - type: object
+          additionalProperties: false
+          required: [kind, attribute, amount, duration_ms]
+          properties:
+            kind: { const: debuff }
+            attribute:
+              description: Attribute this modifies, referenced by contentId (see `buff`).
+              type: string
+              pattern: "^([a-z][a-z0-9_]{1,31}:)?attribute\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+            amount:
+              description: Signed modifier (typically negative). flat = raw units; percent = hundredths of a percent-point.
+              type: integer
+            modifier:
+              enum: [flat, percent]
+              default: flat
+            duration_ms: { type: integer, minimum: 100, maximum: 3600000 }
+            max_stacks: { type: integer, minimum: 1, maximum: 20, default: 1 }
+        - type: object
+          additionalProperties: false
+          required: [kind, amount, duration_ms]
+          properties:
+            kind: { const: shield }
+            amount:
+              description: Absorb pool granted; expires or is consumed by incoming damage.
+              $ref: "#/$defs/intRange"
+            duration_ms: { type: integer, minimum: 100, maximum: 3600000 }
+            max_stacks: { type: integer, minimum: 1, maximum: 20, default: 1 }
+            coefficient: { type: number, minimum: 0, maximum: 2 }
+        - type: object
+          additionalProperties: false
+          required: [kind, type, duration_ms]
+          properties:
+            kind: { const: cc }
+            type:
+              description: Crowd-control category applied for duration_ms.
+              enum: [stun, root, silence]
+            duration_ms: { type: integer, minimum: 100, maximum: 3600000 }
+        - type: object
+          additionalProperties: false
+          required: [kind, pool, operation, amount]
+          properties:
+            kind: { const: resource }
+            pool:
+              description: Which resource pool is affected.
+              enum: [mana, rage, energy]
+            operation:
+              description: grant restores the pool; drain removes from it.
+              enum: [grant, drain]
+            amount: { type: integer, minimum: 0 }
+        - type: object
+          additionalProperties: false
+          required: [kind, motion, distance_m]
+          properties:
+            kind: { const: movement }
+            motion:
+              description: >-
+                Forced movement relative to caster/target. knockback pushes the
+                target away, pull drags it toward the caster, dash moves the caster.
+              enum: [knockback, pull, dash]
+            distance_m:
+              description: Displacement in meters (server resolves the destination against collision).
+              type: number
+              minimum: 0
+              maximum: 60
+        - type: object
+          additionalProperties: false
+          required: [kind, npc]
+          properties:
+            kind: { const: summon }
+            npc:
+              description: The NPC to summon, referenced by contentId.
+              $ref: "#/$defs/npcRef"
+            count: { type: integer, minimum: 1, maximum: 20, default: 1 }
+            duration_ms:
+              description: Lifetime of the summon; omit for a permanent/until-dismissed pet.
+              type: integer
+              minimum: 100
+              maximum: 3600000
 
   audio_visual:
     type: object

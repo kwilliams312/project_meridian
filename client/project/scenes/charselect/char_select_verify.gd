@@ -8,9 +8,13 @@
 #   * the local char-list stub (CharacterStore) enforces the SAME create rules as the
 #     server (empty / over-long name, bad race, bad class, duplicate name), lists in
 #     creation order, and deletes,
-#   * char_select.tscn instantiates, its race/class pickers are populated from the roster,
-#     the shared placeholder model is built, the list reflects the store, and Enter World
-#     emits the intent for the selected character,
+#   * char_select.tscn instantiates as the roster view + controller (#639): the list
+#     reflects the store, the selected-character paperdoll builds, the three actions carry
+#     the "Enter Realm" relabel, Create New Character switches to the creation view (and
+#     Cancel/confirm return), the offline create path lands a character, the #629
+#     create-result status→message map still asserts exact text, and Enter World emits the
+#     intent for the selected character. (The create FORM itself is now in its own scene,
+#     unit-tested by character_create_verify.gd.)
 #   * #327 REGRESSION: the roster is repopulated from the authoritative session context on
 #     EVERY (re-)login — a fresh scene configured from the same session roster shows the
 #     characters again (not an empty list), and a no-roster login shows nothing stale.
@@ -167,13 +171,23 @@ func _verify_store() -> void:
 	_check("delete of absent id is a no-op", not store.delete(999999))
 
 
-# --- 3. char_select.tscn instantiates and behaves -----------------------------
+# --- 3. char_select roster view + controller (#639) ---------------------------
+# The redesign (#639) moved the create FORM out of this scene into character_create.tscn
+# (unit-tested by character_create_verify.gd). What remains HERE is the roster view + the
+# controller: the character list, the selected-character paperdoll, the three roster
+# actions (with the "Enter Realm" relabel), view switching to/from the creation view, the
+# offline create path, and the #629 create-result status→message regression lock (the map
+# still lives on the controller; re-pointed to also surface on the creation view).
 func _verify_scene() -> void:
-	print(" char_select scene:")
+	print(" char_select roster view + controller (#639):")
 	var packed: PackedScene = load("res://scenes/charselect/char_select.tscn")
 	_check("char_select.tscn loads", packed != null)
 	if packed == null:
 		return
+
+	# Drive layout at the #630 window (1728x972) so the roster paperdoll gets a REAL
+	# on-screen size to fill (the #643 fix ties the SubViewport render size to that).
+	root.size = Vector2i(1728, 972)
 
 	var scene := packed.instantiate()
 	# Seed two characters BEFORE the scene enters the tree (the login-handoff path).
@@ -183,125 +197,55 @@ func _verify_scene() -> void:
 	])
 	root.add_child(scene)
 	await process_frame  # let _ready() run
+	await process_frame  # let the Control layout settle so the paperdoll fills its panel
 
-	var race_opt: OptionButton = scene.find_child("RaceOption", true, false)
-	var class_opt: OptionButton = scene.find_child("ClassOption", true, false)
-	var hair_opt: OptionButton = scene.find_child("HairOption", true, false)
-	var face_opt: OptionButton = scene.find_child("FaceOption", true, false)
-	var skin_opt: OptionButton = scene.find_child("SkinOption", true, false)
 	var char_list: ItemList = scene.find_child("CharList", true, false)
 	var preview: Control = scene.find_child("PreviewHolder", true, false)
+	var roster_view: Control = scene.find_child("RosterView", true, false)
+	var enter_btn: Button = scene.find_child("EnterWorldButton", true, false)
+	var create_btn: Button = scene.find_child("CreateNewButton", true, false)
+	var delete_btn: Button = scene.find_child("DeleteButton", true, false)
 
-	_check("race picker populated from roster (4 items)", race_opt != null and race_opt.item_count == 4)
-	_check("class picker populated from roster (4 items)", class_opt != null and class_opt.item_count == 4)
-	_check("race picker item ids are roster ids",
-		race_opt != null and race_opt.get_item_id(0) == 1 and race_opt.get_item_id(3) == 4)
-
-	# Appearance pickers are CATALOG-DRIVEN off MeridianContentDB (#477, spec ② §3):
-	# the default race (Ardent) has a mounted catalog, so the pickers reflect its
-	# preset lists and the item ids are the stable preset ints the server validates.
-	# Path-based access — same reason as char_select.gd: no autoloads in --script
-	# mode, and preload is immune to a stale global class cache.
-	var cat: Dictionary = ContentDbScript.instance().catalog(MeridianRoster.DEFAULT_RACE_ID, 0)
-	_check("ardent catalog is mounted (content staged under res://meridian/core)",
-		not cat.is_empty())
-	var cat_presets: Dictionary = cat.get("presets", {})
-	_check("hair picker populated from the catalog preset list",
-		hair_opt != null and not cat_presets.get("hair", []).is_empty()
-		and hair_opt.item_count == cat_presets["hair"].size())
-	_check("face picker populated from the catalog preset list",
-		face_opt != null and face_opt.item_count == cat_presets.get("face", []).size())
-	_check("skin picker populated from the catalog preset list",
-		skin_opt != null and skin_opt.item_count == cat_presets.get("skin", []).size())
-	_check("appearance picker item ids are the catalog preset ids",
-		hair_opt != null and hair_opt.get_item_id(0) == int(cat_presets["hair"][0]["id"])
-		and not hair_opt.disabled)
-	_check("create form reports the selected appearance record",
-		scene._selected_appearance()["version"] == MeridianAppearance.VERSION
-		and int(scene._selected_appearance()["hair"]) == MeridianAppearance.DEFAULT_HAIR_ID)
-
-	# #590 REGRESSION LOCK: the create UI must expose EVERY catalog preset, not a
-	# hardcoded 1-3 range. The S6 catalog upgrade added hair/face preset id 4 (S5
-	# hair_4, S1 face_4) — unreachable via the old hardcoded stub, reachable via the
-	# catalog-driven pickers (#546). Counts follow the ardent catalog (4 hair, 4 face,
-	# 3 skin), and id 4 is present in both channels that carry it. Driven off the mounted
-	# catalog, so these cannot silently pass on a stale 1-3 stub.
-	_check("hair picker exposes ALL catalog presets incl. id 4 (4 options, id 4 present)",
-		hair_opt != null and hair_opt.item_count == 4 and hair_opt.get_item_index(4) != -1)
-	_check("face picker exposes ALL catalog presets incl. id 4 (4 options, id 4 present)",
-		face_opt != null and face_opt.item_count == 4 and face_opt.get_item_index(4) != -1)
-	_check("skin picker exposes ALL catalog presets (3 options)",
-		skin_opt != null and skin_opt.item_count == 3)
-	# Selecting the formerly-unreachable id 4 flows into the create record verbatim —
-	# the stable ints the server validates. Proves id 4 now round-trips through the UI.
-	hair_opt.select(hair_opt.get_item_index(4))
-	face_opt.select(face_opt.get_item_index(4))
-	var look4: Dictionary = scene._selected_appearance()
-	_check("selecting hair/face preset id 4 yields a create record with hair=face=4",
-		int(look4["hair"]) == 4 and int(look4["face"]) == 4)
-	# Restore the default selection so the rest of the scene test runs from a known state.
-	hair_opt.select(hair_opt.get_item_index(MeridianAppearance.DEFAULT_HAIR_ID))
-	face_opt.select(face_opt.get_item_index(MeridianAppearance.DEFAULT_FACE_ID))
-
-	# Race #2 (Dolmen) D3: selecting Dolmen (id 2) drives the pickers off the NEW
-	# dolmen/male catalog (not content-missing, not the ardent one). The catalog
-	# resolves to the DOLMEN body, and the pickers enable with the Dolmen preset
-	# ids (which reuse the ardent asset ids — same shape, 4 hair / 4 face / 3 skin).
-	var dolmen_cat: Dictionary = ContentDbScript.instance().catalog(2, 0)
-	_check("dolmen catalog is mounted (Race #2 D3 — catalog(2,0) non-empty)",
-		not dolmen_cat.is_empty())
-	_check("dolmen catalog resolves to the DOLMEN body (not ardent)",
-		String(dolmen_cat.get("body_model", "")) == "core:art.char.dolmen.male.base")
-	race_opt.select(race_opt.get_item_index(2))
-	race_opt.item_selected.emit(race_opt.get_item_index(2))
-	var dolmen_presets: Dictionary = dolmen_cat.get("presets", {})
-	_check("selecting Dolmen enables the appearance pickers (has a catalog now)",
-		hair_opt != null and not hair_opt.disabled
-		and not face_opt.disabled and not skin_opt.disabled)
-	_check("Dolmen pickers are populated from the dolmen catalog presets",
-		hair_opt != null and hair_opt.item_count == dolmen_presets.get("hair", []).size()
-		and face_opt.item_count == dolmen_presets.get("face", []).size()
-		and skin_opt.item_count == dolmen_presets.get("skin", []).size())
-	# The preview mounts an AssembledCharacter for Dolmen — a real assembled body
-	# (with a Dolmen skeleton), NOT the capsule fallback that a no-catalog race gets.
-	scene._refresh_preview(2, MeridianAppearance.default_appearance(), [])
-	var dolmen_body: Node = scene.find_child("PreviewBody", true, false)
-	_check("selecting Dolmen assembles the Dolmen body (not a capsule fallback)",
-		dolmen_body != null and dolmen_body.has_method("body_skeleton")
-		and dolmen_body.body_skeleton() != null)
-
-	# Content-missing (spec §6): a race with NO catalog (Sylvane, id 3 — only the
-	# ardent + dolmen catalogs ship) disables the pickers with a visible "(content
-	# missing)" state rather than empty lists, and the create record falls back to
-	# the default.
-	race_opt.select(race_opt.get_item_index(3))
-	race_opt.item_selected.emit(race_opt.get_item_index(3))
-	_check("no-catalog race disables the appearance pickers",
-		hair_opt != null and hair_opt.disabled and face_opt.disabled and skin_opt.disabled)
-	_check("no-catalog race shows a visible 'content missing' item",
-		hair_opt != null and hair_opt.item_count == 1
-		and hair_opt.get_item_text(0) == "(content missing)")
-	_check("content-missing create record falls back to the default appearance",
-		int(scene._selected_appearance()["hair"]) == MeridianAppearance.DEFAULT_HAIR_ID)
-	# Restore the M1-playable race so the rest of the scene test runs on a real catalog.
-	race_opt.select(race_opt.get_item_index(MeridianRoster.DEFAULT_RACE_ID))
-	race_opt.item_selected.emit(race_opt.get_item_index(MeridianRoster.DEFAULT_RACE_ID))
+	# The roster shows the list and the three #639 actions, with "Enter Realm" (the
+	# relabel — the enter-world net intent is unchanged, only the button text).
+	_check("roster has Enter / Create New / Delete action buttons",
+		enter_btn != null and create_btn != null and delete_btn != null)
+	_check("Enter button relabeled to 'Enter Realm' (#639)",
+		enter_btn != null and enter_btn.text == "Enter Realm")
+	_check("Create New Character button present with its label",
+		create_btn != null and create_btn.text == "Create New Character")
 	_check("list shows the two seeded characters", char_list != null and char_list.item_count == 2)
 	_check("list label carries name + class",
 		char_list != null and char_list.get_item_text(0).begins_with("Kaelith — Vanguard"))
 
-	# The preview pane was built into the preview holder (a SubViewport render surface).
+	# Selection gating (unchanged): no selection → Enter/Delete disabled, Create New always
+	# enabled; a selection enables Enter/Delete.
+	_check("no selection disables Enter/Delete; Create New stays enabled",
+		enter_btn.disabled and delete_btn.disabled and not create_btn.disabled)
+	char_list.select(0)
+	char_list.item_selected.emit(0)
+	_check("selecting a character enables Enter/Delete",
+		not enter_btn.disabled and not delete_btn.disabled)
+
+	# The roster paperdoll is built into the holder (a SubViewport render surface, the
+	# shared #639 widget). It scales with the window under `canvas_items` stretch (#630).
 	var has_preview := preview != null and preview.get_child_count() > 0 \
 		and preview.get_child(0) is SubViewportContainer
-	_check("preview pane built into preview holder", has_preview)
+	_check("roster paperdoll built into the preview holder", has_preview)
 
-	# ②/T4 (#541): the preview is an AssembledCharacter driven by the pickers — the SAME
-	# assembly node the world builds — not a bare capsule. For the default (ardent) race
-	# it assembles against the mounted catalog, so the preview body has a real skeleton.
-	var preview_body: Node = scene.find_child("PreviewBody", true, false)
-	_check("preview mounts an AssembledCharacter for the default race",
-		preview_body != null and preview_body.has_method("body_skeleton")
-		and preview_body.has_method("applied_preset"))
+	# #643: the roster paperdoll must be LARGE — filling its "Selected character" panel,
+	# not the tiny 260x290 floor it used to render at — and its SubViewport render size
+	# must TRACK that real on-screen size (drawn large + sharp).
+	if has_preview:
+		var pd: SubViewportContainer = preview.get_child(0)
+		var pd_vp: SubViewport = pd.get_child(0) if pd.get_child_count() > 0 else null
+		_check("roster paperdoll fills its panel (on-screen size >> old 260x290 floor)",
+			pd.size.x >= 400.0 and pd.size.y >= 400.0)
+		_check("roster paperdoll SubViewport render size tracks the on-screen size (#643)",
+			pd_vp != null
+			and absi(pd_vp.size.x - int(round(pd.size.x))) <= 2
+			and absi(pd_vp.size.y - int(round(pd.size.y))) <= 2
+			and pd_vp.size.x >= 400 and pd_vp.size.y >= 400)
 
 	# Roster selection re-assembles from a character's PERSISTED appearance (contract ①
 	# T5 wire, driven here directly). A persisted hair preset id 2 → the assembled preview
@@ -309,28 +253,45 @@ func _verify_scene() -> void:
 	scene._refresh_preview(MeridianRoster.DEFAULT_RACE_ID,
 		{"version": 1, "hair": 2, "face": 1, "skin": 1}, [])
 	var looked_body: Node = scene.find_child("PreviewBody", true, false)
-	_check("persisted appearance re-assembles the preview",
+	_check("roster preview mounts an AssembledCharacter for the default race",
 		looked_body != null and looked_body.has_method("applied_preset"))
-	_check("preview reflects the persisted hair preset (id 2, not the default)",
+	_check("roster preview reflects the persisted hair preset (id 2, not the default)",
 		looked_body != null and int(looked_body.applied_preset("hair").get("id", 0)) == 2)
-
 	# A race with NO catalog (Sylvane, id 3) degrades the preview to the tinted capsule
 	# fallback (spec §6) rather than an empty/assembled body.
 	scene._refresh_preview(3, MeridianAppearance.default_appearance(), [])
 	var fallback_body: Node = scene.find_child("PreviewBody", true, false)
-	_check("no-catalog race degrades the preview to a capsule fallback",
+	_check("no-catalog race degrades the roster preview to a capsule fallback",
 		fallback_body is MeshInstance3D and (fallback_body as MeshInstance3D).mesh is CapsuleMesh)
-	# Restore an assembled preview for a real race so the scene ends in a valid state.
-	scene._refresh_preview(MeridianRoster.DEFAULT_RACE_ID,
-		MeridianAppearance.default_appearance(), [])
+
+	# --- View switching (#639): roster ⇄ creation, no net traffic offline ----------
+	_check("scene starts on the roster view (creation view not yet instanced)",
+		roster_view != null and roster_view.visible and scene._create_view == null)
+	create_btn.pressed.emit()
+	_check("Create New Character reveals the creation view AND hides the roster",
+		scene._create_view != null and scene._create_view.visible and not roster_view.visible)
+	# Cancel returns to the roster with NO net traffic (offline scene never opened _net).
+	scene._create_view.creation_cancelled.emit()
+	_check("Cancel returns to the roster with no net traffic",
+		roster_view.visible and not scene._create_view.visible and scene._net == null)
+
+	# character_confirmed drives the offline create path: the new character lands, is
+	# auto-selected, and we return to the roster.
+	create_btn.pressed.emit()
+	scene._create_view.character_confirmed.emit(
+		"Roevil", 1, 1, MeridianAppearance.default_appearance())
+	_check("character_confirmed creates the character (offline) and returns to the roster",
+		roster_view.visible and not scene._create_view.visible and char_list.item_count == 3)
+	_check("the new character is auto-selected after create",
+		String(scene._character_by_id(scene._selected_char_id()).get("name", "")) == "Roevil")
 
 	# #629 REGRESSION LOCK: the create-result status→message map MUST mirror
-	# schema/net/world.fbs CharCreateStatus 1:1. The raw wire status reaches this
-	# handler verbatim (meridian_net_thread emits msg.char_create.status), so a
-	# scrambled map silently mislabels rejections — the reported bug was
-	# LIMIT_REACHED (6) falling through to the generic "server error". Drive the
-	# error path directly (status != OK never touches _net) and assert the exact
-	# text, keyed by the wire value. If world.fbs renumbers, these must be updated.
+	# schema/net/world.fbs CharCreateStatus 1:1. The raw wire status reaches this handler
+	# verbatim (meridian_net_thread emits msg.char_create.status), so a scrambled map
+	# silently mislabels rejections — the reported bug was LIMIT_REACHED (6) falling
+	# through to the generic "server error". Drive the error path directly (status != OK
+	# never touches _net) and assert the exact text on the status line (the render site the
+	# lock reads). If world.fbs renumbers, these must be updated.
 	var create_msgs := {
 		1: "Cannot create: that name is taken.",                              # DUPLICATE_NAME
 		2: "Cannot create: invalid race.",                                    # INVALID_RACE
@@ -351,6 +312,17 @@ func _verify_scene() -> void:
 	scene._on_net_char_create_result(99, 0)
 	_check("unknown create status falls back to 'server error'",
 		scene._status.text == "Cannot create: server error.")
+
+	# RE-POINT (#639): a rejection WHILE the creation view is open surfaces the honest
+	# message ON that view (so the player stays there to fix + retry, spec §Data flow 5),
+	# in addition to the status line the lock above reads.
+	create_btn.pressed.emit()  # reopen the creation view (reset() clears any stale error)
+	scene._on_net_char_create_result(1, 0)  # DUPLICATE_NAME
+	var err_label: Label = scene._create_view.find_child("ErrorLabel", true, false)
+	_check("a rejection surfaces on the open creation view (stays open to retry)",
+		scene._create_view.visible and err_label != null
+		and err_label.text == "Cannot create: that name is taken.")
+	scene._show_roster_view()
 
 	# Enter World emits the intent for the SELECTED character. Detach the scene first so
 	# the enter guard (is_inside_tree()) skips the real change_scene_to_file — we are

@@ -16,8 +16,8 @@ public readonly record struct AbilityRef(string Id);
 public readonly record struct VendorRef(string Id);
 public readonly record struct LootRef(string Id);
 public readonly record struct EquipTypeRef(string Id);
-public readonly record struct ZoneRef(string Id);
 public readonly record struct NpcRef(string Id);
+public readonly record struct ZoneRef(string Id);
 public readonly record struct QuestRef(string Id);
 public readonly record struct ItemRef(string Id);
 public readonly record struct ArtRef(string Id);
@@ -32,12 +32,54 @@ public enum AbilityEffectKind
     Heal,
     Aura,
     Threat,
+    Dot,
+    Hot,
+    Buff,
+    Debuff,
+    Shield,
+    Cc,
+    Resource,
+    Movement,
+    Summon,
+}
+
+public enum AbilityEffectModifier
+{
+    Flat,
+    Percent,
+}
+
+public enum AbilityEffectMotion
+{
+    Knockback,
+    Pull,
+    Dash,
+}
+
+public enum AbilityEffectOperation
+{
+    Grant,
+    Drain,
 }
 
 public enum AbilityEffectPeriodicKind
 {
     Damage,
     Heal,
+}
+
+public enum AbilityEffectPool
+{
+    Mana,
+    Rage,
+    Energy,
+}
+
+public enum AbilityEffectType
+{
+    Stun,
+    Root,
+    Silence,
 }
 
 public enum AbilityResourceType
@@ -563,6 +605,25 @@ public sealed record AbilityEffect
     public long? MaxStacks { get; init; }
     public AbilityEffectPeriodic? Periodic { get; init; }
     public IReadOnlyList<AbilityEffectStatMod>? StatMods { get; init; }
+    /// <summary>Interval between damage ticks; min 500 (server tick budget).</summary>
+    public long? TickMs { get; init; }
+    /// <summary>The attribute this modifies, referenced by contentId (`&lt;ns&gt;:attribute.&lt;name&gt;`). Resolution against the attribute catalog is validated where the ability is consumed, not here.</summary>
+    public string? Attribute { get; init; }
+    /// <summary>How amount is applied to the attribute (server-authoritative).</summary>
+    public AbilityEffectModifier? Modifier { get; init; }
+    /// <summary>Crowd-control category applied for duration_ms.</summary>
+    public AbilityEffectType? Type { get; init; }
+    /// <summary>Which resource pool is affected.</summary>
+    public AbilityEffectPool? Pool { get; init; }
+    /// <summary>grant restores the pool; drain removes from it.</summary>
+    public AbilityEffectOperation? Operation { get; init; }
+    /// <summary>Forced movement relative to caster/target. knockback pushes the target away, pull drags it toward the caster, dash moves the caster.</summary>
+    public AbilityEffectMotion? Motion { get; init; }
+    /// <summary>Displacement in meters (server resolves the destination against collision).</summary>
+    public double? DistanceM { get; init; }
+    /// <summary>The NPC to summon, referenced by contentId.</summary>
+    public NpcRef? Npc { get; init; }
+    public long? Count { get; init; }
 }
 
 public sealed record AbilityAudioVisual
