@@ -4,6 +4,7 @@ name: Warden's Greaves
 flavor_text: Leg guards cut for the long descent into the Cinderdeep.
 item_class: armor
 subclass: plate
+equip_type: core:equip_type.plate
 slot: legs
 rarity: rare
 required_level: 10

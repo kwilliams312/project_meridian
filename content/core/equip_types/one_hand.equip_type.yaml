@@ -1,0 +1,6 @@
+schema: meridian/equip_type@1
+id: core:equip_type.one_hand
+name: One-Hand
+description: A single-handed weapon, leaving the off-hand free for a shield or focus.
+category: weapon
+slot_class: main

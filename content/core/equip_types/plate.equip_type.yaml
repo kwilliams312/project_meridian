@@ -1,0 +1,5 @@
+schema: meridian/equip_type@1
+id: core:equip_type.plate
+name: Plate
+description: Heavy forged plate. The sturdiest armor, worn by front-line defenders.
+category: armor

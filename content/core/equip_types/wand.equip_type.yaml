@@ -1,0 +1,6 @@
+schema: meridian/equip_type@1
+id: core:equip_type.wand
+name: Wand
+description: A short channeling implement for ranged spellcasters.
+category: weapon
+slot_class: main
