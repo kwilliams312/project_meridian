@@ -28,10 +28,10 @@ namespace {
 // into the client pck but emit NO world.sql this round. A registered type with
 // zero content entities is fine (no seed talents ship in sub-project 1).
 // Mirrors validate_content.py's CONTENT_TYPES (the reference validator).
-constexpr std::array<std::string_view, 14> kContentTypes = {
-    "npc",        "item", "quest",     "ability",    "loot",
-    "vendor",     "spawn", "zone",     "appearance", "dye",
-    "attribute",  "equip_type", "talent", "talent_tree"};
+constexpr std::array<std::string_view, 15> kContentTypes = {
+    "npc",        "item",       "quest",  "ability",     "loot",
+    "vendor",     "spawn",      "zone",   "appearance",  "dye",
+    "attribute",  "equip_type", "race",   "talent",      "talent_tree"};
 
 // Split `s` on '.' into its dot-separated parts.
 std::vector<std::string> split_dots(const std::string& s) {

@@ -20,6 +20,8 @@ public readonly record struct NpcRef(string Id);
 public readonly record struct ZoneRef(string Id);
 public readonly record struct QuestRef(string Id);
 public readonly record struct ItemRef(string Id);
+public readonly record struct AppearanceRef(string Id);
+public readonly record struct AttributeRef(string Id);
 public readonly record struct TalentRef(string Id);
 public readonly record struct ArtRef(string Id);
 public readonly record struct SfxRef(string Id);
@@ -1080,6 +1082,23 @@ public sealed record EquipType
     public required EquipTypeCategory Category { get; init; }
     /// <summary>Informational grouping — armor: helm/chest/…; weapon: main/off/two_hand. Not enforced by the kernel in sub-project 1; a free-form lowercase token.</summary>
     public string? SlotClass { get; init; }
+}
+
+public sealed record AttributeMod
+{
+    public required AttributeRef Attribute { get; init; }
+    public required long Value { get; init; }
+}
+
+public sealed record Race
+{
+    public required ContentId Id { get; init; }
+    public required string Name { get; init; }
+    public string? Description { get; init; }
+    /// <summary>The appearance_catalog entity this race renders as — the cosmetic body/ material variant. Referenced by id; L011 resolves it (spec §3).</summary>
+    public required AppearanceRef Appearance { get; init; }
+    /// <summary>Optional flat per-attribute tuning (spec §2.3). The capability exists for operators; the Chibi theme zeroes/omits it (races are cosmetic there).</summary>
+    public IReadOnlyList<AttributeMod>? AttributeMods { get; init; }
 }
 
 /// <summary>Tagged union (schema oneOf); kind selects the active variant.</summary>
