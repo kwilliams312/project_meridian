@@ -76,3 +76,30 @@ def test_unknown_event_exits_2():
 def test_missing_args_exits_2():
     r = run("--dry-run", "note")
     assert r.returncode == 2
+
+
+@pytest.mark.unit
+def test_skips_and_exits_0_when_no_webhook(tmp_path):
+    # No env URL, and point the webhook file at a nonexistent path so any
+    # developer's real .discord-webhook cannot interfere -> skip, no network.
+    r = run(
+        "note",
+        "no webhook configured here",
+        env={"MERIDIAN_DISCORD_WEBHOOK_FILE": str(tmp_path / "nope")},
+    )
+    assert r.returncode == 0
+    assert "skipping Discord post" in r.stderr
+
+
+@pytest.mark.unit
+def test_empty_webhook_file_skips(tmp_path):
+    # A file that is only comments/blank lines resolves to no URL -> skip.
+    wf = tmp_path / "webhook"
+    wf.write_text("# just a comment\n\n")
+    r = run(
+        "note",
+        "still no url",
+        env={"MERIDIAN_DISCORD_WEBHOOK_FILE": str(wf)},
+    )
+    assert r.returncode == 0
+    assert "skipping Discord post" in r.stderr
