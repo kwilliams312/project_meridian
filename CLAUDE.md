@@ -45,11 +45,9 @@ ambiguous, ask the human rather than assume, and when in doubt consult the docs*
 1. **Decompose into stories.** Break the work into GitHub issues ("stories").
    **No task without a story, and every task is delegated — the lead implements
    nothing directly.** Group stories under an epic and keep its checklist current.
-   Post an `epic-open` update to Discord (see below).
 2. **Dispatch a sub-agent per story.** Every sub-agent runs **Opus 4.8**. Hand it
    exactly one story and point it at `AGENTS.md`. Sub-agents work in **isolation**
-   (see below) so parallel tasks never corrupt each other's tree. As you dispatch,
-   post a `story-dispatch` update.
+   (see below) so parallel tasks never corrupt each other's tree.
 3. **Sub-agent implements and opens a PR into `dev`.** The PR links its story,
    lists the changes, and pastes fresh build + test evidence. Sub-agents **never
    self-merge**.
@@ -75,12 +73,12 @@ ambiguous, ask the human rather than assume, and when in doubt consult the docs*
    drive the running client themselves.
 6. **Lead review & disposition.** Only after QA passes (and UI E2E is confirmed
    when applicable) does the lead review the PR itself — never trusting the
-   sub-agent's or QA's claims blindly. Then either **approve and merge into `dev`**
-   (then post a `pr-merged` update), or **spawn a fix sub-agent** (new story or
-   the same one) to address findings and re-run the loop from step 3.
+   sub-agent's or QA's claims blindly. Then either **approve and merge into `dev`**,
+   or **spawn a fix sub-agent** (new story or the same one) to address findings and
+   re-run the loop from step 3.
 7. **Close the story on merge.** Because PRs merge into `dev` (not the default
    branch), `Closes #N` does not auto-fire — the lead closes the story manually on
-   merge and ticks the parent epic's checklist and posts a `story-close` update.
+   merge and ticks the parent epic's checklist.
 
 ### Sub-agent isolation
 
@@ -94,21 +92,33 @@ See `AGENTS.md` for the rules sub-agents must follow.
 
 ### Development updates → Discord
 
-The lead announces delegation-loop milestones to a Discord channel via
-`scripts/dev/post-update.sh` (one-way incoming webhook — no bot). **Only the lead
-posts; sub-agents never do.** Post at these moments in the loop:
+Development progress goes to Discord as **one daily digest**, not a message per
+milestone (per-event posting was too noisy). A GitHub Actions workflow
+([.github/workflows/daily-digest.yml](.github/workflows/daily-digest.yml)) runs
+`scripts/dev/daily-digest.sh` at **08:00 US Pacific** and posts a recap of the
+*previous* Pacific calendar day, reconstructed straight from GitHub (the source of
+truth — it does not depend on anyone posting during the day):
 
-| Moment | Command |
-|--------|---------|
-| Epic opened (step 1) | `scripts/dev/post-update.sh epic-open "<epic title>" <epic-url>` |
-| Story dispatched (step 2) | `scripts/dev/post-update.sh story-dispatch "<story title>" <story-url>` |
-| PR merged into dev (step 6) | `scripts/dev/post-update.sh pr-merged "<story> — <summary>" <pr-url>` |
-| Story closed on merge (step 7) | `scripts/dev/post-update.sh story-close "<story title>" <story-url>` |
+- **Merged into `dev`** — the PRs that actually shipped,
+- **Stories closed** — the issues (stories/tasks/epics) finished,
+- **Opened** — what got started or planned.
 
-Configure the webhook once via `$MERIDIAN_DISCORD_WEBHOOK_URL` or a gitignored
-`.discord-webhook` file at the repo root. If neither is set the script prints a
-skip notice and exits 0 — a missing webhook never blocks the loop. Use the `note`
-event for any other update worth surfacing.
+Because the digest is rebuilt from GitHub, **the lead no longer posts per-loop
+milestones** — just run the loop and let the 8am digest summarize it. Keep story
+titles and PR summaries descriptive, since those are what the digest shows.
+
+**Setup (one-time):** the workflow reads the webhook from the repo secret
+`MERIDIAN_DISCORD_WEBHOOK_URL`. If the secret is unset the job no-ops (never fails
+CI). Trigger a recap on demand — including for a past day — from the Actions tab
+via *Run workflow* (optional `date: YYYY-MM-DD`), or locally with
+`scripts/dev/daily-digest.sh [--date YYYY-MM-DD] [--dry-run]`.
+
+`scripts/dev/post-update.sh` remains the low-level Discord poster (one-way
+incoming webhook — no bot; the digest script calls it, and it resolves the
+webhook from `$MERIDIAN_DISCORD_WEBHOOK_URL` or a gitignored `.discord-webhook`
+file). **Only the lead posts; sub-agents never do.** Use its `note` event
+(`scripts/dev/post-update.sh note "<title>" [url] --body "<detail>"`) sparingly
+for something genuinely urgent that can't wait for the next digest.
 
 ## Policies
 

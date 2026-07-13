@@ -9,7 +9,9 @@
 #
 # Usage:
 #   scripts/dev/post-update.sh <event> "<message>" [url]
-#     events:  epic-open | story-dispatch | story-close | pr-merged | note
+#     events:  epic-open | story-dispatch | story-close | pr-merged | digest | note
+#     --body "<text>"  plain-language summary shown as the embed body (what the
+#                      work actually is), so the message isn't just a tech title
 #     --dry-run   print the JSON payload to stdout instead of POSTing
 #     --help      show this help
 #
@@ -26,8 +28,9 @@ WEBHOOK_FILE="${MERIDIAN_DISCORD_WEBHOOK_FILE:-${REPO_ROOT}/.discord-webhook}"
 usage() {
   cat <<'EOF'
 scripts/dev/post-update.sh <event> "<message>" [url]
-  events:  epic-open | story-dispatch | story-close | pr-merged | note
-  flags:   --dry-run   print the JSON payload instead of POSTing
+  events:  epic-open | story-dispatch | story-close | pr-merged | digest | note
+  flags:   --body "<text>"  plain-language summary shown as the embed body
+           --dry-run   print the JSON payload instead of POSTing
            --help      show this help
            --          end of flags (use before a message starting with "-")
 EOF
@@ -36,9 +39,12 @@ EOF
 die() { printf 'post-update: %s\n' "$*" >&2; usage >&2; exit 2; }
 
 dry_run=0
+body=""
 args=()
 while [ $# -gt 0 ]; do
   case "$1" in
+    --body) [ $# -ge 2 ] || die "--body needs a value"; body="$2"; shift 2 ;;
+    --body=*) body="${1#--body=}"; shift ;;
     --dry-run) dry_run=1; shift ;;
     --help|-h) usage; exit 0 ;;
     --) shift; while [ $# -gt 0 ]; do args+=("$1"); shift; done ;;
@@ -57,8 +63,9 @@ case "$event" in
   story-dispatch) emoji="🚀"; prefix="Story dispatched";   color=10181046 ;;
   story-close)    emoji="✅"; prefix="Story closed";       color=3066993 ;;
   pr-merged)      emoji="🔀"; prefix="PR merged into dev"; color=5763719 ;;
+  digest)         emoji="📊"; prefix="Daily digest";       color=15844367 ;;
   note)           emoji="📝"; prefix="Note";               color=9807270 ;;
-  *) die "unknown event: $event (want: epic-open|story-dispatch|story-close|pr-merged|note)" ;;
+  *) die "unknown event: $event (want: epic-open|story-dispatch|story-close|pr-merged|digest|note)" ;;
 esac
 
 title="${emoji} ${prefix} — ${message}"
@@ -66,6 +73,7 @@ timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 payload="$(
   EMBED_TITLE="$title" EMBED_URL="$url" EMBED_COLOR="$color" EMBED_TS="$timestamp" \
+  EMBED_BODY="$body" \
   python3 - <<'PY'
 import json
 import os
@@ -79,6 +87,10 @@ embed = {
 url = os.environ.get("EMBED_URL", "")
 if url:
     embed["url"] = url
+# Discord caps embed descriptions at 4096 chars; keep well under to be safe.
+body = os.environ.get("EMBED_BODY", "").strip()
+if body:
+    embed["description"] = body[:4000]
 print(json.dumps({"username": "Meridian Dev", "embeds": [embed]}))
 PY
 )"

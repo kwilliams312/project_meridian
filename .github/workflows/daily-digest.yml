@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# daily-digest — post ONE Discord recap of the previous day's delegation-loop
+# work, at 08:00 US Pacific, instead of a message per milestone (see CLAUDE.md).
+#
+# scripts/dev/daily-digest.sh reconstructs "yesterday" (previous calendar day in
+# America/Los_Angeles) straight from GitHub — PRs merged into `dev`, issues
+# closed, issues opened — and posts it via scripts/dev/post-update.sh.
+#
+# DST: GitHub cron is UTC-only with no DST, so 08:00 Pacific is 15:00 UTC in
+# summer (PDT) and 16:00 UTC in winter (PST). We schedule BOTH and gate on the
+# actual America/Los_Angeles hour, so exactly one run fires at 08:00 Pacific
+# year-round; the off-season duplicate no-ops.
+#
+# Requires repo secret MERIDIAN_DISCORD_WEBHOOK_URL (the incoming webhook). If it
+# is unset the job no-ops instead of failing — a missing webhook never breaks CI.
+
+name: daily-digest
+
+on:
+  schedule:
+    - cron: "0 15 * * *"   # 08:00 PDT (summer)
+    - cron: "0 16 * * *"   # 08:00 PST (winter)
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Recap this Pacific day (YYYY-MM-DD) instead of yesterday"
+        required: false
+        default: ""
+
+# Least-privilege: read the repo (for the scripts) and read issues/PRs (gh list).
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: daily-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Gate — 08:00 America/Los_Angeles + webhook present
+        id: gate
+        env:
+          WEBHOOK: ${{ secrets.MERIDIAN_DISCORD_WEBHOOK_URL }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          hour="$(TZ=America/Los_Angeles date +%H)"
+          if [ "$EVENT" = "schedule" ] && [ "$hour" != "08" ]; then
+            echo "::notice title=Off-DST duplicate::Currently ${hour}:00 Pacific, not 08:00 — this is the other cron half; skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$WEBHOOK" ]; then
+            echo "::notice title=No webhook::MERIDIAN_DISCORD_WEBHOOK_URL secret is unset — skipping digest post."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Post daily digest
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          MERIDIAN_DISCORD_WEBHOOK_URL: ${{ secrets.MERIDIAN_DISCORD_WEBHOOK_URL }}
+          GH_TOKEN: ${{ github.token }}
+          DIGEST_DATE: ${{ github.event.inputs.date }}
+        run: |
+          if [ -n "${DIGEST_DATE}" ]; then
+            scripts/dev/daily-digest.sh --date "${DIGEST_DATE}"
+          else
+            scripts/dev/daily-digest.sh
+          fi
