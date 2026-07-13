@@ -7,15 +7,23 @@
 ; use unique names (%Name) so the script's @onready lookups resolve regardless of layout.
 ; Intentionally minimal — the #110 deliverable is the char-select FLOW, not skinned UI.
 
-[gd_scene load_steps=2 format=3 uid="uid://bmeridiancharsel110"]
+[gd_scene load_steps=3 format=3 uid="uid://bmeridiancharsel110"]
 
 [ext_resource type="Script" path="res://scenes/charselect/char_select.gd" id="1_charsel"]
+
+; #630: a scoped Theme raising the default font size so every Label/Button/OptionButton
+; in this scene reads comfortably at the larger window (Godot's default is 16). Applied
+; on the root CharSelect Control only, so it cascades to this scene alone (login / world
+; HUD are untouched). Under the project's `canvas_items` stretch it scales with the window.
+[sub_resource type="Theme" id="Theme_charsel630"]
+default_font_size = 20
 
 [node name="CharSelect" type="Control"]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+theme = SubResource("Theme_charsel630")
 script = ExtResource("1_charsel")
 
 [node name="Root" type="VBoxContainer" parent="."]
@@ -23,10 +31,10 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 24.0
-offset_top = 24.0
-offset_right = -24.0
-offset_bottom = -24.0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = -16.0
+offset_bottom = -16.0
 
 [node name="Title" type="Label" parent="Root"]
 layout_mode = 2
@@ -139,7 +147,7 @@ text = "Placeholder model (shared)"
 
 [node name="PreviewHolder" type="Control" parent="Root/Body/CreatePanel"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(180, 220)
+custom_minimum_size = Vector2(260, 290)
 layout_mode = 2
 
 [node name="StatusLabel" type="Label" parent="Root"]
