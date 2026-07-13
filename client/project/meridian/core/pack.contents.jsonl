@@ -109,3 +109,6 @@
 {"id":"core:art.char.ardent.male.hair_2","numeric_id":109,"resource":"res://meridian/core/art/char/ardent/male/hair_2.res","hash":"0628227e4aa34db661f7f7f6d752d557fe9f40bdd57a4fa7860654bf73106be9"}
 {"id":"core:art.char.ardent.male.hair_3","numeric_id":110,"resource":"res://meridian/core/art/char/ardent/male/hair_3.res","hash":"21e7c24f052478a110fb4d7c140c9ae1849672e07c9c3ac5b52832f26a431e52"}
 {"id":"core:art.char.ardent.male.hair_4","numeric_id":111,"resource":"res://meridian/core/art/char/ardent/male/hair_4.res","hash":"4eefad84182090776dfb003523f44880c9db923c390c02d970b6f12b9779bbb8"}
+{"id":"core:art.icon.item.iron_sword","numeric_id":112,"resource":"res://meridian/core/art/icon/item/iron_sword.ctex","hash":"6acfb79668402372c83937ce7e01b5d2adf92c6c0758619d3ab42a0c18df84c6"}
+{"id":"core:art.item.weapon.iron_sword","numeric_id":113,"resource":"res://meridian/core/art/item/weapon/iron_sword.scn","hash":"bbdf15c510179b5d04790aaba056758ad2a7d391a20aeaff743af5d0946d16f7"}
+{"id":"core:item.iron_sword","numeric_id":114,"resource":"res://meridian/core/tables/item.bin","hash":"2d9b097598a857a486e9e67cc8feb21ae4b1d582a8be5d460b8cfaa60f7517c6"}

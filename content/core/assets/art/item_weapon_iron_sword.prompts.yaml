@@ -1,0 +1,17 @@
+# Auditable Meshy generation record for the Iron Sword weapon (TD-09, #605).
+# Auxiliary companion, NOT a content entity: validate_content.py + mcc discovery
+# exclude *.prompts.yaml from envelope checks (issue #410 precedent). The raw
+# text-to-3D sculpt this records is the non-deterministic half; the deterministic
+# restyle (restyle_weapon.py) turns it into the committed iron_sword.glb.
+# Regenerate the sculpt from this prompt + task id if ever needed.
+task_id: 019f58ca-b832-7e99-8fcc-97d8813b5a64
+model_version: meshy-5
+preview_task_id: 019f58ca-4a1e-7e85-bd9d-d45bcc3d55b6
+request:
+  mode: preview
+  prompt: a fantasy one-handed arming sword, a single straight double-edged steel
+    blade with a simple straight crossguard, a leather-wrapped cylindrical grip and
+    a round pommel, one clean game-ready weapon prop, blade pointing straight up,
+    symmetric, low-poly, clean even topology, no scabbard, plain polished steel
+  ai_model: meshy-5
+  target_polycount: 14000

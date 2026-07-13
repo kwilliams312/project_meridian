@@ -33,6 +33,7 @@ map:                         # append-only; local index (SAD §2.4)
   core:art.icon.item.ember_mote: 44
   core:art.icon.item.emberforged_pick: 45
   core:art.icon.item.hollow_charm: 46
+  core:art.icon.item.iron_sword: 112
   core:art.icon.item.kobold_ear: 8
   core:art.icon.item.lamp_charm: 9
   core:art.icon.item.map_scrap: 47
@@ -53,6 +54,7 @@ map:                         # append-only; local index (SAD §2.4)
   core:art.item.armor.warden_shoulders: 100
   core:art.item.armor.warden_shoulders_mask: 101
   core:art.item.weapon.emberforged_pick: 76
+  core:art.item.weapon.iron_sword: 113
   core:art.item.weapon.pickaxe_rusty: 13
   core:art.vfx.heal.sparkle_small: 14
   core:art.vfx.impact.dust_small: 15
@@ -66,6 +68,7 @@ map:                         # append-only; local index (SAD §2.4)
   core:item.ember_mote: 52
   core:item.emberforged_pick: 53
   core:item.hollow_charm: 54
+  core:item.iron_sword: 114
   core:item.kobold_ear: 17
   core:item.miners_lamp_charm: 18
   core:item.minor_healing_potion: 19
