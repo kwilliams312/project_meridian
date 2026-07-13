@@ -64,6 +64,14 @@ map:                         # append-only; local index (SAD §2.4)
   core:dye.bone: 77
   core:dye.russet: 78
   core:dye.slate: 79
+  core:equip_type.cloth: 118
+  core:equip_type.leather: 119
+  core:equip_type.mail: 120
+  core:equip_type.one_hand: 121
+  core:equip_type.plate: 122
+  core:equip_type.staff: 123
+  core:equip_type.two_hand: 124
+  core:equip_type.wand: 125
   core:item.brens_signet: 16
   core:item.charred_totem: 49
   core:item.cinder_heart: 50

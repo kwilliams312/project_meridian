@@ -4,6 +4,7 @@ name: Emberforged Pick
 flavor_text: Reforged in the vent-heat of Cinderdeep. It bites where rust only bruised.
 item_class: weapon
 subclass: mace_1h
+equip_type: core:equip_type.one_hand
 slot: main_hand
 rarity: uncommon
 required_level: 6

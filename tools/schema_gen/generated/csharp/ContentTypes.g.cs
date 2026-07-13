@@ -15,6 +15,7 @@ public readonly record struct ContentId(string Id);
 public readonly record struct AbilityRef(string Id);
 public readonly record struct VendorRef(string Id);
 public readonly record struct LootRef(string Id);
+public readonly record struct EquipTypeRef(string Id);
 public readonly record struct ZoneRef(string Id);
 public readonly record struct NpcRef(string Id);
 public readonly record struct QuestRef(string Id);
@@ -160,6 +161,12 @@ public enum DyeRarity
     Rare,
     Epic,
     Legendary,
+}
+
+public enum EquipTypeCategory
+{
+    Armor,
+    Weapon,
 }
 
 public enum GeosetRegion
@@ -501,6 +508,7 @@ public sealed record Item
     public required ItemClass ItemClass { get; init; }
     /// <summary>weapon: sword_1h|sword_2h|axe_1h|axe_2h|mace_1h|mace_2h|dagger|staff|polearm|bow|wand|fist. armor: cloth|leather|mail|plate|shield. Free-form for other classes.</summary>
     public string? Subclass { get; init; }
+    public EquipTypeRef? EquipType { get; init; }
     public ItemSlot? Slot { get; init; }
     public required ItemRarity Rarity { get; init; }
     public long? RequiredLevel { get; init; }
@@ -958,5 +966,16 @@ public sealed record Dye
     public required string Name { get; init; }
     public required string Color { get; init; }
     public required DyeRarity Rarity { get; init; }
+}
+
+public sealed record EquipType
+{
+    public required ContentId Id { get; init; }
+    public required string Name { get; init; }
+    public string? Description { get; init; }
+    /// <summary>armor = a wearable-armor material class (Cloth/Leather/Mail/Plate); weapon = a weapon type (Two-Hand/One-Hand/Wand/Staff). Class proficiencies (sub-project 2) gate equipping by this category.</summary>
+    public required EquipTypeCategory Category { get; init; }
+    /// <summary>Informational grouping — armor: helm/chest/…; weapon: main/off/two_hand. Not enforced by the kernel in sub-project 1; a free-form lowercase token.</summary>
+    public string? SlotClass { get; init; }
 }
 

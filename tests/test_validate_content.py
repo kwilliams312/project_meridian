@@ -1185,6 +1185,108 @@ class TestDye:
         assert "SCHEMA" in codes(res.errors)
 
 
+@pytest.mark.unit
+class TestEquipType:
+    """meridian/equip_type@1 — the armor/weapon-type catalog + item.equip_type
+    integration (spec §2.1). One valid fixture per category; each negative case
+    copies it and mutates one field, per the one-negative-fixture-per-lint
+    convention (Tools PRD §11.1)."""
+
+    # A valid armor equip_type catalog entry.
+    ARMOR_OK = """\
+    schema: meridian/equip_type@1
+    id: tp:equip_type.plate
+    name: Plate
+    description: Heavy metal plate armor.
+    category: armor
+    slot_class: chest
+    """
+
+    # A valid weapon equip_type catalog entry.
+    WEAPON_OK = """\
+    schema: meridian/equip_type@1
+    id: tp:equip_type.one_hand
+    name: One-Hand
+    category: weapon
+    slot_class: main
+    """
+
+    # An item@2 weapon that references an equip_type id (worn/attach kept valid so
+    # the L080/L081 gate does not fire and mask the equip_type behaviour under test).
+    ITEM_WITH_EQUIP_TYPE = """\
+    schema: meridian/item@2
+    id: tp:item.sword
+    name: Sword
+    item_class: weapon
+    slot: main_hand
+    rarity: common
+    equip_type: equip_type.one_hand
+    weapon: { damage: { min: 1, max: 2 }, speed_ms: 2000 }
+    visual:
+      icon: art.ui.icon.sword
+      worn:
+        models: [{ model: art.weapon.tp.sword, mirror: none }]
+        attach: { socket: main_hand, sheath_socket: hip_l }
+    """
+
+    def test_armor_equip_type_valid_passes(self, tmp_path):
+        res = run(tmp_path, {"tp/equip_types/plate.equip_type.yaml": self.ARMOR_OK})
+        assert res.errors == []
+
+    def test_weapon_equip_type_valid_passes(self, tmp_path):
+        res = run(tmp_path, {"tp/equip_types/one_hand.equip_type.yaml": self.WEAPON_OK})
+        assert res.errors == []
+
+    def test_item_referencing_equip_type_resolves(self, tmp_path):
+        # The equip_type entity is defined, so the item's equip_type ref resolves.
+        res = run(
+            tmp_path,
+            {
+                "tp/equip_types/one_hand.equip_type.yaml": self.WEAPON_OK,
+                "tp/items/sword.item.yaml": self.ITEM_WITH_EQUIP_TYPE,
+            },
+        )
+        assert res.errors == []
+
+    def test_item_without_equip_type_still_valid(self, tmp_path):
+        # equip_type is additive/optional — an item omitting it stays valid (back-compat).
+        item = self.ITEM_WITH_EQUIP_TYPE.replace(
+            "    equip_type: equip_type.one_hand\n", ""
+        )
+        res = run(tmp_path, {"tp/items/sword.item.yaml": item})
+        assert res.errors == []
+
+    def test_dangling_equip_type_ref_rejected_L011(self, tmp_path):
+        # The item references an equip_type id that no entity defines — L011.
+        res = run(tmp_path, {"tp/items/sword.item.yaml": self.ITEM_WITH_EQUIP_TYPE})
+        assert "L011" in codes(res.errors)
+
+    def test_unknown_category_fails_schema(self, tmp_path):
+        # category is enum [armor, weapon]; anything else fails schema validation.
+        bad = self.ARMOR_OK.replace("category: armor", "category: trinket")
+        res = run(tmp_path, {"tp/equip_types/plate.equip_type.yaml": bad})
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_missing_category_fails_schema(self, tmp_path):
+        bad = self.ARMOR_OK.replace("    category: armor\n", "")
+        res = run(tmp_path, {"tp/equip_types/plate.equip_type.yaml": bad})
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_slot_class_optional(self, tmp_path):
+        # slot_class is informational/optional — omitting it is valid.
+        entry = self.ARMOR_OK.replace("    slot_class: chest\n", "")
+        res = run(tmp_path, {"tp/equip_types/plate.equip_type.yaml": entry})
+        assert res.errors == []
+
+    def test_id_wrong_type_segment_fails_schema(self, tmp_path):
+        # The strict equipTypeId pattern requires an `equip_type.` type segment, so a
+        # mismatched id (e.g. `item.`) is rejected at the SCHEMA layer — a stronger
+        # guarantee than the generic L003 the shared contentId leans on.
+        bad = self.ARMOR_OK.replace("id: tp:equip_type.plate", "id: tp:item.plate")
+        res = run(tmp_path, {"tp/equip_types/plate.equip_type.yaml": bad})
+        assert "SCHEMA" in codes(res.errors)
+
+
 @pytest.mark.integration
 class TestRepoContent:
     def test_repo_content_validates_clean(self):

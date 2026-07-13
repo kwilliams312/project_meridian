@@ -39,6 +39,7 @@ myzone:quest.welcome_to_emberfall     ← community pack
     vendors/  *.vendor.yaml
     spawns/   *.spawn.yaml   # Forge-authored (hand-editable)
     zones/    *.zone.yaml
+    equip_types/ *.equip_type.yaml  # armor/weapon-type catalog (meridian/equip_type@1)
     assets/   **/*.asset.yaml  # IF-8 sidecars (meridian/asset@1), one per asset ID
   ```
 - Units are always suffixed: `_ms`, `_m` (meters), `_mps`, `_pct`, `_deg`, `_seconds`. Money is always integer **copper** (100c = 1s, 10 000c = 1g).
@@ -57,6 +58,7 @@ myzone:quest.welcome_to_emberfall     ← community pack
 | `meridian/spawn@1` | [spawn.schema.yaml](spawn.schema.yaml) | Spawn points/patrols; written by Forge (NPC-01) |
 | `meridian/zone@1` | [zone.schema.yaml](zone.schema.yaml) | Zone manifest: level range, music, POIs; `chunk_manifest` reserved pending the A-08 chunk-format contract |
 | `meridian/asset@1` | [asset.schema.yaml](asset.schema.yaml) | IF-8 asset-registry sidecar (A-12): source file, license/provenance (TD-09), art import hints, audio stream metadata |
+| `meridian/equip_type@1` | [equip_type.schema.yaml](equip_type.schema.yaml) | Armor/weapon-type catalog (pack-contract spec §2.1): `category: armor\|weapon` distinguishes the armor materials (Cloth/Leather/Mail/Plate) from the weapon types (Two-Hand/One-Hand/Wand/Staff). Items reference one via `item.equip_type`; class proficiencies gate on it in sub-project 2 |
 
 Deferred to M2 (do not invent early): `statprofile` (class/level stat tables), `faction` (v1 uses a simple friendly/neutral/hostile enum on NPCs), `recipe` (ECO-02), `talent` (CHR-04), `gossip` graphs (v1 uses a single `gossip_text`).
 

@@ -15,12 +15,14 @@ namespace {
 
 // The content types, in schema-README order. The first eight are the original
 // server-backed entities; `appearance` (spec §5.1 catalogs) and `dye` (spec §6)
-// are the CLIENT-only visual types added by contract ① — they classify + flow
-// into the client pck but emit NO world.sql (the server never reads visuals,
-// spec §8). Mirrors validate_content.py's CONTENT_TYPES (the reference validator).
-constexpr std::array<std::string_view, 10> kContentTypes = {
+// are the CLIENT-only visual types added by contract ①; `equip_type` (pack-contract
+// spec §2.1) is the armor/weapon-type CATALOG (rules-data referenced by items and,
+// in sub-project 2, class proficiencies). Like the other non-server-emitting types
+// it classifies + flows into the client pck but emits NO world.sql this round.
+// Mirrors validate_content.py's CONTENT_TYPES (the reference validator).
+constexpr std::array<std::string_view, 11> kContentTypes = {
     "npc", "item", "quest", "ability", "loot", "vendor", "spawn", "zone",
-    "appearance", "dye"};
+    "appearance", "dye", "equip_type"};
 
 // Split `s` on '.' into its dot-separated parts.
 std::vector<std::string> split_dots(const std::string& s) {
