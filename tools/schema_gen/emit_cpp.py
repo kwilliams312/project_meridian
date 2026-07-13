@@ -48,6 +48,8 @@ _REF_TYPE_NAME = {
     "appearance": "AppearanceRef",
     "attribute": "AttributeRef",
     "talent": "TalentRef",
+    "race": "RaceRef",
+    "talent_tree": "TalentTreeRef",
     "asset": "AssetId",
     "art": "ArtRef",
     "mus": "MusRef",

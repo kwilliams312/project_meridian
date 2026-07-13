@@ -193,6 +193,7 @@ def test_real_schema_generates_all_root_types():
         "race",
         "talent",
         "talent_tree",
+        "class",
     }
 
 
