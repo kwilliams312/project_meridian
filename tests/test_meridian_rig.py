@@ -83,6 +83,107 @@ def test_unknown_profile_raises():
 
 
 # ---------------------------------------------------------------------------
+# Proportion profiles (spec ④ "proportions are parameters"; Race #2 / Dolmen).
+# The shared-skeleton contract: every profile carries the IDENTICAL 63 bone
+# names + parent hierarchy and differs only in rest transforms, so gear authored
+# on one race binds to another by bone name.
+# ---------------------------------------------------------------------------
+def _max_height(profile: str) -> float:
+    """Crown height = the tallest head/tail Y across a profile's bones."""
+    specs = bones.for_profile(profile)
+    return max(max(b.head_m[1], b.tail_m[1]) for b in specs)
+
+
+def _max_half_width(profile: str) -> float:
+    """Broadest reach from the centre line = the largest |X| across a profile."""
+    specs = bones.for_profile(profile)
+    return max(max(abs(b.head_m[0]), abs(b.tail_m[0])) for b in specs)
+
+
+def test_valid_profiles_includes_ardent_and_dolmen():
+    assert "ardent_male" in bones.VALID_PROFILES
+    assert "dolmen_male" in bones.VALID_PROFILES
+
+
+def test_dolmen_profile_returns_full_63_bone_table():
+    """for_profile now yields all 63 bones (56 profile + 7 sockets) per profile."""
+    assert len(bones.for_profile("dolmen_male")) == 63
+    assert len(bones.for_profile("ardent_male")) == 63
+
+
+def test_dolmen_bone_names_identical_to_ardent():
+    """Shared-skeleton invariant: bone NAMES (and order) match ardent exactly."""
+    assert bones.bone_names("dolmen_male") == bones.bone_names("ardent_male")
+
+
+def test_dolmen_hierarchy_identical_to_ardent():
+    """Shared-skeleton invariant: every bone's parent matches ardent exactly."""
+    assert bones.hierarchy("dolmen_male") == bones.hierarchy("ardent_male")
+
+
+def test_dolmen_rest_transforms_actually_differ_from_ardent():
+    """Proportions really changed: at least one joint sits at a new position."""
+    ardent = {b.name: b for b in bones.for_profile("ardent_male")}
+    dolmen = {b.name: b for b in bones.for_profile("dolmen_male")}
+    assert any(
+        dolmen[name].head_m != ardent[name].head_m
+        or dolmen[name].tail_m != ardent[name].tail_m
+        for name in ardent
+    )
+
+
+def test_dolmen_is_shorter_than_ardent():
+    """Dolmen = "mountain/stone folk": lower total height (~0.86–0.90x)."""
+    ratio = _max_height("dolmen_male") / _max_height("ardent_male")
+    assert ratio < 1.0, "Dolmen must be shorter than Ardent"
+    assert 0.86 <= ratio <= 0.90, f"Dolmen height ratio {ratio:.3f} outside 0.86–0.90x"
+
+
+def test_dolmen_is_broader_than_ardent():
+    """Dolmen is stockier: wider shoulder/hip span than Ardent."""
+    assert _max_half_width("dolmen_male") > _max_half_width("ardent_male")
+
+
+def test_dolmen_legs_shortened_more_than_torso():
+    """Legs compress harder than the torso — the stocky, low-slung stance."""
+    ardent = {b.name: b for b in bones.for_profile("ardent_male")}
+    dolmen = {b.name: b for b in bones.for_profile("dolmen_male")}
+    # Leg span (hip joint -> ankle) shrinks more than the spine column.
+    ard_leg = ardent["RightUpperLeg"].head_m[1] - ardent["RightFoot"].head_m[1]
+    dol_leg = dolmen["RightUpperLeg"].head_m[1] - dolmen["RightFoot"].head_m[1]
+    ard_torso = ardent["Neck"].head_m[1] - ardent["Hips"].head_m[1]
+    dol_torso = dolmen["Neck"].head_m[1] - dolmen["Hips"].head_m[1]
+    assert (dol_leg / ard_leg) < (dol_torso / ard_torso)
+
+
+def test_dolmen_stays_a_valid_humanoid_tpose():
+    """Feet stay on/above the floor and the +/-X mirror survives the transform."""
+    dolmen = {b.name: b for b in bones.for_profile("dolmen_male")}
+    # No joint sinks below the ground plane.
+    assert min(b.head_m[1] for b in dolmen.values()) >= 0.0
+    # Left/right mirror preserved: paired bones are exact +/-X reflections.
+    for right, left in (("RightHand", "LeftHand"), ("RightUpperLeg", "LeftUpperLeg")):
+        rh, lh = dolmen[right].head_m, dolmen[left].head_m
+        assert rh[0] == pytest.approx(-lh[0]) and rh[1:] == lh[1:]
+
+
+def test_dolmen_sockets_ride_the_profiles_hand():
+    """D4 mechanism: socket mounts scale with the profile (not stuck at Ardent).
+
+    socket_main_hand's head equals RightHand's tail in every profile, so a
+    weapon socketed to the Dolmen hand sits on the Dolmen hand — the shared
+    sockets follow the proportions automatically.
+    """
+    for profile in ("ardent_male", "dolmen_male"):
+        specs = {b.name: b for b in bones.for_profile(profile)}
+        assert specs["socket_main_hand"].head_m == specs["RightHand"].tail_m
+    # And the Dolmen socket is genuinely relocated vs Ardent (broader/shorter).
+    ard = {b.name: b for b in bones.for_profile("ardent_male")}
+    dol = {b.name: b for b in bones.for_profile("dolmen_male")}
+    assert dol["socket_main_hand"].head_m != ard["socket_main_hand"].head_m
+
+
+# ---------------------------------------------------------------------------
 # generate_rig — pure argument/path helpers (importable without bpy).
 # ---------------------------------------------------------------------------
 def test_yup_to_blender_maps_gltf_yup_to_blender_zup():
@@ -300,6 +401,85 @@ def test_rig_glb_has_single_bone_root():
     table = set(bones.bone_names())
     unparented = {b for b in table if child_to_parent.get(b) not in table}
     assert unparented == {"Root"}, unparented
+
+
+# ---------------------------------------------------------------------------
+# Structural checks on the committed DOLMEN reference rig .glb (Race #2 D1).
+# The same read-back-with-pygltflib pattern as ardent: proves the committed
+# artifact carries exactly the 63 canonical joints and the shared hierarchy,
+# and that its rest transforms are the Dolmen (shorter/broader) proportions —
+# the shared-skeleton contract as it ships in a binary, not just in the table.
+# ---------------------------------------------------------------------------
+DOLMEN_RIG_GLB = REPO / "content/core/assets/art/char/sk_dolmen_male_skeleton.glb"
+
+skip_if_dolmen_pointer = pytest.mark.skipif(
+    _is_lfs_pointer(DOLMEN_RIG_GLB),
+    reason="dolmen rig .glb is an unsmudged LFS pointer (CI checkout without LFS smudge)",
+)
+
+
+def _load_dolmen_rig_gltf():
+    from pygltflib import GLTF2
+
+    return GLTF2().load(str(DOLMEN_RIG_GLB))
+
+
+@pytest.mark.integration
+@skip_if_dolmen_pointer
+def test_dolmen_rig_glb_joints_are_exactly_the_canonical_63():
+    """I020: the committed dolmen skeleton's skin joints == the canonical 63 bones."""
+    g = _load_dolmen_rig_gltf()
+    joints: set[str] = set()
+    for skin in g.skins or []:
+        for j in skin.joints or []:
+            joints.add(g.nodes[j].name)
+    canonical = set(bones.bone_names("dolmen_male"))
+    assert joints == canonical, {
+        "missing": sorted(canonical - joints),
+        "extra": sorted(joints - canonical),
+    }
+
+
+@pytest.mark.integration
+@skip_if_dolmen_pointer
+def test_dolmen_rig_glb_hierarchy_matches_table():
+    """The committed dolmen skeleton's parent wiring matches the shared hierarchy."""
+    g = _load_dolmen_rig_gltf()
+    child_to_parent: dict[str, str] = {}
+    for n in g.nodes:
+        for c in n.children or []:
+            child_to_parent[g.nodes[c].name] = n.name
+    for name, parent in bones.hierarchy("dolmen_male").items():
+        if parent is not None:
+            assert child_to_parent.get(name) == parent, name
+
+
+@pytest.mark.integration
+@skip_if_dolmen_pointer
+def test_dolmen_rig_glb_rest_transforms_match_dolmen_table():
+    """Each joint's composed global rest position == the Dolmen table's head_m.
+
+    Same round-trip contract the ardent rig asserts, but against the Dolmen
+    profile — proving the committed .glb is the stockier build, not a copy of
+    the ardent skeleton under a different filename.
+    """
+    g = _load_dolmen_rig_gltf()
+    pos = _global_positions(g)
+    for spec in bones.for_profile("dolmen_male"):
+        got = pos[spec.name]
+        for axis, (a, b) in enumerate(zip(got, spec.head_m)):
+            assert abs(a - b) < 1e-4, (
+                f"{spec.name} axis {axis}: exported {got} != table {spec.head_m}"
+            )
+
+
+@pytest.mark.integration
+@skip_if_dolmen_pointer
+def test_dolmen_rig_glb_is_shorter_than_ardent_rig():
+    """The committed dolmen skeleton is measurably shorter than the ardent table."""
+    dolmen_crown = max(p[1] for p in _global_positions(_load_dolmen_rig_gltf()).values())
+    ardent_crown = max(b.head_m[1] for b in bones.for_profile("ardent_male"))
+    assert dolmen_crown < ardent_crown
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,17 @@
+# IF-8 sidecar (meridian/asset@1). Meridian reference rig — the dolmen_male
+# skeleton .glb (armature only, no meshes/animations) generated deterministically
+# from tools/blender/meridian_rig/bones.py by generate_rig.py (spec ④ §2). Same 63
+# canonical bone names/hierarchy as ardent_male; only the rest transforms differ
+# (the shorter, broader "mountain/stone folk" proportion profile — Race #2 D1).
+schema: meridian/asset@1
+id: core:art.char.dolmen.male.skeleton
+class: character_model
+source: assets/art/char/sk_dolmen_male_skeleton.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: original
+  authors: [meridian-contributors]
+import_hints:
+  # I004: the 'character' preset permits only 'authored' (Art SAD §2.3), so the
+  # skeleton-only asset (no meshes, nothing to LOD) matches its 33 siblings.
+  lod_policy: authored

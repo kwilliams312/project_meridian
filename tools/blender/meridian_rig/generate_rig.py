@@ -80,18 +80,18 @@ def yup_to_blender(p: tuple[float, float, float]) -> tuple[float, float, float]:
 def build_armature(profile: str):  # pragma: no cover - requires bpy/Blender
     """Build a fresh armature object holding every bone for ``profile``.
 
-    The profile bones come from :func:`bones.for_profile` (which validates the
-    profile name and returns that profile's rest transforms); the 7 Meridian
-    socket bones are profile-independent and always appended. Edit-bone
-    head/tail are the table's Y-up coords converted to Blender Z-up; parents
-    are wired by name.
+    All 63 bones (56 profile + 7 sockets) come from :func:`bones.for_profile`,
+    which validates the profile name and returns that profile's rest table --
+    the socket mounts ride the profile too, so a stockier profile's sockets sit
+    on that profile's hands/chest/hips. Edit-bone head/tail are the table's Y-up
+    coords converted to Blender Z-up; parents are wired by name.
     """
     import bpy  # noqa: PLC0415 - Blender-only import
 
-    all_specs = list(bones.for_profile(profile)) + list(bones.SOCKET_BONES)
+    all_specs = list(bones.for_profile(profile))
 
-    armature_data = bpy.data.armatures.new("ardent_male")
-    armature_obj = bpy.data.objects.new("ardent_male", armature_data)
+    armature_data = bpy.data.armatures.new(profile)
+    armature_obj = bpy.data.objects.new(profile, armature_data)
     bpy.context.collection.objects.link(armature_obj)
 
     bpy.context.view_layer.objects.active = armature_obj

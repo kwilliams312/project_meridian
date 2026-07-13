@@ -21,6 +21,7 @@ map:                         # append-only; local index (SAD §2.4)
   core:art.char.ardent.male.skin_2: 88
   core:art.char.ardent.male.skin_3: 89
   core:art.char.cindermaw: 38
+  core:art.char.dolmen.male.skeleton: 115
   core:art.char.ember_wisp: 39
   core:art.char.human.female.warden: 40
   core:art.char.human.male.foreman: 41
