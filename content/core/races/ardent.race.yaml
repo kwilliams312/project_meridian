@@ -1,0 +1,10 @@
+# Seed skeleton pack (SP1.8 integration proof) — the Ardent playable race.
+# Cosmetic only: it points at the existing ardent/male appearance catalog and
+# carries NO attribute_mods (races are cosmetic in the seed/Chibi theme — the
+# tuning capability exists but is unused, spec §2.3). Original clean-room
+# archetype mirroring server/characters/src/roster.h's placeholder roster.
+schema: meridian/race@1
+id: core:race.ardent
+name: Ardent
+description: Resilient folk of the central realm.
+appearance: core:appearance.ardent.male

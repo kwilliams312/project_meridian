@@ -661,7 +661,7 @@ public sealed record AbilityEffect
     public IReadOnlyList<AbilityEffectStatMod>? StatMods { get; init; }
     /// <summary>Interval between damage ticks; min 500 (server tick budget).</summary>
     public long? TickMs { get; init; }
-    /// <summary>The attribute this modifies, referenced by contentId (`&lt;ns&gt;:attribute.&lt;name&gt;`). Resolution against the attribute catalog is validated where the ability is consumed, not here.</summary>
+    /// <summary>The attribute this modifies, referenced by contentId (`&lt;ns&gt;:attribute.&lt;name&gt;`). The pattern is only a SHAPE check here; that the id resolves to a defined meridian/attribute@1 entity is a content-level cross-reference check (L011, spec §3) run by validate_content.py + mcc — since #652 (`attribute` in the ref grammar) this attribute ref IS L011-resolved like any other.</summary>
     public string? Attribute { get; init; }
     /// <summary>How amount is applied to the attribute (server-authoritative).</summary>
     public AbilityEffectModifier? Modifier { get; init; }

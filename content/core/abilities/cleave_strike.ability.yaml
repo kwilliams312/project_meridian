@@ -1,0 +1,20 @@
+# Seed skeleton pack (SP1.8 integration proof) — a melee damage opener.
+# Exercises the `damage` effect primitive; part of the Vanguard spellbook.
+# Original clean-room archetype (CONTRIBUTING.md) — generic, no franchise lore.
+schema: meridian/ability@1
+id: core:ability.cleave_strike
+name: Cleave Strike
+description: A sweeping blow that hits for {amount} physical damage.
+school: physical
+target: enemy
+range_m: 5
+cast:
+  time_ms: 0
+cooldown_ms: 6000
+resource:
+  type: rage
+  amount: 15
+effects:
+  - kind: damage
+    amount: { min: 12, max: 18 }
+    coefficient: 0.4

@@ -8,7 +8,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 INSERT INTO world_manifest
   (pack_namespace, pack_version, id_band, content_hash, schema_version, mcc_version, built_at)
 VALUES
-  ('core', '0.1.0', 0, '4ba543a6052c19b11f48d93c2b0bfcdf7a2c63112821c4420df6ba6cd5593c09', 1, '0.0.0', '1970-01-01 00:00:00');
+  ('core', '0.1.0', 0, '6f36ab1c25f12fdb1c74681d03de787e68bb4c27ac5c5f15a357f7bb55295e64', 1, '0.0.0', '1970-01-01 00:00:00');
 
 -- npc_template (8 rows)
 INSERT INTO npc_template (id, name, subtitle, level_min, level_max, creature_type, `rank`, faction, stat_health, stat_mana, stat_armor, stat_damage_min, stat_damage_max, stat_attack_speed_ms, ai_behavior, ai_aggro_radius_m, ai_leash_radius_m, ai_call_for_help_radius_m, ai_flee_at_health_pct, move_walk_speed_mps, move_run_speed_mps, vendor_ref_id, loot_table_ref_id, loot_money_min, loot_money_max, visual_model_id, visual_scale, visual_sound_set_id) VALUES
@@ -77,16 +77,25 @@ INSERT INTO item_stat (item_id, stat, amount) VALUES
   (106, 'stamina', 3),
   (107, 'stamina', 3);
 
--- ability (2 rows)
+-- ability (6 rows)
 INSERT INTO ability (id, name, description, school, target, range_m, cast_time_ms, cast_channel_ms, cooldown_ms, triggers_gcd, resource_type, resource_amount, av_cast_anim, av_cast_vfx_id, av_cast_sfx_id, av_impact_vfx_id, av_impact_sfx_id) VALUES
   (1, 'Minor Healing', 'Restores {amount} health.', 'holy', 'self', 0, 0, NULL, 60000, FALSE, NULL, NULL, NULL, 14, 33, NULL, NULL),
-  (2, 'Pickaxe Slam', 'Slams the target for {amount} physical damage and leaves them bleeding.', 'physical', 'enemy', 5, 0, NULL, 10000, TRUE, 'energy', 20, 'attack_overhead', NULL, NULL, 15, 32);
+  (2, 'Pickaxe Slam', 'Slams the target for {amount} physical damage and leaves them bleeding.', 'physical', 'enemy', 5, 0, NULL, 10000, TRUE, 'energy', 20, 'attack_overhead', NULL, NULL, 15, 32),
+  (133, 'Cleave Strike', 'A sweeping blow that hits for {amount} physical damage.', 'physical', 'enemy', 5, 0, NULL, 6000, TRUE, 'rage', 15, NULL, NULL, NULL, NULL, NULL),
+  (134, 'Iron Resolve', 'Steels the body, increasing stamina for a time.', 'physical', 'self', 0, 0, NULL, 45000, FALSE, 'rage', 10, NULL, NULL, NULL, NULL, NULL),
+  (135, 'Mending Word', 'A whispered blessing that restores {amount} health.', 'holy', 'friendly', 30, 1500, NULL, 0, TRUE, 'mana', 25, NULL, NULL, NULL, NULL, NULL),
+  (136, 'Searing Brand', 'Marks the target with fire, dealing {amount} damage over time and weakening its armor.', 'fire', 'enemy', 30, 0, NULL, 12000, TRUE, 'mana', 20, NULL, NULL, NULL, NULL, NULL);
 
--- ability_effect (3 rows)
+-- ability_effect (8 rows)
 INSERT INTO ability_effect (ability_id, ordinal, kind, amount_min, amount_max, coefficient, threat_amount, duration_ms, max_stacks, periodic_kind, periodic_amount_min, periodic_amount_max, periodic_tick_ms) VALUES
   (1, 0, 'heal', 40, 60, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
   (2, 0, 'damage', 8, 13, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-  (2, 1, 'aura', NULL, NULL, NULL, NULL, 9000, NULL, 'damage', 2, 3, 3000);
+  (2, 1, 'aura', NULL, NULL, NULL, NULL, 9000, NULL, 'damage', 2, 3, 3000),
+  (133, 0, 'damage', 12, 18, 0.4, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+  (134, 0, 'buff', 0, 0, NULL, NULL, 12000, NULL, NULL, NULL, NULL, NULL),
+  (135, 0, 'heal', 30, 45, 0.6, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+  (136, 0, 'dot', 4, 6, 0.15, NULL, 9000, NULL, NULL, NULL, NULL, NULL),
+  (136, 1, 'debuff', 0, 0, NULL, NULL, 9000, NULL, NULL, NULL, NULL, NULL);
 
 -- quest_template (10 rows)
 INSERT INTO quest_template (id, name, summary, offer_text, completion_text, level, required_level, zone_ref_id, giver_npc_id, turn_in_npc_id, reward_xp, reward_money) VALUES

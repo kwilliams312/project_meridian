@@ -1,0 +1,15 @@
+# Seed skeleton pack (SP1.8 integration proof) — a Vanguard opener talent.
+# Exercises a mixed `grants` bundle: an ABILITY grant (cleave_strike, L011-resolved)
+# plus a permanent passive `buff` over a core attribute id (strength).
+schema: meridian/talent@1
+id: core:talent.battle_fury
+name: Battle Fury
+description: Unlocks Cleave Strike and permanently sharpens your strength.
+rank_max: 3
+grants:
+  - kind: ability
+    ability: core:ability.cleave_strike
+  - kind: buff
+    attribute: core:attribute.strength
+    amount: 5
+    modifier: flat
