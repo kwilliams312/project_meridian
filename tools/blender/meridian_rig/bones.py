@@ -12,7 +12,7 @@ Pure-Python, importable without Blender. Single source of truth for:
 from this module's ``bone_names()`` and MUST be kept in sync -- the drift
 guard is ``tests/test_meridian_rig.py::test_skeleton_defs_bones_matches_table``.
 
-Coordinates are metres, Y-up, in the default "ardent_male" proportion
+Coordinates are metres, Y-up, in the reference "ardent_male" proportion
 profile (~1.8 m humanoid), rest T-pose (arms out along +/-X at shoulder
 height). Character's right side is +X, left side is -X; the two sides are
 exact mirrors of each other. Precision is not the goal -- internal
@@ -20,9 +20,26 @@ consistency is: a child bone's ``head_m`` equals its anatomical parent's
 ``tail_m`` wherever the joint is a real anatomical hinge. Rig-only bones
 (``Root``) and socket mount bones are exempt -- they are not anatomical
 joints.
+
+## Proportion profiles (spec 4: "proportions are parameters")
+
+Every profile in :data:`VALID_PROFILES` shares one bone table -- **identical
+bone NAMES and identical parent hierarchy** -- and differs ONLY in the rest
+head/tail transforms. That shared-name contract is the whole reason gear
+authored on one race binds to another by bone name (Race #2 / Dolmen, spec
+``docs/superpowers/specs/2026-07-12-race-2-dolmen-design.md`` section 2). A
+profile is therefore just a per-profile *point transform* applied to the one
+reference geometry below: the structure (names/parents) is defined exactly
+once, so a future race adds only a transform -- never a second 63-name list.
+``ardent_male`` is the reference (identity transform); ``dolmen_male`` is the
+shorter, broader "mountain/stone folk" build. Because each transform is a pure
+function of position, shared anatomical joints stay shared and the +/-X mirror
+is preserved automatically -- the shared-skeleton invariant is structural, not
+hand-maintained.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 Vec3 = tuple[float, float, float]
@@ -34,9 +51,6 @@ class BoneSpec:
     parent: str | None
     head_m: Vec3
     tail_m: Vec3
-
-
-VALID_PROFILES = ("ardent_male",)
 
 
 # ---------------------------------------------------------------------------
@@ -205,24 +219,109 @@ ALL_BONES: list[BoneSpec] = PROFILE_BONES + SOCKET_BONES
 assert len(ALL_BONES) == 63, f"expected 63 total bones, got {len(ALL_BONES)}"
 
 
-def bone_names() -> list[str]:
-    """Bone names in canonical table order (this order == skeleton.defs.yaml enum)."""
-    return [b.name for b in ALL_BONES]
+# ---------------------------------------------------------------------------
+# Proportion profiles -- ONE shared bone table (the names + hierarchy authored
+# above), per-profile REST TRANSFORMS only. Per the module docstring a profile
+# is a pure position->position map applied to the reference (ardent_male)
+# geometry, so every profile carries the identical 63 bone names and parent
+# hierarchy and differs only in where the joints sit. Adding a race == adding
+# one transform here -- never a second 63-name list.
+# ---------------------------------------------------------------------------
+_REFERENCE_BONES: list[BoneSpec] = ALL_BONES  # ardent_male IS the reference pose
 
 
-def hierarchy() -> dict[str, str | None]:
-    """Map bone name -> parent bone name (``None`` for the single root)."""
-    return {b.name: b.parent for b in ALL_BONES}
+def _ardent_pt(p: Vec3) -> Vec3:
+    """Reference profile: identity (ardent_male is the authored geometry)."""
+    return p
+
+
+# Dolmen "mountain/stone folk": shorter overall with disproportionately shorter
+# legs, and broader across the shoulders/hips. Height splits at the hip line
+# (Y=0.95): legs below compress harder than the torso above, and every X widens
+# -- a stockier humanoid that stays a valid T-pose. Bulk/thickness is the BODY
+# mesh's job (Dolmen D2); these spans only set the proportions the body + gear
+# fit to.
+_DOLMEN_HIP_Y = 0.95  # pelvis line: legs below, torso/arms/head above
+_DOLMEN_LEG_SCALE = 0.84  # legs shortened most (stocky stance)
+_DOLMEN_TORSO_SCALE = 0.93  # torso/neck/head shortened gently
+_DOLMEN_WIDTH_SCALE = 1.10  # broader shoulders + hips (also arm span + sockets)
+
+
+def _dolmen_pt(p: Vec3) -> Vec3:
+    """Dolmen point map: piecewise-Y height compression + uniform X widening.
+
+    Continuous at the hip line (both branches meet at Y=0.95, so no joint kinks)
+    and a pure function of position, so shared heads/tails and the +/-X mirror
+    are preserved. Depth (Z) is untouched -- bones are thin; the body mesh adds
+    bulk.
+    """
+    x, y, z = p
+    if y <= _DOLMEN_HIP_Y:
+        y2 = y * _DOLMEN_LEG_SCALE
+    else:
+        y2 = _DOLMEN_HIP_Y * _DOLMEN_LEG_SCALE + (y - _DOLMEN_HIP_Y) * _DOLMEN_TORSO_SCALE
+    return (x * _DOLMEN_WIDTH_SCALE, y2, z)
+
+
+# Registry: profile name -> its point transform. VALID_PROFILES and the built
+# per-profile bone tables below both derive from this single dict.
+_PROFILE_POINT_XFORMS: dict[str, Callable[[Vec3], Vec3]] = {
+    "ardent_male": _ardent_pt,
+    "dolmen_male": _dolmen_pt,
+}
+
+VALID_PROFILES: tuple[str, ...] = tuple(_PROFILE_POINT_XFORMS)
+
+
+def _xform_bone(fn: Callable[[Vec3], Vec3], b: BoneSpec) -> BoneSpec:
+    """Apply a point transform to a bone's head + tail (name/parent unchanged)."""
+    return BoneSpec(b.name, b.parent, fn(b.head_m), fn(b.tail_m))
+
+
+# Materialised once at import: every profile's full 63-bone table (56 profile +
+# 7 sockets), all sharing the reference names/parents.
+_PROFILE_BONES_BY_NAME: dict[str, list[BoneSpec]] = {
+    name: [_xform_bone(fn, b) for b in _REFERENCE_BONES]
+    for name, fn in _PROFILE_POINT_XFORMS.items()
+}
+
+# Shared-skeleton invariant, guarded at import: every profile is name- and
+# hierarchy-identical to the reference -- only rest transforms may differ.
+_REF_NAMES = [b.name for b in _REFERENCE_BONES]
+_REF_HIERARCHY = {b.name: b.parent for b in _REFERENCE_BONES}
+for _pname, _ptable in _PROFILE_BONES_BY_NAME.items():
+    assert [b.name for b in _ptable] == _REF_NAMES, f"{_pname}: bone names diverge from reference"
+    assert {b.name: b.parent for b in _ptable} == _REF_HIERARCHY, (
+        f"{_pname}: hierarchy diverges from reference"
+    )
+    assert len(_ptable) == 63, f"{_pname}: {len(_ptable)} bones, expected 63"
 
 
 def for_profile(profile: str) -> list[BoneSpec]:
-    """Return the 56 profile bones (rest transforms) for a proportion profile.
+    """Return the full 63-bone rest table (56 profile + 7 sockets) for ``profile``.
 
-    v1 supports only ``"ardent_male"``; an unknown key raises ``ValueError``
-    naming the valid profiles.
+    Every profile shares the reference bone NAMES and parent hierarchy; only the
+    rest head/tail transforms differ -- the shared-skeleton contract that lets
+    gear authored on one race bind to another by bone name. An unknown key raises
+    ``ValueError`` naming the valid profiles.
     """
-    if profile not in VALID_PROFILES:
+    if profile not in _PROFILE_BONES_BY_NAME:
         raise ValueError(
             f"unknown proportion profile {profile!r}; valid profiles: {list(VALID_PROFILES)}"
         )
-    return PROFILE_BONES
+    return _PROFILE_BONES_BY_NAME[profile]
+
+
+def bone_names(profile: str = "ardent_male") -> list[str]:
+    """Bone names in canonical table order (identical across every profile).
+
+    This order == ``schema/content/skeleton.defs.yaml``'s ``boneName`` enum.
+    ``profile`` is accepted for symmetry with :func:`for_profile`; names never
+    vary by profile (that is the shared-skeleton contract).
+    """
+    return [b.name for b in for_profile(profile)]
+
+
+def hierarchy(profile: str = "ardent_male") -> dict[str, str | None]:
+    """Map bone name -> parent name (``None`` for the single root; profile-invariant)."""
+    return {b.name: b.parent for b in for_profile(profile)}
