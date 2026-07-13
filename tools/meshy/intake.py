@@ -48,6 +48,57 @@ def load_budgets(path: Path | None = None) -> dict:
     return json.loads((path or BUDGETS_PATH).read_text(encoding="utf-8"))["classes"]
 
 
+# Default generation request as a share of the class ceiling. Meshy tracks
+# target_polycount closely (issue #627: a 30k request produced 30664 tris), so
+# a ceiling-equal request routinely overshoots the L070 budget lint. Requesting
+# ~80% of the ceiling leaves headroom for that overshoot while staying as close
+# to the budget as the class allows.
+TARGET_POLYCOUNT_HEADROOM = 0.8
+
+
+def class_polycount_ceiling(asset_class: str, budgets: dict) -> int:
+    """The lod0_tris ceiling for a class (single source: budgets.json).
+
+    Raises IntakeError for a class that carries no lod0_tris budget — better to
+    refuse before any network call than to guess a polycount for it.
+    """
+    entry = budgets.get(asset_class) or {}
+    ceiling = entry.get("lod0_tris")
+    if ceiling is None:
+        raise IntakeError(
+            f"--class '{asset_class}' has no lod0_tris budget in budgets.json"
+        )
+    return int(ceiling)
+
+
+def derive_target_polycount(
+    asset_class: str, budgets: dict, *, override: int | None = None
+) -> int:
+    """Resolve the Meshy target_polycount to request for a class (issue #627).
+
+    Default: ~80% of the class's lod0_tris ceiling (see TARGET_POLYCOUNT_HEADROOM
+    for why headroom is needed). An explicit override is honored but NEVER
+    allowed to exceed the ceiling: Meshy tracks the request closely, so an
+    over-ceiling request would guarantee an over-budget landing that the
+    L070 pre-check then refuses — reject it up front with a clear error instead
+    of silently clamping (mirrors the tool's other refuse-loudly gates).
+    """
+    ceiling = class_polycount_ceiling(asset_class, budgets)
+    if override is not None:
+        if override < 1:
+            raise IntakeError(
+                f"--target-polycount {override} must be a positive integer"
+            )
+        if override > ceiling:
+            raise IntakeError(
+                f"--target-polycount {override} exceeds the '{asset_class}' "
+                f"lod0_tris ceiling of {ceiling} — Meshy tracks the requested "
+                f"count closely, so this would land over budget and be refused"
+            )
+        return override
+    return max(1, int(ceiling * TARGET_POLYCOUNT_HEADROOM))
+
+
 def validate_name(name: str) -> None:
     if not _NAME_RE.match(name):
         raise IntakeError(
