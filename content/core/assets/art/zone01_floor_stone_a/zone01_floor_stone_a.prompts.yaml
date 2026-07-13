@@ -1,0 +1,8 @@
+task_id: 019f5c26-7555-7134-91be-e37c492950a0
+model_version: meshy-5
+preview_task_id: 019f5c25-b7d0-749f-9b67-0a5fc1117415
+request:
+  mode: preview
+  prompt: stone floor tile module, game-ready, neutral greybox
+  ai_model: meshy-5
+  target_polycount: 16000

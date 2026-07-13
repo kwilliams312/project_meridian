@@ -1,0 +1,16 @@
+schema: meridian/asset@1
+id: core:art.zone01_doorway_stone_a
+class: kit_piece
+source: assets/art/zone01_doorway_stone_a/sm_zone01_doorway_stone_a.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors:
+  - meridian-contributors
+  origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/019f5c26-9614-7139-99e7-b3da3ea2f4b2
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: zone01_doorway_stone_a.prompts.yaml
+budget:
+  lod0_tris: 16466
+restyle_status: pending

@@ -1,0 +1,8 @@
+task_id: 019f5c26-aca6-713f-b4e2-a3e0b6c8594e
+model_version: meshy-5
+preview_task_id: 019f5c25-b1db-749e-a4cd-c6699c9298c9
+request:
+  mode: preview
+  prompt: corner stone wall module, game-ready, neutral greybox
+  ai_model: meshy-5
+  target_polycount: 16000

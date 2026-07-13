@@ -1,0 +1,8 @@
+task_id: 019f5c28-e963-70ed-8d53-c7382d26ed7d
+model_version: meshy-5
+preview_task_id: 019f5c25-c3fb-74a4-8600-83d63a470f82
+request:
+  mode: preview
+  prompt: wooden crate prop, game-ready, neutral greybox
+  ai_model: meshy-5
+  target_polycount: 16000

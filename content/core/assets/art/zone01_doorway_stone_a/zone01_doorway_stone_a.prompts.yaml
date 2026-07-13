@@ -1,0 +1,9 @@
+task_id: 019f5c26-9614-7139-99e7-b3da3ea2f4b2
+model_version: meshy-5
+preview_task_id: 019f5c25-bbf3-74a1-bd9e-6c6fe7b08f65
+request:
+  mode: preview
+  prompt: stone doorway arch aperture, approximately 1.5 by 2.5 meters, game-ready,
+    neutral greybox
+  ai_model: meshy-5
+  target_polycount: 16000

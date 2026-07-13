@@ -1,0 +1,8 @@
+task_id: 019f5c26-6b68-724e-8f00-d2461938d844
+model_version: meshy-5
+preview_task_id: 019f5c25-c1fc-70f3-8855-e2db3fe65a5b
+request:
+  mode: preview
+  prompt: stone pillar column, game-ready, neutral greybox
+  ai_model: meshy-5
+  target_polycount: 16000

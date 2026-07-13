@@ -1,0 +1,8 @@
+task_id: 019f5c24-2120-7072-afad-13286de85792
+model_version: meshy-5
+preview_task_id: 019f5c22-fb5a-7080-8735-371d5173eb22
+request:
+  mode: preview
+  prompt: straight modular stone wall section, game-ready, neutral greybox
+  ai_model: meshy-5
+  target_polycount: 16000

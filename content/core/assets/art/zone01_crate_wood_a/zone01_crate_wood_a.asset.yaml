@@ -1,0 +1,16 @@
+schema: meridian/asset@1
+id: core:art.zone01_crate_wood_a
+class: kit_piece
+source: assets/art/zone01_crate_wood_a/sm_zone01_crate_wood_a.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors:
+  - meridian-contributors
+  origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/019f5c28-e963-70ed-8d53-c7382d26ed7d
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: zone01_crate_wood_a.prompts.yaml
+budget:
+  lod0_tris: 15534
+restyle_status: pending
