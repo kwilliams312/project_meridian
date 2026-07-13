@@ -13,9 +13,9 @@
 //     wire.x = snapshot.x   (ground X)
 //     wire.y = snapshot.z   (ground Z)
 //     wire.z = snapshot.y   (height)
-// and inbound MovementState maps back the same way. worldd seeds the spawn at
-// (kZoneMaxXY/2, kZoneMaxXY/2, kFlatGroundZ) = (64, 64, 0) in WIRE coords, so the
-// client integrator starts at snapshot (64, 0, 64).
+// and inbound MovementState maps back the same way. worldd seeds the spawn at the
+// Zone-01 play-area centre (kZoneSpawnXY, kZoneSpawnXY, kFlatGroundZ) = (-320, -320,
+// 0) in WIRE coords (#562), so the client integrator starts at snapshot (-320, 0, -320).
 
 #include "bot_core.h"
 
@@ -34,14 +34,16 @@ namespace fb = flatbuffers;
 namespace mn = meridian::net;
 namespace mv = meridian::movement;
 
-// M0 flat bootstrap spawn (worldd world_dispatch.cpp: kZoneMaxXY*0.5 on x/y,
-// kFlatGroundZ on z). WIRE coords (z = height).
-constexpr float kSpawnWireX = 64.0f;  // kZoneMaxXY * 0.5
-constexpr float kSpawnWireY = 64.0f;  // kZoneMaxXY * 0.5
-constexpr float kSpawnWireZ = 0.0f;   // kFlatGroundZ
+// Zone-01 spawn (worldd world_dispatch.cpp seeds movement::kZoneSpawnXY on x/y,
+// kFlatGroundZ on z — #562). WIRE coords (z = height). The client has no §8 zone
+// constants, so these MIRROR the server seed the same way the golden fixture does:
+// kZoneSpawnXY = (kZoneMinXY + kZoneMaxXY)/2 = (-512 + -128)/2 = -320.
+constexpr float kSpawnWireX = -320.0f;  // Zone-01 play-area centre (kZoneSpawnXY)
+constexpr float kSpawnWireY = -320.0f;  // Zone-01 play-area centre (kZoneSpawnXY)
+constexpr float kSpawnWireZ = 0.0f;     // kFlatGroundZ
 
 // The square path half-extent (metres). ±10 m around the spawn stays well inside
-// the [0,128]² bootstrap play area, so every legal move is accepted on bounds.
+// the [-512,-128]² Zone-01 play area, so every legal move is accepted on bounds.
 constexpr float kSquareHalfExtent = 10.0f;
 
 // AoI drain tuning (#248). The transport read timeout that bounds each

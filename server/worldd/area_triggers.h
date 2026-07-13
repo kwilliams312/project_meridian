@@ -159,10 +159,10 @@ private:
 };
 
 // The M1 PLACEHOLDER trigger set (the mcc #28 seam — real volumes are compiled
-// into world content and loaded at boot later). Deterministic, laid out on the
-// 128 m flat bootstrap map (D-19), clear of the play-area-centre spawn (64, 64) so
-// a fresh login does not instantly trip a trigger. Documented volume-by-volume in
-// area_triggers.cpp.
+// into world content and loaded at boot later). Deterministic, laid out on the real
+// Zone-01 flat play area (#562: [-512, -128]), clear of the play-area-centre spawn
+// (-320, -320) so a fresh login does not instantly trip a trigger. Documented
+// volume-by-volume in area_triggers.cpp.
 std::vector<TriggerVolume> placeholder_area_triggers();
 
 }  // namespace meridian::worldd

@@ -128,9 +128,10 @@ void test_routing() {
     idc.entity_guid = 1003;
     idc.name = "Cerys";
 
-    const SessionSlot a = world.enter(ida, at(64.0f, 64.0f), ca.sink()).slot;   // origin
-    const SessionSlot b = world.enter(idb, at(70.0f, 64.0f), cb.sink()).slot;   //  6 m: say in
-    const SessionSlot c = world.enter(idc, at(64.0f, 94.0f), cc.sink()).slot;   // 30 m: say out, yell in
+    // Zone-01 play-area centre (#562); B/C offsets preserve the 6 m / 30 m distances.
+    const SessionSlot a = world.enter(ida, at(-320.0f, -320.0f), ca.sink()).slot;   // centre
+    const SessionSlot b = world.enter(idb, at(-314.0f, -320.0f), cb.sink()).slot;   //  6 m: say in
+    const SessionSlot c = world.enter(idc, at(-320.0f, -290.0f), cc.sink()).slot;   // 30 m: say out, yell in
     (void)b;
     (void)c;
 
@@ -197,8 +198,8 @@ void test_leave_unregisters_name() {
     EntityIdentity idb;
     idb.entity_guid = 2002;
     idb.name = "Brynn";
-    const SessionSlot a = world.enter(ida, at(64.0f, 64.0f), ca.sink()).slot;
-    const SessionSlot b = world.enter(idb, at(64.0f, 64.0f), cb.sink()).slot;
+    const SessionSlot a = world.enter(ida, at(-320.0f, -320.0f), ca.sink()).slot;
+    const SessionSlot b = world.enter(idb, at(-320.0f, -320.0f), cb.sink()).slot;
 
     check("whisper before leave delivers",
           world.whisper(a, "Brynn", "hi") == ChatWhisperOutcome::kDelivered);

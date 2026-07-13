@@ -89,14 +89,16 @@ bool AreaTriggerSet::is_discovered(AoiId guid, TriggerId id) const {
 // M1 placeholder volume set (the mcc #28 seam).
 // ---------------------------------------------------------------------------
 //
-// Three deterministic volumes on the 128 m flat bootstrap chunk (D-19,
-// kZoneMinXY..kZoneMaxXY = [0, 128]), each clear of the play-area-centre spawn
-// (64, 64) so a fresh login does not instantly trip a trigger. Ids/area/name ids
-// are placeholder content ids; real values arrive with compiled world data.
-//   • id=1  NE corner  — DISCOVERY POI (the one client-facing trigger): entering
-//                        marks it discovered on the character + sends POI_DISCOVERED.
-//   • id=2  SW corner  — GRAVEYARD zone (server-side event only at M1).
-//   • id=3  NW corner  — QUEST-OBJECTIVE hook volume (server-side event only).
+// Three deterministic volumes on the real Zone-01 flat play area (#562:
+// kZoneMinXY..kZoneMaxXY = [-512, -128]), each clear of the play-area-centre spawn
+// (-320, -320) so a fresh login does not instantly trip a trigger. Positions are
+// the old bootstrap corner volumes shifted by the play-area recentre (+ -384) so
+// the same inset geometry now lives inside Zone-01. Ids/area/name ids are
+// placeholder content ids; real values arrive with compiled world data.
+//   • id=1  +x/+y corner — DISCOVERY POI (the one client-facing trigger): entering
+//                          marks it discovered on the character + sends POI_DISCOVERED.
+//   • id=2  -x/-y corner — GRAVEYARD zone (server-side event only at M1).
+//   • id=3  -x/+y corner — QUEST-OBJECTIVE hook volume (server-side event only).
 std::vector<TriggerVolume> placeholder_area_triggers() {
     const float z_lo = mc::kFlatGroundZ - 1000.0f;  // span the whole flat map in z
     const float z_hi = mc::kFlatGroundZ + 1000.0f;
@@ -108,10 +110,10 @@ std::vector<TriggerVolume> placeholder_area_triggers() {
     discovery.kind = TriggerKind::kDiscovery;
     discovery.area_id = 100;
     discovery.name_id = 1;
-    discovery.min_x = 90.0f;
-    discovery.max_x = 110.0f;
-    discovery.min_y = 90.0f;
-    discovery.max_y = 110.0f;
+    discovery.min_x = -294.0f;
+    discovery.max_x = -274.0f;
+    discovery.min_y = -294.0f;
+    discovery.max_y = -274.0f;
     discovery.min_z = z_lo;
     discovery.max_z = z_hi;
     v.push_back(discovery);
@@ -121,10 +123,10 @@ std::vector<TriggerVolume> placeholder_area_triggers() {
     graveyard.kind = TriggerKind::kGraveyard;
     graveyard.area_id = 100;
     graveyard.name_id = 2;
-    graveyard.min_x = 10.0f;
-    graveyard.max_x = 30.0f;
-    graveyard.min_y = 10.0f;
-    graveyard.max_y = 30.0f;
+    graveyard.min_x = -374.0f;
+    graveyard.max_x = -354.0f;
+    graveyard.min_y = -374.0f;
+    graveyard.max_y = -354.0f;
     graveyard.min_z = z_lo;
     graveyard.max_z = z_hi;
     v.push_back(graveyard);
@@ -134,10 +136,10 @@ std::vector<TriggerVolume> placeholder_area_triggers() {
     quest.kind = TriggerKind::kQuestObjective;
     quest.area_id = 101;
     quest.name_id = 3;
-    quest.min_x = 10.0f;
-    quest.max_x = 30.0f;
-    quest.min_y = 90.0f;
-    quest.max_y = 110.0f;
+    quest.min_x = -374.0f;
+    quest.max_x = -354.0f;
+    quest.min_y = -294.0f;
+    quest.max_y = -274.0f;
     quest.min_z = z_lo;
     quest.max_z = z_hi;
     v.push_back(quest);

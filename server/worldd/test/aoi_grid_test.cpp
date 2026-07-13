@@ -42,10 +42,11 @@
 //      not (0,0) indexes a world point OUTSIDE the old [0,128] bootstrap square to
 //      the correct cell (the old hardcode would have clamped it into [0,128]).
 //
-// Sections A–G run on the ACTIVE bootstrap zone config (zone_geometry.h:
-// active_zone_aoi_config — origin (0,0), 128 m extent, ~66 m cells, enter 40 /
-// leave 50 m radii scaled to fit the bootstrap square). Sections H–I build
-// production-tuned configs at arbitrary origins to prove the parameterisation.
+// Sections A–G run on a COMPACT hysteresis/indexing-mechanics fixture (boot_cfg —
+// origin (0,0), 128 m extent, ~66 m cells, enter 40 / leave 50 m). The ACTIVE
+// zone config (zone_geometry.h: active_zone_aoi_config) is the real Zone-01 play
+// area at PRODUCTION R=90/100 after #562 — verified by its own section and, at
+// production scale + arbitrary origins, by sections H–I.
 
 #include "aoi_grid.h"
 #include "movement_constants.h"
@@ -79,20 +80,65 @@ bool has(const std::unordered_set<AoiId>& s, AoiId id) { return s.find(id) != s.
 
 const std::unordered_set<AoiId> kEmpty;
 
-// The ACTIVE bootstrap zone config sections A–G exercise: origin (0,0), 128 m
-// extent, ~66 m cells, enter 40 / leave 50 m (fits the bootstrap play area).
-AoiGridConfig boot_cfg() { return active_zone_aoi_config(); }
+// A COMPACT hysteresis/indexing-MECHANICS fixture sections A–G exercise: origin
+// (0,0), 128 m extent, ~66 m cells, enter 40 / leave 50 m. This is deliberately
+// small (radii that fit a 128 m square) so the enter/leave/hysteresis/cell-seam
+// mechanics are easy to read; it is config-agnostic (the mechanics are the same at
+// any scale). #562 flipped the ACTIVE zone (active_zone_aoi_config) to the real
+// Zone-01 extent + PRODUCTION R=90/100 — verified by its own section below and by
+// the production-scale sections H–I — so A–G no longer read the active config
+// directly (their compact radii no longer fit the real extent).
+AoiGridConfig boot_cfg() {
+    AoiGridConfig cfg = production_aoi_config(0.0f, 0.0f, 128.0f, 128.0f);
+    cfg.enter_radius = 40.0f;   // compact enter radius (fits the 128 m fixture)
+    cfg.leave_radius = 50.0f;   // compact leave radius (> enter → hysteresis band)
+    return cfg;
+}
 
 }  // namespace
 
 int main() {
     std::printf("worldd Grid/AoI engine unit test (IT-M0 AoI core #87; zone geometry #559)\n");
 
-    // Two guids used throughout. The bootstrap play-area centre is (64, 64) on the
-    // 128 m bootstrap chunk (kZoneMinXY..kZoneMaxXY = [0,128]).
+    // Two guids used throughout. Sections A–G run on the compact mechanics fixture
+    // boot_cfg() (origin (0,0), 128 m, centre (64,64)); the ACTIVE Zone-01 config is
+    // verified separately just below and at production scale in H–I.
     const AoiId A = 1001;
     const AoiId B = 2002;
     const AoiId C = 3003;
+
+    // ===== ACTIVE ZONE CONFIG — the #562 production flip =====================
+    // active_zone_aoi_config() must now be the real Zone-01 play area (manifest
+    // origin/extent, movement_constants §8 bounds) at PRODUCTION interest radii
+    // (SAD §2.5 R=90 enter / 100 leave, ~66 m cells) — NOT the old bootstrap
+    // 40/50-over-[0,128]. This pins the flip the story asked for.
+    {
+        AoiGridConfig z = active_zone_aoi_config();
+        check("ACTIVE: origin is the Zone-01 min corner (-512)",
+              z.origin_x == -512.0f && z.origin_y == -512.0f);
+        check("ACTIVE: extent is the 3-chunk manifest grid (384 m)",
+              z.extent_x == 384.0f && z.extent_y == 384.0f);
+        check("ACTIVE: max corner is -128 (origin+extent)",
+              z.max_x() == -128.0f && z.max_y() == -128.0f);
+        check("ACTIVE: PRODUCTION enter radius R=90 (SAD §2.5)",
+              z.enter_radius == kAoiEnterRadiusM && z.enter_radius == 90.0f);
+        check("ACTIVE: PRODUCTION leave radius 100 (hysteresis band)",
+              z.leave_radius == kAoiLeaveRadiusM && z.leave_radius == 100.0f);
+        check("ACTIVE: production ~66 m cell size", z.cell_size == kAoiCellSizeM);
+
+        // A session can move OUT of another's interest range within the real extent
+        // (the #562 verify): two sessions 120 m apart (> 100 m leave) do NOT see
+        // each other, and both fit inside [-512,-128]. -320 is the play-area centre.
+        AoiGrid g(z);
+        g.upsert(A, at(-320.0f, -320.0f));
+        g.upsert(B, at(-320.0f, -200.0f));  // 120 m from A > 100 m leave radius
+        check("ACTIVE: 120 m apart within the real extent — A does NOT see B",
+              !has(g.interest_set(A, kEmpty), B));
+        // Brought within R=90 (80 m apart), B ENTERS — production interest works.
+        g.upsert(B, at(-320.0f, -240.0f));  // 80 m from A ≤ 90 enter
+        check("ACTIVE: brought within R=90 on the real zone — B ENTERS",
+              has(g.interest_set(A, kEmpty), B));
+    }
 
     // ===== A. MEMBERSHIP =====================================================
     {

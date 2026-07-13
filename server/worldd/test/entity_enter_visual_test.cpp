@@ -85,7 +85,7 @@ int main() {
         vis.equipment.push_back(boots);
         id.visual = vis;
 
-        Player unit(id.entity_guid, at(64.0f, 64.0f),
+        Player unit(id.entity_guid, at(-320.0f, -320.0f),
                     placeholder_player_stats(id.char_class),
                     /*account_id=*/0, id.char_class, id.name);
 
@@ -131,7 +131,7 @@ int main() {
         id.name = "Sentry";
         // id.visual deliberately left nullopt (the NPC branch).
 
-        Player unit(id.entity_guid, at(64.0f, 64.0f), placeholder_player_stats(1),
+        Player unit(id.entity_guid, at(-320.0f, -320.0f), placeholder_player_stats(1),
                     /*account_id=*/0, /*char_class=*/1, id.name);
 
         std::vector<std::uint8_t> buf = encode_entity_enter_payload(id, unit);

@@ -24,7 +24,7 @@
 // DB-free worldd-aoi unit test.
 //
 // What it proves end-to-end (docs/it-m0-runbook.md Step 3, DC-4):
-//   1. Two clients HandshakeOk and enter world at the SAME spawn (64,64) — within
+//   1. Two clients HandshakeOk and enter world at the SAME spawn (-320,-320) — within
 //      AoI range. On enter each receives an EntityEnter for the other (login
 //      bidirectional visibility).
 //   2. Client A sends a LEGAL MovementIntent (a small walk step). Client B
@@ -314,7 +314,7 @@ constexpr const char* kCharacterDdl =
 
 // Seed one owned character (class 1 = Vanguard, matching the #328 assertion) via
 // raw SQL and return its minted id. map/pos default 0 — worldd re-seeds spawn at
-// zone centre (64,64) on ENTER_WORLD, so the relay position assertions hold.
+// zone centre (-320,-320) on ENTER_WORLD (#562), so the relay position assertions hold.
 std::uint64_t seed_character(db::Connection& db, std::uint64_t account_id,
                              const std::string& name) {
     db.execute("DELETE FROM `character` WHERE name = ?", {db::Param{name}});
@@ -525,9 +525,9 @@ int main() {
             for (auto& t : conns) t.join();
         });
 
-        // ===== 1. BOTH clients enter world at the spawn (64,64) — in range =====
+        // ===== 1. BOTH clients enter world at the spawn (-320,-320) — in range =====
         // Both owned characters spawn at the play-area centre (the ENTER_WORLD
-        // handler seeds spawn = (kZoneMaxXY*0.5, kZoneMaxXY*0.5, 0) = (64,64,0)),
+        // handler seeds spawn = (kZoneSpawnXY, kZoneSpawnXY, 0) = (-320,-320,0) — #562),
         // so they are co-located and mutually in AoI range on enter.
         //
         // The two clients live in a nested scope so their sockets CLOSE (dtor ->
@@ -556,9 +556,9 @@ int main() {
         EntityMsg a_enter = recv_entity(a);
         check("1: A receives EntityEnter when B logs in nearby",
               a_enter.got && a_enter.opcode == mn::Opcode::ENTITY_ENTER);
-        check("1: the EntityEnter carries the spawn position (~64,64)",
-              a_enter.got && a_enter.x > 63.9f && a_enter.x < 64.1f &&
-                  a_enter.y > 63.9f && a_enter.y < 64.1f);
+        check("1: the EntityEnter carries the spawn position (~-320,-320)",
+              a_enter.got && a_enter.x > -320.1f && a_enter.x < -319.9f &&
+                  a_enter.y > -320.1f && a_enter.y < -319.9f);
         // #328: the relayed EntityEnter carries B's class so A colors B's capsule by
         // class. Both seeded characters are class 1 (Vanguard), so the relayed
         // EntityEnter must carry class 1 — now sourced from the REAL character row.
@@ -576,37 +576,36 @@ int main() {
               a_guid != a_enter.guid);
 
         // ===== 2. A moves a legal step -> B sees EntityUpdate at A's new pos =====
-        // A walks +0.20 m in x (a small legal walk step from 64,64). B, already
-        // seeing A, must receive an EntityUpdate carrying A's NEW position.
+        // A walks +0.20 m in x (a small legal walk step from the -320,-320 spawn).
+        // B, already seeing A, must receive an EntityUpdate carrying A's NEW position.
         a.send_frame(mw::encode_frame(mn::Opcode::MOVEMENT_INTENT, /*seq=*/2,
                                       enc_movement_intent(/*seq=*/10, /*Walk*/ 1,
-                                                          64.20f, 64.0f, 0.0f,
+                                                          -319.80f, -320.0f, 0.0f,
                                                           /*client_time_ms=*/100)));
         EntityMsg b_update = recv_entity(b);
         check("2: B receives an entity message for A after A moves", b_update.got);
         check("2: the update is FOR A (matching A's guid)", b_update.guid == a_guid);
         check("2: B's message is an EntityUpdate (A already visible to B)",
               b_update.opcode == mn::Opcode::ENTITY_UPDATE);
-        check("2: the EntityUpdate carries A's NEW position (x ~64.20)",
-              b_update.x > 64.19f && b_update.x < 64.21f);
+        check("2: the EntityUpdate carries A's NEW position (x ~-319.80)",
+              b_update.x > -319.81f && b_update.x < -319.79f);
 
         // ===== 3. A moves FAR out of B's AoI radius -> B sees EntityLeave ========
-        // The AoI leave radius is 50 m. A legal single walk step cannot cross 50 m
-        // (walk cap ≈ 0.29 m/packet), so we send A a sequence of legal walk steps
-        // marching in +x until it is well past the leave radius from B (who is
-        // still at 64). Each step is inside the per-packet + window speed budget;
-        // 100 ms apart so the rate class admits each. After A clears 50 m from B,
-        // B must receive an EntityLeave{OUT_OF_RANGE} for A.
+        // The AoI leave radius is now the PRODUCTION 100 m (#562). A legal single
+        // walk step cannot cross 100 m (walk cap ≈ 0.29 m/packet), so we send A a
+        // sequence of legal RUN steps marching in +x until it is well past the leave
+        // radius from B (who is still at the -320 spawn). Each step is inside the
+        // per-packet + window speed budget; 100 ms apart so the rate class admits each.
+        // After A clears 100 m from B, B must receive an EntityLeave{OUT_OF_RANGE}.
         //
-        // A now RUNS in +x (state_flags = Run = 2) out of B's AoI radius. Run mode
-        // is used so the SUSTAINED-speed sliding-window check (SAD §5.5 R3) has
-        // ample headroom: at 0.20 m every 100 ms A moves 2.0 m/s, far under the
-        // run cap (6.0 m/s) — per packet 0.20 < 6.0*0.1*1.15 = 0.69 m, and the 2 s
-        // window sum (~8 m) is well under 6.0*2*1.15 = 13.8 m. So every step is a
-        // LEGAL accepted move; A's authoritative position advances each time.
-        // (Walk here would trip R3 — 0.20 m/100 ms = 2.0 m/s is under the 2.5 m/s
-        // walk cap on AVERAGE but the tight window boundary rejects dense walk
-        // packets; running is the natural way to legally cover 50 m fast.)
+        // A RUNS in +x (state_flags = Run = 2) out of B's AoI radius. At 0.20 m every
+        // 100 ms A moves 2.0 m/s — per packet 0.20 < 6.0*0.1*1.15 = 0.69 m, and the
+        // sustained 2 s sliding-window sum (~4 m) is far under 6.0*2*1.15 = 13.8 m, so
+        // neither the per-packet nor the window cap trips (a faster sustained rate does
+        // trip the window in this rapid-fire loop). Every step is a LEGAL accepted move;
+        // A's authoritative position advances each time. 0.20 m steps cross the 100 m
+        // production leave radius (#562) in ~500 steps (within the budget) while A stays
+        // inside the [-512,-128] play area (it stops at ~-220).
         //
         // We INTERLEAVE send + drain: send one intent, then drain the one entity
         // frame it relays to B. This keeps B's receive buffer from filling and
@@ -617,14 +616,14 @@ int main() {
         // the EntityLeave for A (or a step budget is exhausted).
         std::uint32_t seq = 11;
         std::uint64_t t = 200;
-        float x = 64.20f;
+        float x = -319.80f;
         bool b_saw_leave = false;
-        for (int i = 0; i < 320 && !b_saw_leave; ++i) {
+        for (int i = 0; i < 600 && !b_saw_leave; ++i) {
             x += 0.20f;
             const std::uint32_t frame_seq = seq++;
             a.send_frame(mw::encode_frame(mn::Opcode::MOVEMENT_INTENT, frame_seq,
                                           enc_movement_intent(frame_seq, /*Run*/ 2, x,
-                                                             64.0f, 0.0f, t)));
+                                                             -320.0f, 0.0f, t)));
             t += 100;  // 100 ms apart — inside the 10/s rate class
             EntityMsg m = recv_entity(b);
             if (!m.got) break;  // connection ended unexpectedly

@@ -500,7 +500,7 @@ void seed_corpse(mw::WorldServer& world, std::uint64_t corpse, std::uint64_t own
     lo::LootRoll roll;
     roll.stacks.push_back(lo::LootStack{item_id, count, /*required_quest_id=*/0});
     roll.copper = 0;
-    const lo::LootPoint pos{64.0f, 64.0f, 0.0f};
+    const lo::LootPoint pos{-320.0f, -320.0f, 0.0f};  // == ENTER_WORLD spawn (kZoneSpawnXY, #562)
     world.loot_registry().insert(
         lo::LootSession(corpse, pos, std::move(roll), {owner}, /*loot_range=*/1.0e6f));
 }
@@ -827,7 +827,7 @@ int main() {
             std::uint32_t intent_seq = 1;
             std::uint64_t corpse_seq = 0xC0FFEE00ULL;
             std::uint64_t move_time = 0;
-            float player_x = 64.0f;  // authoritative spawn x; advances one step per explore
+            float player_x = -320.0f;  // authoritative spawn x (Zone-01 centre, #562); advances one step per explore
             mw::TriggerId explore_vol_id = 900;
             int kills_seen = 0, collects_seen = 0, delivers_seen = 0, explores_seen = 0;
             bool reward_items_landed = false;
@@ -926,7 +926,7 @@ int main() {
                             v.area_id = o.zone_id;
                             v.poi = o.poi;
                             v.min_x = player_x + 0.10f; v.max_x = target + 0.10f;
-                            v.min_y = 63.0f;            v.max_y = 65.0f;
+                            v.min_y = -321.0f;          v.max_y = -319.0f;
                             world.world_state().load_area_triggers({v});
                             move_time += 1000;
                             // state_flags low 3 bits = MoveMode (Idle=0/Walk=1/Run=2);
@@ -934,7 +934,7 @@ int main() {
                             // (cap 0) and would reject every move.
                             c.send_frame(mw::encode_frame(
                                 mn::Opcode::MOVEMENT_INTENT, seq++,
-                                enc_movement_intent(intent_seq++, /*Run=*/2u, target, 64.0f,
+                                enc_movement_intent(intent_seq++, /*Run=*/2u, target, -320.0f,
                                                     0.0f, move_time)));
                             Progress p = read_progress_for(c, q->id, idx);
                             checks("explore objective credited server-side: '" + nm + "'",

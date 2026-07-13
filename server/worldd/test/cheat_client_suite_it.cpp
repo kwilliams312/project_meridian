@@ -448,7 +448,7 @@ void seed_corpse(mw::WorldServer& world, std::uint64_t corpse, std::uint64_t own
     roll.stacks.push_back(lo::LootStack{item_id, 1, /*required_quest_id=*/0});  // slot 0
     roll.stacks.push_back(lo::LootStack{item_id, 1, /*required_quest_id=*/0});  // slot 1
     roll.copper = 0;
-    const lo::LootPoint pos{64.0f, 64.0f, 0.0f};
+    const lo::LootPoint pos{-320.0f, -320.0f, 0.0f};  // == ENTER_WORLD spawn (kZoneSpawnXY, #562)
     world.loot_registry().insert(
         lo::LootSession(corpse, pos, std::move(roll), {owner}, /*loot_range=*/1.0e6f));
 }
@@ -501,8 +501,8 @@ bool contains_all(const std::string& hay, std::initializer_list<const char*> nee
 // A snap-back MovementState reply holds the LAST AUTHORITATIVE position (spawn here,
 // the play-area centre). "Rejected + no displacement gained" ⇔ the reply is at spawn
 // and NOT at the attack target.
-constexpr float kSpawnX = mc::kZoneMaxXY * 0.5f;  // 64 m
-constexpr float kSpawnY = mc::kZoneMaxXY * 0.5f;  // 64 m
+constexpr float kSpawnX = mc::kZoneSpawnXY;  // -320 m — Zone-01 play-area centre (#562)
+constexpr float kSpawnY = mc::kZoneSpawnXY;  // -320 m
 bool near_spawn(float x, float y) {
     return std::fabs(x - kSpawnX) < 0.01f && std::fabs(y - kSpawnY) < 0.01f;
 }

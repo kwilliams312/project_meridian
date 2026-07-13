@@ -2033,14 +2033,15 @@ void Dispatcher::register_m0_stubs() {
            // --- OK: spawn the REAL owned character in-world ----------------------
            const LoadedCharacter& pc = *loaded;
 
-           // Seed the authoritative movement state (#86) at the character's M0
-           // spawn. D-19 flat bootstrap map: spawn at the play-area centre so the
+           // Seed the authoritative movement state (#86) at the character's spawn.
+           // Zone-01 flat ground (D-19): spawn at the play-area centre (#562:
+           // kZoneSpawnXY = -320 m, the manifest-derived Zone-01 centre) so the
            // first legal moves in any direction stay in bounds. The guid lets the
            // world thread stamp MovementState; spawn_time_ms = 0 seeds Δt.
            Position spawn;
-           spawn.x = movement::kZoneMaxXY * 0.5f;  // 64 m — bootstrap play-area centre
-           spawn.y = movement::kZoneMaxXY * 0.5f;
-           spawn.z = movement::kFlatGroundZ;       // flat ground (D-19)
+           spawn.x = movement::kZoneSpawnXY;   // -320 m — Zone-01 play-area centre
+           spawn.y = movement::kZoneSpawnXY;
+           spawn.z = movement::kFlatGroundZ;   // flat ground (D-19)
            ctx.movement.emplace(spawn, /*spawn_time_ms=*/0);
            ctx.movement->set_entity_guid(pc.char_guid);  // may be refined below (AoI)
 

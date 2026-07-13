@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// worldd — SINGLE-SOURCE zone geometry seam (issue #559; successor to #87).
+// worldd — SINGLE-SOURCE zone geometry seam (issue #559; grown to real Zone-01 by
+// #562; successor to #87).
 //
 // CLEAN-ROOM: designed from docs/sad/server-sad.md §2.5 (Grid/AoI engine — 533 m
 // grids × 8×8 cells, default interest R = 90 m, per-map config), §5.5 (movement
-// map-bounds validation), decision D-19 (M0 flat bootstrap map), and the #508
-// axis/origin lesson (client + server must share ONE authoritative zone origin).
-// No GPL source consulted. See CONTRIBUTING.md.
+// map-bounds validation), the IF-6 chunk-manifest contract (schema/chunk/
+// chunk-manifest.schema.yaml), and the #508 axis/origin lesson (client + server
+// must share ONE authoritative zone origin). No GPL source consulted. See
+// CONTRIBUTING.md.
 //
 // WHY THIS FILE EXISTS (#559): worldd's AoI grid used to bake the M0 bootstrap
 // geometry — [0,128] play area, origin (0,0), 64 m cells — straight into
@@ -16,33 +18,25 @@
 // their play area from a single source and can never silently diverge (the #508
 // lesson: client chunk-streaming and server interest must agree on ONE origin).
 //
-// ─── WHERE THE ORIGIN/EXTENT COME FROM ───────────────────────────────────────
-// The zone content worldd loads (content/core/zones/zone01.zone.yaml →
-// schema/content/zone.schema.yaml → schema/sql/world/80_zone.sql `zone` table)
-// does NOT yet carry a zone origin or extent — geometry lives in Forge-exported
-// chunk data whose manifest is RESERVED until the A-08 chunk-format contract
-// (zone.chunk_manifest = null). So the best zone geometry worldd has today is the
-// movement validator's bootstrap play area (movement_constants.h §8, D-19): the
-// [kZoneMinXY, kZoneMaxXY] square. We bind the AoI grid to exactly that square
-// here, so interest and movement bounds stay consistent by construction.
+// ─── WHERE THE ORIGIN/EXTENT COME FROM (#562) ────────────────────────────────
+// The SINGLE authoritative source of Zone-01's origin/extent is the IF-6 chunk
+// manifest (core:zone.zone01 → zone01.chunks.json), emitted by mcc (#22 Story 0 /
+// #553) — the SAME artifact the client streamer reads, so client interest and
+// server interest agree on ONE origin. The manifest fields below are transcribed
+// here (kManifest*), the play area is derived from them (kZoneOrigin*/kZoneExtent*),
+// and a static_assert proves movement_constants.h §8 (the movement validator's
+// map bounds) equals that derived play area — a compile-time guarantee that the
+// two never diverge into a second origin (#508). Zone content (zone01.zone.yaml →
+// zone.schema.yaml → 80_zone.sql `zone.chunk_manifest`) still POINTS at this
+// manifest rather than carrying geometry inline; a later story plumbs the manifest
+// through the DB / IF-4 loader so these constants become the loader's typed default
+// instead of a transcription (the same M1 migration movement-spike.md §4 describes).
 //
-// TODO(#559 / #22 Story 0): source origin + extent from the SHARED zone manifest —
-// the same authoritative origin the client's chunk-streaming reads — once #22
-// Story 0 plumbs a zone origin/extent into the world DB / IF-4 artifact set. When
-// that lands, BOTH this seam and movement_constants.h §8 read the manifest origin;
-// do NOT introduce a second, divergent origin in the meantime.
-//
-// TODO(#559): the bootstrap play area is only kZoneMaxXY (= 128 m) across —
-// SMALLER than the SAD §2.5 production interest radius (R = 90 m). Until the zone
-// extent grows to real Zone-01 geometry, the ACTIVE interest radii are scaled to
-// fit the bootstrap square (kBootstrap*RadiusM below) so AoI enter/leave still has
-// a meaningful hysteresis band inside [0,128]. Growing the extent requires the
-// movement map-bounds ([0,128]) to grow too, and those bounds are pinned by the
-// CROSS-TRACK golden fixture (movement_fixture.h `out_of_bounds`, mirrored on the
-// client doctest track) — so the extent/bounds growth is a coordinated cross-track
-// change (its own story), NOT this one. The production radii (kAoiEnterRadiusM =
-// 90 m / kAoiLeaveRadiusM = 100 m) are the AoiGridConfig defaults and are proven
-// by the pure #87 grid unit tests at a real (large) extent.
+// ─── AXIS MAP (#508) ─────────────────────────────────────────────────────────
+// worldd's horizontal ground plane is (x, y) with z = height (movement_constants
+// §7); the manifest is Godot XZ (Y-up), so the manifest z axis maps to worldd's y.
+// Zone-01's grid is square and origin-symmetric, so both worldd axes share one
+// [kZoneMinXY, kZoneMaxXY] bound and this seam derives a single square play area.
 
 #ifndef MERIDIAN_WORLDD_ZONE_GEOMETRY_H
 #define MERIDIAN_WORLDD_ZONE_GEOMETRY_H
@@ -52,41 +46,48 @@
 
 namespace meridian::worldd {
 
-// The active zone's horizontal play-area geometry — the SINGLE authoritative
-// source, bound to the movement validator's bootstrap bounds (movement_constants.h
-// §8) so the AoI grid and map-bounds validation never diverge. See the file-header
-// TODOs for the shared-manifest origin (#22 Story 0) that will replace these.
-inline constexpr float kZoneOriginX = movement::kZoneMinXY;
-inline constexpr float kZoneOriginY = movement::kZoneMinXY;
-inline constexpr float kZoneExtentX = movement::kZoneMaxXY - movement::kZoneMinXY;
-inline constexpr float kZoneExtentY = movement::kZoneMaxXY - movement::kZoneMinXY;
+// ─── The IF-6 chunk manifest fields (zone01.chunks.json), transcribed ────────
+// The world→cell transform is cx = floor((x − origin.x)/chunk_size_m) (manifest
+// schema §origin), so the inclusive grid [min_c, max_c] covers zone-local metres
+// [min_c·chunk + origin, (max_c+1)·chunk + origin]. These name the manifest so the
+// derivation below is auditable against the artifact byte-for-byte.
+inline constexpr float kManifestOriginXZ  = -384.0f;  // manifest origin.x == origin.z
+inline constexpr float kManifestChunkSize = 128.0f;   // manifest chunk_size_m
+inline constexpr int   kManifestGridMin   = -1;       // manifest grid.min_cx == min_cz
+inline constexpr int   kManifestGridMax   =  1;       // manifest grid.max_cx == max_cz
 
-// M0/M1 BOOTSTRAP interest radii — scaled to fit the 128 m bootstrap square (see
-// the file-header TODO). These stand in for the production R = 90 m enter radius
-// (kAoiEnterRadiusM) only until the zone extent grows past ~2·R. Enter < leave
-// keeps the hysteresis band; both fit within the 128 m play area so a session can
-// actually move out of another's leave radius inside the bootstrap map.
-inline constexpr float kBootstrapEnterRadiusM = 40.0f;  // come within 40 m to enter
-inline constexpr float kBootstrapLeaveRadiusM = 50.0f;  // leave only past 50 m
+// The active zone's horizontal play-area geometry, DERIVED from the manifest grid.
+// origin = min corner; extent = grid span in metres. These are the SINGLE
+// authoritative origin/extent the AoI grid is built on.
+inline constexpr float kZoneOriginX = kManifestGridMin * kManifestChunkSize + kManifestOriginXZ;  // -512
+inline constexpr float kZoneOriginY = kZoneOriginX;                                               // square, origin-symmetric
+inline constexpr float kZoneExtentX = (kManifestGridMax - kManifestGridMin + 1) * kManifestChunkSize;  // 384
+inline constexpr float kZoneExtentY = kZoneExtentX;
 
-static_assert(kBootstrapLeaveRadiusM > kBootstrapEnterRadiusM,
-              "bootstrap AoI hysteresis requires leave radius > enter radius");
-static_assert(kBootstrapLeaveRadiusM < kZoneExtentX &&
-                  kBootstrapLeaveRadiusM < kZoneExtentY,
-              "bootstrap leave radius must fit inside the play area so a session "
-              "can leave another's interest set inside the bootstrap map");
+// ONE-ORIGIN cross-check (#508): the movement validator's map bounds (movement_
+// constants §8) MUST equal the manifest-derived play area. If either side drifts,
+// the server would hold two divergent origins — this fails the build instead.
+static_assert(kZoneOriginX == movement::kZoneMinXY,
+              "#508: AoI grid origin must equal the movement map-bounds min (one origin)");
+static_assert(kZoneOriginX + kZoneExtentX == movement::kZoneMaxXY,
+              "#508: AoI grid max (origin+extent) must equal the movement map-bounds max (one origin)");
+static_assert(kZoneOriginY == movement::kZoneMinXY &&
+                  kZoneOriginY + kZoneExtentY == movement::kZoneMaxXY,
+              "#508: AoI grid must share the movement map bounds on the y axis too");
 
-// The AoI grid config for the ACTIVE zone: the single-source origin/extent above,
-// the SAD §2.5 production cell size (~66 m, from production_aoi_config), and the
-// bootstrap-scaled interest radii above. When the zone extent grows to production
-// geometry, drop the two radius overrides so the production R = 90 m defaults apply.
+// The AoI grid config for the ACTIVE zone: the single-source manifest origin/extent
+// above, the SAD §2.5 production cell size (~66 m) AND the production interest radii
+// (enter R = 90 m / leave 100 m). #562 grew the play area past the old 128 m
+// bootstrap square, so the production radii finally fit — no bootstrap down-scaling.
 inline AoiGridConfig active_zone_aoi_config() {
-    AoiGridConfig cfg = production_aoi_config(kZoneOriginX, kZoneOriginY,
-                                              kZoneExtentX, kZoneExtentY);
-    cfg.enter_radius = kBootstrapEnterRadiusM;
-    cfg.leave_radius = kBootstrapLeaveRadiusM;
-    return cfg;
+    return production_aoi_config(kZoneOriginX, kZoneOriginY, kZoneExtentX, kZoneExtentY);
 }
+
+// The production interest radii must fit inside the play area so a session can
+// actually move out of another's leave radius within the real extent (the #562
+// verify: "a session can move out of interest range within the real extent").
+static_assert(kAoiLeaveRadiusM < kZoneExtentX && kAoiLeaveRadiusM < kZoneExtentY,
+              "production leave radius must fit inside the Zone-01 play area");
 
 }  // namespace meridian::worldd
 

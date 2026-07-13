@@ -463,7 +463,7 @@ int main() {
 
             // A must now receive a Disconnect{KICKED} (the KickFn wrote it to A's
             // socket from B's serve thread). B's AoI enter first relays A an
-            // EntityEnter for B (both spawn co-located at 64,64), so read frames
+            // EntityEnter for B (both spawn co-located at -320,-320), so read frames
             // until the Disconnect arrives — the kick is guaranteed once B's admit
             // runs (right after B's HandshakeOk). recv_frame blocks between frames.
             bool a_kicked = false;

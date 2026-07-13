@@ -681,12 +681,12 @@ int main() {
         // + OPS-03a (#420) REJECT -> live SNAP-BACK correction, on the SAME session.
         // Handshake on grant_move, ENTER_WORLD once, then send TWO intents on the
         // one in-world connection:
-        //   (1) a LEGAL 0.20 m walk step from the (64,64) spawn — accepted, the
-        //       authoritative position advances to ~64.20 (#86 authoritative path).
+        //   (1) a LEGAL 0.20 m walk step from the (-320,-320) spawn (#562) — accepted,
+        //       the authoritative position advances to ~-319.80 (#86 authoritative path).
         //   (2) an ILLEGAL move — a Swim mode flag (selector value 4) on the flat
         //       bootstrap map, which has NO liquid volume: "swim on dry land" (SAD
         //       §5.5 flag legality). The full envelope REJECTS it and replies a
-        //       snap-back MovementState at the LAST authoritative position (~64.20),
+        //       snap-back MovementState at the LAST authoritative position (~-319.80),
         //       NOT the cheated position — reject + snap-back on the wired serve
         //       loop, end-to-end (the pure unit test proves the rule; this proves
         //       the wiring). Reusing the one session avoids a second ENTER_WORLD
@@ -694,24 +694,24 @@ int main() {
         {
             MoveResult g = drive_hello_then_move(
                 port, grant_move, client_build, char_move,
-                /*flags=Walk*/ 1, /*x=*/64.20f, /*y=*/64.0f, /*z=*/0.0f,
+                /*flags=Walk*/ 1, /*x=*/-319.80f, /*y=*/-320.0f, /*z=*/0.0f,
                 /*client_time_ms=*/100,
                 // Second, ILLEGAL intent on the same session: swim on dry land.
                 /*second_move=*/true, /*flags2=Swim*/ mw::movement::kModeSwim,
-                /*x2=*/64.40f, /*y2=*/64.0f, /*z2=*/0.0f,
+                /*x2=*/-319.60f, /*y2=*/-320.0f, /*z2=*/0.0f,
                 /*intent_seq2=*/8, /*client_time_ms2=*/200);
             check("G: handshake ok on the movement connection", g.handshake_ok);
             check("G: server replied MovementState to the legal intent", g.got_state);
             check("G: MovementState acks the intent seq", g.ack_seq == 7);
             check("G: authoritative advanced to the validated position",
-                  g.got_state && g.state_x > 64.19f && g.state_x < 64.21f);
+                  g.got_state && g.state_x > -319.81f && g.state_x < -319.79f);
             // The illegal second move: server still replies (snap-back correction).
             check("G: server replied a MovementState to the illegal move", g.got_state2);
             check("G: the correction acks the illegal intent seq", g.ack_seq2 == 8);
-            // Snap-back holds the LAST authoritative position (~64.20, from move 1),
-            // NOT the cheated 64.40 — reject + snap-back proven on the live path.
-            check("G: illegal move corrected back to last authoritative (~64.20, not 64.40)",
-                  g.got_state2 && g.state2_x > 64.19f && g.state2_x < 64.21f);
+            // Snap-back holds the LAST authoritative position (~-319.80, from move 1),
+            // NOT the cheated -319.60 — reject + snap-back proven on the live path.
+            check("G: illegal move corrected back to last authoritative (~-319.80, not -319.60)",
+                  g.got_state2 && g.state2_x > -319.81f && g.state2_x < -319.79f);
         }
 
         server.join();
