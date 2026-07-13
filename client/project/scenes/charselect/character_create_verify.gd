@@ -47,9 +47,15 @@ func _verify_view() -> void:
 	if packed == null:
 		return
 
+	# Drive layout at the #630 window (1728x972) so the paperdoll gets a REAL on-screen
+	# size to fill — the #643 fix ties the SubViewport render size to that, not to the
+	# small custom_minimum_size floor.
+	root.size = Vector2i(1728, 972)
+
 	var view := packed.instantiate()
 	root.add_child(view)
 	await process_frame  # let _ready() run (builds the paperdoll, populates pickers)
+	await process_frame  # let the Control layout settle so the paperdoll fills its panel
 
 	var race_opt: OptionButton = view.find_child("RaceOption", true, false)
 	var class_opt: OptionButton = view.find_child("ClassOption", true, false)
@@ -111,6 +117,21 @@ func _verify_view() -> void:
 	_check("creation paperdoll built into the holder (SubViewport surface)",
 		preview != null and preview.get_child_count() > 0
 		and preview.get_child(0) is SubViewportContainer)
+
+	# #643: the paperdoll must be LARGE and fill its panel — NOT pinned at the small
+	# custom_minimum_size (360x460) it used to render at. At the 1728x972 window it should
+	# fill roughly the left half of the Body and most of the vertical space, and the
+	# SubViewport RENDER size must TRACK that real on-screen size (drawn large + sharp, not
+	# an upscaled 360x460 surface).
+	var paperdoll: SubViewportContainer = preview.get_child(0)
+	var pd_vp: SubViewport = paperdoll.get_child(0) if paperdoll.get_child_count() > 0 else null
+	_check("creation paperdoll fills its panel (on-screen size >> old 360x460 floor)",
+		paperdoll.size.x >= 500.0 and paperdoll.size.y >= 500.0)
+	_check("creation paperdoll SubViewport render size tracks the on-screen size (#643)",
+		pd_vp != null
+		and absi(pd_vp.size.x - int(round(paperdoll.size.x))) <= 2
+		and absi(pd_vp.size.y - int(round(paperdoll.size.y))) <= 2
+		and pd_vp.size.x >= 500 and pd_vp.size.y >= 500)
 	_check("paperdoll mounts an AssembledCharacter for the default race",
 		preview_body != null and preview_body.has_method("body_skeleton")
 		and preview_body.has_method("applied_preset"))

@@ -203,11 +203,14 @@ func _process(_delta: float) -> void:
 # Build the roster view's paperdoll into %PreviewHolder: the shared widget (#639),
 # front-facing (rotation optional on the roster — spec). The selected character's
 # persisted race + appearance drive it via _refresh_selected_preview().
+# The widget anchors itself full-rect inside the (plain Control) holder (#643), so it
+# fills the "Selected character" panel and grows with it — custom_minimum_size is only a
+# floor. (No size flags here: %PreviewHolder is a plain Control, which lays children out
+# by anchors, not flags.)
 func _build_roster_paperdoll() -> void:
 	_roster_paperdoll = PaperdollScript.new()
 	_roster_paperdoll.name = "Paperdoll"
 	_roster_paperdoll.custom_minimum_size = Vector2(ROSTER_PAPERDOLL_SIZE)
-	_roster_paperdoll.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_preview_holder.add_child(_roster_paperdoll)
 
 

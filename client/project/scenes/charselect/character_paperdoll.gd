@@ -32,6 +32,15 @@ extends SubViewportContainer
 # --script verify runs). Assemble() false → the capsule fallback (spec §6).
 const AssembledCharacterScript := preload("res://characters/assembled_character.gd")
 
+# Camera framing (#643). A portrait-telephoto lens: a low FOV is flatter and more
+# flattering than a wide angle, and the distance is chosen so a ~1.8 m standing figure
+# (feet at y=0, head ~1.8) fills MOST of the frame head-to-toe with a modest margin,
+# INDEPENDENT of the viewport's on-screen size (Godot's default KEEP_HEIGHT aspect fixes
+# the vertical FOV, so the figure stays framed as the widget grows with the window, #630).
+# At z=3.3 / fov=40 the visible vertical extent is ~2.4 m, so a 1.8 m figure fills ~75%.
+const _CAM_FOV := 40.0
+const _CAM_POS := Vector3(0.0, 0.98, 3.3)
+
 ## When true, a left-drag on the widget yaws the preview. Roster: false (front-facing);
 ## creation view: true. Set BEFORE or after add — read live in _gui_input.
 var draggable: bool = false
@@ -43,30 +52,36 @@ var _dragging: bool = false
 
 
 func _init() -> void:
-	# stretch: the SubViewport render surface tracks the container size, so under the
-	# project's `canvas_items` stretch the preview scales with the window (#630). STOP
-	# mouse filter so _gui_input fires for the drag (the 3D sub-world needs no picking).
+	# stretch: the SubViewportContainer keeps the SubViewport render surface sized to the
+	# container, so under the project's `canvas_items` stretch the preview scales with the
+	# window (#630). STOP mouse filter so _gui_input fires for the drag (the 3D sub-world
+	# needs no picking).
 	stretch = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
 
 func _ready() -> void:
 	_build()
+	# Both call sites drop this widget into a PLAIN Control (`%PreviewHolder`), which lays
+	# its children out by ANCHORS — not size flags (those only matter inside a Container).
+	# Anchoring to the full parent rect makes the widget FILL its holder and grow with the
+	# panel + window (#643 — previously it stayed pinned at custom_minimum_size, a small
+	# model floating in a big empty panel). custom_minimum_size stays a floor, not a cap.
+	# With `stretch = true` the SubViewportContainer then keeps the SubViewport RENDER size
+	# matched to our real on-screen pixels, so the model is drawn LARGE and SHARP (never an
+	# upscaled small surface) and re-tracks automatically on every resize.
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
 
 # Build the SubViewport (light + camera) + the PreviewRoot the model mounts into.
 # Idempotent (a lazy set_appearance before _ready builds it once, order-independent).
-# The SubViewport RENDER size follows custom_minimum_size so the model is drawn at the
-# widget's resolution (not upscaled-blurry); callers set custom_minimum_size first.
+# The SubViewport size is NOT set here: `stretch = true` makes the SubViewportContainer
+# own it and keep it matched to the container's real pixel size (#643).
 func _build() -> void:
 	if _preview_root != null:
 		return
-	var px := Vector2i(
-		max(1, int(custom_minimum_size.x)),
-		max(1, int(custom_minimum_size.y)))
 
 	_viewport = SubViewport.new()
-	_viewport.size = px
 	_viewport.transparent_bg = true
 	add_child(_viewport)
 
@@ -84,10 +99,11 @@ func _build() -> void:
 	_preview_root.rotation.y = _yaw
 	world_root.add_child(_preview_root)
 
-	# Framed for a standing figure (feet at y=0, head ~1.8) — the assembled body is
-	# rooted at the feet.
+	# Framed for a standing figure (feet at y=0, head ~1.8) — tightened in #643 so the
+	# model fills most of the viewport rather than floating small in a big margin.
 	var cam := Camera3D.new()
-	cam.position = Vector3(0, 1.0, 3.2)
+	cam.position = _CAM_POS
+	cam.fov = _CAM_FOV
 	cam.current = true
 	world_root.add_child(cam)
 

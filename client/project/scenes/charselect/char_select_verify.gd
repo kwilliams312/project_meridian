@@ -185,6 +185,10 @@ func _verify_scene() -> void:
 	if packed == null:
 		return
 
+	# Drive layout at the #630 window (1728x972) so the roster paperdoll gets a REAL
+	# on-screen size to fill (the #643 fix ties the SubViewport render size to that).
+	root.size = Vector2i(1728, 972)
+
 	var scene := packed.instantiate()
 	# Seed two characters BEFORE the scene enters the tree (the login-handoff path).
 	scene.configure("tester@example.com", [
@@ -193,6 +197,7 @@ func _verify_scene() -> void:
 	])
 	root.add_child(scene)
 	await process_frame  # let _ready() run
+	await process_frame  # let the Control layout settle so the paperdoll fills its panel
 
 	var char_list: ItemList = scene.find_child("CharList", true, false)
 	var preview: Control = scene.find_child("PreviewHolder", true, false)
@@ -227,6 +232,20 @@ func _verify_scene() -> void:
 	var has_preview := preview != null and preview.get_child_count() > 0 \
 		and preview.get_child(0) is SubViewportContainer
 	_check("roster paperdoll built into the preview holder", has_preview)
+
+	# #643: the roster paperdoll must be LARGE — filling its "Selected character" panel,
+	# not the tiny 260x290 floor it used to render at — and its SubViewport render size
+	# must TRACK that real on-screen size (drawn large + sharp).
+	if has_preview:
+		var pd: SubViewportContainer = preview.get_child(0)
+		var pd_vp: SubViewport = pd.get_child(0) if pd.get_child_count() > 0 else null
+		_check("roster paperdoll fills its panel (on-screen size >> old 260x290 floor)",
+			pd.size.x >= 400.0 and pd.size.y >= 400.0)
+		_check("roster paperdoll SubViewport render size tracks the on-screen size (#643)",
+			pd_vp != null
+			and absi(pd_vp.size.x - int(round(pd.size.x))) <= 2
+			and absi(pd_vp.size.y - int(round(pd.size.y))) <= 2
+			and pd_vp.size.x >= 400 and pd_vp.size.y >= 400)
 
 	# Roster selection re-assembles from a character's PERSISTED appearance (contract ①
 	# T5 wire, driven here directly). A persisted hair preset id 2 → the assembled preview
