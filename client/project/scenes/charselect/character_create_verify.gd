@@ -24,6 +24,10 @@ extends SceneTree
 # freshly-added class_name may be missing from a stale global class cache.
 const ContentDbScript := preload("res://content/content_db.gd")
 
+# The shared paperdoll widget (#639) — preloaded by path for the world-isolation regression
+# lock (#643 bleed fix), same no-autoload reason as above.
+const PaperdollScript := preload("res://scenes/charselect/character_paperdoll.gd")
+
 var _fails := 0
 
 
@@ -36,8 +40,73 @@ func _check(name: String, ok: bool) -> void:
 func _initialize() -> void:
 	print("meridian character-create view RUNTIME verify (#639)")
 	await _verify_view()
+	await _verify_world_isolation()
 	print("\n%s" % ("ALL RUNTIME CHECKS PASS" if _fails == 0 else "%d RUNTIME FAILURE(S)" % _fails))
 	quit(0 if _fails == 0 else 1)
+
+
+# #643 BLEED REGRESSION LOCK: mounting TWO paperdolls at once (the roster view's + the
+# creation view's) must NOT make them share a 3D world. A SubViewport defaults to
+# own_world_3d = false, which SHARES the parent viewport's World3D — so both mounted
+# PreviewBody characters coexisted in one world and each viewport's camera rendered BOTH
+# (the roster's selected character bled a static second model into the creation view).
+# The fix: character_paperdoll owns its World3D. This test builds a roster paperdoll AND a
+# creation paperdoll with DIFFERENT races and proves their SubViewports each own a DISTINCT
+# World3D (and neither shares the SceneTree root's world), with exactly ONE PreviewBody per
+# world — the creation viewport must NOT contain the roster's body. FAILS on the pre-fix
+# shared-world code, PASSES after.
+func _verify_world_isolation() -> void:
+	print(" paperdoll world isolation (two paperdolls mounted at once, #643 bleed):")
+
+	# Mount both widgets under the same SceneTree — the exact condition that triggered the
+	# bleed (pre-fix they'd share root's World3D).
+	var roster_pd := PaperdollScript.new()          # roster view's preview (front-facing)
+	root.add_child(roster_pd)
+	var create_pd := PaperdollScript.new()          # creation view's preview (drag-to-rotate)
+	create_pd.draggable = true
+	root.add_child(create_pd)
+	await process_frame  # let _ready() build each SubViewport + PreviewRoot
+
+	# Different races so the two previews are genuinely distinct models (Dolmen vs Ardent).
+	roster_pd.set_appearance(2, MeridianAppearance.default_appearance(), [])   # Dolmen
+	create_pd.set_appearance(MeridianRoster.DEFAULT_RACE_ID,
+		MeridianAppearance.default_appearance(), [])                           # Ardent
+	await process_frame
+
+	var roster_vp: SubViewport = roster_pd.get_child(0) if roster_pd.get_child_count() > 0 else null
+	var create_vp: SubViewport = create_pd.get_child(0) if create_pd.get_child_count() > 0 else null
+	_check("both paperdolls built a SubViewport",
+		roster_vp is SubViewport and create_vp is SubViewport)
+
+	# find_world_3d() returns the World3D a viewport ACTUALLY renders into: its own when
+	# own_world_3d is set, else the one it inherits by walking up to the parent viewport.
+	# (Godot exposes it here rather than get_world_3d(), which is lazily null under --headless
+	# until a frame draws.) Pre-fix (own_world_3d = false) BOTH walk up to the SceneTree root's
+	# shared world and are the SAME object; the fix gives each its own.
+	var roster_world: World3D = roster_vp.find_world_3d() if roster_vp != null else null
+	var create_world: World3D = create_vp.find_world_3d() if create_vp != null else null
+	var root_world: World3D = root.get_world_3d()
+	# THE lock: distinct World3D (with distinct RenderingServer scenarios) between the two
+	# previews — pre-fix they resolved to the SAME shared world, so each camera drew BOTH.
+	_check("roster + creation paperdolls render into DISTINCT World3D (no shared 3D scene)",
+		roster_world != null and create_world != null
+		and roster_world != create_world and roster_world.scenario != create_world.scenario)
+	# And neither shares the SceneTree root's world — each preview is fully isolated.
+	_check("neither paperdoll shares the SceneTree root's World3D",
+		roster_world != root_world and create_world != root_world)
+
+	# Exactly ONE PreviewBody per viewport, and the creation viewport does NOT contain the
+	# roster's (Dolmen) body — proves no cross-viewport model bleed at the scene level too.
+	var roster_bodies := roster_vp.find_children("PreviewBody", "", true, false) if roster_vp != null else []
+	var create_bodies := create_vp.find_children("PreviewBody", "", true, false) if create_vp != null else []
+	_check("roster viewport contains exactly one PreviewBody", roster_bodies.size() == 1)
+	_check("creation viewport contains exactly one PreviewBody", create_bodies.size() == 1)
+	_check("creation viewport does NOT contain the roster's PreviewBody (no bleed)",
+		create_bodies.size() == 1 and roster_bodies.size() == 1
+		and not create_bodies.has(roster_bodies[0]))
+
+	roster_pd.queue_free()
+	create_pd.queue_free()
 
 
 func _verify_view() -> void:

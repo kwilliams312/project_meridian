@@ -82,6 +82,14 @@ func _build() -> void:
 		return
 
 	_viewport = SubViewport.new()
+	# Own the 3D scene so this preview's World3D is isolated (#643 bleed fix). A
+	# SubViewport defaults to own_world_3d = false, which SHARES the parent viewport's
+	# World3D — so with the redesign mounting TWO paperdolls (roster + creation) their
+	# PreviewBody characters would coexist in one shared world and each camera would render
+	# BOTH (the roster's selected character bled into the creation view, and vice-versa).
+	# Set BEFORE adding the world_root/light/camera/PreviewRoot children so they populate
+	# THIS viewport's owned world.
+	_viewport.own_world_3d = true
 	_viewport.transparent_bg = true
 	add_child(_viewport)
 
