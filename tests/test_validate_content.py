@@ -1185,6 +1185,220 @@ class TestDye:
         assert "SCHEMA" in codes(res.errors)
 
 
+@pytest.mark.unit
+class TestAbilityEffectPalette:
+    """Story #653 (SP1.3) — the extended Tier-1 effect-primitive palette.
+
+    Every new kind must validate on a well-formed sample, and a malformed effect
+    (bad enum, missing required field, unknown property, bad attribute ref, or
+    too many effects) must be rejected with a SCHEMA error. The pre-existing
+    damage/heal/aura/threat kinds must keep validating unchanged.
+    """
+
+    # An NPC the `summon` sample can resolve against (L011).
+    SUMMON_NPC = NPC.replace("id: tp:npc.dummy", "id: tp:npc.imp")
+
+    @staticmethod
+    def _ability(effects_block: str) -> str:
+        """Wrap an `effects:` YAML block into a complete, otherwise-valid ability."""
+        return (
+            "schema: meridian/ability@1\n"
+            "id: tp:ability.sample\n"
+            "name: Sample\n"
+            "target: enemy\n"
+            "school: fire\n"
+            "effects:\n" + effects_block
+        )
+
+    def _run_ability(self, tmp_path, effects_block, extra=None):
+        files = {"tp/abilities/sample.ability.yaml": self._ability(effects_block)}
+        if extra:
+            files.update(extra)
+        return run(tmp_path, files)
+
+    # --- positive: each new kind validates -------------------------------
+
+    def test_dot_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: dot\n"
+            "    amount: { min: 3, max: 5 }\n"
+            "    duration_ms: 6000\n"
+            "    tick_ms: 2000\n",
+        )
+        assert res.errors == []
+
+    def test_hot_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: hot\n"
+            "    amount: { min: 4, max: 6 }\n"
+            "    duration_ms: 9000\n"
+            "    tick_ms: 3000\n"
+            "    max_stacks: 3\n",
+        )
+        assert res.errors == []
+
+    def test_buff_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: buff\n"
+            "    attribute: core:attribute.strength\n"
+            "    amount: 10\n"
+            "    modifier: flat\n"
+            "    duration_ms: 30000\n",
+        )
+        assert res.errors == []
+
+    def test_debuff_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: debuff\n"
+            "    attribute: core:attribute.agility\n"
+            "    amount: -15\n"
+            "    modifier: percent\n"
+            "    duration_ms: 12000\n",
+        )
+        assert res.errors == []
+
+    def test_shield_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: shield\n"
+            "    amount: { min: 200, max: 200 }\n"
+            "    duration_ms: 10000\n",
+        )
+        assert res.errors == []
+
+    def test_cc_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: cc\n    type: stun\n    duration_ms: 4000\n",
+        )
+        assert res.errors == []
+
+    def test_resource_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: resource\n"
+            "    pool: mana\n"
+            "    operation: drain\n"
+            "    amount: 300\n",
+        )
+        assert res.errors == []
+
+    def test_movement_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: movement\n    motion: knockback\n    distance_m: 8\n",
+        )
+        assert res.errors == []
+
+    def test_summon_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: summon\n    npc: npc.imp\n    count: 2\n    duration_ms: 60000\n",
+            extra={"tp/npcs/imp.npc.yaml": self.SUMMON_NPC},
+        )
+        assert res.errors == []
+
+    def test_existing_kinds_still_validate(self, tmp_path):
+        # Regression: damage + aura (with periodic + stat_mods) + threat unchanged.
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: damage\n    amount: { min: 8, max: 13 }\n    coefficient: 0.5\n"
+            "  - kind: aura\n    duration_ms: 9000\n"
+            "    periodic: { kind: damage, amount: { min: 2, max: 3 }, tick_ms: 3000 }\n"
+            "    stat_mods: [{ stat: strength, amount: 5 }]\n"
+            "  - kind: threat\n    amount: 100\n",
+        )
+        assert res.errors == []
+
+    def test_five_effect_kit_valid_after_maxitems_bump(self, tmp_path):
+        # A signature ability chaining 5 primitives — proves the maxItems bump.
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: damage\n    amount: { min: 10, max: 15 }\n"
+            "  - kind: dot\n    amount: { min: 2, max: 3 }\n    duration_ms: 6000\n    tick_ms: 2000\n"
+            "  - kind: debuff\n    attribute: core:attribute.stamina\n    amount: -10\n    modifier: flat\n    duration_ms: 8000\n"
+            "  - kind: cc\n    type: stun\n    duration_ms: 2000\n"
+            "  - kind: movement\n    motion: knockback\n    distance_m: 6\n",
+        )
+        assert res.errors == []
+
+    # --- negative: malformed effects are rejected ------------------------
+
+    def test_cc_bad_type_rejected(self, tmp_path):
+        res = self._run_ability(
+            tmp_path, "  - kind: cc\n    type: freeze\n    duration_ms: 4000\n"
+        )
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_cc_missing_duration_rejected(self, tmp_path):
+        res = self._run_ability(tmp_path, "  - kind: cc\n    type: stun\n")
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_buff_missing_attribute_rejected(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: buff\n    amount: 10\n    modifier: flat\n    duration_ms: 30000\n",
+        )
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_buff_bad_attribute_ref_rejected(self, tmp_path):
+        # `strength` is not a namespaced attribute id (needs the `attribute.` type).
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: buff\n    attribute: strength\n    amount: 10\n"
+            "    modifier: flat\n    duration_ms: 30000\n",
+        )
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_resource_bad_operation_rejected(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: resource\n    pool: mana\n    operation: steal\n    amount: 300\n",
+        )
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_resource_bad_pool_rejected(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: resource\n    pool: focus\n    operation: drain\n    amount: 300\n",
+        )
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_movement_bad_motion_rejected(self, tmp_path):
+        res = self._run_ability(
+            tmp_path, "  - kind: movement\n    motion: teleport\n    distance_m: 8\n"
+        )
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_dot_missing_tick_rejected(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: dot\n    amount: { min: 3, max: 5 }\n    duration_ms: 6000\n",
+        )
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_unknown_property_rejected(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: shield\n    amount: { min: 1, max: 1 }\n"
+            "    duration_ms: 1000\n    bogus_field: 1\n",
+        )
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_unknown_kind_rejected(self, tmp_path):
+        res = self._run_ability(tmp_path, "  - kind: nonsense\n    amount: 1\n")
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_too_many_effects_rejected(self, tmp_path):
+        one = "  - kind: cc\n    type: stun\n    duration_ms: 1000\n"
+        res = self._run_ability(tmp_path, one * 7)
+        assert "SCHEMA" in codes(res.errors)
+
+
 @pytest.mark.integration
 class TestRepoContent:
     def test_repo_content_validates_clean(self):
