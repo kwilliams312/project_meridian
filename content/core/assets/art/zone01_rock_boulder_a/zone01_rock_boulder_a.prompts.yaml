@@ -1,0 +1,8 @@
+task_id: 019f5c4c-cfdc-7e87-b964-8bafd0414c3b
+model_version: meshy-5
+preview_task_id: 019f5c4b-7c87-7eed-a2da-a775c2c27ab5
+request:
+  mode: preview
+  prompt: natural boulder rock, game-ready, neutral greybox
+  ai_model: meshy-5
+  target_polycount: 16000

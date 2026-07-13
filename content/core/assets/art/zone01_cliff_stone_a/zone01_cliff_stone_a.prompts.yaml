@@ -1,0 +1,8 @@
+task_id: 019f5c50-1b57-7ce5-bdfc-d7178f95f687
+model_version: meshy-5
+preview_task_id: 019f5c4e-b5e5-7fa7-b9df-3eeb3de6cd04
+request:
+  mode: preview
+  prompt: stone cliff face module, game-ready, neutral greybox
+  ai_model: meshy-5
+  target_polycount: 16000

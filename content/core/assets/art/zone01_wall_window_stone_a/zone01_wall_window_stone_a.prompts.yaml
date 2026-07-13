@@ -1,0 +1,8 @@
+task_id: 019f5c39-6b40-7a52-9307-856be7387a15
+model_version: meshy-5
+preview_task_id: 019f5c38-c1d6-76db-8864-91f89d7f6b90
+request:
+  mode: preview
+  prompt: stone wall section with a window aperture, game-ready, neutral greybox
+  ai_model: meshy-5
+  target_polycount: 16000

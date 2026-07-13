@@ -1,0 +1,8 @@
+task_id: 019f5c47-0d3e-7c4d-b501-1a1abfd9cf4b
+model_version: meshy-5
+preview_task_id: 019f5c46-5007-7cdf-bc6e-0973f4d7c9ff
+request:
+  mode: preview
+  prompt: stone roof ceiling module, game-ready, neutral greybox
+  ai_model: meshy-5
+  target_polycount: 16000

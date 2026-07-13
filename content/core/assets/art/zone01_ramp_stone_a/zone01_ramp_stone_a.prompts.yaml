@@ -1,0 +1,8 @@
+task_id: 019f5c3d-ce55-783c-bd42-2eb3fcd2315c
+model_version: meshy-5
+preview_task_id: 019f5c3c-fbea-7a0c-b36c-defdf44a0c11
+request:
+  mode: preview
+  prompt: stone ramp slope traversal module, game-ready, neutral greybox
+  ai_model: meshy-5
+  target_polycount: 16000

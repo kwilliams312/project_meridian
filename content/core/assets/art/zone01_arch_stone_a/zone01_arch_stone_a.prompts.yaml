@@ -1,0 +1,8 @@
+task_id: 019f5c43-83d2-7ab4-b2c8-41d3af05975a
+model_version: meshy-5
+preview_task_id: 019f5c42-86c1-7c4c-af15-1d3b7329263b
+request:
+  mode: preview
+  prompt: freestanding stone arch module, game-ready, neutral greybox
+  ai_model: meshy-5
+  target_polycount: 16000

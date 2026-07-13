@@ -1,0 +1,8 @@
+task_id: 019f5c49-e02f-7d04-a49d-32333105626e
+model_version: meshy-5
+preview_task_id: 019f5c48-4138-794f-88b4-9e8bd0632c30
+request:
+  mode: preview
+  prompt: wooden barrel prop, game-ready, neutral greybox
+  ai_model: meshy-5
+  target_polycount: 16000

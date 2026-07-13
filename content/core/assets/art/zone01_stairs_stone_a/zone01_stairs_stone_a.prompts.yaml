@@ -1,0 +1,8 @@
+task_id: 019f5c40-e819-76c8-8e18-1b72a6a37569
+model_version: meshy-5
+preview_task_id: 019f5c3f-1d8e-78c0-87b7-a69d55f4fad9
+request:
+  mode: preview
+  prompt: stone staircase stair module, game-ready, neutral greybox
+  ai_model: meshy-5
+  target_polycount: 16000

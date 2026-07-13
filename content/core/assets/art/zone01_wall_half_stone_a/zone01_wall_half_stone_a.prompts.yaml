@@ -1,0 +1,9 @@
+task_id: 019f5c3b-c999-77a4-aa1b-575b93c9e222
+model_version: meshy-5
+preview_task_id: 019f5c3a-a61b-7aa4-b3d9-99253eb3a801
+request:
+  mode: preview
+  prompt: half-height low stone wall, roughly 1.5 meters tall, game-ready, neutral
+    greybox
+  ai_model: meshy-5
+  target_polycount: 16000
