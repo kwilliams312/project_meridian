@@ -39,6 +39,7 @@ while [ $# -gt 0 ]; do
     -h|--help)  grep '^#' "$0" | sed 's/^#\{1,\} \{0,1\}//'; exit 0 ;;
     *)          die "unknown arg: $1 (see --help)" ;;
   esac
+  shift   # consume the flag just handled (space-forms already shifted their value)
 done
 
 case "$TARGET" in
