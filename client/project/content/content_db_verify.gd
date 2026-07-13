@@ -42,6 +42,7 @@ func _initialize() -> void:
 	_check("staged core pack loads (res://meridian/core)", loaded and db.is_loaded())
 
 	_verify_catalog(db)
+	_verify_catalog_dolmen(db)
 	_verify_worn(db)
 	_verify_dye(db)
 	_verify_model_path(db)
@@ -62,6 +63,34 @@ func _verify_catalog(db) -> void:
 	_check("catalog is non-empty", not cat.is_empty())
 	_check("catalog.body_model is set", String(cat.get("body_model", "")) == "core:art.char.ardent.male.base")
 	_check("catalog.skeleton is set", String(cat.get("skeleton", "")) == "core:art.char.ardent.male.skeleton")
+	var presets: Dictionary = cat.get("presets", {})
+	_check("presets carry hair/face/skin lists",
+		presets.has("hair") and presets.has("face") and presets.has("skin"))
+	_check("hair presets are non-empty {id, model}",
+		not presets["hair"].is_empty()
+		and int(presets["hair"][0]["id"]) == 1
+		and not String(presets["hair"][0]["model"]).is_empty())
+
+
+# --- catalog(2, 0) — the dolmen/male catalog (Race #2 D3) ---------------------
+# The second race's catalog resolves to the DOLMEN body + skeleton (D1/D2), NOT
+# the Ardent ones — the ContentDB half of the D3 "catalog(2,0) → Dolmen body"
+# proof. Presets reuse the Ardent asset ids (no-key D3), so the preset SHAPE
+# matches ardent while the body/skeleton are dolmen-specific.
+func _verify_catalog_dolmen(db) -> void:
+	print(" catalog(2, 0) — dolmen male (MeridianRoster id 2, Race #2 D3):")
+	var cat: Dictionary = db.catalog(2, 0)
+	_check("dolmen catalog is non-empty", not cat.is_empty())
+	_check("catalog.body_model is the DOLMEN body (not ardent)",
+		String(cat.get("body_model", "")) == "core:art.char.dolmen.male.base")
+	_check("catalog.skeleton is the DOLMEN skeleton (not ardent)",
+		String(cat.get("skeleton", "")) == "core:art.char.dolmen.male.skeleton")
+	# The dolmen body differs from the ardent body — the model-per-race payoff.
+	_check("dolmen body_model differs from the ardent catalog's",
+		String(cat.get("body_model", "")) != String(db.catalog(1, 0).get("body_model", "")))
+	# The dolmen body id resolves to a staged res:// resource the assembler can load.
+	_check("dolmen body_model resolves to a staged res:// path",
+		db.model_path(String(cat.get("body_model", ""))).begins_with("res://meridian/"))
 	var presets: Dictionary = cat.get("presets", {})
 	_check("presets carry hair/face/skin lists",
 		presets.has("hair") and presets.has("face") and presets.has("skin"))
@@ -110,7 +139,7 @@ func _verify_model_path(db) -> void:
 # --- documented empty sentinels (spec §6 / contract ① §9) ---------------------
 func _verify_sentinels(db) -> void:
 	print(" empty sentinels (miss → documented default, never a crash):")
-	_check("catalog(unknown race) → {}", db.catalog(2, 0).is_empty())        # Dolmen: no catalog
+	_check("catalog(unknown race) → {}", db.catalog(3, 0).is_empty())        # Sylvane (id 3): no catalog yet
 	_check("worn(unknown item) → {}", db.worn(999999999).is_empty())
 	_check("dye_color(unknown) → Color(0,0,0,0)", db.dye_color(999999999) == Color(0, 0, 0, 0))
 	_check("model_path(unknown id) → ''", db.model_path("core:art.nope") == "")

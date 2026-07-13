@@ -114,3 +114,4 @@
 {"id":"core:item.iron_sword","numeric_id":114,"resource":"res://meridian/core/tables/item.bin","hash":"2d9b097598a857a486e9e67cc8feb21ae4b1d582a8be5d460b8cfaa60f7517c6"}
 {"id":"core:art.char.dolmen.male.skeleton","numeric_id":115,"resource":"res://meridian/core/art/char/dolmen/male/skeleton.scn","hash":"9d6983960b267e8c9570e674aac54629e92f3fdb833386773540e315998703d6"}
 {"id":"core:art.char.dolmen.male.base","numeric_id":116,"resource":"res://meridian/core/art/char/dolmen/male/base.scn","hash":"28271c0bddf4df4cc456598b4b9d8e2cc1c2e3560ebac090e79fa793eda65ad2"}
+{"id":"core:appearance.dolmen.male","numeric_id":117,"resource":"res://meridian/core/tables/appearance.bin","hash":"2d931e6bbf6993f302d2cc914feb7b21d9dbcc45934832aa5e1f48e4ad8137b4"}
