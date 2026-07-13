@@ -387,7 +387,10 @@ func _physics_process(delta: float) -> void:
 
 
 func _tick_local_player() -> void:
-	# WASD relative to the camera yaw (physical keys so no input-map dependency).
+	# WASD is relative to the VIEW / look direction (camera_yaw), not the
+	# character's committed facing: "forward" is always the way the camera points,
+	# and it follows BOTH right-click steer AND left-click orbit. Physical keys so
+	# there's no input-map dependency.
 	var key_w := Input.is_physical_key_pressed(KEY_W)
 	var key_s := Input.is_physical_key_pressed(KEY_S)
 	var key_d := Input.is_physical_key_pressed(KEY_D)
@@ -401,11 +404,12 @@ func _tick_local_player() -> void:
 
 	var yaw := 0.0
 	if _camera != null:
-		yaw = _camera.get_character_yaw()
-	# Rotate the local (strafe, forward) input into world axes by the facing yaw
-	# using Godot's own Y-rotation, so the move stays parallel to the visible Body
-	# (rotated to the same character_yaw) for ALL yaws — the #619 fix. Godot forward
-	# is -Z; a yaw of 0 faces -Z.
+		yaw = _camera.get_camera_yaw()  # the VIEW yaw — "forward = where you look"
+	# Rotate the local (strafe, forward) input into world axes by the VIEW yaw
+	# using Godot's own Y-rotation (Basis(UP, yaw) * v), so W drives along the
+	# camera's look direction and A/S/D are relative to it, for ALL yaws. The yaw
+	# is also reported as the facing so remotes see the character oriented toward
+	# where it moves/looks. Godot forward is -Z; a yaw of 0 faces -Z.
 	var move := MovementBasis.character_relative_move(fwd, strafe, yaw)
 
 	var intent: Dictionary = _mover.predict(move, false, false, yaw, _client_ms)
