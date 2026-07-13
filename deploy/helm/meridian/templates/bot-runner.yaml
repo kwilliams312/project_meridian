@@ -87,6 +87,7 @@ metadata:
 spec:
   serviceName: {{ $name }}
   replicas: {{ $br.count }}
+  revisionHistoryLimit: {{ $br.revisionHistoryLimit | default .Values.revisionHistoryLimit | default 3 }}
   # Parallel: bring all N bots up at once (they are independent accounts; no need
   # to serialise on the previous ordinal being Ready).
   podManagementPolicy: Parallel
