@@ -20,10 +20,14 @@ namespace {
 // spec §8). `attribute` (pack-contract spec §2.2) is the kernel-blessed base
 // stat vocabulary — a rules-data catalog that classifies + flows into the pck
 // but emits no world.sql this round (kernel formulas are sub-project 2).
+// `equip_type` (pack-contract spec §2.1) is the armor/weapon-type CATALOG
+// (rules-data referenced by items and, in sub-project 2, class proficiencies).
+// Like the other non-server-emitting types it classifies + flows into the client
+// pck but emits NO world.sql this round.
 // Mirrors validate_content.py's CONTENT_TYPES (the reference validator).
-constexpr std::array<std::string_view, 11> kContentTypes = {
+constexpr std::array<std::string_view, 12> kContentTypes = {
     "npc", "item", "quest", "ability", "loot", "vendor", "spawn", "zone",
-    "appearance", "dye", "attribute"};
+    "appearance", "dye", "attribute", "equip_type"};
 
 // Split `s` on '.' into its dot-separated parts.
 std::vector<std::string> split_dots(const std::string& s) {

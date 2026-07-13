@@ -4,6 +4,7 @@ name: Warden's Sabatons
 flavor_text: Iron-shod boots that grip wet stone and hot ash alike.
 item_class: armor
 subclass: plate
+equip_type: core:equip_type.plate
 slot: feet
 rarity: rare
 required_level: 10

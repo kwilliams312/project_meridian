@@ -1,0 +1,5 @@
+schema: meridian/equip_type@1
+id: core:equip_type.cloth
+name: Cloth
+description: The lightest armor material. Worn by casters who forgo protection for power.
+category: armor

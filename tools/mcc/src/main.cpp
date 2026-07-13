@@ -20,8 +20,10 @@
 
 #include "stages/check.h"
 #include "stages/chunk_emit.h"
+#include "stages/content_hash.h"
 #include "stages/format.h"
 #include "stages/index.h"
+#include "stages/pack_contract.h"
 #include "stages/stages.h"
 
 #ifndef MCC_VERSION
@@ -522,15 +524,56 @@ int cmd_fmt(const std::vector<std::string>& args) {
     return mcc::stages::fmt(path, check_only, std::cout, std::cerr);
 }
 
+// mcc diff <old-pack> <new-pack> [--json]
+//   Classify every change between two content packs (each a content root dir) as
+//   ADDITIVE (new ids, new optional fields) or BREAKING (removed/renumbered id,
+//   removed capability, changed id type) — spec §3. Breaking → non-zero exit +
+//   an actionable report naming the exact ids/fields; the report also flags a
+//   breaking diff that failed to bump compatibility_version (boot-gate contract).
 int cmd_diff(const std::vector<std::string>& args) {
-    if (args.size() != 2) {
-        std::cerr << kProg << " diff: expected two build arguments: "
-                  << "diff <buildA> <buildB>\n";
+    bool as_json = false;
+    std::vector<std::string> pos;
+    for (const auto& a : args) {
+        if (a == "--json" || a == "--diag-format=json") as_json = true;
+        else if (!a.empty() && a[0] == '-') {
+            std::cerr << kProg << " diff: unknown flag '" << a << "'\n";
+            return 2;
+        } else {
+            pos.push_back(a);
+        }
+    }
+    if (pos.size() != 2) {
+        std::cerr << kProg << " diff: expected two packs: "
+                  << "diff <old-pack> <new-pack> [--json]\n";
         return 2;
     }
-    std::cout << "stub: diff — compare two builds (" << args[0] << " vs "
-              << args[1] << ") at the manifest/artifact level (Tools PRD §2.2)\n";
-    return 0;
+    return mcc::stages::diff_packs(
+        pos[0], pos[1], as_json ? mcc::stages::DiagFormat::Json : mcc::stages::DiagFormat::Text,
+        std::cout, std::cerr);
+}
+
+// mcc content-hash [dir] [--json]
+//   Print the per-pack content_hash (the pack-level BLAKE3 over the canonicalized
+//   content set, spec §3) — the same digest emit-sql/emit-pck stamp into their
+//   manifests (three-way tie). Stable across runs; changes iff content changes.
+int cmd_content_hash(const std::vector<std::string>& args) {
+    bool as_json = false;
+    std::string content_dir(kDefaultContentDir);
+    bool have_dir = false;
+    for (const auto& a : args) {
+        if (a == "--json" || a == "--diag-format=json") as_json = true;
+        else if (!a.empty() && a[0] == '-') {
+            std::cerr << kProg << " content-hash: unknown flag '" << a << "'\n";
+            return 2;
+        } else if (!have_dir) {
+            content_dir = a;
+            have_dir = true;
+        } else {
+            std::cerr << kProg << " content-hash: unexpected extra argument '" << a << "'\n";
+            return 2;
+        }
+    }
+    return mcc::stages::content_hash_report(content_dir, as_json, std::cout, std::cerr);
 }
 
 int cmd_pack(const std::vector<std::string>&) {
@@ -600,7 +643,8 @@ const Command kCommands[] = {
     {"emit-pck",  "emit IF-5 client pack + pack.manifest.json (--out <dir>, --built-at)",       cmd_emit_pck},
     {"chunk-emit","emit a procedural N×N chunk fixture pack (IF-6) (--zone, --grid, --out)",     cmd_chunk_emit},
     {"fmt",       "canonically format /content YAML; --check for CI/pre-commit",       cmd_fmt},
-    {"diff",      "compare two builds: diff <buildA> <buildB>",                        cmd_diff},
+    {"diff",      "classify pack changes additive/breaking: diff <old> <new> [--json]", cmd_diff},
+    {"content-hash", "print the per-pack content_hash: content-hash [dir] [--json]",    cmd_content_hash},
     {"pack",      "build a signed .mcpack community pack + content hash",              cmd_pack},
     {"install",   "install a .mcpack into a realm: install <pack>",                    cmd_install},
     {"uninstall", "remove an installed pack from a realm: uninstall <pack>",           cmd_uninstall},
@@ -620,10 +664,10 @@ void print_help() {
            "  " << kProg << " <command> [args]\n"
            "  " << kProg << " --version | --help\n\n"
            "COMMANDS:\n";
-    // Longest command name is "uninstall" (9 chars); pad to a clean column.
+    // Longest command name is "content-hash" (12 chars); pad to a clean column.
     for (const auto& c : kCommands) {
         std::cout << "  " << c.name;
-        for (std::size_t i = c.name.size(); i < 11; ++i) std::cout << ' ';
+        for (std::size_t i = c.name.size(); i < 14; ++i) std::cout << ' ';
         std::cout << c.summary << '\n';
     }
     std::cout

@@ -4,6 +4,7 @@ name: Iron Sword
 flavor_text: A plain arming sword of forge-black iron — honest steel, no frills.
 item_class: weapon
 subclass: sword_1h
+equip_type: core:equip_type.one_hand
 slot: main_hand
 rarity: common
 required_level: 1

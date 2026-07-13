@@ -8,12 +8,13 @@
 #         --script res://scenes/login/login_screen_verify.gd --quit-after 120
 #
 # It proves, on a real device (the login scene loads the MeridianLogin GDExtension,
-# so a dummy/headless device would abort — see #283), that after #638:
+# so a dummy/headless device would abort — see #283), that after #645 (was #638):
 #   * login_screen.tscn instantiates and every control the flow wires is present
 #     (Host / Port / Account / Password / Login button / Status) with its defaults,
-#   * the scene root carries a scoped Theme raising default_font_size to 20 (up from
-#     Godot's default 16) so the screen reads comfortably in the #630 1728×972 window,
-#   * the form is a centered, sensibly-sized card (a fixed max-width, NOT edge-to-edge),
+#   * the scene root carries a scoped Theme raising default_font_size to 26 (up from
+#     Godot's default 16, and from #638's 20) so the screen reads comfortably in the
+#     #630 1728×972 window, with an even larger per-control Title font,
+#   * the form is a centered, substantially-sized card (a fixed size, NOT edge-to-edge),
 #   * under the project `canvas_items`/`expand` stretch the canvas scale tracks the
 #     window size on resize (base 1.0, larger >1.0, smaller <1.0) — same behavior #630
 #     established — and a screenshot is written as evidence.
@@ -24,7 +25,8 @@ extends SceneTree
 
 const LOGIN_SCENE := "res://scenes/login/login_screen.tscn"
 const BASE := Vector2(1728, 972)   # #630 base viewport (project.godot [display]).
-const EXPECTED_FONT_SIZE := 20     # #638 scoped Theme default_font_size.
+const EXPECTED_FONT_SIZE := 26     # #645 scoped Theme default_font_size (was 20 in #638).
+const EXPECTED_TITLE_FONT_SIZE := 42  # #645 per-control Title font override (> default).
 
 var _fails := 0
 var _frame := 0
@@ -39,7 +41,7 @@ func _check(name: String, ok: bool) -> void:
 
 
 func _initialize() -> void:
-	print("meridian login-screen sizing verify (#638)")
+	print("meridian login-screen sizing verify (#645)")
 
 	# --- The scene resource loads + instantiates (drives login_screen.gd::_ready,
 	#     which constructs LoginFlow via the C++ GDExtension). ---
@@ -72,10 +74,10 @@ func _initialize() -> void:
 	_check("LoginButton present", login_button != null)
 	_check("StatusLabel present", status != null)
 
-	# --- The scoped Theme raises the font size for this scene only (#638). ---
+	# --- The scoped Theme raises the font size for this scene only (#645). ---
 	var theme := scene.theme
 	_check("scene root carries a scoped Theme", theme != null)
-	_check("Theme default_font_size == %d (up from Godot's 16)" % EXPECTED_FONT_SIZE,
+	_check("Theme default_font_size == %d (up from Godot's 16, and #638's 20)" % EXPECTED_FONT_SIZE,
 		theme != null and theme.default_font_size == EXPECTED_FONT_SIZE)
 	# The larger size actually cascades to a control in this scene. A control with no
 	# explicit per-type font_size override (as here) draws at the theme's DEFAULT font
@@ -83,17 +85,32 @@ func _initialize() -> void:
 	if login_button != null:
 		_check("Login button cascades the enlarged default font size (>=%d)" % EXPECTED_FONT_SIZE,
 			login_button.get_theme_default_font_size() >= EXPECTED_FONT_SIZE)
+	# #645: the Title carries a per-control font override larger than the field default,
+	# so the heading reads bigger than the form rows (get_theme_font_size("font_size")
+	# resolves the Label's own override, not the theme default).
+	var title: Label = scene.get_node_or_null("VBox/Title")
+	_check("Title present", title != null)
+	if title != null:
+		var title_size := title.get_theme_font_size("font_size")
+		_check("Title font (%d) == the #645 heading size %d" % [title_size, EXPECTED_TITLE_FONT_SIZE],
+			title_size == EXPECTED_TITLE_FONT_SIZE)
+		_check("Title font is larger than the field default (%d > %d)" % [title_size, EXPECTED_FONT_SIZE],
+			title_size > EXPECTED_FONT_SIZE)
 
-	# --- The form is a centered, fixed max-width card — not stretched edge-to-edge. ---
+	# --- The form is a centered, substantially-sized card — NOT stretched edge-to-edge.
+	#     #645 grew it to 900×620 (~52% wide, ~64% tall of the 1728×972 base). The bounds
+	#     below assert it is BOTH large enough to fill a comfortable share of the window AND
+	#     still bounded well inside it (a clear margin on every side), so it can neither
+	#     regress to the tiny #638 card nor sprawl edge-to-edge. ---
 	var card: Control = scene.get_node_or_null("%VBox")
 	_check("login card (VBox) present", card != null)
 	if card != null:
 		var w := card.offset_right - card.offset_left
 		var h := card.offset_bottom - card.offset_top
-		_check("card has a bounded max-width (300–640px, not edge-to-edge): %d" % int(w),
-			w >= 300.0 and w <= 640.0)
-		_check("card is a fixed-size centered box (grown for the bigger fonts): %dx%d" % [int(w), int(h)],
-			w >= 400.0 and h >= 300.0)
+		_check("card is substantially large (>=800×520, comfortably fills the window): %dx%d" % [int(w), int(h)],
+			w >= 800.0 and h >= 520.0)
+		_check("card stays bounded inside the window with a clear margin (w<=70%%, h<=80%% of base): %dx%d" % [int(w), int(h)],
+			w <= BASE.x * 0.70 and h <= BASE.y * 0.80)
 		_check("card centered on the viewport (anchor 0.5)",
 			is_equal_approx(card.anchor_left, 0.5) and is_equal_approx(card.anchor_top, 0.5))
 
@@ -120,7 +137,7 @@ func _process(_delta: float) -> bool:
 	#     before any resizing, so the capture is of a clean, fully-drawn frame. ---
 	var win := get_root()
 	var img: Image = win.get_texture().get_image()
-	var shot := "user://login_screen_638.png"
+	var shot := "user://login_screen_645.png"
 	var wrote := img != null and img.save_png(shot) == OK
 	_check("screenshot written (%s)" % shot, wrote)
 	if wrote:

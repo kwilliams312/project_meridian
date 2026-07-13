@@ -1213,6 +1213,16 @@ attribute_mods:
     value: 3
 """
 
+CLEAN_IDMAP = """\
+schema: meridian/idmap@1
+namespace: tp
+band: 0
+released_watermark: 0
+map:
+  tp:npc.dummy: 1
+  tp:zone.z1: 2
+"""
+
 
 @pytest.mark.unit
 class TestAttributeSchema:
@@ -1358,6 +1368,376 @@ class TestAttributeMods:
         )
         res = validate(content, sdir, "ignore")
         assert res.errors == [], res.errors
+
+
+@pytest.mark.unit
+class TestL016AppendOnly:
+    """L016 — idmap.lock append-only discipline: an id never changes meaning, ids
+    are never renumbered/reused (spec §3, formalizes the roster.h rule as a lint)."""
+
+    def test_clean_idmap_passes(self, tmp_path):
+        res = run(
+            tmp_path, {"tp/idmap.lock": CLEAN_IDMAP, "tp/npcs/dummy.npc.yaml": NPC}
+        )
+        assert "L016" not in codes(res.errors), res.errors
+
+    def test_renumber_collision_is_error(self, tmp_path):
+        # A renumber that lands an id on an index another id already owns: the
+        # canonical footprint of a hand-edited renumber. Two ids share index 1.
+        idmap = CLEAN_IDMAP.replace("tp:zone.z1: 2", "tp:zone.z1: 1")
+        res = run(tmp_path, {"tp/idmap.lock": idmap})
+        assert "L016" in codes(res.errors), res.errors
+        joined = " ".join(res.errors)
+        assert "tp:npc.dummy" in joined and "tp:zone.z1" in joined
+
+    def test_reuse_of_retired_index_is_error(self, tmp_path):
+        idmap = CLEAN_IDMAP + "retired:\n  tp:npc.old: 1\n"
+        res = run(tmp_path, {"tp/idmap.lock": idmap})
+        # index 1 is live (npc.dummy) but also frozen in retired (npc.old): reuse.
+        assert "L016" in codes(res.errors), res.errors
+        assert "tp:npc.dummy" in " ".join(e for e in res.errors if "L016" in e)
+
+    def test_id_in_both_map_and_retired_is_error(self, tmp_path):
+        idmap = CLEAN_IDMAP + "retired:\n  tp:npc.dummy: 9\n"
+        res = run(tmp_path, {"tp/idmap.lock": idmap})
+        assert "L016" in codes(res.errors), res.errors
+
+    def test_reserved_zero_index_is_error(self, tmp_path):
+        idmap = CLEAN_IDMAP.replace("tp:zone.z1: 2", "tp:zone.z1: 0")
+        res = run(tmp_path, {"tp/idmap.lock": idmap})
+        assert "L016" in codes(res.errors), res.errors
+
+
+@pytest.mark.unit
+class TestEquipType:
+    """meridian/equip_type@1 — the armor/weapon-type catalog + item.equip_type
+    integration (spec §2.1). One valid fixture per category; each negative case
+    copies it and mutates one field, per the one-negative-fixture-per-lint
+    convention (Tools PRD §11.1)."""
+
+    # A valid armor equip_type catalog entry.
+    ARMOR_OK = """\
+    schema: meridian/equip_type@1
+    id: tp:equip_type.plate
+    name: Plate
+    description: Heavy metal plate armor.
+    category: armor
+    slot_class: chest
+    """
+
+    # A valid weapon equip_type catalog entry.
+    WEAPON_OK = """\
+    schema: meridian/equip_type@1
+    id: tp:equip_type.one_hand
+    name: One-Hand
+    category: weapon
+    slot_class: main
+    """
+
+    # An item@2 weapon that references an equip_type id (worn/attach kept valid so
+    # the L080/L081 gate does not fire and mask the equip_type behaviour under test).
+    ITEM_WITH_EQUIP_TYPE = """\
+    schema: meridian/item@2
+    id: tp:item.sword
+    name: Sword
+    item_class: weapon
+    slot: main_hand
+    rarity: common
+    equip_type: equip_type.one_hand
+    weapon: { damage: { min: 1, max: 2 }, speed_ms: 2000 }
+    visual:
+      icon: art.ui.icon.sword
+      worn:
+        models: [{ model: art.weapon.tp.sword, mirror: none }]
+        attach: { socket: main_hand, sheath_socket: hip_l }
+    """
+
+    def test_armor_equip_type_valid_passes(self, tmp_path):
+        res = run(tmp_path, {"tp/equip_types/plate.equip_type.yaml": self.ARMOR_OK})
+        assert res.errors == []
+
+    def test_weapon_equip_type_valid_passes(self, tmp_path):
+        res = run(tmp_path, {"tp/equip_types/one_hand.equip_type.yaml": self.WEAPON_OK})
+        assert res.errors == []
+
+    def test_item_referencing_equip_type_resolves(self, tmp_path):
+        # The equip_type entity is defined, so the item's equip_type ref resolves.
+        res = run(
+            tmp_path,
+            {
+                "tp/equip_types/one_hand.equip_type.yaml": self.WEAPON_OK,
+                "tp/items/sword.item.yaml": self.ITEM_WITH_EQUIP_TYPE,
+            },
+        )
+        assert res.errors == []
+
+    def test_item_without_equip_type_still_valid(self, tmp_path):
+        # equip_type is additive/optional — an item omitting it stays valid (back-compat).
+        item = self.ITEM_WITH_EQUIP_TYPE.replace(
+            "    equip_type: equip_type.one_hand\n", ""
+        )
+        res = run(tmp_path, {"tp/items/sword.item.yaml": item})
+        assert res.errors == []
+
+    def test_dangling_equip_type_ref_rejected_L011(self, tmp_path):
+        # The item references an equip_type id that no entity defines — L011.
+        res = run(tmp_path, {"tp/items/sword.item.yaml": self.ITEM_WITH_EQUIP_TYPE})
+        assert "L011" in codes(res.errors)
+
+    def test_unknown_category_fails_schema(self, tmp_path):
+        # category is enum [armor, weapon]; anything else fails schema validation.
+        bad = self.ARMOR_OK.replace("category: armor", "category: trinket")
+        res = run(tmp_path, {"tp/equip_types/plate.equip_type.yaml": bad})
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_missing_category_fails_schema(self, tmp_path):
+        bad = self.ARMOR_OK.replace("    category: armor\n", "")
+        res = run(tmp_path, {"tp/equip_types/plate.equip_type.yaml": bad})
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_slot_class_optional(self, tmp_path):
+        # slot_class is informational/optional — omitting it is valid.
+        entry = self.ARMOR_OK.replace("    slot_class: chest\n", "")
+        res = run(tmp_path, {"tp/equip_types/plate.equip_type.yaml": entry})
+        assert res.errors == []
+
+    def test_id_wrong_type_segment_fails_schema(self, tmp_path):
+        # The strict equipTypeId pattern requires an `equip_type.` type segment, so a
+        # mismatched id (e.g. `item.`) is rejected at the SCHEMA layer — a stronger
+        # guarantee than the generic L003 the shared contentId leans on.
+        bad = self.ARMOR_OK.replace("id: tp:equip_type.plate", "id: tp:item.plate")
+        res = run(tmp_path, {"tp/equip_types/plate.equip_type.yaml": bad})
+        assert "SCHEMA" in codes(res.errors)
+
+
+@pytest.mark.unit
+class TestAbilityEffectPalette:
+    """Story #653 (SP1.3) — the extended Tier-1 effect-primitive palette.
+
+    Every new kind must validate on a well-formed sample, and a malformed effect
+    (bad enum, missing required field, unknown property, bad attribute ref, or
+    too many effects) must be rejected with a SCHEMA error. The pre-existing
+    damage/heal/aura/threat kinds must keep validating unchanged.
+    """
+
+    # An NPC the `summon` sample can resolve against (L011).
+    SUMMON_NPC = NPC.replace("id: tp:npc.dummy", "id: tp:npc.imp")
+
+    @staticmethod
+    def _attr(name: str, kind: str = "primary") -> str:
+        """A minimal meridian/attribute@1 entity the buff/debuff samples resolve
+        against (L011): with story 1.2's attribute schema merged, an effect's
+        `attribute` ref is now a resolvable content ref, so the referenced
+        attribute entity must exist in the tree."""
+        return (
+            "schema: meridian/attribute@1\n"
+            f"id: tp:attribute.{name}\n"
+            f"name: {name.title()}\n"
+            f"kind: {kind}\n"
+        )
+
+    @staticmethod
+    def _ability(effects_block: str) -> str:
+        """Wrap an `effects:` YAML block into a complete, otherwise-valid ability."""
+        return (
+            "schema: meridian/ability@1\n"
+            "id: tp:ability.sample\n"
+            "name: Sample\n"
+            "target: enemy\n"
+            "school: fire\n"
+            "effects:\n" + effects_block
+        )
+
+    def _run_ability(self, tmp_path, effects_block, extra=None):
+        files = {"tp/abilities/sample.ability.yaml": self._ability(effects_block)}
+        if extra:
+            files.update(extra)
+        return run(tmp_path, files)
+
+    # --- positive: each new kind validates -------------------------------
+
+    def test_dot_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: dot\n"
+            "    amount: { min: 3, max: 5 }\n"
+            "    duration_ms: 6000\n"
+            "    tick_ms: 2000\n",
+        )
+        assert res.errors == []
+
+    def test_hot_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: hot\n"
+            "    amount: { min: 4, max: 6 }\n"
+            "    duration_ms: 9000\n"
+            "    tick_ms: 3000\n"
+            "    max_stacks: 3\n",
+        )
+        assert res.errors == []
+
+    def test_buff_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: buff\n"
+            "    attribute: tp:attribute.strength\n"
+            "    amount: 10\n"
+            "    modifier: flat\n"
+            "    duration_ms: 30000\n",
+            extra={"tp/attributes/strength.attribute.yaml": self._attr("strength")},
+        )
+        assert res.errors == []
+
+    def test_debuff_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: debuff\n"
+            "    attribute: tp:attribute.agility\n"
+            "    amount: -15\n"
+            "    modifier: percent\n"
+            "    duration_ms: 12000\n",
+            extra={"tp/attributes/agility.attribute.yaml": self._attr("agility")},
+        )
+        assert res.errors == []
+
+    def test_shield_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: shield\n"
+            "    amount: { min: 200, max: 200 }\n"
+            "    duration_ms: 10000\n",
+        )
+        assert res.errors == []
+
+    def test_cc_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: cc\n    type: stun\n    duration_ms: 4000\n",
+        )
+        assert res.errors == []
+
+    def test_resource_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: resource\n"
+            "    pool: mana\n"
+            "    operation: drain\n"
+            "    amount: 300\n",
+        )
+        assert res.errors == []
+
+    def test_movement_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: movement\n    motion: knockback\n    distance_m: 8\n",
+        )
+        assert res.errors == []
+
+    def test_summon_valid(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: summon\n    npc: npc.imp\n    count: 2\n    duration_ms: 60000\n",
+            extra={"tp/npcs/imp.npc.yaml": self.SUMMON_NPC},
+        )
+        assert res.errors == []
+
+    def test_existing_kinds_still_validate(self, tmp_path):
+        # Regression: damage + aura (with periodic + stat_mods) + threat unchanged.
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: damage\n    amount: { min: 8, max: 13 }\n    coefficient: 0.5\n"
+            "  - kind: aura\n    duration_ms: 9000\n"
+            "    periodic: { kind: damage, amount: { min: 2, max: 3 }, tick_ms: 3000 }\n"
+            "    stat_mods: [{ stat: strength, amount: 5 }]\n"
+            "  - kind: threat\n    amount: 100\n",
+        )
+        assert res.errors == []
+
+    def test_five_effect_kit_valid_after_maxitems_bump(self, tmp_path):
+        # A signature ability chaining 5 primitives — proves the maxItems bump.
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: damage\n    amount: { min: 10, max: 15 }\n"
+            "  - kind: dot\n    amount: { min: 2, max: 3 }\n    duration_ms: 6000\n    tick_ms: 2000\n"
+            "  - kind: debuff\n    attribute: tp:attribute.stamina\n    amount: -10\n    modifier: flat\n    duration_ms: 8000\n"
+            "  - kind: cc\n    type: stun\n    duration_ms: 2000\n"
+            "  - kind: movement\n    motion: knockback\n    distance_m: 6\n",
+            extra={"tp/attributes/stamina.attribute.yaml": self._attr("stamina")},
+        )
+        assert res.errors == []
+
+    # --- negative: malformed effects are rejected ------------------------
+
+    def test_cc_bad_type_rejected(self, tmp_path):
+        res = self._run_ability(
+            tmp_path, "  - kind: cc\n    type: freeze\n    duration_ms: 4000\n"
+        )
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_cc_missing_duration_rejected(self, tmp_path):
+        res = self._run_ability(tmp_path, "  - kind: cc\n    type: stun\n")
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_buff_missing_attribute_rejected(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: buff\n    amount: 10\n    modifier: flat\n    duration_ms: 30000\n",
+        )
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_buff_bad_attribute_ref_rejected(self, tmp_path):
+        # `strength` is not a namespaced attribute id (needs the `attribute.` type).
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: buff\n    attribute: strength\n    amount: 10\n"
+            "    modifier: flat\n    duration_ms: 30000\n",
+        )
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_resource_bad_operation_rejected(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: resource\n    pool: mana\n    operation: steal\n    amount: 300\n",
+        )
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_resource_bad_pool_rejected(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: resource\n    pool: focus\n    operation: drain\n    amount: 300\n",
+        )
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_movement_bad_motion_rejected(self, tmp_path):
+        res = self._run_ability(
+            tmp_path, "  - kind: movement\n    motion: teleport\n    distance_m: 8\n"
+        )
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_dot_missing_tick_rejected(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: dot\n    amount: { min: 3, max: 5 }\n    duration_ms: 6000\n",
+        )
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_unknown_property_rejected(self, tmp_path):
+        res = self._run_ability(
+            tmp_path,
+            "  - kind: shield\n    amount: { min: 1, max: 1 }\n"
+            "    duration_ms: 1000\n    bogus_field: 1\n",
+        )
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_unknown_kind_rejected(self, tmp_path):
+        res = self._run_ability(tmp_path, "  - kind: nonsense\n    amount: 1\n")
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_too_many_effects_rejected(self, tmp_path):
+        one = "  - kind: cc\n    type: stun\n    duration_ms: 1000\n"
+        res = self._run_ability(tmp_path, one * 7)
+        assert "SCHEMA" in codes(res.errors)
 
 
 @pytest.mark.integration

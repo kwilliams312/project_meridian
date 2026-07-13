@@ -4,6 +4,7 @@ name: Warden's Pauldrons
 flavor_text: Twin plates that shrug off a kobold's overhand as if it were rain.
 item_class: armor
 subclass: plate
+equip_type: core:equip_type.plate
 slot: shoulders
 rarity: rare
 required_level: 10

@@ -1,0 +1,5 @@
+schema: meridian/equip_type@1
+id: core:equip_type.mail
+name: Mail
+description: Interlocking metal rings. Solid protection without the weight of plate.
+category: armor

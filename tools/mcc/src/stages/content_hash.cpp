@@ -11,6 +11,9 @@
 #include <vector>
 
 #include "hash/blake3.h"
+#include "stages/diagnostics.h"
+#include "stages/discover.h"
+#include "stages/parse.h"
 
 namespace mcc::stages {
 
@@ -65,6 +68,31 @@ std::map<std::string, std::string> compute_pack_hashes(const model::ContentModel
     std::map<std::string, std::string> out;
     for (const auto& [ns, h] : running) out[ns] = h.hex();
     return out;
+}
+
+int content_hash_report(const std::string& content_dir, bool as_json, std::ostream& out,
+                        std::ostream& err) {
+    model::ContentModel model;
+    if (!discover(content_dir, model)) {
+        err << "mcc content-hash: content directory not found: " << content_dir << '\n';
+        return 2;
+    }
+    diag::Diagnostics throwaway;  // hash the tree as parsed; diagnostics are check's job
+    parse(model, throwaway);
+
+    const std::map<std::string, std::string> hashes = compute_pack_hashes(model);
+    if (as_json) {
+        out << "{\n  \"schema\": \"meridian/content-hash@1\",\n  \"packs\": {";
+        bool first = true;
+        for (const auto& [ns, hex] : hashes) {
+            out << (first ? "\n" : ",\n") << "    \"" << ns << "\": \"" << hex << "\"";
+            first = false;
+        }
+        out << (first ? "" : "\n") << "  }\n}\n";
+    } else {
+        for (const auto& [ns, hex] : hashes) out << ns << "  " << hex << "\n";
+    }
+    return 0;
 }
 
 }  // namespace mcc::stages

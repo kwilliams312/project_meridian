@@ -209,6 +209,12 @@ _CONTENT_REF_DEFS = {
     "vendorRef": "vendor",
     "zoneRef": "zone",
     "contentId": "content",  # the file's own fully-qualified id
+    # equip_type (pack-contract spec §2.1) is a new content type whose ref defs
+    # live locally in their schema files (not common.defs.yaml, owned by a sibling
+    # story). equipTypeId is the equip_type entity's own id (generic self-id, like
+    # contentId); equipTypeRef is a reference to an equip_type (e.g. item.equip_type).
+    "equipTypeId": "content",
+    "equipTypeRef": "equip_type",
 }
 _ASSET_REF_DEFS = {
     "artRef": "art",
