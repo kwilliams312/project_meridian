@@ -1,0 +1,5 @@
+schema: meridian/equip_type@1
+id: core:equip_type.leather
+name: Leather
+description: Supple hide armor. A balance of mobility and protection for skirmishers.
+category: armor

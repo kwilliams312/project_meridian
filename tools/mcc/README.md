@@ -7,7 +7,7 @@ x64 and Linux x64 from one CMake tree.
 **Contract:** [Tools SAD §2](../../docs/sad/tools-sad.md) · **Schemas:** [`/schema/content`](../../schema/content)
 
 Pipeline is a DAG of pure stages: `discover/parse → validate → link → bake → emit-sql / emit-pck`.
-CLI (v1): `mcc build [--full|--watch] | check | fmt | diff | pack | install | uninstall | migrate | idmap verify|reassign`.
+CLI (v1): `mcc build [--full|--watch] | check | fmt | diff | content-hash | pack | install | uninstall | migrate | idmap verify|reassign`.
 
 Determinism is a hard requirement — same source + same `mcc` ⇒ byte-identical SQL and
 content-identical `.pck` (double-build hash-compared in CI).
@@ -91,6 +91,7 @@ ignore unknown keys.
 | `L003` | id type segment == the file's schema type |
 | `L010` | no duplicate ids across the tree |
 | `L011` | every content ref (`npc.`/`item.`/…) resolves to a defined id |
+| `L016` | `idmap.lock` append-only discipline (spec §3): no renumber collision, no reuse of a retired index, no dual `map`/`retired` listing, no reserved index 0 |
 
 `mcc check` and `validate_content.py` produce **identical** messages on these rules
 (verified message-for-message on schema-valid fixtures).
@@ -143,6 +144,23 @@ chars — exactly the shape `worldd`'s `verify_world_manifest` accepts
 (`kContentHashHexLen = 64`, `schema_version == kSupportedContentSchemaVersion = 1`).
 BLAKE3 is **vendored** (`src/hash/blake3.{h,cpp}`, no external hashing dep, SAD
 §2.6 decision table) and byte-verified against the published BLAKE3 test vectors.
+
+`mcc content-hash [dir] [--json]` surfaces this **per-pack digest** directly on
+stdout (`<namespace>  <64-hex>` lines, or a JSON object) — the same value
+emit-sql/emit-pck stamp into their manifests (the three-way tie). Because the pack
+manifest is part of the hashed tree, any pack-field change — including the new
+`compatibility_version` / `theme` — flows into it. Stable across runs; changes iff
+content changes (the client↔server agreement token, pack-contract spec §3).
+
+**diff** (`mcc diff <old-pack> <new-pack> [--json]`, pack-contract spec §3) —
+classifies every change between two content packs as **ADDITIVE** (new ids, new
+optional fields) or **BREAKING** (a removed id, a renumbered id — its `idmap.lock`
+local index changed, a removed field/capability, or a changed id type). A breaking
+diff exits **non-zero** with an actionable report naming the exact ids/fields, and
+flags a breaking change that failed to bump `compatibility_version` (the boot-gate
+contract: a realm records the `compatibility_version` it booted with and refuses a
+higher-with-breaking pack until an operator migration runs — enforced in
+sub-project 2). Additive diffs exit 0.
 
 **chunk-emit** (Tools SAD §3, IF-6, #553) — emits a **procedural Zone-01 fixture
 pack**: the v0 slice of the real mcc chunk stage in *fixture mode*, so client

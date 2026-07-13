@@ -128,6 +128,7 @@ add_library(mcc_stages STATIC
     src/stages/link.cpp
     src/stages/index.cpp
     src/stages/content_hash.cpp
+    src/stages/pack_contract.cpp
     src/stages/emit_sql.cpp
     src/stages/emit_pck.cpp
     src/stages/chunk_emit.cpp
@@ -269,6 +270,24 @@ else()
 endif()
 
 add_test(NAME mcc-index-unit COMMAND mcc-index-tests)
+
+# pack-contract tests (SAD §2.4, pack-contract spec §3, story #654): the idmap
+# append-only lint (L016 — a clean lock passes; a renumber collision, a retired-
+# index reuse, a dual map/retired listing, and a reserved index 0 each fail), the
+# `mcc diff` breaking-change classifier (additive edit -> additive + exit 0; a
+# removed/renumbered id or removed field -> breaking + exit 1 + the exact id/field
+# named; a breaking diff with no compatibility_version bump flagged), and the
+# pack content_hash (stable across runs; changes iff content changes).
+add_executable(mcc-pack-contract-tests
+    tests/test_pack_contract.cpp)
+target_link_libraries(mcc-pack-contract-tests PRIVATE mcc_stages)
+if(MSVC)
+    target_compile_options(mcc-pack-contract-tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(mcc-pack-contract-tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_test(NAME mcc-pack-contract-unit COMMAND mcc-pack-contract-tests)
 
 # emit-sql stage + vendored BLAKE3 tests (SAD §2.6, IF-4): BLAKE3 correctness vs
 # published vectors, well-formed world DB SQL + a world_manifest row (64-hex

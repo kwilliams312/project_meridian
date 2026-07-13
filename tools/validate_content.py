@@ -11,6 +11,9 @@ Validates every YAML file under /content against the JSON Schemas in
   L004   intRange min <= max (JSON Schema cannot express this)
   L010   no duplicate ids across the content tree
   L011   every content reference (npc./item./quest./...) resolves to a defined id
+  L016   idmap.lock append-only discipline (spec §3): an id never changes meaning —
+         no renumber collision, no reuse of a retired index, no dual map/retired
+         listing, no reserved index 0 (kept in parity with tools/mcc's idmap scan)
   L020   every asset reference (art./mus./sfx./amb.) resolves to an IF-8 sidecar
          (severity via --assets: warn [default] | error | ignore — interim posture
          per Tools SAD §4.3 until the first art drop)
@@ -102,6 +105,7 @@ CONTENT_TYPES = (
     "zone",
     "appearance",
     "dye",
+    "equip_type",
 )
 ASSET_PREFIXES = ("art", "mus", "sfx", "amb")
 
@@ -222,7 +226,7 @@ ASSET_BUDGETS: dict[str, dict[str, tuple[int, str]]] = {
 }
 REF_RE = re.compile(
     r"^(?:([a-z][a-z0-9_]{1,31}):)?"
-    r"((npc|item|quest|ability|loot|vendor|spawn|zone)\.[a-z0-9_]+(?:\.[a-z0-9_]+)*)$"
+    r"((npc|item|quest|ability|loot|vendor|spawn|zone|equip_type)\.[a-z0-9_]+(?:\.[a-z0-9_]+)*)$"
 )
 ASSET_RE = re.compile(
     r"^(?:([a-z][a-z0-9_]{1,31}):)?((art|mus|sfx|amb)\.[a-z0-9_]+(?:\.[a-z0-9_]+)*)$"
@@ -601,6 +605,88 @@ def check_appearance_presets(doc: dict, rel_path: Path) -> list[str]:
     return errors
 
 
+def check_idmap_append_only(content_dir: Path, root: Path) -> list[str]:
+    """L016 — idmap.lock append-only discipline (Tools SAD §2.4, spec §3).
+
+    Within a namespace's idmap.lock an id NEVER changes meaning: ids are
+    append-only, indices are never renumbered or reused. This formalizes the
+    roster.h "append-only, never renumber" rule as a content lint (kept in parity
+    with tools/mcc's idmap_append_only scan). Pure single-file invariants over the
+    committed lock — the clean corpus passes, a hand-edited renumber/reuse fails:
+
+      * a local index assigned to two distinct live ids (a renumber collision —
+        the footprint of renumbering one id onto another's slot);
+      * a live `map` index that reuses an index frozen in `retired` (a retired
+        index is never reallocated, SAD §2.4 "Retirement");
+      * an id listed in both `map` and `retired`;
+      * index 0 (reserved as the null/unset id).
+    """
+    errors: list[str] = []
+
+    def rel(path: Path) -> Path:
+        try:
+            return path.relative_to(root)
+        except ValueError:
+            return path
+
+    for lock_path in sorted(content_dir.rglob("idmap.lock")):
+        try:
+            doc = yaml.safe_load(lock_path.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            errors.append(f"L016 {rel(lock_path)}: invalid YAML")
+            continue
+        if not isinstance(doc, dict):
+            errors.append(f"L016 {rel(lock_path)}: idmap.lock is not a YAML mapping")
+            continue
+        r = rel(lock_path)
+        live = doc.get("map") or {}
+        retired = doc.get("retired") or {}
+        if not isinstance(live, dict) or not isinstance(retired, dict):
+            errors.append(f"L016 {r}: `map`/`retired` must be mappings")
+            continue
+
+        # Index 0 is reserved (null/unset); no entry may claim it.
+        for section, entries in (("map", live), ("retired", retired)):
+            for entry_id, idx in entries.items():
+                if idx == 0:
+                    errors.append(
+                        f"L016 {r}: {section} id '{entry_id}' uses reserved index 0 "
+                        f"(0 is the null/unset id, SAD §2.4)"
+                    )
+
+        # A local index assigned to two distinct live ids — a renumber collision.
+        by_index: dict[int, str] = {}
+        for entry_id in sorted(live):
+            idx = live[entry_id]
+            if idx in by_index:
+                errors.append(
+                    f"L016 {r}: local index {idx} is assigned to both "
+                    f"'{by_index[idx]}' and '{entry_id}' — ids are append-only and "
+                    f"never renumbered/reused (SAD §2.4)"
+                )
+            else:
+                by_index[idx] = entry_id
+
+        # A retired index reallocated to a live id (never reuse a retired slot).
+        retired_indices = {idx: rid for rid, idx in retired.items()}
+        for entry_id in sorted(live):
+            idx = live[entry_id]
+            if idx in retired_indices:
+                errors.append(
+                    f"L016 {r}: local index {idx} for live id '{entry_id}' reuses a "
+                    f"retired index (was '{retired_indices[idx]}') — retired indices "
+                    f"are frozen forever (SAD §2.4)"
+                )
+
+        # An id in both map and retired is contradictory (live and retired at once).
+        for entry_id in sorted(set(live) & set(retired)):
+            errors.append(
+                f"L016 {r}: id '{entry_id}' appears in both `map` and `retired`"
+            )
+
+    return errors
+
+
 def validate(
     content_dir: Path,
     schema_dir: Path,
@@ -887,6 +973,9 @@ def validate(
         imp = validate_imports.validate(content_dir, presets, imports_mode)
         res.errors.extend(imp.errors)
         res.warnings.extend(imp.warnings)
+
+    # L016 — idmap.lock append-only discipline (spec §3; parity with mcc).
+    res.errors.extend(check_idmap_append_only(content_dir, root))
 
     res.stats = {
         "files": len(files),

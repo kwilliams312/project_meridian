@@ -19,6 +19,34 @@ properties:
   content_schema_version:
     description: Major schema version this pack is authored against.
     const: 1
+  compatibility_version:
+    description: >-
+      Pack CONTRACT version — distinct from the semver `version`. Bumps ONLY on a
+      breaking (non-additive) id change (a removed/renumbered id or removed
+      capability, per the §3 breaking-change rules `mcc diff` classifies). Additive
+      changes (new ids, new optional fields) never bump it. A realm records the
+      value it booted with; a higher pack with a breaking diff refuses to boot until
+      an operator migration runs (boot-gate contract, enforced in sub-project 2).
+      Optional at rest — an absent value is treated as the baseline 1.
+    type: integer
+    minimum: 1
+  theme:
+    description: >-
+      Thin theme metadata (sub-project 1 slice). The full UI-theme/audio manifest
+      folding + realm selection lands in sub-project 4; here it is display-only.
+    type: object
+    additionalProperties: false
+    properties:
+      display_name:
+        description: Human-facing theme name shown in a realm/pack picker.
+        $ref: "#/$defs/displayName"
+      tagline:
+        description: One-line theme tagline.
+        type: string
+        maxLength: 200
+      preview_asset:
+        description: Optional art-registry id for a preview image.
+        $ref: "#/$defs/artRef"
   engine:
     description: Engine pin — .pck packs are validated against this Godot version (Tools PRD R8).
     type: object

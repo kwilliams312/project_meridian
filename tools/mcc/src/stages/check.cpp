@@ -6,6 +6,7 @@
 #include <chrono>
 #include <filesystem>
 #include <functional>
+#include <sstream>
 #include <system_error>
 #include <thread>
 
@@ -18,12 +19,43 @@
 #include "stages/idmap.h"
 #include "stages/link.h"
 #include "stages/model.h"
+#include "stages/pack_contract.h"
 #include "stages/parse.h"
 #include "stages/validate.h"
 
 namespace fs = std::filesystem;
 
 namespace mcc::stages {
+
+namespace {
+
+// L016 — run the idmap append-only lint over each pack's idmap.lock (spec §3;
+// parity with validate_content.py). Namespaces come from the parsed pack
+// manifests; a missing lock is not an error here (link/L015 owns allocation
+// drift). Kept in `check` so every PR's `mcc check` enforces the same discipline
+// the Python validator does.
+void check_idmap_append_only(const std::string& content_dir,
+                             const model::ContentModel& model, diag::Diagnostics& diags) {
+    for (const auto& pf : model.files) {
+        if (!pf.parsed || pf.file.kind != model::FileKind::Pack) continue;
+        if (pf.namespace_.empty()) continue;
+        const fs::path lock_path = fs::path(content_dir) / pf.namespace_ / "idmap.lock";
+        std::ifstream f(lock_path, std::ios::binary);
+        if (!f) continue;
+        std::ostringstream ss;
+        ss << f.rdbuf();
+        const std::string rel = (fs::path(pf.namespace_) / "idmap.lock").generic_string();
+        idmap::IdMap m;
+        std::string perr;
+        if (!idmap::parse(ss.str(), m, perr)) {
+            diags.error("L016", rel, "", perr);
+            continue;
+        }
+        scan_idmap_append_only(m, rel, diags);
+    }
+}
+
+}  // namespace
 
 int check(const std::string& content_dir, DiagFormat format, std::ostream& out,
           std::ostream& err) {
@@ -36,6 +68,7 @@ int check(const std::string& content_dir, DiagFormat format, std::ostream& out,
     diag::Diagnostics diags;
     parse(model, diags);
     validate(model, diags);
+    check_idmap_append_only(content_dir, model, diags);
 
     if (format == DiagFormat::Json) {
         diag::render_json(diags, out);

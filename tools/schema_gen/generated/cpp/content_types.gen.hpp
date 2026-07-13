@@ -21,6 +21,7 @@ struct ContentId { std::string id; };
 struct AbilityRef { std::string id; };
 struct VendorRef { std::string id; };
 struct LootRef { std::string id; };
+struct EquipTypeRef { std::string id; };
 struct NpcRef { std::string id; };
 struct ZoneRef { std::string id; };
 struct QuestRef { std::string id; };
@@ -189,6 +190,11 @@ enum class DyeRarity {
     Legendary,
 };
 
+enum class EquipTypeCategory {
+    Armor,
+    Weapon,
+};
+
 enum class GeosetRegion {
     Head,
     Hands,
@@ -318,6 +324,12 @@ enum class StatKey {
     Spirit,
 };
 
+struct PackTheme {
+    std::optional<std::string> display_name;  // Human-facing theme name shown in a realm/pack picker.
+    std::optional<std::string> tagline;  // One-line theme tagline.
+    std::optional<ArtRef> preview_asset;  // Optional art-registry id for a preview image.
+};
+
 struct PackEngine {
     std::string godot;
 };
@@ -333,6 +345,8 @@ struct Pack {
     std::optional<std::string> description;  // optional
     std::string version;  // Semver of this content pack.
     std::int64_t content_schema_version;  // Major schema version this pack is authored against.
+    std::optional<std::int64_t> compatibility_version;  // Pack CONTRACT version — distinct from the semver `version`. Bumps ONLY on a breaking (non-additive) id change (a removed/renumbered id or removed capability, per the §3 breaking-change rules `mcc diff` classifies). Additive changes (new ids, new optional fields) never bump it. A realm records the value it booted with; a higher pack with a breaking diff refuses to boot until an operator migration runs (boot-gate contract, enforced in sub-project 2). Optional at rest — an absent value is treated as the baseline 1.
+    std::optional<PackTheme> theme;  // Thin theme metadata (sub-project 1 slice). The full UI-theme/audio manifest folding + realm selection lands in sub-project 4; here it is display-only.
     PackEngine engine;  // Engine pin — .pck packs are validated against this Godot version (Tools PRD R8).
     std::vector<PackDependency> dependencies;  // Other packs whose IDs this pack may reference.
     std::vector<std::string> authors;  // optional
@@ -468,6 +482,7 @@ struct Item {
     std::optional<std::string> flavor_text;  // optional
     ItemClass item_class;
     std::optional<std::string> subclass;  // weapon: sword_1h|sword_2h|axe_1h|axe_2h|mace_1h|mace_2h|dagger|staff|polearm|bow|wand|fist. armor: cloth|leather|mail|plate|shield. Free-form for other classes.
+    std::optional<EquipTypeRef> equip_type;  // optional
     std::optional<ItemSlot> slot;  // optional
     ItemRarity rarity;
     std::optional<std::int64_t> required_level;  // optional
@@ -831,6 +846,14 @@ struct Dye {
     std::string name;
     std::string color;
     DyeRarity rarity;
+};
+
+struct EquipType {
+    ContentId id;
+    std::string name;
+    std::optional<std::string> description;  // optional
+    EquipTypeCategory category;  // armor = a wearable-armor material class (Cloth/Leather/Mail/Plate); weapon = a weapon type (Two-Hand/One-Hand/Wand/Staff). Class proficiencies (sub-project 2) gate equipping by this category.
+    std::optional<std::string> slot_class;  // Informational grouping — armor: helm/chest/…; weapon: main/off/two_hand. Not enforced by the kernel in sub-project 1; a free-form lowercase token.
 };
 
 }  // namespace mcc::content

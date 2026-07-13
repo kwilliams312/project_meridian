@@ -1,0 +1,6 @@
+schema: meridian/equip_type@1
+id: core:equip_type.staff
+name: Staff
+description: A two-handed spellcasting focus favored by mages and healers.
+category: weapon
+slot_class: two_hand
