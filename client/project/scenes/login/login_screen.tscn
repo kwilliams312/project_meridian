@@ -11,14 +11,15 @@
 
 [ext_resource type="Script" path="res://scenes/login/login_screen.gd" id="1_login"]
 
-; #638: a scoped Theme raising the default font size so every Label / LineEdit /
-; Button on this screen reads comfortably in the larger #630 window (Godot's default
-; is 16; 20 matches the char-select scene so the two boot screens read at one size).
-; Applied on the root LoginScreen Control only, so it cascades to this scene alone
-; (world HUD untouched). Under the project's `canvas_items` stretch it scales with the
-; window, so the login card grows/shrinks proportionally on resize (consistent w/ #630).
+; #645 (was #638): a scoped Theme raising the default font size so every Label /
+; LineEdit / Button on this screen reads comfortably in the large #630 1728×972 window.
+; Godot's default is 16; #638 bumped it to 20, but on-device that still read small and
+; lost in the window — #645 raises the field/button/label default to 26 (with a larger
+; per-control Title, see below). Applied on the root LoginScreen Control only, so it
+; cascades to this scene alone (world HUD untouched). Under the project's `canvas_items`
+; stretch it scales with the window, so the login card grows/shrinks on resize (#630).
 [sub_resource type="Theme" id="Theme_login638"]
-default_font_size = 20
+default_font_size = 26
 
 [node name="LoginScreen" type="Control"]
 layout_mode = 3
@@ -28,11 +29,13 @@ anchor_bottom = 1.0
 theme = SubResource("Theme_login638")
 script = ExtResource("1_login")
 
-; #638: the login form is a fixed-width card centered in the window (anchor 0.5/0.5),
-; NOT stretched edge-to-edge — 480×360 is a sensible max-width so the fields stay a
-; readable line length in the 1728-wide base window (~28% of it) rather than sprawling.
-; Grown from 320×220 to give the +25% fonts room; `alignment = 1` centers the rows
-; vertically within the card. Under `canvas_items` stretch the whole card scales on resize.
+; #645 (was #638): the login form is a fixed-size card centered in the window
+; (anchor 0.5/0.5), NOT stretched edge-to-edge. #638's 480×360 read tiny in the
+; 1728×972 window (~28% wide, lost in dead space), so #645 grows it to 900×620 —
+; ~52% of the width and ~64% of the height, a comfortably-proportioned share that
+; is still clearly a centered, bounded card. `separation` spaces the rows so they
+; breathe in the taller card; `alignment = 1` centers them vertically. Under
+; `canvas_items` stretch the whole card scales with the window on resize (#630).
 [node name="VBox" type="VBoxContainer" parent="."]
 unique_name_in_owner = true
 layout_mode = 1
@@ -41,14 +44,17 @@ anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
-offset_left = -240.0
-offset_top = -180.0
-offset_right = 240.0
-offset_bottom = 180.0
+offset_left = -450.0
+offset_top = -310.0
+offset_right = 450.0
+offset_bottom = 310.0
+theme_override_constants/separation = 20
 alignment = 1
 
 [node name="Title" type="Label" parent="VBox"]
 layout_mode = 2
+theme_override_font_sizes/font_size = 42
+horizontal_alignment = 1
 text = "Project Meridian — Login"
 
 [node name="HostEdit" type="LineEdit" parent="VBox"]
