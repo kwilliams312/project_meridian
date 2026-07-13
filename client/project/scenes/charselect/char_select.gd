@@ -573,8 +573,8 @@ func _on_net_char_list(characters: Array, status: int = 0) -> void:
 
 # Create result: OK re-lists (server is the source of truth); else a typed error.
 func _on_net_char_create_result(status: int, character_id: int) -> void:
-	# world.fbs CharCreateStatus: 0 OK, 1 DUPLICATE_NAME, 2 INVALID_NAME,
-	# 3 INVALID_RACE, 4 INVALID_CLASS, 5 LIMIT_REACHED, 6 INTERNAL.
+	# world.fbs CharCreateStatus: 0 OK, 1 DUPLICATE_NAME, 2 INVALID_RACE,
+	# 3 INVALID_CLASS, 4 INVALID_NAME, 5 INTERNAL, 6 LIMIT_REACHED.
 	if status == 0:
 		_name_edit.clear()
 		_pending_select_id = character_id  # select the new character once it lists
@@ -582,8 +582,9 @@ func _on_net_char_create_result(status: int, character_id: int) -> void:
 		_set_status("Character created.")
 		return
 	var reasons := {
-		1: "that name is taken", 2: "invalid name", 3: "invalid race",
-		4: "invalid class", 5: "you already have a character",
+		1: "that name is taken", 2: "invalid race", 3: "invalid class",
+		4: "invalid name", 5: "server error",
+		6: "you already have the maximum number of characters",
 	}
 	var why: String = reasons.get(status, "server error")
 	_set_status("Cannot create: %s." % why)

@@ -267,14 +267,30 @@ int run_integration_tests() {
         check("account_id resolved on the create path", created.account_id == seeded_account_id);
         check("character id assigned", created.character.character_id > 0);
 
-        // #329 cap is 1 — a second create for the same account is refused.
+        // #329 cap (raised to 8 in #629) — the account can fill up to
+        // kMaxCharactersPerAccount, then one more create is refused. Names must
+        // be globally unique, so each fill uses a distinct name. Driven off the
+        // constant so the test tracks any future cap retune. `charname` above is
+        // the account's 1st character.
+        bool filled = true;
+        for (std::uint64_t i = 1; i < characters::kMaxCharactersPerAccount; ++i) {
+            character_cli::CreateArgs fill = args;
+            fill.name = charname + "_" + std::to_string(i);
+            character_cli::CreateForAccountResult rf =
+                character_cli::create_character_for_account(char_db, fill);
+            filled = filled && rf.character.character_id > 0;
+        }
+        check("the account fills up to kMaxCharactersPerAccount characters", filled);
+
         bool threw_limit = false;
+        character_cli::CreateArgs over = args;
+        over.name = charname + "_over";
         try {
-            character_cli::create_character_for_account(char_db, args);
+            character_cli::create_character_for_account(char_db, over);
         } catch (const characters::CharacterLimitReached&) {
             threw_limit = true;
         }
-        check("a second character for the same account hits the #329 cap",
+        check("a create past kMaxCharactersPerAccount hits the #329 cap",
               threw_limit);
 
         // Clean up.
