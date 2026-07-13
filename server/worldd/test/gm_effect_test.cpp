@@ -93,17 +93,17 @@ void test_forced_move_barrier() {
     std::printf("[gm] .tele/.summon force_correction: move + ack barrier + anti-cheat\n");
 
     // A mover authoritatively at the play-area centre, one legit intent processed.
-    SessionMovementState st(at(64.0f, 64.0f), /*spawn_time_ms=*/0);
+    SessionMovementState st(at(-320.0f, -320.0f), /*spawn_time_ms=*/0);
     st.set_entity_guid(7001);
 
     // GM teleports the mover far across the map (a jump that WOULD trip the R6
     // teleport check on a normal intent). The ack barrier is armed at seq+1.
-    const Position dest = at(20.0f, 100.0f);
+    const Position dest = at(-364.0f, -284.0f);
     const std::uint32_t ack = st.last_seq() + 1;
     st.force_correction(dest, ack);
 
     check(".tele: authoritative position reset to the destination",
-          approx(st.authoritative().x, 20.0f) && approx(st.authoritative().y, 100.0f));
+          approx(st.authoritative().x, -364.0f) && approx(st.authoritative().y, -284.0f));
     check(".tele: forced-move ack barrier armed", st.awaiting_forced_ack());
     check(".tele: ack barrier seq is last+1", st.forced_ack_seq() == ack);
     check(".tele: sliding speed window cleared (jump not counted)",
@@ -114,7 +114,7 @@ void test_forced_move_barrier() {
     {
         MovementIntentPod stale;
         stale.seq = 0;  // predates the ack barrier
-        stale.pos = at(64.5f, 64.0f);
+        stale.pos = at(-319.5f, -320.0f);
         stale.client_time_ms = 500;
         const MoveDecision d = st.validate_move(stale, stale.client_time_ms);
         check(".tele: a stale pre-teleport intent is frozen (kUnackedForcedMove)",
@@ -129,7 +129,7 @@ void test_forced_move_barrier() {
         ackd.seq = ack;                  // acknowledges the forced move
         ackd.state_flags =
             static_cast<std::uint32_t>(mc::MoveMode::Run);  // a real locomotion mode
-        ackd.pos = at(20.4f, 100.0f);    // a ~0.4 m step from the destination
+        ackd.pos = at(-363.6f, -284.0f);    // a ~0.4 m step from the destination
         ackd.client_time_ms = 1000;      // ample dt from spawn_time 0
         const MoveDecision d = st.validate_move(ackd, ackd.client_time_ms);
         check(".tele: the reconciling move from the destination is ACCEPTED (no cheat flag)",
@@ -156,8 +156,8 @@ void test_summon() {
     bob_id.name = "Bob";
 
     // GM at centre; Bob far away (out of AoI, so no initial enter between them).
-    const SessionSlot gm_slot = world.enter(gm_id, at(64.0f, 64.0f), gm_cap.sink()).slot;
-    const SessionSlot bob_slot = world.enter(bob_id, at(5.0f, 5.0f), bob_cap.sink()).slot;
+    const SessionSlot gm_slot = world.enter(gm_id, at(-320.0f, -320.0f), gm_cap.sink()).slot;
+    const SessionSlot bob_slot = world.enter(bob_id, at(-500.0f, -500.0f), bob_cap.sink()).slot;
     (void)gm_slot;
     check(".summon setup: two sessions entered", world.session_count() == 2);
     check(".summon setup: GM does not yet see Bob (far)", !gm_cap.saw_enter(5002));
@@ -167,7 +167,7 @@ void test_summon() {
     world.set_session_control(bob_slot, &bob_mailbox, [] {});
 
     // A GM summons Bob to the GM's position.
-    const Position dest = at(64.0f, 64.0f);
+    const Position dest = at(-320.0f, -320.0f);
     const WorldState::TargetOutcome oc =
         world.summon_to("Bob", dest, /*ack_seq=*/0, /*state_flags=*/0, /*server_time_ms=*/1);
     check(".summon: outcome applied", oc == WorldState::TargetOutcome::kApplied);
@@ -175,8 +175,8 @@ void test_summon() {
     // The TARGET was moved authoritatively in the world (its Unit position == dest).
     const Unit* bob_unit = world.unit_for_slot(bob_slot);
     check(".summon: target's world position moved to the summoner",
-          bob_unit != nullptr && approx(bob_unit->position().x, 64.0f) &&
-              approx(bob_unit->position().y, 64.0f));
+          bob_unit != nullptr && approx(bob_unit->position().x, -320.0f) &&
+              approx(bob_unit->position().y, -320.0f));
 
     // AoI relay fired: the GM (co-located now) SEES Bob enter its view.
     check(".summon: the summoner now sees the target (AoI EntityEnter relayed)",
@@ -189,7 +189,7 @@ void test_summon() {
     {
         const std::optional<Position> pending = bob_mailbox.take();
         check(".summon: the mailbox carries the summon destination",
-              pending && approx(pending->x, 64.0f) && approx(pending->y, 64.0f));
+              pending && approx(pending->x, -320.0f) && approx(pending->y, -320.0f));
         check(".summon: taking the mailbox clears it", !bob_mailbox.has_pending());
     }
 
@@ -212,7 +212,7 @@ void test_kick() {
     EntityIdentity bob_id;
     bob_id.entity_guid = 6001;
     bob_id.name = "Bob";
-    const SessionSlot bob_slot = world.enter(bob_id, at(64.0f, 64.0f), cap.sink()).slot;
+    const SessionSlot bob_slot = world.enter(bob_id, at(-320.0f, -320.0f), cap.sink()).slot;
 
     bool kicked = false;
     // The teardown mirrors the live closure: flip the session's disconnect signal +
@@ -247,7 +247,7 @@ void test_setlevel() {
     EntityIdentity id;
     id.entity_guid = 7001;
     id.name = "Bob";
-    const SessionSlot slot = world.enter(id, at(64.0f, 64.0f), cap.sink()).slot;
+    const SessionSlot slot = world.enter(id, at(-320.0f, -320.0f), cap.sink()).slot;
 
     check(".setlevel: applies to an entered session", world.set_unit_level(slot, 42));
     const Unit* u = world.unit_for_slot(slot);

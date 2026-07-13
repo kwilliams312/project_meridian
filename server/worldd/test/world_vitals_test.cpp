@@ -152,8 +152,8 @@ int main() {
     idb.char_class = 1;  // Vanguard (rage)
     idb.name = "Brynn";
 
-    world.enter(ida, at(64.0f, 64.0f), ca.sink());
-    world.enter(idb, at(64.0f, 64.0f), cb.sink());
+    world.enter(ida, at(-320.0f, -320.0f), ca.sink());
+    world.enter(idb, at(-320.0f, -320.0f), cb.sink());
 
     // ===== 1. Entity entering AoI carries correct vitals =====================
     // On B's enter, B's capture (cb) received an EntityEnter for A (guid A). Its

@@ -409,11 +409,12 @@ void test_command_set() {
     {
         FakeEffects fake;
         Capture cap;
-        gm::CommandOutcome oc = run(".tele 10 20 0", kGm, fake, cap);
+        // Destination inside the real Zone-01 play area [-512,-128] (#562).
+        gm::CommandOutcome oc = run(".tele -320 -300 0", kGm, fake, cap);
         check(".tele valid: outcome OK", oc == gm::CommandOutcome::kOk);
         check(".tele valid: seam invoked once", fake.teleport_calls == 1);
         check(".tele valid: dest forwarded",
-              fake.last_dest.x == 10.0f && fake.last_dest.y == 20.0f &&
+              fake.last_dest.x == -320.0f && fake.last_dest.y == -300.0f &&
                   fake.last_dest.z == 0.0f);
         check(".tele valid: reply confirms", cap.any_reply_has("Teleported"));
         check(".tele valid: audited as success (executed)",

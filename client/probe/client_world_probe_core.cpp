@@ -39,10 +39,11 @@ namespace cn = meridian::clientnet;
 namespace mv = meridian::movement;
 namespace net = meridian::net;
 
-// M0 flat bootstrap spawn (worldd world_dispatch.cpp: kZoneMaxXY*0.5 on x/y,
-// kFlatGroundZ on z). WIRE coords (z = height). Same as the bot.
-constexpr float kSpawnWireX = 64.0f;
-constexpr float kSpawnWireY = 64.0f;
+// Zone-01 spawn (worldd world_dispatch.cpp seeds movement::kZoneSpawnXY on x/y,
+// kFlatGroundZ on z — #562). WIRE coords (z = height). Same as the bot:
+// kZoneSpawnXY = (kZoneMinXY + kZoneMaxXY)/2 = (-512 + -128)/2 = -320.
+constexpr float kSpawnWireX = -320.0f;
+constexpr float kSpawnWireY = -320.0f;
 constexpr float kSpawnWireZ = 0.0f;
 constexpr float kSquareHalfExtent = 10.0f;
 

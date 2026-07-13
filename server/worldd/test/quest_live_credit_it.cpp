@@ -405,18 +405,19 @@ int main() {
         mw::Dispatcher dispatcher;
         mw::WorldServer world(dispatcher, mw::WorldServerConfig{});
 
-        // Load a discovery area-trigger volume just EAST of the spawn (64,64): a
-        // single legal walk step (→ 64.20) crosses IN, carrying the explore poi the
-        // Test Explore quest matches. Spawn (x=64) is OUTSIDE (x-min 64.1) so the
-        // crossing fires on the MOVE, not on enter.
+        // Load a discovery area-trigger volume just EAST of the spawn (-320,-320,
+        // the Zone-01 play-area centre — #562): a single legal walk step (→ -319.80)
+        // crosses IN, carrying the explore poi the Test Explore quest matches. Spawn
+        // (x=-320) is OUTSIDE (x-min -319.9) so the crossing fires on the MOVE, not
+        // on enter.
         {
             mw::TriggerVolume v;
             v.id = kExploreTrigger;
             v.kind = mw::TriggerKind::kDiscovery;
             v.area_id = kExploreZone;
             v.poi = kExplorePoi;
-            v.min_x = 64.1f; v.max_x = 65.0f;
-            v.min_y = 63.0f; v.max_y = 65.0f;
+            v.min_x = -319.9f; v.max_x = -319.0f;
+            v.min_y = -321.0f; v.max_y = -319.0f;
             world.world_state().load_area_triggers({v});
         }
 
@@ -439,8 +440,8 @@ int main() {
                           ctx.char_level = 5;
                           ctx.quests.emplace(quest_store);  // the installed synthetic store
                           mw::Position spawn;
-                          spawn.x = 64.0f;
-                          spawn.y = 64.0f;
+                          spawn.x = -320.0f;
+                          spawn.y = -320.0f;
                           spawn.z = 0.0f;
                           ctx.movement.emplace(spawn, /*spawn_time_ms=*/0);
                           ctx.movement->set_entity_guid(kSelfGuid);
@@ -538,10 +539,10 @@ int main() {
                   dp.got && dp.quest_id == kQDeliver && dp.complete);
 
             // ===== EXPLORE: walk into the discovery volume → QUEST_PROGRESS =====
-            // One legal walk step east (64 → 64.20) crosses into the volume.
+            // One legal walk step east (-320 → -319.80) crosses into the volume.
             c.send_frame(mw::encode_frame(mn::Opcode::MOVEMENT_INTENT, seq++,
                                           enc_movement_intent(/*seq=*/10, /*Walk=*/1,
-                                                              64.20f, 64.0f, 0.0f,
+                                                              -319.80f, -320.0f, 0.0f,
                                                               /*client_time_ms=*/100)));
             Progress ep = read_quest_progress(c);  // skips the MOVEMENT_STATE reply
             check("area-trigger enter advances the explore objective (QUEST_PROGRESS)",

@@ -416,7 +416,7 @@ int main() {
             Client c(port);
             check("G: client connected", c.connected());
             c.send_frame(mw::encode_frame(mn::Opcode::MOVEMENT_INTENT, /*seq=*/11,
-                                          enc_movement_intent(1, /*flags=*/2, 64.0f, 64.0f,
+                                          enc_movement_intent(1, /*flags=*/2, -320.0f, -320.0f,
                                                               0.0f, /*client_time_ms=*/1000)));
             std::optional<Bytes> reply = c.recv_frame();
             bool got_disconnect = false;

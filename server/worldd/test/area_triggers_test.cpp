@@ -259,12 +259,12 @@ void test_placeholder_set() {
     auto set = placeholder_area_triggers();
     check("placeholder has 3 volumes", set.size() == 3);
 
-    // The (64,64) play-area-centre spawn must NOT sit inside any placeholder volume
-    // (a fresh login should not instantly trip a trigger).
-    const Position spawn = at(mc::kZoneMaxXY * 0.5f, mc::kZoneMaxXY * 0.5f);
+    // The (-320,-320) play-area-centre spawn (#562: kZoneSpawnXY) must NOT sit inside
+    // any placeholder volume (a fresh login should not instantly trip a trigger).
+    const Position spawn = at(mc::kZoneSpawnXY, mc::kZoneSpawnXY);
     bool spawn_clear = true;
     for (const auto& v : set) spawn_clear = spawn_clear && !v.contains(spawn);
-    check("spawn (64,64) trips no placeholder volume", spawn_clear);
+    check("spawn (-320,-320) trips no placeholder volume", spawn_clear);
 
     // Exactly one discovery volume in the placeholder set (the client-facing one).
     int discovery = 0;

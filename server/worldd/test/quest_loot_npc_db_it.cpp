@@ -390,7 +390,7 @@ void seed_corpse(mw::WorldServer& world, std::uint64_t corpse, std::uint64_t own
     lo::LootRoll roll;
     roll.stacks.push_back(lo::LootStack{kCopperOre, /*count=*/5, /*required_quest_id=*/0});
     roll.copper = 50;
-    const lo::LootPoint pos{64.0f, 64.0f, 0.0f};  // == ENTER_WORLD spawn (kZoneMaxXY*0.5)
+    const lo::LootPoint pos{-320.0f, -320.0f, 0.0f};  // == ENTER_WORLD spawn (kZoneSpawnXY, #562)
     world.loot_registry().insert(
         lo::LootSession(corpse, pos, std::move(roll), {owner}, /*loot_range=*/5.0f));
 }

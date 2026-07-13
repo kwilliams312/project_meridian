@@ -343,7 +343,7 @@ int main() {
                           ctx.char_id = kSelfGuid;
                           ctx.char_class = kRuncaller;
                           ctx.char_level = 1;
-                          mw::Position spawn = at(64.0f, 64.0f);
+                          mw::Position spawn = at(-320.0f, -320.0f);  // Zone-01 centre (#562)
                           ctx.movement.emplace(spawn, /*spawn_time_ms=*/0);
                           ctx.movement->set_entity_guid(kSelfGuid);
                           // Seal a real s2c egress (the §5.2 WorldSession seam) so the
@@ -413,10 +413,10 @@ int main() {
             // BARRIER: a legal movement step whose MOVEMENT_STATE echo proves the
             // server has PROCESSED the WORLD_HELLO stub (AoI enter + vitals-egress
             // REGISTRATION of kSelfGuid) — so the push below is retained, not dropped
-            // as unregistered. Spawn (64) → 64.10 is one legal walk step.
+            // as unregistered. Spawn (-320) → -319.90 is one legal walk step.
             c.send_frame(mw::encode_frame(mn::Opcode::MOVEMENT_INTENT, seq++,
                                           enc_movement_intent(/*seq=*/10, /*Walk=*/1,
-                                                              64.10f, 64.0f, 0.0f,
+                                                              -319.90f, -320.0f, 0.0f,
                                                               /*client_time_ms=*/100)));
             check("session entered + registered (movement echo received)",
                   c.recv_frame().has_value());
@@ -432,10 +432,10 @@ int main() {
 
             // Poke the session with a second legal step: any handled frame drains its
             // pending vitals (poll_vitals_egress) → mirrors onto the WorldState unit →
-            // pushes the VITALS_UPDATE to this client. 64.10 → 64.20 is one legal step.
+            // pushes the VITALS_UPDATE to this client. -319.90 → -319.80 is one legal step.
             c.send_frame(mw::encode_frame(mn::Opcode::MOVEMENT_INTENT, seq++,
                                           enc_movement_intent(/*seq=*/11, /*Walk=*/1,
-                                                              64.20f, 64.10f, 0.0f,
+                                                              -319.80f, -319.90f, 0.0f,
                                                               /*client_time_ms=*/200)));
 
             const Vitals v = recv_vitals(c);

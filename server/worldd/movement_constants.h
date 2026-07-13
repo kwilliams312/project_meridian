@@ -233,16 +233,45 @@ inline constexpr float    kChunkSizeM          = 128.0f; // [LOCKED: IF-6 / D-20
 inline constexpr float    kFlatGroundZ         = 0.0f;   // [D-19] flat bootstrap map ground plane
 
 // ===========================================================================
-// 8. Zone bounds (M0 bootstrap map) — [D-19 / SAD §5.5 "inside map bounds"]
+// 8. Zone bounds (real Zone-01, sourced from the IF-6 chunk manifest) — [SAD §5.5
+//    "inside map bounds" / #562, successor to the D-19 [0,128] bootstrap]
 // ===========================================================================
-// SAD §5.5 requires the move be "inside map bounds". D-19's flat bootstrap map
-// has no authored extent yet, so M0 uses the heightfield chunk footprint as the
-// zone-local play area: the [0, kChunkSizeM] × [0, kChunkSizeM] square (the same
-// 128 m chunk the heightfield geometry describes). Positions outside this square
-// are a hard bounds violation → snap-back. This is a conservative M0 stand-in;
-// the real per-zone bounds arrive with Zone-01 at M1 (D-19).
-inline constexpr float    kZoneMinXY           = 0.0f;                 // [D-19 M0] bootstrap play-area min (x and y)
-inline constexpr float    kZoneMaxXY           = kChunkSizeM;          // [D-19 M0] bootstrap play-area max (x and y) = 128 m
+// SAD §5.5 requires the move be "inside map bounds". Through #559 the play area
+// was the D-19 [0, kChunkSizeM]² flat-bootstrap stand-in. #562 grows it to the
+// REAL Zone-01 extent, mirrored from the SINGLE authoritative source the client
+// streamer also reads: the IF-6 chunk manifest (core:zone.zone01 → zone01.chunks.json,
+// emitted by mcc — #22 Story 0 / #553). This header is byte-for-byte transcribed
+// from that manifest, the same "documented sync point + drift trip-wire" discipline
+// the rest of this file uses; zone_geometry.h re-derives the manifest play area and
+// static_asserts it equals these constants, so the server can never hold a second,
+// divergent origin from the client's (the #508 axis/origin lesson).
+//
+// MANIFEST → PLAY AREA (zone01.chunks.json): origin {x:-384, z:-384}, chunk_size_m 128,
+// grid {min_cx:-1, min_cz:-1, max_cx:1, max_cz:1}. The world→cell transform is
+// cx = floor((x − origin.x)/chunk_size_m) (manifest schema §origin), so the inclusive
+// grid [-1,1]² covers a 3-chunk-wide square whose zone-local corners are:
+//   min = min_c·chunk + origin = -1·128 + (-384) = -512
+//   max = (max_c+1)·chunk + origin = (1+1)·128 + (-384) = -128   (extent = 3·128 = 384 m)
+// AXIS MAP (#508): worldd's horizontal ground plane is (x, y) with z = height
+// (movement_constants §7), while the manifest is Godot XZ (Y-up). The manifest z
+// axis therefore maps to worldd's y. Zone-01's grid is square and origin-symmetric,
+// so both worldd axes share the same [-512, -128] bound.
+inline constexpr float    kZoneMinXY           = -512.0f;   // [#562] Zone-01 play-area min (x and y), from manifest grid min corner
+inline constexpr float    kZoneMaxXY           = -128.0f;   // [#562] Zone-01 play-area max (x and y), from manifest grid max corner
+
+// The character spawn / play-area centre. worldd seeds a fresh login here (D-19
+// flat ground), and the headless bot mirrors it. Deriving it from the bounds keeps
+// the "spawn is the centre" invariant true for ANY extent (the old kZoneMaxXY*0.5
+// form silently broke once the origin moved off 0).
+inline constexpr float    kZoneSpawnXY         = (kZoneMinXY + kZoneMaxXY) * 0.5f;  // [#562] = -320 m (Zone-01 centre)
+
+// Manifest drift trip-wire (#562): pin the play area to the values derived from
+// zone01.chunks.json above. If someone edits a bound without re-checking the
+// manifest, this fails at compile time — before zone_geometry.h's cross-check.
+static_assert(kZoneMinXY == -1.0f * kChunkSizeM + -384.0f,   "kZoneMinXY drift vs zone01 manifest (min_cx·chunk + origin.x)");
+static_assert(kZoneMaxXY == (1.0f + 1.0f) * kChunkSizeM + -384.0f, "kZoneMaxXY drift vs zone01 manifest ((max_cx+1)·chunk + origin.x)");
+static_assert(kZoneMaxXY - kZoneMinXY == 3.0f * kChunkSizeM, "Zone-01 extent must be the 3-chunk manifest grid (384 m)");
+static_assert(kZoneSpawnXY == -320.0f,                       "kZoneSpawnXY must be the Zone-01 play-area centre (-320 m)");
 
 // ===========================================================================
 // Compile-time drift trip-wire (movement-spike.md §4 first line of defence).

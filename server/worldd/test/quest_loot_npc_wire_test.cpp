@@ -259,7 +259,7 @@ void seed_corpse(mw::WorldServer& world, std::uint64_t corpse, std::uint64_t own
     lo::LootRoll roll;
     roll.stacks.push_back(lo::LootStack{kCopperOre, /*count=*/5, /*required_quest_id=*/0});
     roll.copper = 50;
-    const lo::LootPoint pos{64.0f, 64.0f, 0.0f};  // == ENTER_WORLD spawn (kZoneMaxXY*0.5)
+    const lo::LootPoint pos{-320.0f, -320.0f, 0.0f};  // == ENTER_WORLD spawn (kZoneSpawnXY, #562)
     world.loot_registry().insert(
         lo::LootSession(corpse, pos, std::move(roll), {owner}, /*loot_range=*/5.0f));
 }
@@ -312,7 +312,7 @@ int main() {
         // TEST WORLD_HELLO: promote IN-WORLD without a grant DB. Emplace a quest log
         // over the placeholder store, capture a synthetic class/level (Runcaller-ish
         // class 2, level 1 — so the Vanguard-only strike is WRONG_CLASS and the
-        // level-5 heal is LEVEL_TOO_LOW in the trainer list), and spawn at (64,64,0).
+        // level-5 heal is LEVEL_TOO_LOW in the trainer list), and spawn at (-320,-320,0).
         static mw::PlaceholderQuestStore quest_store;
         dispatcher.on(mn::Opcode::WORLD_HELLO,
                       [](net::Session& /*sess*/, const mw::Frame& /*f*/, mw::ConnCtx& ctx) {
@@ -324,8 +324,8 @@ int main() {
                           ctx.char_level = 1;
                           ctx.quests.emplace(quest_store);
                           mw::Position spawn;
-                          spawn.x = 64.0f;
-                          spawn.y = 64.0f;
+                          spawn.x = -320.0f;
+                          spawn.y = -320.0f;
                           spawn.z = 0.0f;
                           ctx.movement.emplace(spawn, /*spawn_time_ms=*/0);
                           ctx.movement->set_entity_guid(kSelfGuid);

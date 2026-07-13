@@ -240,8 +240,8 @@ int main() {
                           ctx.account_id = 1;
                           ctx.phase = mw::SessionPhase::kInWorld;
                           mw::Position spawn;
-                          spawn.x = 64.0f;
-                          spawn.y = 64.0f;
+                          spawn.x = -320.0f;
+                          spawn.y = -320.0f;
                           spawn.z = 0.0f;
                           ctx.movement.emplace(spawn, /*spawn_time_ms=*/0);
                           if (ctx.world != nullptr) {

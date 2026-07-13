@@ -236,7 +236,7 @@ int main() {
         id.type_id = 1;
         id.char_class = 1;  // Vanguard
         // A no-op egress (single-session: no observers, nothing is emitted).
-        EnterResult er = world.enter(id, at(64, 64),
+        EnterResult er = world.enter(id, at(-320, -320),
                                      [](mn::Opcode, const std::vector<std::uint8_t>&) {
                                          return true;
                                      });
@@ -249,7 +249,7 @@ int main() {
             check("H: session unit is a Player", u->type() == ObjectType::kPlayer);
             check("H: session unit spawns alive at full HP",
                   u->is_alive() && u->health() == u->max_health() && u->health() > 0);
-            check("H: session unit position is its spawn", u->position().x == 64);
+            check("H: session unit position is its spawn", u->position().x == -320);
 
             // Damage it to death through the WorldState-owned Unit.
             DamageResult killed = u->apply_damage(u->max_health());
