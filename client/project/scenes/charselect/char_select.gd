@@ -1,32 +1,28 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Project Meridian — minimal character-select screen (issue #110, CHR-01 / D-11).
+# Project Meridian — character-select CONTROLLER + roster view (issue #110 origin,
+# redesigned in #639).
 #
 # The third scene in the boot flow (Boot/Login → CharSelect → World, Client SAD §"GDScript
-# interaction path"). After a successful login it lists the account's characters (name +
-# class), lets the player CREATE one (name entry + race/class pickers drawn from the
-# M0-frozen roster) and DELETE one, then ENTER WORLD — which at M0 loads the test map.
+# interaction path"). After a successful login it owns the live net session, the cached
+# roster, and view switching between two focused views (#639):
 #
-# SCOPE (D-11): "name entry + class selection over ONE placeholder model" — no appearance
-# customization, no per-class models. A single shared capsule stands in for every character
-# (built in code below). The server character row still stores a race id AND a class id
-# (both NOT NULL), so the create form offers both pickers; both are validated against the
-# same roster the server uses (MeridianRoster ⇄ server/characters/src/roster.h).
+#   * ROSTER VIEW (this scene's %RosterView): the character list, the SELECTED character's
+#     paperdoll, and three actions — Delete, Create New Character, Enter Realm. ("Enter
+#     Realm" is the button LABEL; the enter-world net intent is unchanged — #639.)
+#   * CREATION VIEW (scenes/charselect/character_create.tscn): a self-contained full-screen
+#     view this controller reveals on "Create New Character" and hides on create/cancel. It
+#     never touches the net layer — it emits character_confirmed / creation_cancelled back
+#     here, and THIS controller owns all networking (build_char_create_request_frame, etc.).
 #
-# CHARACTER LIST SOURCE (M0): a LOCAL in-memory stub (CharacterStore) — there is no
-# char-management wire message at M0 (world.fbs freezes the opcode set to session/movement/
-# entity/clock). See character_store.gd for the full rationale and the migration path to the
-# real session-backed CRUD.
+# This split replaced the old single-screen layout that crammed the roster list AND the
+# full create form side by side (#639). The net flow (CharList / CharCreate / CharDelete /
+# EnterWorld), the appearance data contract, and the #629 create-result status mapping are
+# all preserved.
 #
-# Scene shape (char_select.tscn — a plain Control tree; %names resolve regardless of layout):
-#   Control (this script)
-#     └ Root (VBox)
-#         ├ Title / AccountLabel (Label)
-#         ├ Body (HBox)
-#         │   ├ ListPanel (VBox): CharList (ItemList) + Enter/Delete buttons
-#         │   └ CreatePanel (VBox): NameEdit + RaceOption + ClassOption + CreateButton
-#         │       + PreviewHolder (Control — the shared placeholder model viewport)
-#         └ StatusLabel (Label)
+# CHARACTER LIST SOURCE: online = the server roster over the authenticated session
+# (CharList); offline (warm boot / tests) = a LOCAL in-memory stub (CharacterStore). See
+# character_store.gd for the rationale and the migration path to the real session CRUD.
 
 extends Control
 
@@ -43,31 +39,25 @@ signal enter_world_requested(character: Dictionary)
 const WORLD_SCENE: String = "res://scenes/world/world.tscn"
 const LOCAL_DEMO_SCENE: String = "res://scenes/world/camera_demo.tscn"
 
-# MeridianContentDB (#477), referenced by PATH (not the bare `ContentDB` autoload
-# name, and not the bare class name): the headless verify harness runs standalone
-# --script, where autoloads never initialize, and a freshly-added class_name is
-# invisible to a stale .godot global class cache — preload is immune to both.
-# ContentDb.instance() returns the autoload in the running app (it registers
-# itself in _init), else a shared lazily-created instance (verify runs).
-const ContentDb := preload("res://content/content_db.gd")
+# The reusable paperdoll widget (#639) — builds a SubViewport preview of a character.
+# The roster view uses it (front-facing) for the selected character; the creation view
+# uses the SAME widget large + drag-to-rotate. Preloaded by path (never the bare class
+# name): the headless --script verify has no global class cache — preload is immune.
+const PaperdollScript := preload("res://scenes/charselect/character_paperdoll.gd")
 
-# AssembledCharacter (②/T4, #541): the preview pane renders the SAME assembly node the
-# world uses, driven by the create-form pickers (and re-driven from a roster row's
-# persisted appearance on selection). Preloaded by path — the headless verify has no
-# global class cache. A content miss (no catalog for the race) degrades to the tinted
-# capsule fallback, matching the "content missing" picker state (spec §6).
-const AssembledCharacterScript := preload("res://characters/assembled_character.gd")
+# The creation view scene (#639), instanced on demand and revealed full-rect over the
+# roster. Preloaded by path for the same reason.
+const CharacterCreateScene := preload("res://scenes/charselect/character_create.tscn")
 
+## Render size of the roster paperdoll (the selected character, front-facing). Matches
+## the #630 sizing; a minimum, not a trap — under `canvas_items` stretch it scales.
+const ROSTER_PAPERDOLL_SIZE := Vector2i(260, 290)
+
+@onready var _roster_view: Control = %RosterView
 @onready var _account_label: Label = %AccountLabel
 @onready var _char_list: ItemList = %CharList
-@onready var _name_edit: LineEdit = %NameEdit
-@onready var _race_option: OptionButton = %RaceOption
-@onready var _class_option: OptionButton = %ClassOption
-@onready var _hair_option: OptionButton = %HairOption
-@onready var _face_option: OptionButton = %FaceOption
-@onready var _skin_option: OptionButton = %SkinOption
-@onready var _create_button: Button = %CreateButton
 @onready var _delete_button: Button = %DeleteButton
+@onready var _create_new_button: Button = %CreateNewButton
 @onready var _enter_button: Button = %EnterWorldButton
 @onready var _status: Label = %StatusLabel
 @onready var _preview_holder: Control = %PreviewHolder
@@ -76,8 +66,8 @@ var _store: CharacterStore
 var _account: String = ""
 var _session: Dictionary = {}
 var _pending_status: String = ""            # set by configure(), shown once in _ready
-var _preview_root: Node3D = null            # preview 3D container; holds the AssembledCharacter (②/T4) or capsule fallback
-var _content_missing: bool = false          # no appearance catalog for the selected race (#477, spec §6)
+var _roster_paperdoll: SubViewportContainer = null   # roster view's selected-character preview
+var _create_view: Control = null            # the creation view (instanced on first use, #639)
 
 # --- Server-authoritative character CRUD over the net thread (#279 / D-35) -----
 # When there is a live session (grant + WorldHello frame + worldd address), this
@@ -145,23 +135,13 @@ func configure(account: String, seed_rows: Array = [], session: Dictionary = {},
 func _ready() -> void:
 	if _store == null:
 		_store = CharacterStore.new()
-	_populate_pickers()
-	_build_placeholder_preview()
+	_build_roster_paperdoll()
 	_account_label.text = "Account: %s" % (_account if not _account.is_empty() else "(local)")
 
-	_create_button.pressed.connect(_on_create_pressed)
 	_delete_button.pressed.connect(_on_delete_pressed)
+	_create_new_button.pressed.connect(_on_create_new_pressed)
 	_enter_button.pressed.connect(_on_enter_pressed)
 	_char_list.item_selected.connect(_on_char_selected)
-	_name_edit.text_submitted.connect(func(_t: String) -> void: _on_create_pressed())
-	# Any appearance pick re-assembles the preview so the choice is visible before create
-	# (②/T4, #541 — the preview is the SAME AssembledCharacter the world builds).
-	_hair_option.item_selected.connect(func(_i: int) -> void: _refresh_preview_from_form())
-	_face_option.item_selected.connect(func(_i: int) -> void: _refresh_preview_from_form())
-	_skin_option.item_selected.connect(func(_i: int) -> void: _refresh_preview_from_form())
-	# Changing race re-drives the appearance pickers from that race's catalog (#477),
-	# which then re-assembles the preview for the new race.
-	_race_option.item_selected.connect(func(_i: int) -> void: _populate_appearance_pickers(_race_option.get_selected_id()))
 
 	_refresh_list()
 	# A pending status (e.g. a world connect-failure the player was bounced back with,
@@ -218,86 +198,27 @@ func _process(_delta: float) -> void:
 		_net.pump()
 
 
-# Fill the race + class + appearance pickers. Race/class come from the M0-frozen
-# roster; hair/face/skin are CATALOG-DRIVEN off MeridianContentDB (#477, spec ② §3):
-# the picker lists come from the appearance catalog for the selected race/sex, so
-# the ids offered are exactly the stable preset ints the server validates. When no
-# catalog is mounted for a race the pickers disable with a "content missing" state
-# (spec §6) instead of showing empty lists. Each item carries its id so create()
-# reads ids, never list indices.
-func _populate_pickers() -> void:
-	_race_option.clear()
-	for r in MeridianRoster.RACES:
-		_race_option.add_item(String(r["name"]), int(r["id"]))
-	_class_option.clear()
-	for c in MeridianRoster.CLASSES:
-		_class_option.add_item(String(c["name"]), int(c["id"]))
-	# Default to the M1-playable pair (Ardent / Vanguard), then drive the appearance
-	# pickers from that race's catalog.
-	_select_option_by_id(_race_option, MeridianRoster.DEFAULT_RACE_ID)
-	_select_option_by_id(_class_option, MeridianRoster.DEFAULT_CLASS_ID)
-	_populate_appearance_pickers(_race_option.get_selected_id())
+# --- Roster paperdoll (the selected character's preview) ----------------------
+
+# Build the roster view's paperdoll into %PreviewHolder: the shared widget (#639),
+# front-facing (rotation optional on the roster — spec). The selected character's
+# persisted race + appearance drive it via _refresh_selected_preview().
+# The widget anchors itself full-rect inside the (plain Control) holder (#643), so it
+# fills the "Selected character" panel and grows with it — custom_minimum_size is only a
+# floor. (No size flags here: %PreviewHolder is a plain Control, which lays children out
+# by anchors, not flags.)
+func _build_roster_paperdoll() -> void:
+	_roster_paperdoll = PaperdollScript.new()
+	_roster_paperdoll.name = "Paperdoll"
+	_roster_paperdoll.custom_minimum_size = Vector2(ROSTER_PAPERDOLL_SIZE)
+	_preview_holder.add_child(_roster_paperdoll)
 
 
-# (Re)fill the hair/face/skin pickers from the appearance catalog for `race_id`
-# (M1 sex 0 = male). A mounted catalog → each preset id becomes a picker item and
-# the pickers enable; no catalog → the pickers disable with a "(content missing)"
-# placeholder (spec §6), and _selected_appearance falls back to the default record.
-func _populate_appearance_pickers(race_id: int) -> void:
-	var cat: Dictionary = ContentDb.instance().catalog(race_id, 0)
-	var presets: Dictionary = cat.get("presets", {})
-	_content_missing = cat.is_empty() or not presets.has("hair")
-	_fill_preset_picker(_hair_option, presets.get("hair", []), "Hair")
-	_fill_preset_picker(_face_option, presets.get("face", []), "Face")
-	_fill_preset_picker(_skin_option, presets.get("skin", []), "Skin")
-	if not _content_missing:
-		# Default to the first preset of each channel (the catalog lists are ordered).
-		_select_option_by_id(_hair_option, MeridianAppearance.DEFAULT_HAIR_ID)
-		_select_option_by_id(_face_option, MeridianAppearance.DEFAULT_FACE_ID)
-		_select_option_by_id(_skin_option, MeridianAppearance.DEFAULT_SKIN_ID)
-	_refresh_preview_from_form()
-
-
-# Fill one preset picker from a catalog preset list ([{id, model}, ...]). Each item's
-# id IS the stable preset int. An empty list (no catalog for this race) disables the
-# picker with a single "(content missing)" item so the state is visible, not blank.
-func _fill_preset_picker(option: OptionButton, presets: Array, channel: String) -> void:
-	option.clear()
-	if presets.is_empty():
-		option.add_item("(content missing)")
-		option.disabled = true
-		return
-	for p in presets:
-		option.add_item("%s %d" % [channel, int(p["id"])], int(p["id"]))
-	option.disabled = false
-
-
-# The appearance record the create form currently shows: {version, hair, face, skin}.
-# Ids come straight off the pickers (each item id IS the preset id). With no catalog
-# for the selected race the record falls back to the default (the server clamps any
-# out-of-range appearance, so a create still succeeds — spec §9).
-func _selected_appearance() -> Dictionary:
-	if _content_missing:
-		return MeridianAppearance.default_appearance()
-	return {
-		"version": MeridianAppearance.VERSION,
-		"hair": _hair_option.get_selected_id(),
-		"face": _face_option.get_selected_id(),
-		"skin": _skin_option.get_selected_id(),
-	}
-
-
-func _select_option_by_id(option: OptionButton, id: int) -> void:
-	for i in range(option.item_count):
-		if option.get_item_id(i) == id:
-			option.select(i)
-			return
-
-
-# Rebuild the character list from the store. Each row shows "Name — Class (Race)" and
-# stores its character id as item metadata so delete/enter read the id, not the row index.
-# The current roster rows — the server roster cache when online (from CharList), or
-# the local store when offline. Each row is { id, name, race, class }.
+# Rebuild the character list from the current source. Each row shows "Name — Class (Race)"
+# and stores its character id as item metadata so delete/enter read the id, not the row
+# index. Re-selects the previously-selected id when it survives the refresh.
+# The current roster rows — the server roster cache when online (from CharList), or the
+# local store when offline. Each row is { id, name, race, class }.
 func _rows() -> Array:
 	return _roster if _online else _store.list()
 
@@ -316,17 +237,31 @@ func _refresh_list() -> void:
 		if int(row["id"]) == previously_selected:
 			_char_list.select(idx)
 	_update_action_buttons()
+	_refresh_selected_preview()
 
 
 func _on_char_selected(_index: int) -> void:
 	_update_action_buttons()
-	# Roster selection re-assembles the preview from THAT character's persisted appearance
-	# + race (②/T4, #541 — appearance rides the char-list wire, contract ① T5). Falls back
-	# to the default record for a row with no appearance (old server / offline seed).
+	_refresh_selected_preview()
+
+
+# Re-assemble the roster paperdoll from the SELECTED character's persisted appearance +
+# race (②/T4, #541 — appearance rides the char-list wire, contract ① T5). Falls back to
+# the default record for a row with no appearance (old server / offline seed). No-op when
+# nothing is selected (empty roster) — the preview just stays blank.
+func _refresh_selected_preview() -> void:
 	var row := _character_by_id(_selected_char_id())
 	if not row.is_empty():
 		_refresh_preview(int(row.get("race", 0)),
 			row.get("appearance", MeridianAppearance.default_appearance()), [])
+
+
+# Mount an AssembledCharacter for (race, appearance) into the roster paperdoll, replacing
+# whatever was there (delegates to the shared widget — the capsule fallback lives there).
+# Kept as a controller method so the headless verify can drive the roster preview directly.
+func _refresh_preview(race: int, appearance: Dictionary, equipment: Array) -> void:
+	if _roster_paperdoll != null:
+		_roster_paperdoll.set_appearance(race, appearance, equipment)
 
 
 # Enter World / Delete are only actionable when a character is selected.
@@ -343,38 +278,96 @@ func _selected_char_id() -> int:
 	return int(_char_list.get_item_metadata(sel[0]))
 
 
-func _on_create_pressed() -> void:
-	# Online: send CHAR_CREATE over the session; the roster refreshes on the OK reply
-	# (server is the source of truth). Offline: create in the local store immediately.
+# --- View switching (roster ⇄ creation, #639) ---------------------------------
+
+# "Create New Character" → reveal the creation view (full-rect over the roster). We do
+# NOT auto-open it on an empty roster (entry stays explicit — spec §Roster view layout).
+func _on_create_new_pressed() -> void:
+	_show_create_view()
+
+
+# Instance the creation view once (lazy) and wire its signals. THIS controller owns all
+# networking — the view only hands back the player's chosen values.
+func _ensure_create_view() -> Control:
+	if _create_view == null:
+		_create_view = CharacterCreateScene.instantiate()
+		_create_view.character_confirmed.connect(_on_create_confirmed)
+		_create_view.creation_cancelled.connect(_on_create_cancelled)
+		add_child(_create_view)
+		_create_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	return _create_view
+
+
+func _show_create_view() -> void:
+	var view := _ensure_create_view()
+	view.reset()
+	view.visible = true
+	_roster_view.visible = false
+
+
+func _show_roster_view() -> void:
+	if _create_view != null:
+		_create_view.visible = false
+	_roster_view.visible = true
+
+
+# The creation view confirmed a character. Validate locally (defense in depth — the view
+# already guarded the name), then drive the EXISTING create flow. On the OK result we
+# return to the roster and select the new character; a rejection surfaces on the creation
+# view (it stays open so the player can fix + retry — spec §Data flow step 5).
+func _on_create_confirmed(char_name: String, race: int, char_class: int, appearance: Dictionary) -> void:
+	var name := char_name.strip_edges()
+	# Local validation mirrors the server's (name non-empty ≤ 32; race/class from the
+	# frozen roster). Surface failures on the creation view so the player stays there.
+	if name.is_empty():
+		_notify_create_error("Enter a name first.")
+		return
+	if name.length() > 32:
+		_notify_create_error("A name can be at most 32 characters.")
+		return
+	if not MeridianRoster.is_valid_race(race):
+		_notify_create_error("Cannot create: invalid race.")
+		return
+	if not MeridianRoster.is_valid_class(char_class):
+		_notify_create_error("Cannot create: invalid class.")
+		return
+
 	if _online:
 		if not _handshaked:
-			_set_status("Still connecting to the realm…")
+			_notify_create_error("Still connecting to the realm…")
 			return
-		var name := _name_edit.text.strip_edges()
-		if name.is_empty():
-			_set_status("Enter a name first.")
-			return
-		var look := _selected_appearance()
 		var frame: PackedByteArray = _net.build_char_create_request_frame(
-			name, _race_option.get_selected_id(), _class_option.get_selected_id(),
-			int(look["hair"]), int(look["face"]), int(look["skin"]))
+			name, race, char_class,
+			int(appearance["hair"]), int(appearance["face"]), int(appearance["skin"]))
 		if _net.send_bulk(frame):
 			_set_status("Creating %s…" % name)
 		else:
-			_set_status("Could not send the create request.")
+			_notify_create_error("Could not send the create request.")
 		return
-	var result := _store.create(
-		_name_edit.text, _race_option.get_selected_id(), _class_option.get_selected_id(),
-		_selected_appearance()
-	)
+
+	# Offline: create in the local store immediately; the result returns to the roster.
+	var result := _store.create(name, race, char_class, appearance)
 	if not result.get("ok", false):
-		_set_status("Cannot create: %s" % String(result.get("detail", "unknown error")))
+		_notify_create_error("Cannot create: %s" % String(result.get("detail", "unknown error")))
 		return
 	var row: Dictionary = result["row"]
-	_name_edit.clear()
 	_refresh_list()
 	_select_char_id(int(row["id"]))
 	_set_status("Created %s the %s." % [String(row["name"]), MeridianRoster.class_name_for(int(row["class"]))])
+	_show_roster_view()
+
+
+func _on_create_cancelled() -> void:
+	# Cancel/Back → return to the roster with NO net traffic (spec §Data flow step 6).
+	_show_roster_view()
+
+
+# Surface a create failure on the creation view (so the player stays there to retry) AND
+# mirror it on the roster status line (the single source the #629 regression lock reads).
+func _notify_create_error(message: String) -> void:
+	_set_status(message)
+	if _create_view != null and _create_view.visible:
+		_create_view.show_error(message)
 
 
 func _on_delete_pressed() -> void:
@@ -447,101 +440,7 @@ func _select_char_id(id: int) -> void:
 			_char_list.select(i)
 			break
 	_update_action_buttons()
-
-
-# Build the preview pane: a SubViewport (light + camera) with a `_preview_root` the
-# character model mounts into. The model is an AssembledCharacter (②/T4, #541) driven by
-# the create-form pickers — the SAME assembly node the world scene builds — replacing the
-# D-11 shared capsule placeholder. Built in code so the .tscn stays a plain Control tree
-# (same convention as scenes/world/camera_demo.gd). _refresh_preview_from_form() mounts
-# the first model once the pickers are populated.
-func _build_placeholder_preview() -> void:
-	# #630: the paperdoll grew (180×220 → 260×290: ~+44% wide, ~+32% tall) to match the
-	# larger char-select window, and the SubViewport RENDER size tracks it so the model is
-	# drawn at the new resolution (not upscaled-blurry). Height is capped at 290 (not the
-	# fuller 330) so the create-form column still fits the 972-tall base window without
-	# pushing the Title off-screen — the form is a long single column; see the Theme note in
-	# char_select.tscn. Under the project's `canvas_items` stretch the SubViewportContainer
-	# — a Control — scales with the window like the rest of the UI, so it also grows on resize.
-	var container := SubViewportContainer.new()
-	container.stretch = true
-	container.custom_minimum_size = Vector2(260, 290)
-	container.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-
-	var viewport := SubViewport.new()
-	viewport.size = Vector2i(260, 290)
-	viewport.transparent_bg = true
-	container.add_child(viewport)
-
-	var world_root := Node3D.new()
-	viewport.add_child(world_root)
-
-	var light := DirectionalLight3D.new()
-	light.rotation = Vector3(deg_to_rad(-45.0), deg_to_rad(35.0), 0.0)
-	world_root.add_child(light)
-
-	# The model mounts under this container so a re-assemble just clears + rebuilds it.
-	_preview_root = Node3D.new()
-	_preview_root.name = "PreviewRoot"
-	world_root.add_child(_preview_root)
-
-	# Framed for a standing figure (feet at y=0, head ~1.8) rather than the old centered
-	# capsule — the assembled body is rooted at the feet.
-	var cam := Camera3D.new()
-	cam.position = Vector3(0, 1.0, 3.2)
-	cam.current = true
-	world_root.add_child(cam)
-
-	_preview_holder.add_child(container)
-	_refresh_preview_from_form()
-
-
-# Re-assemble the preview from the CURRENT create-form state (selected race + the
-# appearance record the pickers report). Called on every appearance/race pick.
-func _refresh_preview_from_form() -> void:
-	_refresh_preview(_race_option.get_selected_id(), _selected_appearance(), [])
-
-
-# Mount an AssembledCharacter for (race, appearance) into the preview, replacing whatever
-# was there. On a content miss (no catalog for the race — assemble() false, spec §6) the
-# tinted-capsule fallback stands in, matching the "content missing" picker state. No-op
-# until the preview root is built (order-independent).
-func _refresh_preview(race: int, appearance: Dictionary, equipment: Array) -> void:
-	if _preview_root == null:
-		return
-	for child in _preview_root.get_children():
-		child.free()
-	var assembled = AssembledCharacterScript.new()
-	assembled.name = "PreviewBody"
-	var ok: bool = assembled.assemble(race, 0, appearance, equipment)
-	if ok:
-		_preview_root.add_child(assembled)
-		return
-	assembled.free()
-	_preview_root.add_child(_make_preview_capsule(int(appearance.get("skin", MeridianAppearance.DEFAULT_SKIN_ID))))
-
-
-# The tinted-capsule fallback (D-11 placeholder), used when no catalog is mounted for the
-# selected race (spec §6). Tinted by the chosen skin preset so the pick still reads (#435).
-func _make_preview_capsule(skin_id: int) -> MeshInstance3D:
-	var body := MeshInstance3D.new()
-	body.name = "PreviewBody"
-	var capsule := CapsuleMesh.new()
-	capsule.height = 1.8
-	capsule.radius = 0.35
-	body.mesh = capsule
-	body.position = Vector3(0, 0.9, 0)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = MeridianAppearance.skin_color(skin_id)
-	body.material_override = mat
-	# A small "nose" so the model has an obvious front (facing -Z, Godot forward).
-	var nose := MeshInstance3D.new()
-	var nm := BoxMesh.new()
-	nm.size = Vector3(0.2, 0.2, 0.5)
-	nose.mesh = nm
-	nose.position = Vector3(0, 0.2, -0.45)
-	body.add_child(nose)
-	return body
+	_refresh_selected_preview()
 
 
 # --- Net-thread signal handlers (online only) --------------------------------
@@ -578,23 +477,29 @@ func _on_net_char_list(characters: Array, status: int = 0) -> void:
 		_set_status("Select a character to enter the world, or create a new one.")
 
 
-# Create result: OK re-lists (server is the source of truth); else a typed error.
+# Create result: OK re-lists (server is the source of truth) and returns to the roster;
+# a typed rejection surfaces on the creation view so the player can fix + retry.
 func _on_net_char_create_result(status: int, character_id: int) -> void:
 	# world.fbs CharCreateStatus: 0 OK, 1 DUPLICATE_NAME, 2 INVALID_RACE,
 	# 3 INVALID_CLASS, 4 INVALID_NAME, 5 INTERNAL, 6 LIMIT_REACHED.
 	if status == 0:
-		_name_edit.clear()
 		_pending_select_id = character_id  # select the new character once it lists
 		_net.send_bulk(_net.build_char_list_request_frame())
 		_set_status("Character created.")
+		_show_roster_view()  # OK → back to the roster (the new char auto-selects on re-list)
 		return
+	# #629: the status→message map MUST mirror schema/net/world.fbs CharCreateStatus 1:1.
+	# The raw wire status reaches this handler verbatim, so a scrambled map silently
+	# mislabels rejections (the reported bug: LIMIT_REACHED falling through to the generic
+	# "server error"). Keep exact text; the #629 regression lock asserts it (char_select_verify.gd).
 	var reasons := {
 		1: "that name is taken", 2: "invalid race", 3: "invalid class",
 		4: "invalid name", 5: "server error",
 		6: "you already have the maximum number of characters",
 	}
 	var why: String = reasons.get(status, "server error")
-	_set_status("Cannot create: %s." % why)
+	# Rejection → stay on the creation view with the honest message (spec §Data flow step 5).
+	_notify_create_error("Cannot create: %s." % why)
 
 
 # Delete result: OK re-lists; REFUSED/INTERNAL surfaces a message.
