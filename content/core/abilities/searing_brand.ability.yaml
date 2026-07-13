@@ -1,10 +1,19 @@
-# Seed skeleton pack (SP1.8 integration proof) — a ranged burn that also softens
-# the target's armor. Exercises the `dot` primitive AND a `debuff` whose
-# `attribute` field is L011-resolved against the meridian/attribute@1 catalog.
+# Seed skeleton pack (SP1.8 integration proof) — a ranged burn that also weakens
+# the target. Reworked (#688 CI fix) from a dot + armor-debuff onto the
+# currently-emittable `aura` primitive: periodic fire damage (the burn) plus a
+# stat_mods entry that weakens the target's strength (the "softening"). The
+# world-DB DDL (schema/sql/world/30_ability.sql) only carries the SP1 effect
+# palette — damage / heal / aura / threat — so the dot/debuff kinds the ability
+# *schema* gained in #653 have no world.sql emission yet. Extending the
+# `ability_effect` DDL + mcc emit-sql per new kind is real kernel-consumption work
+# and is DEFERRED to sub-project 2 (kernel ability-engine). New-effect-kind
+# coverage still lives in the tests/ validation fixtures, which never emit to the
+# DB. (armor is a derived attribute, not a v1 primary statKey, so the weakening
+# rides on strength here.)
 schema: meridian/ability@1
 id: core:ability.searing_brand
 name: Searing Brand
-description: Marks the target with fire, dealing {amount} damage over time and weakening its armor.
+description: Marks the target with fire, dealing {amount} damage over time and weakening it.
 school: fire
 target: enemy
 range_m: 30
@@ -15,13 +24,12 @@ resource:
   type: mana
   amount: 20
 effects:
-  - kind: dot
-    amount: { min: 4, max: 6 }
+  - kind: aura
     duration_ms: 9000
-    tick_ms: 3000
-    coefficient: 0.15
-  - kind: debuff
-    attribute: core:attribute.armor
-    amount: -5
-    modifier: percent
-    duration_ms: 9000
+    periodic:
+      kind: damage
+      amount: { min: 4, max: 6 }
+      tick_ms: 3000
+    stat_mods:
+      - stat: strength
+        amount: -5

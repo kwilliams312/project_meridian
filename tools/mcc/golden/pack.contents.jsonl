@@ -131,9 +131,9 @@
 {"id":"core:attribute.stamina","numeric_id":131,"resource":"res://meridian/core/tables/attribute.bin","hash":"5943a0ec8d3230d635b65055494c89d9bac337138bd8260882ca42b9928cf3de"}
 {"id":"core:attribute.strength","numeric_id":132,"resource":"res://meridian/core/tables/attribute.bin","hash":"c93f949d308cdeccb0e5d5d8eaed36d4a09bc3f2cef486020530466343377f17"}
 {"id":"core:ability.cleave_strike","numeric_id":133,"resource":"res://meridian/core/tables/ability.bin","hash":"409b0f9315a0b6f5baf0d3d1cd4b85ba07976a1f2684a978822e72bbe5c3c42c"}
-{"id":"core:ability.iron_resolve","numeric_id":134,"resource":"res://meridian/core/tables/ability.bin","hash":"0bcc22aee52b465057b1bd80bccfd682cc7b7f3c54a1b9c2f1eb560310ca3f14"}
+{"id":"core:ability.iron_resolve","numeric_id":134,"resource":"res://meridian/core/tables/ability.bin","hash":"271cc7e12ddc15b0988ea0909e88366e2760ee9166fa630602b6c8f8332609b8"}
 {"id":"core:ability.mending_word","numeric_id":135,"resource":"res://meridian/core/tables/ability.bin","hash":"bfc8f5c3254ef0c9abf20f5364bfc24e3ea9b95c35baad665e24db2ca63e816d"}
-{"id":"core:ability.searing_brand","numeric_id":136,"resource":"res://meridian/core/tables/ability.bin","hash":"b7e6becee19d4002d41d176563cf919eaf877b8814ae14d1e2efb8cb1da7a428"}
+{"id":"core:ability.searing_brand","numeric_id":136,"resource":"res://meridian/core/tables/ability.bin","hash":"54874e64507f6f1992ba6617b5e175065d574a50c85ddd5797e7b8552244c5b5"}
 {"id":"core:class.vanguard","numeric_id":137,"resource":"res://meridian/core/tables/class.bin","hash":"acb3d37904bad3696aa097ef88ae479bfd09adb5b2a6ecc52b1a3c621781822f"}
 {"id":"core:class.warden","numeric_id":138,"resource":"res://meridian/core/tables/class.bin","hash":"e5bcbbac6af46177c099fe99c575e2457d98e808311c0c8684b3e81388727c78"}
 {"id":"core:race.ardent","numeric_id":139,"resource":"res://meridian/core/tables/race.bin","hash":"d6aba34758d66dac09dc5510f028d9c59757bc15cae71a0f68598df2e1c5e15d"}

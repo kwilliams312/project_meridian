@@ -1,6 +1,12 @@
 # Seed skeleton pack (SP1.8 integration proof) — a self buff that raises stamina.
-# Exercises the `buff` effect primitive whose `attribute` field is L011-resolved
-# against the meridian/attribute@1 catalog (since #652).
+# Reworked (#688 CI fix) onto the currently-emittable `aura` primitive with a
+# stat_mods entry. The world-DB DDL (schema/sql/world/30_ability.sql) only carries
+# the SP1 effect palette — damage / heal / aura / threat — so the richer
+# buff/debuff/dot/… kinds the ability *schema* gained in #653 have no world.sql
+# emission yet. Extending the `ability_effect` DDL + mcc emit-sql per new kind is
+# real kernel-consumption work and is DEFERRED to sub-project 2 (kernel
+# ability-engine). New-effect-kind coverage still lives in the tests/ validation
+# fixtures, which never emit to the DB.
 schema: meridian/ability@1
 id: core:ability.iron_resolve
 name: Iron Resolve
@@ -16,8 +22,8 @@ resource:
   type: rage
   amount: 10
 effects:
-  - kind: buff
-    attribute: core:attribute.stamina
-    amount: 8
-    modifier: flat
+  - kind: aura
     duration_ms: 12000
+    stat_mods:
+      - stat: stamina
+        amount: 8
