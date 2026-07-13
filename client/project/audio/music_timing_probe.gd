@@ -94,10 +94,10 @@ func _run_transitions(zmp, n: int) -> Array:
 	var events: Array = []
 	var state := "explore"
 	for idx in range(n):
-		var nxt := _FLIP_STATES[(idx + 1) % _FLIP_STATES.size()]
+		var nxt: String = _FLIP_STATES[(idx + 1) % _FLIP_STATES.size()]
 		if nxt == state:
 			nxt = _FLIP_STATES[(idx + 2) % _FLIP_STATES.size()]
-		var req := zmp.ground_truth_sample()
+		var req: int = zmp.ground_truth_sample()
 		var predicted: int = zmp.predicted_boundary(req, nxt)
 		zmp.set_music_state(nxt, req)
 		# Advance real frames until the player fires the queued flip.
@@ -120,7 +120,7 @@ func _run_transitions(zmp, n: int) -> Array:
 func _run_drift(zmp, bars: int) -> Array:
 	var samples: Array = []
 	var spb: float = MusicCore.samples_per_bar(
-		float(zmp.set_meta()["bpm"]), int(zmp.set_meta()["beats_per_bar"]), 44100)
+		float(zmp.music_meta()["bpm"]), int(zmp.music_meta()["beats_per_bar"]), 44100)
 	for bar in range(bars):
 		var positions: Array = zmp.stem_positions()
 		samples.append({

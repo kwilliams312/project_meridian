@@ -77,7 +77,7 @@ func _initialize() -> void:
 	_check("player is a Node", zmp is Node)
 	_check("MusicStems bus exists", AudioServer.get_bus_index("MusicStems") != -1)
 	_check("starts in explore (zone default)", zmp.current_state() == "explore")
-	var meta: Dictionary = zmp.set_meta()
+	var meta: Dictionary = zmp.music_meta()
 	_check("set meta bpm 96 / 4-4 / 96 bars",
 		meta["bpm"] == 96.0 and meta["beats_per_bar"] == 4 and meta["length_bars"] == 96)
 	var positions = zmp.stem_positions()
