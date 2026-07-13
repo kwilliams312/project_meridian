@@ -1,0 +1,34 @@
+# Seed skeleton pack (SP1.8 integration proof) — the Vanguard, a front-line melee
+# class. Exercises ALL seven class fields with cross-references that L011-resolve:
+#   - abilities            → seed abilities (cleave_strike/iron_resolve/searing_brand)
+#   - usable_armor_types   → existing core equip_types (plate/mail, category=armor)
+#   - usable_weapon_types  → existing core equip_types (two_hand/one_hand, weapon)
+#   - role                 → a single combat role (tank) — the role XOR hybrid branch
+#   - attribute_mods       → core attribute ids (strength/stamina)
+#   - race_limits          → seed races (ardent/dolmen)
+#   - talent_tree          → seed talent_tree (vanguard_path)
+# Original clean-room archetype (roster.h placeholder roster; CONTRIBUTING.md).
+schema: meridian/class@1
+id: core:class.vanguard
+name: Vanguard
+description: A front-line melee defender who holds the line.
+abilities:
+  - core:ability.cleave_strike
+  - core:ability.iron_resolve
+  - core:ability.searing_brand
+usable_armor_types:
+  - core:equip_type.plate
+  - core:equip_type.mail
+usable_weapon_types:
+  - core:equip_type.two_hand
+  - core:equip_type.one_hand
+role: tank
+attribute_mods:
+  - attribute: core:attribute.strength
+    value: 2
+  - attribute: core:attribute.stamina
+    value: 1
+race_limits:
+  - core:race.ardent
+  - core:race.dolmen
+talent_tree: core:talent_tree.vanguard_path

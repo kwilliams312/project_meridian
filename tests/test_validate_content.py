@@ -2459,6 +2459,378 @@ class TestClass:
         assert re.compile(defs["classId"]["pattern"]).match("core:class.warrior")
 
 
+@pytest.mark.unit
+class TestSeedPackIntegration:
+    """Story #658 (SP1.8) — the seed-skeleton-pack integration proof.
+
+    The per-schema suites above validate each new SP1 type in ISOLATION (a class
+    fixture with just-enough supporting entities, a talent fixture, etc.). This
+    class instead assembles the WHOLE cross-referencing graph as one pack and
+    proves it resolves as a unit — the integration guarantee the seed pack in
+    content/core/ rests on:
+
+        class ─abilities──────────────▶ ability ─buff/debuff attribute─▶ attribute
+              ─usable_armor/weapon────▶ equip_type
+              ─attribute_mods────────▶ attribute
+              ─race_limits───────────▶ race ─appearance─▶ appearance_catalog
+              ─talent_tree───────────▶ talent_tree ─tiers.talents─▶ talent
+                                                                    ─grants.ability─▶ ability
+                                                                    ─grants.attribute─▶ attribute
+
+    Then it applies the exact crafted-invalid mutations story #658 calls out —
+    dangling ref of each kind, a renumbered/reused idmap index, an unknown
+    attribute, an over-`maxItems` effect list, both role+hybrid on a class, and a
+    talent_tree id where a talent id is required — and confirms EACH is rejected
+    in that integrated context (not just against an isolated fixture)."""
+
+    APPEARANCE = """\
+    schema: meridian/appearance_catalog@1
+    id: sp:appearance.hero.male
+    race: ardent
+    sex: male
+    skeleton: art.char.hero.male.skeleton
+    body_model: art.char.hero.male.base
+    presets:
+      hair: [{ id: 1, model: art.char.hero.male.hair_short }]
+      face: [{ id: 1, texture: art.char.hero.male.face_a }]
+      skin: [{ id: 1, palette: art.char.hero.male.skin_pale }]
+    morphs: []
+    """
+
+    def _attr(self, name: str, kind: str = "primary") -> str:
+        return (
+            "schema: meridian/attribute@1\n"
+            f"id: sp:attribute.{name}\n"
+            f"name: {name.title()}\n"
+            f"kind: {kind}\n"
+        )
+
+    # ability.cleave — plain damage; ability.mend — plain heal.
+    ABILITY_CLEAVE = """\
+    schema: meridian/ability@1
+    id: sp:ability.cleave
+    name: Cleave
+    target: enemy
+    school: physical
+    effects:
+      - kind: damage
+        amount: { min: 5, max: 9 }
+    """
+    ABILITY_MEND = """\
+    schema: meridian/ability@1
+    id: sp:ability.mend
+    name: Mend
+    target: friendly
+    school: holy
+    effects:
+      - kind: heal
+        amount: { min: 8, max: 12 }
+    """
+    # ability.brand — a NEW-palette kit (dot + debuff) whose debuff attribute ref
+    # is L011-resolved against sp:attribute.armor (the #652 behaviour this story
+    # reconciles the ability.schema comment against).
+    ABILITY_BRAND = """\
+    schema: meridian/ability@1
+    id: sp:ability.brand
+    name: Brand
+    target: enemy
+    school: fire
+    effects:
+      - kind: dot
+        amount: { min: 2, max: 3 }
+        duration_ms: 6000
+        tick_ms: 3000
+      - kind: debuff
+        attribute: sp:attribute.armor
+        amount: -5
+        modifier: percent
+        duration_ms: 6000
+    """
+    # ability.resolve — a self buff whose attribute ref resolves to sp:attribute.stamina.
+    ABILITY_RESOLVE = """\
+    schema: meridian/ability@1
+    id: sp:ability.resolve
+    name: Resolve
+    target: self
+    school: physical
+    effects:
+      - kind: buff
+        attribute: sp:attribute.stamina
+        amount: 6
+        modifier: flat
+        duration_ms: 10000
+    """
+
+    ARMOR = """\
+    schema: meridian/equip_type@1
+    id: sp:equip_type.plate
+    name: Plate
+    category: armor
+    slot_class: chest
+    """
+    WEAPON = """\
+    schema: meridian/equip_type@1
+    id: sp:equip_type.blade
+    name: Blade
+    category: weapon
+    slot_class: main
+    """
+
+    # Two cosmetic races, both rendering as the one appearance catalog (a race is a
+    # REFERENCE to a catalog, so sharing one catalog is fine — L083 only bars two
+    # catalogs for the same (race, sex)).
+    RACE_ARDENT = """\
+    schema: meridian/race@1
+    id: sp:race.ardent
+    name: Ardent
+    appearance: appearance.hero.male
+    """
+    RACE_DOLMEN = """\
+    schema: meridian/race@1
+    id: sp:race.dolmen
+    name: Dolmen
+    appearance: appearance.hero.male
+    """
+
+    # Talents mix an ability grant with a permanent passive buff over an attribute.
+    TALENT_FURY = """\
+    schema: meridian/talent@1
+    id: sp:talent.battle_fury
+    name: Battle Fury
+    grants:
+      - kind: ability
+        ability: ability.cleave
+      - kind: buff
+        attribute: attribute.strength
+        amount: 5
+    """
+    TALENT_GRACE = """\
+    schema: meridian/talent@1
+    id: sp:talent.warding_grace
+    name: Warding Grace
+    grants:
+      - kind: ability
+        ability: ability.mend
+      - kind: buff
+        attribute: attribute.intellect
+        amount: 3
+    """
+    TALENT_TREE = """\
+    schema: meridian/talent_tree@1
+    id: sp:talent_tree.path
+    name: Seed Path
+    tiers:
+      - required_points: 0
+        talents:
+          - talent.battle_fury
+      - required_points: 5
+        talents:
+          - talent.warding_grace
+    """
+
+    # class.vanguard — single role (tank), exercises ALL seven fields.
+    CLASS_VANGUARD = """\
+    schema: meridian/class@1
+    id: sp:class.vanguard
+    name: Vanguard
+    abilities:
+      - ability.cleave
+      - ability.resolve
+      - ability.brand
+    usable_armor_types:
+      - equip_type.plate
+    usable_weapon_types:
+      - equip_type.blade
+    role: tank
+    attribute_mods:
+      - attribute: attribute.strength
+        value: 2
+      - attribute: attribute.stamina
+        value: 1
+    race_limits:
+      - race.ardent
+      - race.dolmen
+    talent_tree: talent_tree.path
+    """
+    # class.warden — the hybrid branch; race_limits/talent_tree omitted (defaults).
+    CLASS_WARDEN = """\
+    schema: meridian/class@1
+    id: sp:class.warden
+    name: Warden
+    abilities:
+      - ability.mend
+      - ability.brand
+    usable_armor_types:
+      - equip_type.plate
+    usable_weapon_types:
+      - equip_type.blade
+    hybrid:
+      - dps_ranged
+      - healer
+    attribute_mods:
+      - attribute: attribute.agility
+        value: 2
+    """
+
+    PACK = """\
+    schema: meridian/pack@1
+    namespace: sp
+    name: Seed Integration Pack
+    version: 0.1.0
+    content_schema_version: 1
+    engine:
+      godot: "4.6"
+    license: Apache-2.0
+    """
+
+    def _seed_pack(self) -> dict[str, str]:
+        """The complete, valid, cross-referencing seed pack as an in-tree dict."""
+        return {
+            "sp/pack.yaml": self.PACK,
+            "sp/appearance/hero_male.appearance.yaml": self.APPEARANCE,
+            "sp/attributes/strength.attribute.yaml": self._attr("strength"),
+            "sp/attributes/stamina.attribute.yaml": self._attr("stamina"),
+            "sp/attributes/intellect.attribute.yaml": self._attr("intellect"),
+            "sp/attributes/agility.attribute.yaml": self._attr("agility"),
+            "sp/attributes/armor.attribute.yaml": self._attr("armor", "derived"),
+            "sp/abilities/cleave.ability.yaml": self.ABILITY_CLEAVE,
+            "sp/abilities/mend.ability.yaml": self.ABILITY_MEND,
+            "sp/abilities/brand.ability.yaml": self.ABILITY_BRAND,
+            "sp/abilities/resolve.ability.yaml": self.ABILITY_RESOLVE,
+            "sp/equip_types/plate.equip_type.yaml": self.ARMOR,
+            "sp/equip_types/blade.equip_type.yaml": self.WEAPON,
+            "sp/races/ardent.race.yaml": self.RACE_ARDENT,
+            "sp/races/dolmen.race.yaml": self.RACE_DOLMEN,
+            "sp/talents/battle_fury.talent.yaml": self.TALENT_FURY,
+            "sp/talents/warding_grace.talent.yaml": self.TALENT_GRACE,
+            "sp/talent_trees/path.talent_tree.yaml": self.TALENT_TREE,
+            "sp/classes/vanguard.class.yaml": self.CLASS_VANGUARD,
+            "sp/classes/warden.class.yaml": self.CLASS_WARDEN,
+        }
+
+    # -- positive: the whole graph resolves as one pack ----------------------
+
+    def test_seed_pack_resolves_clean(self, tmp_path):
+        # Every cross-reference in the class→race/ability/equip_type/attribute/
+        # talent_tree→talent→ability/attribute graph resolves (L011) — no errors.
+        res = run(tmp_path, self._seed_pack())
+        assert res.errors == [], res.errors
+
+    # -- crafted-invalid mutations (story #658): each must be REJECTED -------
+
+    def test_dangling_ability_ref_rejected(self, tmp_path):
+        pack = self._seed_pack()
+        pack["sp/classes/vanguard.class.yaml"] = self.CLASS_VANGUARD.replace(
+            "ability.cleave", "ability.ghost"
+        )
+        assert "L011" in codes(run(tmp_path, pack).errors)
+
+    def test_dangling_equip_type_ref_rejected(self, tmp_path):
+        pack = self._seed_pack()
+        pack["sp/classes/vanguard.class.yaml"] = self.CLASS_VANGUARD.replace(
+            "equip_type.blade", "equip_type.ghost"
+        )
+        assert "L011" in codes(run(tmp_path, pack).errors)
+
+    def test_dangling_race_limit_ref_rejected(self, tmp_path):
+        pack = self._seed_pack()
+        pack["sp/classes/vanguard.class.yaml"] = self.CLASS_VANGUARD.replace(
+            "race.dolmen", "race.ghost"
+        )
+        assert "L011" in codes(run(tmp_path, pack).errors)
+
+    def test_dangling_talent_tree_ref_rejected(self, tmp_path):
+        pack = self._seed_pack()
+        pack["sp/classes/vanguard.class.yaml"] = self.CLASS_VANGUARD.replace(
+            "talent_tree.path", "talent_tree.ghost"
+        )
+        assert "L011" in codes(run(tmp_path, pack).errors)
+
+    def test_dangling_talent_ref_in_tree_rejected(self, tmp_path):
+        pack = self._seed_pack()
+        pack["sp/talent_trees/path.talent_tree.yaml"] = self.TALENT_TREE.replace(
+            "talent.warding_grace", "talent.ghost"
+        )
+        assert "L011" in codes(run(tmp_path, pack).errors)
+
+    def test_dangling_talent_grant_ability_ref_rejected(self, tmp_path):
+        pack = self._seed_pack()
+        pack["sp/talents/battle_fury.talent.yaml"] = self.TALENT_FURY.replace(
+            "ability.cleave", "ability.ghost"
+        )
+        assert "L011" in codes(run(tmp_path, pack).errors)
+
+    def test_dangling_race_appearance_ref_rejected(self, tmp_path):
+        pack = self._seed_pack()
+        pack["sp/races/ardent.race.yaml"] = self.RACE_ARDENT.replace(
+            "appearance.hero.male", "appearance.ghost"
+        )
+        assert "L011" in codes(run(tmp_path, pack).errors)
+
+    def test_unknown_attribute_in_ability_debuff_rejected(self, tmp_path):
+        # ability.brand's debuff references an attribute id no entity defines.
+        pack = self._seed_pack()
+        pack["sp/abilities/brand.ability.yaml"] = self.ABILITY_BRAND.replace(
+            "attribute.armor", "attribute.ghost"
+        )
+        assert "L011" in codes(run(tmp_path, pack).errors)
+
+    def test_unknown_attribute_in_class_mod_rejected(self, tmp_path):
+        pack = self._seed_pack()
+        pack["sp/classes/warden.class.yaml"] = self.CLASS_WARDEN.replace(
+            "attribute.agility", "attribute.ghost"
+        )
+        assert "L011" in codes(run(tmp_path, pack).errors)
+
+    def test_reused_idmap_index_rejected(self, tmp_path):
+        # A hand-edited idmap that lands two ids on the same numeric index — the
+        # append-only/no-reuse discipline (L016, spec §3) applied to the seed pack.
+        pack = self._seed_pack()
+        pack["sp/idmap.lock"] = (
+            "schema: meridian/idmap@1\n"
+            "namespace: sp\n"
+            "band: 0\n"
+            "released_watermark: 0\n"
+            "map:\n"
+            "  sp:ability.cleave: 1\n"
+            "  sp:ability.mend: 1\n"  # collision: two ids share index 1
+        )
+        assert "L016" in codes(run(tmp_path, pack).errors)
+
+    def test_over_limit_ability_effects_rejected(self, tmp_path):
+        # >6 effects blows the ability effects.maxItems ceiling (SCHEMA).
+        pack = self._seed_pack()
+        one = "      - kind: cc\n        type: stun\n        duration_ms: 1000\n"
+        pack["sp/abilities/brand.ability.yaml"] = (
+            "    schema: meridian/ability@1\n"
+            "    id: sp:ability.brand\n"
+            "    name: Brand\n"
+            "    target: enemy\n"
+            "    school: fire\n"
+            "    effects:\n" + textwrap.indent(one * 7, "    ")
+        )
+        assert "SCHEMA" in codes(run(tmp_path, pack).errors)
+
+    def test_both_role_and_hybrid_rejected(self, tmp_path):
+        # role XOR hybrid: adding a `hybrid` to the role-based Vanguard breaks the
+        # schema's top-level oneOf.
+        pack = self._seed_pack()
+        pack["sp/classes/vanguard.class.yaml"] = self.CLASS_VANGUARD.replace(
+            "    role: tank\n",
+            "    role: tank\n    hybrid:\n      - tank\n      - healer\n",
+        )
+        assert "SCHEMA" in codes(run(tmp_path, pack).errors)
+
+    def test_talent_tree_id_where_talent_id_required_rejected(self, tmp_path):
+        # A tier's `talents` list demands talent ids; a talent_tree id has the wrong
+        # type segment and is rejected at the SCHEMA layer (talentRef pattern).
+        pack = self._seed_pack()
+        pack["sp/talent_trees/path.talent_tree.yaml"] = self.TALENT_TREE.replace(
+            "talent.warding_grace", "talent_tree.path"
+        )
+        assert "SCHEMA" in codes(run(tmp_path, pack).errors)
+
+
 @pytest.mark.integration
 class TestRepoContent:
     def test_repo_content_validates_clean(self):

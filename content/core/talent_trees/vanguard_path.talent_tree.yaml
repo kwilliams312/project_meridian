@@ -1,0 +1,15 @@
+# Seed skeleton pack (SP1.8 integration proof) — a simple two-tier talent tree.
+# Row-unlock by points (spec §2.5): the opening row offers Battle Fury; the
+# second row unlocks at 5 spent points and offers Warding Grace. Both talent ids
+# are L011-resolved. Referenced by class.vanguard via `talent_tree`.
+schema: meridian/talent_tree@1
+id: core:talent_tree.vanguard_path
+name: Vanguard Path
+description: The Vanguard's tiered talent progression.
+tiers:
+  - required_points: 0
+    talents:
+      - core:talent.battle_fury
+  - required_points: 5
+    talents:
+      - core:talent.warding_grace

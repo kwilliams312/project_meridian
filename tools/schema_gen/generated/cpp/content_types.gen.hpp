@@ -564,7 +564,7 @@ struct AbilityEffect {
     std::optional<AbilityEffectPeriodic> periodic;  // optional
     std::vector<AbilityEffectStatMod> stat_mods;  // optional
     std::optional<std::int64_t> tick_ms;  // Interval between damage ticks; min 500 (server tick budget).
-    std::optional<std::string> attribute;  // The attribute this modifies, referenced by contentId (`<ns>:attribute.<name>`). Resolution against the attribute catalog is validated where the ability is consumed, not here.
+    std::optional<std::string> attribute;  // The attribute this modifies, referenced by contentId (`<ns>:attribute.<name>`). The pattern is only a SHAPE check here; that the id resolves to a defined meridian/attribute@1 entity is a content-level cross-reference check (L011, spec §3) run by validate_content.py + mcc — since #652 (`attribute` in the ref grammar) this attribute ref IS L011-resolved like any other.
     std::optional<AbilityEffectModifier> modifier;  // How amount is applied to the attribute (server-authoritative).
     std::optional<AbilityEffectType> type;  // Crowd-control category applied for duration_ms.
     std::optional<AbilityEffectPool> pool;  // Which resource pool is affected.

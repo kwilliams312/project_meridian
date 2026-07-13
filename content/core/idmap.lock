@@ -3,8 +3,12 @@ namespace: core
 band: 0                      # assigned once, immutable (SAD §2.4)
 released_watermark: 0      # highest local index frozen by a tagged release
 map:                         # append-only; local index (SAD §2.4)
+  core:ability.cleave_strike: 133
+  core:ability.iron_resolve: 134
+  core:ability.mending_word: 135
   core:ability.minor_healing: 1
   core:ability.pickaxe_slam: 2
+  core:ability.searing_brand: 136
   core:amb.zone01.forest_day: 3
   core:appearance.ardent.male: 82
   core:appearance.dolmen.male: 117
@@ -68,6 +72,8 @@ map:                         # append-only; local index (SAD §2.4)
   core:attribute.intellect: 130
   core:attribute.stamina: 131
   core:attribute.strength: 132
+  core:class.vanguard: 137
+  core:class.warden: 138
   core:dye.bone: 77
   core:dye.russet: 78
   core:dye.slate: 79
@@ -124,6 +130,8 @@ map:                         # append-only; local index (SAD §2.4)
   core:quest.the_deep_tally: 70
   core:quest.trail_of_the_digmasters: 71
   core:quest.wardens_watch: 72
+  core:race.ardent: 139
+  core:race.dolmen: 140
   core:sfx.char.cindermaw: 73
   core:sfx.char.ember_wisp: 74
   core:sfx.char.human_male: 30
@@ -133,5 +141,8 @@ map:                         # append-only; local index (SAD §2.4)
   core:spawn.zone01_cinderdeep_deep: 75
   core:spawn.zone01_emberfall_village: 34
   core:spawn.zone01_kobold_camp: 35
+  core:talent.battle_fury: 141
+  core:talent.warding_grace: 142
+  core:talent_tree.vanguard_path: 143
   core:vendor.bren_general_goods: 36
   core:zone.zone01: 37

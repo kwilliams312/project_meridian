@@ -146,8 +146,11 @@ properties:
             attribute:
               description: >-
                 The attribute this modifies, referenced by contentId
-                (`<ns>:attribute.<name>`). Resolution against the attribute
-                catalog is validated where the ability is consumed, not here.
+                (`<ns>:attribute.<name>`). The pattern is only a SHAPE check here;
+                that the id resolves to a defined meridian/attribute@1 entity is a
+                content-level cross-reference check (L011, spec §3) run by
+                validate_content.py + mcc — since #652 (`attribute` in the ref
+                grammar) this attribute ref IS L011-resolved like any other.
               type: string
               pattern: "^([a-z][a-z0-9_]{1,31}:)?attribute\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
             amount:

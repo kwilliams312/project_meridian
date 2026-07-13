@@ -1,0 +1,8 @@
+# Seed skeleton pack (SP1.8 integration proof) — the Dolmen playable race.
+# Cosmetic only: references the existing dolmen/male appearance catalog, no
+# attribute_mods (see ardent.race.yaml). Clean-room placeholder per roster.h.
+schema: meridian/race@1
+id: core:race.dolmen
+name: Dolmen
+description: Stoic mountain folk hewn from the deep stone.
+appearance: core:appearance.dolmen.male

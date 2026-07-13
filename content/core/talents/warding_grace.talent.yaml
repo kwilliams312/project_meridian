@@ -1,0 +1,14 @@
+# Seed skeleton pack (SP1.8 integration proof) — a support talent.
+# Exercises an ABILITY grant (mending_word) and a permanent passive `buff` over a
+# core attribute id (intellect). A single-rank talent (rank_max omitted → 1).
+schema: meridian/talent@1
+id: core:talent.warding_grace
+name: Warding Grace
+description: Unlocks Mending Word and bolsters your intellect.
+grants:
+  - kind: ability
+    ability: core:ability.mending_word
+  - kind: buff
+    attribute: core:attribute.intellect
+    amount: 3
+    modifier: flat
