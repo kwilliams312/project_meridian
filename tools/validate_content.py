@@ -45,8 +45,9 @@ Validates every YAML file under /content against the JSON Schemas in
          visible-slot armor; FORBIDDEN for invisible slots (neck/finger/trinket/bag)
          and non-equippables (item_class not in {weapon, armor}) — always a hard error
   L081   visual.worn attach-vs-skinned rule (contract ① §4/§9): weapon.worn REQUIRES
-         attach and FORBIDS hides (attach XOR skinned); armor.worn FORBIDS attach —
-         always a hard error
+         attach and FORBIDS hides (attach XOR skinned); armor.worn FORBIDS attach,
+         EXCEPT subclass:shield, which follows the weapon path (REQUIRES attach,
+         FORBIDS hides — issue #460) — always a hard error
   L082   appearance_catalog preset ids are unique within each preset list
          (hair/face/skin) — contract ①/T3, always a hard error
   L083   at most one appearance_catalog per (race, sex) across the content tree
@@ -510,10 +511,14 @@ def check_worn(doc: dict, rel_path: Path) -> list[str]:
       {weapon, armor}).
     L081 — a weapon's worn REQUIRES attach and FORBIDS hides (a weapon mounts to a
       bone socket; it never skins/hides body geosets — attach XOR skinned); an
-      armor's worn FORBIDS attach (armor skins onto the body).
+      armor's worn FORBIDS attach (armor skins onto the body) — EXCEPT a shield
+      (item_class armor, subclass shield): a shield is bone-attached like a
+      weapon, not skinned to the body, so it follows the weapon path — REQUIRES
+      attach and FORBIDS hides (contract ① §4 amendment, issue #460).
     """
     errors: list[str] = []
     item_class = doc.get("item_class")
+    subclass = doc.get("subclass")
     slot = doc.get("slot")
     visual = doc.get("visual") or {}
     worn = visual.get("worn")
@@ -545,16 +550,21 @@ def check_worn(doc: dict, rel_path: Path) -> list[str]:
 
     attach = worn.get("attach")
     hides = worn.get("hides")
-    if item_class == "weapon":
+    # A shield (armor, subclass shield) is bone-attached like a weapon, not
+    # skinned to the body — the sole armor exception to the skinned rule
+    # (contract ① §4 amendment, issue #460).
+    is_shield = item_class == "armor" and subclass == "shield"
+    if item_class == "weapon" or is_shield:
+        kind = "shield" if is_shield else "weapon"
         if attach is None:
             errors.append(
-                f"L081 {rel_path}: weapon visual.worn requires an attach block "
-                f"(weapons mount to a bone socket, contract ① §4)"
+                f"L081 {rel_path}: {kind} visual.worn requires an attach block "
+                f"({kind}s mount to a bone socket, contract ① §4)"
             )
         if hides is not None:
             errors.append(
-                f"L081 {rel_path}: weapon visual.worn must not declare hides "
-                f"(attach XOR skinned — weapons never hide body geosets, contract ① §9)"
+                f"L081 {rel_path}: {kind} visual.worn must not declare hides "
+                f"(attach XOR skinned — {kind}s never hide body geosets, contract ① §9)"
             )
     elif item_class == "armor" and attach is not None:
         errors.append(

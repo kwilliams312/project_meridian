@@ -91,8 +91,11 @@ properties:
       # worn — how this item renders on an equipped character (contract ① §4/§9).
       # Presence is gated by lints L080 (weapon/visible-armor require it; invisible
       # slots + non-equippables forbid it) and L081 (weapon→attach, armor→skinned;
-      # attach XOR hides). Skeleton vocabulary ($defs geosetRegion/attachSocket/
-      # dyeChannel/raceName) is the meridian/skeleton@1 contract (T1).
+      # attach XOR hides — EXCEPT subclass:shield, the sole armor exception: a
+      # shield is bone-attached like a weapon, not skinned to the body, so it
+      # REQUIRES attach and FORBIDS hides too; issue #460). Skeleton vocabulary
+      # ($defs geosetRegion/attachSocket/dyeChannel/raceName) is the
+      # meridian/skeleton@1 contract (T1).
       worn:
         type: object
         additionalProperties: false
