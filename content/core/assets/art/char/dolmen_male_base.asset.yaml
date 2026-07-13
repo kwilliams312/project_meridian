@@ -1,0 +1,34 @@
+# IF-8 sidecar (meridian/asset@1). Dolmen male base body — a real stylized
+# low-poly mesh generated with Meshy (text-to-3D, model meshy-5) and restyled to
+# the canonical Meridian rig per the tools/blender/README.md restyle procedure
+# (Race #2 D2), fitted to the DOLMEN proportion profile: scaled to the shorter,
+# broader dolmen skeleton's rest bounds + T-pose stance, budget-cleaned to the
+# Art PRD §2.1 player-body band with an authored LOD0-3 chain, cut into the 8
+# geo_<region>_lod<N> geosets against the dolmen region anchors, and skinned to
+# the canonical 63-bone armature by bone name (<=4 influences, normalized). This
+# is the second race's body — a NEW asset id (art.char.dolmen.male.base), NOT a
+# reuse of the ardent id; both bodies share the 63 canonical bone names so the
+# Ardent-authored gear deforms onto either (the model-per-race thesis, D4).
+# source_tier: ai — the restyle pass is complete, so restyle_status: done (the
+# #525 quarantine lint blocks 'pending').
+schema: meridian/asset@1
+id: core:art.char.dolmen.male.base
+class: character_model
+source: assets/art/char/sk_dolmen_male_base.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors: [meridian-contributors]
+  origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/019f59ab-bd05-7bff-be80-9cab2553c919
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: dolmen_male_base.prompts.yaml
+budget:
+  # 8 geoset regions × LOD0, summed. Inside the 45-60k player-body band, under
+  # the 60k character_model ceiling (validate_content L070).
+  lod0_tris: 51999
+import_hints:
+  # Real body ships an authored LOD0-3 chain per geoset region (I023 — no
+  # 'single' exemption, which only the greybox blockout used).
+  lod_policy: authored
+restyle_status: done

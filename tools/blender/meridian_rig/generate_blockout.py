@@ -111,17 +111,21 @@ def mesh_name(region: str) -> str:
     return f"geo_{region}_lod0"
 
 
-def _bone_by_name() -> dict[str, bones.BoneSpec]:
-    return {b.name: b for b in bones.ALL_BONES}
+def _bone_by_name(profile: str = "ardent_male") -> dict[str, bones.BoneSpec]:
+    return {b.name: b for b in bones.for_profile(profile)}
 
 
-def group_bbox(bone_names: list[str], radius: float) -> tuple[Vec3, Vec3]:
+def group_bbox(
+    bone_names: list[str], radius: float, profile: str = "ardent_male"
+) -> tuple[Vec3, Vec3]:
     """Axis-aligned bounding box (table Y-up space) over a bone group's head+tail.
 
     Every axis is expanded so its half-extent is at least ``radius``, giving even
-    a single collinear bone chain a solid volume to skin.
+    a single collinear bone chain a solid volume to skin. ``profile`` selects the
+    proportion profile's rest geometry (default ``ardent_male``); a second race
+    (Dolmen D2) sizes the geoset boxes from its own shorter/broader bone table.
     """
-    table = _bone_by_name()
+    table = _bone_by_name(profile)
     pts: list[Vec3] = []
     for name in bone_names:
         spec = table[name]
@@ -222,7 +226,7 @@ def build_body(profile: str):  # pragma: no cover - requires bpy/Blender
         radius = REGION_RADIUS.get(region, _DEFAULT_RADIUS)
         boxes = []
         for i, group in enumerate(bone_groups):
-            lo_t, hi_t = group_bbox(group, radius)
+            lo_t, hi_t = group_bbox(group, radius, profile)
             lo_b = generate_rig.yup_to_blender(lo_t)
             hi_b = generate_rig.yup_to_blender(hi_t)
             # yup_to_blender negates one axis, so recompute min/max per axis.

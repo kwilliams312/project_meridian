@@ -1,0 +1,15 @@
+task_id: 019f59ab-bd05-7bff-be80-9cab2553c919
+model_version: meshy-5
+preview_task_id: 019f59aa-fc34-7cd4-bd12-66ada5d26af3
+request:
+  mode: preview
+  prompt: a stylized low-poly adult male stone-folk mountain warrior in a strict symmetric
+    T-pose, both arms fully extended completely straight out horizontally to the far
+    left and right at shoulder height reaching maximum wingspan with fingertips pointing
+    outward, arm span as wide as the body is tall, legs together and straight, bald
+    head, bare neutral base body, stocky broad heavy stocky build with thick muscular
+    limbs a wide barrel chest and very broad shoulders, short squat proportions, rugged
+    rocky stone-like skin, stylized fantasy MMO game character, clean even topology,
+    symmetric, front facing
+  ai_model: meshy-5
+  target_polycount: 30000

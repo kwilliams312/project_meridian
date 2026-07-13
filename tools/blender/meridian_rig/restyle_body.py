@@ -66,7 +66,7 @@ def mesh_name(region: str, lod: int) -> str:
     return f"geo_{region}_lod{lod}"
 
 
-def region_anchors() -> list[tuple[str, Vec3]]:
+def region_anchors(profile: str = "ardent_male") -> list[tuple[str, Vec3]]:
     """Flat ``(region, center)`` anchor list in Blender Z-up space.
 
     One anchor per bone-group of each geoset region (so paired limbs get a
@@ -74,7 +74,10 @@ def region_anchors() -> list[tuple[str, Vec3]]:
     nearest anchor (:func:`nearest_region`) — a Voronoi partition of the body
     into the eight geosets, using the exact region->bone-group table the
     greybox blockout is built from (single-sourced via
-    :func:`generate_blockout.region_bone_groups`).
+    :func:`generate_blockout.region_bone_groups`). ``profile`` selects the
+    proportion profile whose rest geometry positions the anchors (default
+    ``ardent_male``); Dolmen D2 partitions against the shorter/broader dolmen
+    bone table so the cut lands on the body it is actually skinned to.
     """
     anchors: list[tuple[str, Vec3]] = []
     for region, groups in generate_blockout.region_bone_groups().items():
@@ -82,7 +85,7 @@ def region_anchors() -> list[tuple[str, Vec3]]:
             region, generate_blockout._DEFAULT_RADIUS
         )
         for group in groups:
-            lo_t, hi_t = generate_blockout.group_bbox(group, radius)
+            lo_t, hi_t = generate_blockout.group_bbox(group, radius, profile)
             center_t = tuple((a + b) / 2.0 for a, b in zip(lo_t, hi_t))
             anchors.append((region, generate_rig.yup_to_blender(center_t)))
     return anchors
@@ -100,15 +103,18 @@ def nearest_region(point: Vec3, anchors: list[tuple[str, Vec3]]) -> str:
     return best_region
 
 
-def rig_bounds_z() -> tuple[float, float]:
+def rig_bounds_z(profile: str = "ardent_male") -> tuple[float, float]:
     """(min_z, max_z) of the canonical rig in Blender space, over all bone ends.
 
     Used to fit an imported sculpt to the rig's height. Bone table points are
     Y-up; :func:`generate_rig.yup_to_blender` maps them to the Blender Z-up
-    space the imported mesh lives in.
+    space the imported mesh lives in. ``profile`` selects the proportion
+    profile's rest table (default ``ardent_male``): the fit must scale the
+    sculpt to the target skeleton's height, so a shorter Dolmen skeleton yields
+    a shorter fit target than ardent.
     """
     zs: list[float] = []
-    for spec in bones.ALL_BONES:
+    for spec in bones.for_profile(profile):
         for p in (spec.head_m, spec.tail_m):
             zs.append(generate_rig.yup_to_blender(p)[2])
     return min(zs), max(zs)
@@ -252,18 +258,19 @@ def _budget_lod0(obj):  # pragma: no cover - needs bpy
     _decimate_to(obj, min(TARGET_LOD0_TRIS, MAX_LOD0_TRIS))
 
 
-def _partition_regions(obj):  # pragma: no cover - needs bpy
+def _partition_regions(obj, profile: str = "ardent_male"):  # pragma: no cover - needs bpy
     """Split ``obj`` into one mesh per geoset region by nearest-anchor Voronoi.
 
     Returns ``{region: object}``. Every one of the 8 regions is guaranteed a
     (non-empty) mesh: any region that captured no faces from the sculpt falls
     back to a blockout proxy box for that region so the geoset cut is always
-    complete (I022 needs all 8 at lod0).
+    complete (I022 needs all 8 at lod0). ``profile`` positions both the anchors
+    and any fallback box against the target skeleton's rest geometry.
     """
     import bmesh  # noqa: PLC0415
     import bpy  # noqa: PLC0415
 
-    anchors = region_anchors()
+    anchors = region_anchors(profile)
     regions = list(generate_blockout.region_bone_groups().keys())
 
     # Label every polygon with its region index via a face integer layer.
@@ -291,7 +298,7 @@ def _partition_regions(obj):  # pragma: no cover - needs bpy
         kept = _keep_region_faces(dup, idx)
         if kept == 0:
             bpy.data.objects.remove(dup, do_unlink=True)
-            result[region] = _region_fallback_box(region)
+            result[region] = _region_fallback_box(region, profile)
         else:
             dup.name = mesh_name(region, 0)
             dup.data.name = mesh_name(region, 0)
@@ -333,7 +340,7 @@ def _remove_loose(obj):  # pragma: no cover - needs bpy
     bm.free()
 
 
-def _region_fallback_box(region: str):  # pragma: no cover - needs bpy
+def _region_fallback_box(region: str, profile: str = "ardent_male"):  # pragma: no cover - needs bpy
     """A blockout-style proxy box for a region the sculpt didn't cover."""
     groups = generate_blockout.region_bone_groups()[region]
     radius = generate_blockout.REGION_RADIUS.get(
@@ -343,7 +350,7 @@ def _region_fallback_box(region: str):  # pragma: no cover - needs bpy
     lo_all = [float("inf")] * 3
     hi_all = [float("-inf")] * 3
     for group in groups:
-        lo_t, hi_t = generate_blockout.group_bbox(group, radius)
+        lo_t, hi_t = generate_blockout.group_bbox(group, radius, profile)
         lo_b = generate_rig.yup_to_blender(lo_t)
         hi_b = generate_rig.yup_to_blender(hi_t)
         for i in range(3):
@@ -540,13 +547,13 @@ def main(argv: list[str] | None = None) -> None:  # pragma: no cover - needs bpy
     generate_rig.reset_scene()
     src = _import_and_join(args.in_glb)
 
-    rig_min_z, rig_max_z = rig_bounds_z()
+    rig_min_z, rig_max_z = rig_bounds_z(args.profile)
     mesh_min, mesh_max = _obj_bbox(src)
     scale, offset = fit_transform(mesh_min, mesh_max, rig_min_z, rig_max_z)
     _apply_fit(src, scale, offset)
 
     _budget_lod0(src)
-    region_meshes = _partition_regions(src)  # consumes src
+    region_meshes = _partition_regions(src, args.profile)  # consumes src
 
     armature = generate_rig.build_armature(args.profile)
     segments = _bone_segments(armature)
