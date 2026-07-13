@@ -243,11 +243,39 @@ func _verify_scene() -> void:
 	hair_opt.select(hair_opt.get_item_index(MeridianAppearance.DEFAULT_HAIR_ID))
 	face_opt.select(face_opt.get_item_index(MeridianAppearance.DEFAULT_FACE_ID))
 
-	# Content-missing (spec §6): a race with NO catalog (Dolmen, id 2 — M1 ships only
-	# the ardent catalog) disables the pickers with a visible "(content missing)" state
-	# rather than empty lists, and the create record falls back to the default.
+	# Race #2 (Dolmen) D3: selecting Dolmen (id 2) drives the pickers off the NEW
+	# dolmen/male catalog (not content-missing, not the ardent one). The catalog
+	# resolves to the DOLMEN body, and the pickers enable with the Dolmen preset
+	# ids (which reuse the ardent asset ids — same shape, 4 hair / 4 face / 3 skin).
+	var dolmen_cat: Dictionary = ContentDbScript.instance().catalog(2, 0)
+	_check("dolmen catalog is mounted (Race #2 D3 — catalog(2,0) non-empty)",
+		not dolmen_cat.is_empty())
+	_check("dolmen catalog resolves to the DOLMEN body (not ardent)",
+		String(dolmen_cat.get("body_model", "")) == "core:art.char.dolmen.male.base")
 	race_opt.select(race_opt.get_item_index(2))
 	race_opt.item_selected.emit(race_opt.get_item_index(2))
+	var dolmen_presets: Dictionary = dolmen_cat.get("presets", {})
+	_check("selecting Dolmen enables the appearance pickers (has a catalog now)",
+		hair_opt != null and not hair_opt.disabled
+		and not face_opt.disabled and not skin_opt.disabled)
+	_check("Dolmen pickers are populated from the dolmen catalog presets",
+		hair_opt != null and hair_opt.item_count == dolmen_presets.get("hair", []).size()
+		and face_opt.item_count == dolmen_presets.get("face", []).size()
+		and skin_opt.item_count == dolmen_presets.get("skin", []).size())
+	# The preview mounts an AssembledCharacter for Dolmen — a real assembled body
+	# (with a Dolmen skeleton), NOT the capsule fallback that a no-catalog race gets.
+	scene._refresh_preview(2, MeridianAppearance.default_appearance(), [])
+	var dolmen_body: Node = scene.find_child("PreviewBody", true, false)
+	_check("selecting Dolmen assembles the Dolmen body (not a capsule fallback)",
+		dolmen_body != null and dolmen_body.has_method("body_skeleton")
+		and dolmen_body.body_skeleton() != null)
+
+	# Content-missing (spec §6): a race with NO catalog (Sylvane, id 3 — only the
+	# ardent + dolmen catalogs ship) disables the pickers with a visible "(content
+	# missing)" state rather than empty lists, and the create record falls back to
+	# the default.
+	race_opt.select(race_opt.get_item_index(3))
+	race_opt.item_selected.emit(race_opt.get_item_index(3))
 	_check("no-catalog race disables the appearance pickers",
 		hair_opt != null and hair_opt.disabled and face_opt.disabled and skin_opt.disabled)
 	_check("no-catalog race shows a visible 'content missing' item",
@@ -286,9 +314,9 @@ func _verify_scene() -> void:
 	_check("preview reflects the persisted hair preset (id 2, not the default)",
 		looked_body != null and int(looked_body.applied_preset("hair").get("id", 0)) == 2)
 
-	# A race with NO catalog (Dolmen, id 2) degrades the preview to the tinted capsule
+	# A race with NO catalog (Sylvane, id 3) degrades the preview to the tinted capsule
 	# fallback (spec §6) rather than an empty/assembled body.
-	scene._refresh_preview(2, MeridianAppearance.default_appearance(), [])
+	scene._refresh_preview(3, MeridianAppearance.default_appearance(), [])
 	var fallback_body: Node = scene.find_child("PreviewBody", true, false)
 	_check("no-catalog race degrades the preview to a capsule fallback",
 		fallback_body is MeshInstance3D and (fallback_body as MeshInstance3D).mesh is CapsuleMesh)
