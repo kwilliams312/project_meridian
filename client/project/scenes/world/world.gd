@@ -59,6 +59,9 @@ const CHAR_SELECT_SCENE := "res://scenes/charselect/char_select.tscn"
 # remote-player capsules resolve their color through this one script, so own vs.
 # remote coloring can never drift — every client renders a class the same way.
 const PlayerClassColors := preload("res://scenes/world/player_class_colors.gd")
+# WASD → world-space move basis (CHR-02, #619): keeps "forward" locked to the
+# character's facing for ALL yaws (Godot Y-rotation, shared with input_move_verify).
+const MovementBasis := preload("res://scenes/world/movement_basis.gd")
 
 # HUD foundation (UI-01, #431): the MVVM event bus + the unit-frame HUD. world.gd
 # owns the ONE event bus for this world session and publishes every decoded server
@@ -399,13 +402,11 @@ func _tick_local_player() -> void:
 	var yaw := 0.0
 	if _camera != null:
 		yaw = _camera.get_character_yaw()
-	# Rotate the local (strafe, forward) input into world axes by the facing yaw.
-	# Godot forward is -Z; a yaw of 0 faces -Z.
-	var sin_y := sin(yaw)
-	var cos_y := cos(yaw)
-	var world_x := strafe * cos_y - (-fwd) * sin_y
-	var world_z := strafe * sin_y + (-fwd) * cos_y
-	var move := Vector3(world_x, 0.0, world_z)
+	# Rotate the local (strafe, forward) input into world axes by the facing yaw
+	# using Godot's own Y-rotation, so the move stays parallel to the visible Body
+	# (rotated to the same character_yaw) for ALL yaws — the #619 fix. Godot forward
+	# is -Z; a yaw of 0 faces -Z.
+	var move := MovementBasis.character_relative_move(fwd, strafe, yaw)
 
 	var intent: Dictionary = _mover.predict(move, false, false, yaw, _client_ms)
 	if _mover.should_emit_intent(_client_ms, int(intent.get("state_flags", 0))):
