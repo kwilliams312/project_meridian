@@ -50,3 +50,6 @@ doubt consult the docs** (`docs/`, the SADs/PRDs, the specs under
     user can point the client at your local server and drive it themselves.
 - Commits are **unsigned** (`commit.gpgsign=false`); use conventional-commit
   messages.
+- **Do not post development updates to Discord.** Announcing delegation-loop
+  progress is the orchestration lead's job (`scripts/dev/post-update.sh`);
+  sub-agents never post.

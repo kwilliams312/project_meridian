@@ -45,9 +45,11 @@ ambiguous, ask the human rather than assume, and when in doubt consult the docs*
 1. **Decompose into stories.** Break the work into GitHub issues ("stories").
    **No task without a story, and every task is delegated — the lead implements
    nothing directly.** Group stories under an epic and keep its checklist current.
+   Post an `epic-open` update to Discord (see below).
 2. **Dispatch a sub-agent per story.** Every sub-agent runs **Opus 4.8**. Hand it
    exactly one story and point it at `AGENTS.md`. Sub-agents work in **isolation**
-   (see below) so parallel tasks never corrupt each other's tree.
+   (see below) so parallel tasks never corrupt each other's tree. As you dispatch,
+   post a `story-dispatch` update.
 3. **Sub-agent implements and opens a PR into `dev`.** The PR links its story,
    lists the changes, and pastes fresh build + test evidence. Sub-agents **never
    self-merge**.
@@ -73,12 +75,12 @@ ambiguous, ask the human rather than assume, and when in doubt consult the docs*
    drive the running client themselves.
 6. **Lead review & disposition.** Only after QA passes (and UI E2E is confirmed
    when applicable) does the lead review the PR itself — never trusting the
-   sub-agent's or QA's claims blindly. Then either **approve and merge into `dev`**,
-   or **spawn a fix sub-agent** (new story or the same one) to address findings and
-   re-run the loop from step 3.
+   sub-agent's or QA's claims blindly. Then either **approve and merge into `dev`**
+   (then post a `pr-merged` update), or **spawn a fix sub-agent** (new story or
+   the same one) to address findings and re-run the loop from step 3.
 7. **Close the story on merge.** Because PRs merge into `dev` (not the default
    branch), `Closes #N` does not auto-fire — the lead closes the story manually on
-   merge and ticks the parent epic's checklist.
+   merge and ticks the parent epic's checklist and posts a `story-close` update.
 
 ### Sub-agent isolation
 
@@ -89,6 +91,24 @@ can't clobber one another. The branch name **includes the story's issue number**
 worktree starts from current `dev`.
 
 See `AGENTS.md` for the rules sub-agents must follow.
+
+### Development updates → Discord
+
+The lead announces delegation-loop milestones to a Discord channel via
+`scripts/dev/post-update.sh` (one-way incoming webhook — no bot). **Only the lead
+posts; sub-agents never do.** Post at these moments in the loop:
+
+| Moment | Command |
+|--------|---------|
+| Epic opened (step 1) | `scripts/dev/post-update.sh epic-open "<epic title>" <epic-url>` |
+| Story dispatched (step 2) | `scripts/dev/post-update.sh story-dispatch "<story title>" <story-url>` |
+| PR merged into dev (step 6) | `scripts/dev/post-update.sh pr-merged "<story> — <summary>" <pr-url>` |
+| Story closed on merge (step 7) | `scripts/dev/post-update.sh story-close "<story title>" <story-url>` |
+
+Configure the webhook once via `$MERIDIAN_DISCORD_WEBHOOK_URL` or a gitignored
+`.discord-webhook` file at the repo root. If neither is set the script prints a
+skip notice and exits 0 — a missing webhook never blocks the loop. Use the `note`
+event for any other update worth surfacing.
 
 ## Policies
 
