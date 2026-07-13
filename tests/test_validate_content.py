@@ -1185,6 +1185,181 @@ class TestDye:
         assert "SCHEMA" in codes(res.errors)
 
 
+ATTR_STRENGTH = """\
+schema: meridian/attribute@1
+id: tp:attribute.strength
+name: Strength
+kind: primary
+description: Raw physical power.
+"""
+
+ATTR_CRIT = """\
+schema: meridian/attribute@1
+id: tp:attribute.crit
+name: Critical Strike
+kind: derived
+"""
+
+# A dye doc carrying an attribute_mods block — only valid against the scratch
+# carrier schema TestAttributeMods mounts (the real dye schema has no such field).
+DYE_WITH_MODS = """\
+schema: meridian/dye@1
+id: tp:dye.russet
+name: Russet
+color: "#8a4b2d"
+rarity: common
+attribute_mods:
+  - attribute: attribute.strength
+    value: 3
+"""
+
+
+@pytest.mark.unit
+class TestAttributeSchema:
+    """meridian/attribute@1 — the kernel-blessed base attribute vocabulary (spec §2.2)."""
+
+    def test_valid_attribute_passes(self, tmp_path):
+        res = run(
+            tmp_path,
+            {
+                "tp/attributes/strength.attribute.yaml": ATTR_STRENGTH,
+                "tp/attributes/crit.attribute.yaml": ATTR_CRIT,
+            },
+        )
+        assert res.errors == []
+
+    def test_description_optional(self, tmp_path):
+        # ATTR_CRIT carries no description — the field is optional.
+        res = run(tmp_path, {"tp/attributes/crit.attribute.yaml": ATTR_CRIT})
+        assert res.errors == []
+
+    def test_bad_kind_rejected(self, tmp_path):
+        bad = ATTR_STRENGTH.replace("kind: primary", "kind: tertiary")
+        res = run(tmp_path, {"tp/attributes/strength.attribute.yaml": bad})
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_missing_kind_rejected(self, tmp_path):
+        bad = ATTR_STRENGTH.replace("kind: primary\n", "")
+        res = run(tmp_path, {"tp/attributes/strength.attribute.yaml": bad})
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_extra_field_rejected(self, tmp_path):
+        bad = ATTR_STRENGTH + "cost: 5\n"
+        res = run(tmp_path, {"tp/attributes/strength.attribute.yaml": bad})
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_l003_id_type_must_match(self, tmp_path):
+        bad = ATTR_STRENGTH.replace("id: tp:attribute.strength", "id: tp:dye.strength")
+        res = run(tmp_path, {"tp/attributes/strength.attribute.yaml": bad})
+        assert "L003" in codes(res.errors)
+
+    def test_contentid_accepts_attribute_segment(self):
+        import re
+
+        from validate_content import load_schemas
+
+        defs = load_schemas(SCHEMA_DIR)["attribute"].schema["$defs"]
+        pat = re.compile(defs["contentId"]["pattern"])
+        assert pat.match("core:attribute.strength")
+        assert pat.match("core:attribute.crit")
+
+
+@pytest.mark.unit
+class TestAttributeMods:
+    """common.defs.yaml#/$defs/attributeMods — the shared race/class stat-mod
+    structure (spec §2.2). Owned by story 1.2 so parallel stories don't collide."""
+
+    def _mods_validator(self):
+        from jsonschema import Draft202012Validator
+
+        from validate_content import load_schemas
+
+        defs = load_schemas(SCHEMA_DIR)["attribute"].schema["$defs"]
+        return Draft202012Validator({"$ref": "#/$defs/attributeMods", "$defs": defs})
+
+    def test_def_is_present(self):
+        from validate_content import load_schemas
+
+        defs = load_schemas(SCHEMA_DIR)["attribute"].schema["$defs"]
+        assert "attributeMods" in defs
+        assert "attributeRef" in defs
+
+    def test_valid_mods_accepted(self):
+        v = self._mods_validator()
+        mods = [
+            {"attribute": "core:attribute.strength", "value": 5},
+            {"attribute": "attribute.agility", "value": -2},
+        ]
+        assert list(v.iter_errors(mods)) == []
+
+    def test_missing_value_rejected(self):
+        v = self._mods_validator()
+        assert list(v.iter_errors([{"attribute": "core:attribute.strength"}]))
+
+    def test_non_integer_value_rejected(self):
+        v = self._mods_validator()
+        assert list(
+            v.iter_errors([{"attribute": "core:attribute.strength", "value": 1.5}])
+        )
+
+    def test_bad_attribute_ref_shape_rejected(self):
+        v = self._mods_validator()
+        # a non-attribute id shape must not satisfy attributeRef
+        assert list(v.iter_errors([{"attribute": "core:dye.russet", "value": 1}]))
+
+    def test_extra_field_rejected(self):
+        v = self._mods_validator()
+        assert list(
+            v.iter_errors(
+                [{"attribute": "core:attribute.strength", "value": 1, "pct": 10}]
+            )
+        )
+
+    # --- End-to-end L011: an attributeMods entry that references an unknown
+    # attribute id is rejected. A race/class schema (later stories) reuses this
+    # def; here we mount a carrier by extending the dye schema in a scratch schema
+    # dir so the rejection is proven through the real validate() pipeline now.
+    def _carrier_schema_dir(self, tmp_path) -> Path:
+        import shutil
+
+        sdir = tmp_path / "schema"
+        shutil.copytree(SCHEMA_DIR, sdir)
+        carrier = (sdir / "dye.schema.yaml").read_text(encoding="utf-8")
+        carrier = carrier.replace(
+            "  rarity: { enum: [poor, common, uncommon, rare, epic, legendary] }\n",
+            "  rarity: { enum: [poor, common, uncommon, rare, epic, legendary] }\n"
+            '  attribute_mods: { $ref: "#/$defs/attributeMods" }\n',
+        )
+        (sdir / "dye.schema.yaml").write_text(carrier, encoding="utf-8")
+        return sdir
+
+    def test_l011_rejects_unknown_attribute_id(self, tmp_path):
+        sdir = self._carrier_schema_dir(tmp_path)
+        content = build(
+            tmp_path,
+            {
+                "tp/attributes/strength.attribute.yaml": ATTR_STRENGTH,
+                "tp/dyes/russet.dye.yaml": DYE_WITH_MODS.replace(
+                    "attribute.strength", "attribute.ghost"
+                ),
+            },
+        )
+        res = validate(content, sdir, "ignore")
+        assert "L011" in codes(res.errors), res.errors
+
+    def test_l011_resolves_known_attribute_id(self, tmp_path):
+        sdir = self._carrier_schema_dir(tmp_path)
+        content = build(
+            tmp_path,
+            {
+                "tp/attributes/strength.attribute.yaml": ATTR_STRENGTH,
+                "tp/dyes/russet.dye.yaml": DYE_WITH_MODS,
+            },
+        )
+        res = validate(content, sdir, "ignore")
+        assert res.errors == [], res.errors
+
+
 @pytest.mark.integration
 class TestRepoContent:
     def test_repo_content_validates_clean(self):

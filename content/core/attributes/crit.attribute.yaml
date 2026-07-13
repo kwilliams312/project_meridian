@@ -1,0 +1,5 @@
+schema: meridian/attribute@1
+id: core:attribute.crit
+name: Critical Strike
+kind: derived
+description: Chance for an attack or spell to critically strike for extra damage.

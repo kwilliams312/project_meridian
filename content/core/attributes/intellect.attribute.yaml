@@ -1,0 +1,5 @@
+schema: meridian/attribute@1
+id: core:attribute.intellect
+name: Intellect
+kind: primary
+description: Arcane acuity — scales spell power and the mana pool.

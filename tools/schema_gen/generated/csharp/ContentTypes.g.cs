@@ -145,6 +145,12 @@ public enum AttachSocket
     Shield,
 }
 
+public enum AttributeKind
+{
+    Primary,
+    Derived,
+}
+
 public enum DyeChannel
 {
     Primary,
@@ -950,6 +956,14 @@ public sealed record Appearance
     public required AppearancePresets Presets { get; init; }
     /// <summary>0 at M1; ships only if the §2.5 crowd budget allows (A-03/D-32). Capped at 2 entries.</summary>
     public IReadOnlyList<AppearanceMorph>? Morphs { get; init; }
+}
+
+public sealed record Attribute
+{
+    public required ContentId Id { get; init; }
+    public required string Name { get; init; }
+    public required AttributeKind Kind { get; init; }
+    public string? Description { get; init; }
 }
 
 public sealed record Dye

@@ -5,7 +5,7 @@ $defs:
   contentId:
     description: Fully-qualified ID owned by this file (namespace required).
     type: string
-    pattern: "^[a-z][a-z0-9_]{1,31}:(npc|item|quest|ability|loot|vendor|spawn|zone|pack|dye|appearance)\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+    pattern: "^[a-z][a-z0-9_]{1,31}:(npc|item|quest|ability|loot|vendor|spawn|zone|pack|dye|appearance|attribute)\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
 
   assetId:
     description: Fully-qualified asset ID owned by an IF-8 sidecar (namespace required).
@@ -39,6 +39,10 @@ $defs:
   appearanceRef:
     type: string
     pattern: "^([a-z][a-z0-9_]{1,31}:)?appearance\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+  attributeRef:
+    description: Reference to a meridian/attribute@1 entity (a primary/derived stat).
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?attribute\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
 
   artRef:
     description: Asset-registry ID for a visual asset (Baseline §5.3).
@@ -96,6 +100,22 @@ $defs:
   statKey:
     description: v1 primary stats; secondary ratings arrive with ITM-03 (M2).
     enum: [strength, agility, stamina, intellect, spirit]
+
+  attributeMods:
+    description: >-
+      Flat per-attribute adjustments reused by race and class schemas (spec §2.2):
+      each entry adds `value` (may be negative) to the referenced meridian/attribute@1
+      id. JSON Schema only checks the id SHAPE here (attributeRef); that the id
+      actually resolves to a defined attribute is a content-level cross-reference
+      check (L011). Owned by story 1.2 so parallel wave-1 stories don't collide.
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [attribute, value]
+      properties:
+        attribute: { $ref: "#/$defs/attributeRef" }
+        value: { type: integer }
 
   school:
     enum: [physical, fire, frost, nature, shadow, holy, arcane]

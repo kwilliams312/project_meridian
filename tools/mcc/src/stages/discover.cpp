@@ -17,10 +17,13 @@ namespace {
 // server-backed entities; `appearance` (spec §5.1 catalogs) and `dye` (spec §6)
 // are the CLIENT-only visual types added by contract ① — they classify + flow
 // into the client pck but emit NO world.sql (the server never reads visuals,
-// spec §8). Mirrors validate_content.py's CONTENT_TYPES (the reference validator).
-constexpr std::array<std::string_view, 10> kContentTypes = {
+// spec §8). `attribute` (pack-contract spec §2.2) is the kernel-blessed base
+// stat vocabulary — a rules-data catalog that classifies + flows into the pck
+// but emits no world.sql this round (kernel formulas are sub-project 2).
+// Mirrors validate_content.py's CONTENT_TYPES (the reference validator).
+constexpr std::array<std::string_view, 11> kContentTypes = {
     "npc", "item", "quest", "ability", "loot", "vendor", "spawn", "zone",
-    "appearance", "dye"};
+    "appearance", "dye", "attribute"};
 
 // Split `s` on '.' into its dot-separated parts.
 std::vector<std::string> split_dots(const std::string& s) {

@@ -1,0 +1,5 @@
+schema: meridian/attribute@1
+id: core:attribute.agility
+name: Agility
+kind: primary
+description: Speed and finesse — scales ranged attack power, dodge, and crit.

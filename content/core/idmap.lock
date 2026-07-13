@@ -61,6 +61,13 @@ map:                         # append-only; local index (SAD §2.4)
   core:art.item.weapon.pickaxe_rusty: 13
   core:art.vfx.heal.sparkle_small: 14
   core:art.vfx.impact.dust_small: 15
+  core:attribute.agility: 118
+  core:attribute.armor: 119
+  core:attribute.crit: 120
+  core:attribute.haste: 121
+  core:attribute.intellect: 122
+  core:attribute.stamina: 123
+  core:attribute.strength: 124
   core:dye.bone: 77
   core:dye.russet: 78
   core:dye.slate: 79

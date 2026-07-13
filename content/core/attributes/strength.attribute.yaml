@@ -1,0 +1,5 @@
+schema: meridian/attribute@1
+id: core:attribute.strength
+name: Strength
+kind: primary
+description: Raw physical power — scales melee attack power and carrying capacity.
