@@ -1,21 +1,35 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Project Meridian — headless runtime verification for AssembledCharacter
-# (story #540, client-assembler spec ② §4/§6). NOT a shipped scene: a SceneTree
-# script run
+# (story #540, client-assembler spec ② §4/§6; extended by Dolmen D4 #615). NOT a
+# shipped scene: a SceneTree script run
+#   godot --headless --path client/project --import   # once, to populate the
 #   godot --headless --path client/project --script res://characters/assembled_character_verify.gd
 # (same convention as content/content_db_verify.gd) so CI / a dev box can prove,
 # with no render and no server, that the assembler builds the REAL staged
 # blockout+pickaxe content correctly and that every spec-§6 fallback path holds.
 #
-# Two phases:
+# ⛔ Run `--import` FIRST. The assembler resolves the `MeridianRoster` global
+# class, which lives only in .godot/global_script_class_cache.cfg — a fresh
+# checkout has no cache, so `--script` alone would fail to find the class. A
+# single headless `--import` pass builds the cache (and imports the staged art);
+# after that this verify runs offline against bin/*.framework with no re-import.
+#
+# Three phases:
 #   A. The staged core pack (res://meridian/core): body instanced (8 geosets
 #      visible, 63 canonical bones incl. socket_*), pickaxe → BoneAttachment3D
 #      on socket_main_hand with the weapon mesh child, incremental
 #      set_equipment_slot idempotence, ⑤/S3 mask-tint dye on the Warden's Cuirass
 #      (russet on channel 0 → dye_tint.gdshader ShaderMaterial) + unknown-dye and
-#      non-dyeable-piece fallbacks, unknown-preset → preset 1, assemble() false on
-#      a catalog miss.
+#      non-dyeable-piece fallbacks, the full Ardent Warden's Kit composite,
+#      unknown-preset → preset 1, assemble() false on a catalog miss.
+#   A-D4. CROSS-RACE FIT-CHECK (Dolmen #615): assemble the Dolmen (race 2) with
+#      the SAME Ardent-authored Warden's Kit + hair + iron sword, all russet-dyed,
+#      and assert the gear binds cleanly by bone name onto the Dolmen's stockier
+#      63-bone skeleton — every piece mounts, the hide union is correct, the sword
+#      rides the Dolmen hand socket, and NO assembly_failed fires. This is the
+#      standing regression guard behind the "model per race" proof: gear authored
+#      once for Ardent deforms onto Dolmen with ZERO race_overrides.
 #   B. A fixture pack (user://, same artifact shapes, models resolving to the
 #      REAL staged art): worn.hides ["feet"] → geo_feet_lod0 hidden + restored
 #      on unequip, race_overrides wholesale substitution, skinned gear
@@ -89,6 +103,7 @@ func _initialize() -> void:
 	_verify_idempotence(ac, pickaxe)
 	_verify_dye(ac, db, pickaxe)
 	_verify_full_kit(ac, db)
+	_verify_dolmen_fitcheck(ac, db)
 	_verify_unknown_preset(ac)
 	_verify_catalog_miss(ac)
 
@@ -300,25 +315,31 @@ func _verify_full_kit(ac, db) -> void:
 			all_slots_mounted = false
 	_check("all six Warden's Kit slots mount a mesh", all_slots_mounted)
 
-	# Hide union: the kit hides head, torso, hands, hips_legs, feet, lower_legs —
-	# leaving ONLY forearms + waist body geosets visible (the two regions no kit
-	# piece covers). That is the "no bare grey body poking through" invariant.
-	var hidden_regions: Array = ["head", "torso", "hands", "hips_legs", "feet", "lower_legs"]
-	var visible_regions: Array = ["forearms", "waist"]
+	# Hide union: the Warden's Kit hides head, torso (head+shoulders+chest all map
+	# to torso/head), hands, hips_legs, feet — the union of the six pieces' worn.hides
+	# (see content/core/items/warden_*.item.yaml). That leaves forearms, lower_legs
+	# and waist visible: the three regions no kit piece covers (the shins between the
+	# greaves and boots, the forearms below the vambraces, and the waist gap). This
+	# is the "no bare grey body poking through the ARMOURED regions" invariant — the
+	# uncovered regions are body skin by design. (Round-1's kit also hid lower_legs;
+	# the #599 "Warden's Kit v2 polish — feet fit" re-cut stopped the boots hiding
+	# the shin, so lower_legs is now an authored uncovered region.)
+	var hidden_regions: Array = ["head", "torso", "hands", "hips_legs", "feet"]
+	var visible_regions: Array = ["forearms", "lower_legs", "waist"]
 	var hides_ok: bool = true
 	for region in hidden_regions:
 		var g: MeshInstance3D = ac.geoset_node(region)
 		if g == null or g.visible:
 			hides_ok = false
-	_check("all six kit-covered body regions are hidden", hides_ok)
+	_check("all five kit-covered body regions are hidden", hides_ok)
 	var uncovered_ok: bool = true
 	for region in visible_regions:
 		var g2: MeshInstance3D = ac.geoset_node(region)
 		if g2 == null or not g2.visible:
 			uncovered_ok = false
-	_check("the two uncovered regions (forearms, waist) stay visible", uncovered_ok)
-	_check("exactly 2 body geosets visible under the full kit",
-		_visible_geoset_count(ac) == 2)
+	_check("the three uncovered regions (forearms, lower_legs, waist) stay visible", uncovered_ok)
+	_check("exactly 3 body geosets visible under the full kit",
+		_visible_geoset_count(ac) == 3)
 
 	# The chest dye survives in the composite (mask-tint ShaderMaterial applied).
 	var chest_mesh: MeshInstance3D = _first_piece_mesh(ac, SLOT_CHEST)
@@ -341,6 +362,114 @@ func _verify_full_kit(ac, db) -> void:
 		ac.set_equipment_slot(slot, 0, [])
 
 
+# --- A-D4. CROSS-RACE FIT-CHECK (Dolmen #615): the "model per race" proof -------
+# The standing regression guard behind the D4 GPU render. Assembles the DOLMEN
+# (race 2, sex 0 — a DISTINCT stockier/shorter 63-bone skeleton + its own Meshy
+# body) and equips the SAME Ardent-authored Warden's Kit + hair + iron sword, all
+# russet-dyed. The kit was authored ONCE, on Ardent; it must deform onto Dolmen
+# purely by bone-NAME binding (the two skeletons share bone names/hierarchy, only
+# rest transforms differ — the shared-skeleton invariant). Asserts the whole
+# composite lands with ZERO race_overrides: every armour piece + the sword mounts,
+# the hide union is identical to Ardent's (hides are race-agnostic), the sword
+# rides the Dolmen hand socket, and NO assembly_failed fires anywhere in the equip.
+# 11 meshes render (3 uncovered body geosets + 6 armour + hair + sword), matching
+# the lead's D4 GPU render. If this ever goes red, cross-race gear reuse regressed.
+func _verify_dolmen_fitcheck(ac, db) -> void:
+	print(" A-D4 cross-race fit-check — Dolmen (race 2) wears the Ardent Warden's Kit + sword:")
+	var russet: int = db.numeric_id_for("core:dye.russet")
+	_check("russet dye resolves", russet != 0)
+
+	# Snapshot the failure log up front: the whole Dolmen assemble+equip must add
+	# ZERO new assembly_failed reasons — that is the crux of the proof.
+	var failures_before: int = _failures.size()
+
+	# Assemble the Dolmen body from its OWN D3 catalog (ContentDB.catalog(2, 0)).
+	var ok: bool = ac.assemble(2, 0, {"hair": 1, "face": 1, "skin": 1}, [])
+	_check("assemble(2, 0) returns true — Dolmen has a real catalog now", ok and ac.is_assembled())
+	var skel: Skeleton3D = ac.body_skeleton()
+	_check("Dolmen mounts a single canonical Skeleton3D", skel != null)
+	_check("Dolmen skeleton has exactly the 63 canonical bones", skel != null and skel.get_bone_count() == 63)
+	_check("Dolmen skeleton keeps the socket_main_hand bone (sword mount)",
+		skel != null and skel.find_bone("socket_main_hand") >= 0)
+
+	# It must be the DOLMEN body, not the Ardent one (D3 catalog wiring).
+	var body_model: String = String(db.catalog(2, 0).get("body_model", ""))
+	_check("catalog(2, 0) resolves the Dolmen body model (not Ardent)",
+		body_model == "core:art.char.dolmen.male.base")
+
+	# Equip the full dyed Warden's Kit (6 armour slots, russet on channel 0 of each)
+	# + the iron sword on the main hand. Ardent-authored item ids — reused verbatim.
+	var armor_slots: Dictionary = {
+		SLOT_HEAD: "core:item.warden_head",
+		SLOT_SHOULDERS: "core:item.warden_shoulders",
+		SLOT_CHEST: "core:item.warden_chest",
+		SLOT_HANDS: "core:item.warden_hands",
+		SLOT_LEGS: "core:item.warden_legs",
+		SLOT_FEET: "core:item.warden_feet",
+	}
+	for slot in armor_slots:
+		var iid: int = db.numeric_id_for(armor_slots[slot])
+		_check("%s resolves" % armor_slots[slot], iid != 0)
+		ac.set_equipment_slot(slot, iid, [{"channel": 0, "dye_id": russet}])
+	var sword: int = db.numeric_id_for("core:item.iron_sword")
+	_check("core:item.iron_sword resolves", sword != 0)
+	ac.set_equipment_slot(SLOT_MAIN_HAND, sword, [])
+
+	# CRUX: not a single assembly_failed across the whole Dolmen assemble + equip.
+	# A missing skin bone, a failed model load, or an unresolved socket would show
+	# up here — this is what "binds cleanly by bone name" means, mechanically.
+	_check("ZERO assembly_failed across the Dolmen assemble + full-kit equip",
+		_failures.size() == failures_before)
+
+	# Every armour piece mounted a real mesh (no invisible/greybox-missing piece).
+	var all_mounted: bool = true
+	for slot in armor_slots:
+		if _first_piece_mesh(ac, slot) == null:
+			all_mounted = false
+	_check("all six Ardent Warden's Kit pieces mount a mesh on the Dolmen", all_mounted)
+
+	# The sword rides the Dolmen hand: a BoneAttachment3D on socket_main_hand,
+	# parented under the Dolmen skeleton, carrying a weapon mesh child.
+	var sword_nodes: Array = ac.equipped_nodes(SLOT_MAIN_HAND)
+	_check("iron sword mounts exactly one piece", sword_nodes.size() == 1)
+	if sword_nodes.size() == 1:
+		var att = sword_nodes[0]
+		_check("sword is a BoneAttachment3D on socket_main_hand (rides the Dolmen hand)",
+			att is BoneAttachment3D and String(att.bone_name) == "socket_main_hand"
+			and att.get_parent() == skel)
+		_check("sword attachment carries a weapon mesh child",
+			not att.find_children("*", "MeshInstance3D", true, false).is_empty())
+
+	# Hide union (race-agnostic): the kit hides head, torso, hands, hips_legs, feet,
+	# leaving forearms, lower_legs and waist as uncovered Dolmen body skin — the
+	# SAME three regions Ardent shows. Proves the hides bind identically across races.
+	var hidden_regions: Array = ["head", "torso", "hands", "hips_legs", "feet"]
+	var visible_regions: Array = ["forearms", "lower_legs", "waist"]
+	var hides_ok: bool = true
+	for region in hidden_regions:
+		var g: MeshInstance3D = ac.geoset_node(region)
+		if g == null or g.visible:
+			hides_ok = false
+	_check("armour-covered Dolmen body regions are hidden (head/torso/hands/hips_legs/feet)", hides_ok)
+	var uncovered_ok: bool = true
+	for region in visible_regions:
+		var g2: MeshInstance3D = ac.geoset_node(region)
+		if g2 == null or not g2.visible:
+			uncovered_ok = false
+	_check("uncovered Dolmen regions stay visible (forearms/lower_legs/waist)", uncovered_ok)
+	_check("exactly 3 Dolmen body geosets visible under the kit", _visible_geoset_count(ac) == 3)
+
+	# Whole-composite render check: 3 body geosets + 6 armour + hair + sword = 11
+	# visible meshes, matching the lead's D4 GPU render (11 visible LOD0 meshes).
+	_check("exactly 11 visible meshes render on the assembled Dolmen (3 body + 6 armour + hair + sword)",
+		_visible_mesh_total(ac) == 11)
+
+	# Tear the kit + sword back down so later phases start clean.
+	for slot in armor_slots:
+		ac.set_equipment_slot(slot, 0, [])
+	ac.set_equipment_slot(SLOT_MAIN_HAND, 0, [])
+
+
 # --- A5. unknown preset id → catalog entry 1 + assembly_failed -----------------
 func _verify_unknown_preset(ac) -> void:
 	print(" unknown preset id — falls back to preset 1:")
@@ -355,11 +484,14 @@ func _verify_unknown_preset(ac) -> void:
 
 
 # --- A6. catalog miss → assemble() returns false (capsule fallback) ------------
+# Uses Sylvane (race id 3): a frozen-but-unimplemented roster race with NO staged
+# catalog. Dolmen (id 2) USED to be the catalog-miss case, but D3 (#625) added the
+# Dolmen catalog — so this asserts against the next race that genuinely has none.
 func _verify_catalog_miss(ac) -> void:
-	print(" catalog miss — race with no catalog (Dolmen, id 2):")
-	var ok: bool = ac.assemble(2, 0, {}, [])
+	print(" catalog miss — race with no catalog (Sylvane, id 3):")
+	var ok: bool = ac.assemble(3, 0, {}, [])
 	_check("assemble returns false", not ok and not ac.is_assembled())
-	_check("assembly_failed names the missing catalog", _failures.has("catalog:2|0"))
+	_check("assembly_failed names the missing catalog", _failures.has("catalog:3|0"))
 
 
 # --- B. fixture pack: hides / race_overrides / skinned / missing model ---------
@@ -461,6 +593,18 @@ func _visible_geoset_count(ac) -> int:
 	var n: int = 0
 	for g in ac.body_geosets():
 		if g is MeshInstance3D and g.visible:
+			n += 1
+	return n
+
+
+# Total MeshInstance3Ds that actually render on the whole assembled character —
+# body geosets + equipped gear + hair + weapons — counting only those visible in
+# the tree (hidden LOD1-3 and armour-covered geosets do not draw). The holistic
+# "what the GPU render shows" count.
+func _visible_mesh_total(ac) -> int:
+	var n: int = 0
+	for m in ac.find_children("*", "MeshInstance3D", true, false):
+		if m.is_visible_in_tree():
 			n += 1
 	return n
 

@@ -105,6 +105,13 @@ assemble(race=2, sex=0, appearance, equipment) ─► Dolmen body
 - Determinism/golden/staged gates as always; check_staged_models covers Dolmen assets.
 - **Definition of done:** lead GPU render — Dolmen in the Ardent-authored Warden's Kit + sword,
   reading as a coherent armored stone-folk warrior. That render IS the model-per-race proof.
+- **Result (D4, #615):** ACHIEVED with **ZERO `race_overrides`**. The Dolmen wears the full dyed
+  Warden's Kit + hair + iron sword authored once for Ardent, bound onto its stockier 63-bone
+  skeleton purely by bone name — no per-race gear duplication, no stretched universal mesh. The
+  ① `race_overrides` escape hatch went unused (the strongest form of the proof). The standing
+  regression guard is `assembled_character_verify.gd → _verify_dolmen_fitcheck` (headless): it
+  asserts the assemble+equip lands with 63 bones, no `assembly_failed`, every piece + the sword
+  mounted, the correct hide union, and 11 rendered meshes — matching the lead's GPU render.
 
 ## 6. Story decomposition (for the plan)
 | # | Story | Sourcing | Key? | Depends |

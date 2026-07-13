@@ -63,10 +63,16 @@
 
 **Interfaces:** Consumes D1–D3 + the merged Warden's Kit (#594) + sword (#605). Produces the DoD render + any sparse overrides.
 
-- [ ] Extend `assembled_character_verify.gd`: assemble `(race=2, sex=0, appearance, full Warden's Kit + sword)` → all pieces mount, geoset hides correct, dye applies, sword on the hand. (Structural — the LEAD's GPU render judges the deformation quality.)
-- [ ] **Lead GPU render (the proof):** Dolmen + full dyed Warden's Kit + hair + sword. Assess each piece: does the Ardent-authored gear deform acceptably onto Dolmen's proportions (bound by bone name)? Expected: yes (some looseness OK).
-- [ ] For ANY piece that clips/voids badly on Dolmen: author `race_overrides.dolmen` on that item@2 file (a Dolmen-fitted model via restyle_armor's dolmen region config) — the ① escape hatch, first real use. Re-stage + golden. Document each override (not a silent copy). If ZERO overrides needed, state that explicitly — it's the strongest proof.
-- [ ] GREEN full gates + the DoD render. Commit `feat(content): dolmen fit-check + race_overrides for any failing piece (D4)`.
+- [x] Extend `assembled_character_verify.gd`: assemble `(race=2, sex=0, appearance, full Warden's Kit + sword)` → all pieces mount, geoset hides correct, dye applies, sword on the hand. (Structural — the LEAD's GPU render judges the deformation quality.) → new `_verify_dolmen_fitcheck` phase, the standing regression guard (see Proof outcome below).
+- [x] **Lead GPU render (the proof):** Dolmen + full dyed Warden's Kit + hair + sword. Assess each piece: does the Ardent-authored gear deform acceptably onto Dolmen's proportions (bound by bone name)? Expected: yes (some looseness OK). → **DONE by the lead — deforms cleanly by bone name; render attached to #615.**
+- [x] For ANY piece that clips/voids badly on Dolmen: author `race_overrides.dolmen` on that item@2 file … If ZERO overrides needed, state that explicitly — it's the strongest proof. → **ZERO `race_overrides` needed** (see Proof outcome). The ① escape hatch went unused — the strongest form of the proof.
+- [x] GREEN full gates + the DoD render. Commit `feat(content): dolmen fit-check + race_overrides for any failing piece (D4)`.
+
+**Proof outcome (D4 — the "model per race" result):**
+The Dolmen (race 2, sex 0) wears the **Ardent-authored Warden's Kit** (head/shoulders/chest/hands/legs/feet) + hair + iron sword, all russet-dyed, with **ZERO `race_overrides.dolmen`**. The gear was authored ONCE, on Ardent; it binds onto the Dolmen's stockier/shorter 63-bone skeleton **purely by bone name** (both skeletons share bone names + hierarchy; only rest transforms differ). No per-race gear duplication, no stretched "universal" mesh — one mesh per race, gear reused across races. The lead's D4 GPU render confirms the deformation reads cleanly (some looseness from proportion mismatch is acceptable greybox-plus, per spec §D4).
+
+- **Regression guard:** `client/project/characters/assembled_character_verify.gd → _verify_dolmen_fitcheck` (headless, no render). It asserts `assemble(2, 0, …, full dyed kit + sword) == true`, the canonical `Skeleton3D` has exactly **63** bones, **no `assembly_failed`** fires across the whole assemble+equip, the six armour pieces + the sword each mount (sword on the `socket_main_hand` `BoneAttachment3D`), the hide union hides `head/torso/hands/hips_legs/feet` while `forearms/lower_legs/waist` stay visible, and **11 meshes render** (3 uncovered body geosets + 6 armour + hair + sword) — matching the lead's GPU render. If cross-race gear reuse ever regresses, this phase goes red.
+- **Run it:** `godot --headless --path client/project --import` once (builds the `MeridianRoster` global-class cache), then `godot --headless --path client/project --script res://characters/assembled_character_verify.gd` → `ALL RUNTIME CHECKS PASS`, exit 0.
 
 ---
 
