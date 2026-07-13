@@ -49,12 +49,17 @@ public class SemanticIntegrityTests
         // Spot-check the envelope: every content file carries `schema:`; entity files also
         // carry `id:` (the pack root pack.yaml uses `namespace:` instead, and *.render.yaml
         // strudel-render manifests are auxiliary artifacts with no id, issue #410).
+        // *.prompts.yaml Meshy generation records carry neither `schema:` nor `id:`
+        // (same issue #410 auxiliary-companion precedent), so only the CST parse applies.
         Assert.Equal(CstKind.Mapping, doc.Root.Kind);
-        Assert.NotNull(doc.GetValue("schema"));
-        if (!relativePath.EndsWith("pack.yaml", StringComparison.Ordinal)
-            && !relativePath.EndsWith(".render.yaml", StringComparison.Ordinal))
+        if (!relativePath.EndsWith(".prompts.yaml", StringComparison.Ordinal))
         {
-            Assert.NotNull(doc.GetValue("id"));
+            Assert.NotNull(doc.GetValue("schema"));
+            if (!relativePath.EndsWith("pack.yaml", StringComparison.Ordinal)
+                && !relativePath.EndsWith(".render.yaml", StringComparison.Ordinal))
+            {
+                Assert.NotNull(doc.GetValue("id"));
+            }
         }
     }
 
