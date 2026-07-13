@@ -36,7 +36,7 @@ var _track_map  # ZoneTrackMap (untyped: resolved via preload, not the global)
 var _player: AudioStreamPlayer
 var _sync: AudioStreamSynchronized
 
-var _set_meta: Dictionary = {}          # bpm / beats_per_bar / length_bars / key
+var _music_meta: Dictionary = {}        # bpm / beats_per_bar / length_bars / key
 var _sample_rate: int = 44100
 var _stem_layers: Array[String] = []    # stem index -> layer role
 var _current_state: String = MusicCore.EXPLORE
@@ -83,7 +83,7 @@ func _ensure_bus() -> void:
 
 # --- public Client API (SAD §2.5) ---------------------------------------
 func set_zone(zone_id: String) -> void:
-	var set_dict := _track_map.resolve_zone(zone_id)
+	var set_dict: Dictionary = _track_map.resolve_zone(zone_id)
 	_current_zone = zone_id
 	_current_state = _track_map.default_state_for_zone(zone_id)
 	_build_stack(set_dict)
@@ -170,7 +170,7 @@ func _set_stem_volume(db: float, stem_index: int) -> void:
 
 # --- stack construction (PLACEHOLDER streams) ---------------------------
 func _build_stack(set_dict: Dictionary) -> void:
-	_set_meta = {
+	_music_meta = {
 		"bpm": float(set_dict["bpm"]), "beats_per_bar": int(set_dict["beats_per_bar"]),
 		"length_bars": int(set_dict["length_bars"]), "key": String(set_dict["key"]),
 	}
@@ -198,8 +198,8 @@ func _apply_layer_gains_immediate(state: String) -> void:
 func _schedule(from_state: String, to_state: String, request_sample: int) -> Dictionary:
 	return MusicCore.crossfade_schedule(
 		from_state, to_state, request_sample,
-		float(_set_meta["bpm"]), int(_set_meta["beats_per_bar"]), _sample_rate,
-		int(_set_meta["length_bars"]))
+		float(_music_meta["bpm"]), int(_music_meta["beats_per_bar"]), _sample_rate,
+		int(_music_meta["length_bars"]))
 
 
 # --- shadow bar clock + timing seam (music SAD §2.1.1 / §3.1) -----------
@@ -220,8 +220,8 @@ func ground_truth_sample() -> int:
 func predicted_boundary(request_sample: int, to_state: String) -> int:
 	var rule := MusicCore.rule_for(_current_state, to_state)
 	return MusicCore.boundary_sample(request_sample, String(rule["quantize"]),
-		float(_set_meta["bpm"]), int(_set_meta["beats_per_bar"]), _sample_rate,
-		int(_set_meta["length_bars"]))
+		float(_music_meta["bpm"]), int(_music_meta["beats_per_bar"]), _sample_rate,
+		int(_music_meta["length_bars"]))
 
 
 # Per-stem playback positions (samples) — the drift probe's raw reading. In an
@@ -249,8 +249,8 @@ func drain_gain_edges() -> Array:
 	return out
 
 
-func set_meta() -> Dictionary:
-	return _set_meta.duplicate()
+func music_meta() -> Dictionary:
+	return _music_meta.duplicate()
 
 
 func _is_playing() -> bool:
