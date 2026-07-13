@@ -28,6 +28,9 @@ __pycache__/
 scripts/dev/certs/*.crt
 scripts/dev/certs/*.key
 
+# Discord webhook URL for scripts/dev/post-update.sh (never commit)
+.discord-webhook
+
 # --- Client GDExtension build artifacts (issue #158) ---
 # Godot editor cache
 .godot/
