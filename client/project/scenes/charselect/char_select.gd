@@ -456,13 +456,20 @@ func _select_char_id(id: int) -> void:
 # (same convention as scenes/world/camera_demo.gd). _refresh_preview_from_form() mounts
 # the first model once the pickers are populated.
 func _build_placeholder_preview() -> void:
+	# #630: the paperdoll grew (180×220 → 260×290: ~+44% wide, ~+32% tall) to match the
+	# larger char-select window, and the SubViewport RENDER size tracks it so the model is
+	# drawn at the new resolution (not upscaled-blurry). Height is capped at 290 (not the
+	# fuller 330) so the create-form column still fits the 972-tall base window without
+	# pushing the Title off-screen — the form is a long single column; see the Theme note in
+	# char_select.tscn. Under the project's `canvas_items` stretch the SubViewportContainer
+	# — a Control — scales with the window like the rest of the UI, so it also grows on resize.
 	var container := SubViewportContainer.new()
 	container.stretch = true
-	container.custom_minimum_size = Vector2(180, 220)
+	container.custom_minimum_size = Vector2(260, 290)
 	container.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 
 	var viewport := SubViewport.new()
-	viewport.size = Vector2i(180, 220)
+	viewport.size = Vector2i(260, 290)
 	viewport.transparent_bg = true
 	container.add_child(viewport)
 

@@ -24,6 +24,21 @@ config/features=PackedStringArray("4.7", "Forward Plus")
 ; autoload in the running app (see content_db.gd's ACCESS PATTERN header).
 ContentDB="*res://content/content_db.gd"
 
+[display]
+
+; #630: grow the base window ~50% over the Godot default (1152×648 → 1728×972) so
+; character-select (and the other Control scenes) open larger, and scale the whole UI
+; — fonts + the char-select paperdoll SubViewportContainer — proportionally as the
+; window resizes. `canvas_items` renders the 2D canvas at the base resolution then
+; scales it to the window; `expand` keeps the base scale without distortion (extra
+; area on off-aspect windows instead of letterboxing). All client scenes use responsive
+; anchor/container layouts, so the scaled canvas keeps its layout; the world's 3D
+; content renders into the same base viewport and is unaffected functionally.
+window/size/viewport_width=1728
+window/size/viewport_height=972
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
 [rendering]
 
 textures/vram_compression/import_etc2_astc=true
