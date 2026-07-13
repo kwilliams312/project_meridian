@@ -180,6 +180,16 @@ def _text_to_3d_handler(
     return handler, calls
 
 
+def _preview_payload(calls: list[httpx.Request]) -> dict:
+    """Extract the text-to-3D preview POST body from a recorded call list."""
+    for c in calls:
+        if c.method == "POST" and c.url.path == client_mod.TEXT_TO_3D_PATH:
+            body = json.loads(c.content)
+            if body.get("mode") == "preview":
+                return body
+    raise AssertionError("no text-to-3D preview POST was captured")
+
+
 # ============================================================================
 # client.py — MeshyClient unit tests (httpx.MockTransport, no live HTTP)
 # ============================================================================
@@ -350,6 +360,49 @@ def test_landing_paths_shape(tmp_path):
 
 
 # ============================================================================
+# target_polycount derivation (issue #627) — pure intake logic
+# ============================================================================
+
+
+def test_derive_target_polycount_defaults_below_kit_piece_ceiling():
+    # kit_piece caps lod0_tris at 20000; the default must request headroom
+    # under that ceiling (Meshy tracks the request closely, so a ceiling-equal
+    # request routinely lands over budget). ~80% -> 16000.
+    budgets = intake.load_budgets()
+    got = intake.derive_target_polycount("kit_piece", budgets)
+    ceiling = budgets["kit_piece"]["lod0_tris"]
+    assert got == 16000
+    assert got <= ceiling
+
+
+def test_derive_target_polycount_honors_explicit_override():
+    budgets = intake.load_budgets()
+    got = intake.derive_target_polycount("kit_piece", budgets, override=12000)
+    assert got == 12000
+
+
+def test_derive_target_polycount_rejects_override_above_ceiling():
+    budgets = intake.load_budgets()
+    with pytest.raises(intake.IntakeError) as exc:
+        intake.derive_target_polycount("kit_piece", budgets, override=25000)
+    message = str(exc.value)
+    assert "25000" in message
+    assert "20000" in message  # the ceiling is named
+
+
+def test_derive_target_polycount_rejects_nonpositive_override():
+    budgets = intake.load_budgets()
+    with pytest.raises(intake.IntakeError):
+        intake.derive_target_polycount("kit_piece", budgets, override=0)
+
+
+def test_derive_target_polycount_rejects_unknown_class():
+    budgets = intake.load_budgets()
+    with pytest.raises(intake.IntakeError, match="no lod0_tris budget"):
+        intake.derive_target_polycount("not_a_real_class", budgets)
+
+
+# ============================================================================
 # __main__.py — CLI end-to-end (in-process; MeshyClient construction is
 # monkeypatched to inject the mock transport — see meshy_main._new_client)
 # ============================================================================
@@ -414,6 +467,124 @@ def test_generate_happy_path_lands_sidecar_and_prompts(
     assert prompts_doc["task_id"] == "task_refine_1"
     assert prompts_doc["preview_task_id"] == "task_preview_1"
     assert prompts_doc["request"]["prompt"] == "a small barrel"
+
+
+def _run_kit_piece_generate(tmp_path, monkeypatch, extra_args=()):
+    """Drive `generate` for a kit_piece (ceiling 20000) and return (rc, calls)."""
+    glb_bytes = _make_glb(tmp_path / "src.glb", triangle_count=2).read_bytes()
+    handler, calls = _text_to_3d_handler(glb_bytes=glb_bytes)
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    rc = meshy_main.main(
+        [
+            "generate",
+            "--text",
+            "a stone archway kit piece",
+            "--ns",
+            "core",
+            "--name",
+            "test_kit",
+            "--class",
+            "kit_piece",
+            "--terms-verified",
+            "--content-root",
+            str(tmp_path / "content"),
+            "--poll-interval",
+            "0",
+            "--poll-timeout",
+            "5",
+            *extra_args,
+        ]
+    )
+    return rc, calls
+
+
+def test_generate_defaults_target_polycount_under_kit_piece_ceiling(
+    tmp_path, monkeypatch
+):
+    # The core #627 regression: with no override, a kit_piece intake must
+    # request a polycount at/under its 20000 ceiling (was hardwired to 30000,
+    # guaranteeing an over-budget refusal that blocked #141).
+    rc, calls = _run_kit_piece_generate(tmp_path, monkeypatch)
+    assert rc == 0
+    body = _preview_payload(calls)
+    ceiling = intake.load_budgets()["kit_piece"]["lod0_tris"]
+    assert body["target_polycount"] <= ceiling
+    assert body["target_polycount"] == 16000
+
+
+def test_generate_honors_explicit_target_polycount_override(tmp_path, monkeypatch):
+    rc, calls = _run_kit_piece_generate(
+        tmp_path, monkeypatch, extra_args=["--target-polycount", "12000"]
+    )
+    assert rc == 0
+    body = _preview_payload(calls)
+    assert body["target_polycount"] == 12000
+
+
+def test_generate_refuses_target_polycount_over_class_ceiling(
+    tmp_path, monkeypatch, capsys
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no HTTP call should happen for an over-ceiling request")
+
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    rc = meshy_main.main(
+        [
+            "generate",
+            "--text",
+            "a stone archway kit piece",
+            "--ns",
+            "core",
+            "--name",
+            "test_kit",
+            "--class",
+            "kit_piece",
+            "--target-polycount",
+            "25000",
+            "--terms-verified",
+            "--content-root",
+            str(tmp_path / "content"),
+        ]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert err.startswith("refused:")
+    assert "25000" in err
+    assert "20000" in err  # the ceiling is named
+
+
+def test_generate_refuses_target_polycount_with_image_mode(
+    tmp_path, monkeypatch, capsys
+):
+    # --target-polycount is a text-to-3D control; silently ignoring it on an
+    # image intake would be a provenance lie, so it is refused up front.
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no HTTP call should happen for a refused combination")
+
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    rc = meshy_main.main(
+        [
+            "generate",
+            "--image",
+            "https://example.com/ref.png",
+            "--ns",
+            "core",
+            "--name",
+            "test_img",
+            "--class",
+            "kit_piece",
+            "--target-polycount",
+            "12000",
+            "--terms-verified",
+            "--content-root",
+            str(tmp_path / "content"),
+        ]
+    )
+    assert rc == 2
+    assert "--target-polycount" in capsys.readouterr().err
 
 
 def test_generate_refuses_without_terms_verified(tmp_path, monkeypatch, capsys):

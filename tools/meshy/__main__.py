@@ -94,6 +94,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="content tree root (default: repo content/)",
     )
     gen.add_argument(
+        "--target-polycount",
+        type=int,
+        default=None,
+        help=(
+            "override the Meshy target_polycount request (text-to-3D only). "
+            "Default: derived from the --class lod0_tris ceiling in "
+            "budgets.json with headroom. May not exceed the class ceiling."
+        ),
+    )
+    gen.add_argument(
         "--poll-interval", type=float, default=client_mod.DEFAULT_POLL_INTERVAL_S
     )
     gen.add_argument(
@@ -181,12 +191,33 @@ def cmd_generate(args: argparse.Namespace) -> int:
         budgets=budgets,
     )
 
+    # --- Derive the Meshy target_polycount from the class budget (issue #627),
+    # still before any network call. Only text-to-3D takes a polycount, so an
+    # override paired with --image is refused rather than silently dropped.
+    target_polycount: int | None = None
+    if args.text:
+        try:
+            target_polycount = intake.derive_target_polycount(
+                args.asset_class, budgets, override=args.target_polycount
+            )
+        except intake.IntakeError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 2
+    elif args.target_polycount is not None:
+        print(
+            "refused: --target-polycount applies to --text generation only "
+            "(image-to-3D does not take a polycount)",
+            file=sys.stderr,
+        )
+        return 2
+
     client = _new_client(api_key)
     try:
         try:
             if args.text:
                 handle = client.text_to_3d(
                     args.text,
+                    target_polycount=target_polycount,
                     poll_interval_s=args.poll_interval,
                     poll_timeout_s=args.poll_timeout,
                 )
