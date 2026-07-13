@@ -66,6 +66,7 @@ AUTHD_PORT=7100
 WORLDD_PORT=7200
 TEST_USER="devtester"
 TEST_PASS="devpassword"
+REALM_NAME="Meridian Dev Realm"
 
 # --- --stop: tear down a previously-started background realm and exit. --------
 stop_realm() {
@@ -164,6 +165,25 @@ else
   fi
 fi
 
+# --- Seed a dev realm row pointing at worldd (idempotent). -------------------
+# authd serves the realm list LIVE from meridian_auth.realm (login_session.cpp:
+# "SELECT id,name,address,port,... FROM realm ORDER BY id"). With no row, the GUI
+# client gets an empty realm list and can't proceed past realm-select (#640). Seed
+# exactly one realm pointing at this run's worldd. Idempotent: keyed on
+# (address, port) via INSERT ... SELECT ... WHERE NOT EXISTS, so repeat starts (the
+# script's "idempotent start" contract) neither duplicate nor error. Single source
+# of truth: demo-networked.sh no longer seeds — it resolves the id this created.
+log "Seeding dev realm '${REALM_NAME}' (127.0.0.1:${WORLDD_PORT})"
+_dbc meridian_auth -e \
+  "INSERT INTO realm (name, address, port, build_min, build_max, population, flags) \
+   SELECT '${REALM_NAME}', '127.0.0.1', ${WORLDD_PORT}, 0, 100000, 0, 0 \
+   WHERE NOT EXISTS (SELECT 1 FROM realm WHERE address='127.0.0.1' AND port=${WORLDD_PORT});" \
+  || { db_stop; die "realm seed INSERT failed"; }
+REALM_ID="$(_dbc -N meridian_auth -e \
+  "SELECT id FROM realm WHERE address='127.0.0.1' AND port=${WORLDD_PORT} ORDER BY id LIMIT 1;")"
+[ -n "${REALM_ID}" ] || { db_stop; die "realm seed failed (no realm row after insert)"; }
+ok "Dev realm seeded: id ${REALM_ID} '${REALM_NAME}' @ 127.0.0.1:${WORLDD_PORT}"
+
 # --- Launch daemons. authd needs the auth DB env; worldd needs auth+chars DB. -
 log "Launching authd (IF-1) on 127.0.0.1:${AUTHD_PORT}"
 env MERIDIAN_DB_HOST=127.0.0.1 MERIDIAN_DB_PORT="${MERIDIAN_DEV_DB_PORT}" \
@@ -217,6 +237,15 @@ case "$MODE" in
     rc=0
     [ "$authd_ok" -eq 1 ]  || { warn "authd smoke FAILED";  rc=1; }
     [ "$worldd_ok" -eq 1 ] || { warn "worldd smoke FAILED"; rc=1; }
+    # Realm-seed regression guard (#640): authd serves the realm list from this
+    # table, so an empty realm table means the GUI client can't log in. Assert the
+    # seed produced >= 1 row while the DB is still up (before teardown below).
+    realm_count="$(_dbc -N meridian_auth -e 'SELECT COUNT(*) FROM realm;' 2>/dev/null || echo 0)"
+    if [ "${realm_count:-0}" -ge 1 ]; then
+      ok "realm table has ${realm_count} row(s) — realm-list will be non-empty"
+    else
+      warn "realm smoke FAILED — realm table empty (GUI login would get 0 realms)"; rc=1
+    fi
     cleanup_daemons
     db_stop
     echo
@@ -238,6 +267,7 @@ case "$MODE" in
       echo "  authd    127.0.0.1:${AUTHD_PORT}   (log: ${RUN_DIR}/authd.log)"
       echo "  worldd   127.0.0.1:${WORLDD_PORT}   (log: ${RUN_DIR}/worldd.log)"
       echo "  MariaDB  127.0.0.1:${MERIDIAN_DEV_DB_PORT}   account: ${TEST_USER} / ${TEST_PASS}"
+      echo "  realm    id ${REALM_ID} '${REALM_NAME}' -> 127.0.0.1:${WORLDD_PORT}"
     }
     print_summary
     # Block until a daemon dies or Ctrl-C.
@@ -254,6 +284,7 @@ case "$MODE" in
     echo "  authd    127.0.0.1:${AUTHD_PORT}   (pid $(cat "${AUTHD_PIDFILE}"),  log: ${RUN_DIR}/authd.log)"
     echo "  worldd   127.0.0.1:${WORLDD_PORT}   (pid $(cat "${WORLDD_PIDFILE}"), log: ${RUN_DIR}/worldd.log)"
     echo "  MariaDB  127.0.0.1:${MERIDIAN_DEV_DB_PORT}   account: ${TEST_USER} / ${TEST_PASS}"
+    echo "  realm    id ${REALM_ID} '${REALM_NAME}' -> 127.0.0.1:${WORLDD_PORT}"
     echo
     echo "  Stop with:  scripts/dev/run-local.sh --stop"
     # Detach: don't let EXIT kill the backgrounded daemons.
