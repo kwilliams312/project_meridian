@@ -44,6 +44,7 @@ _REF_TYPE_NAME = {
     "loot": "LootRef",
     "vendor": "VendorRef",
     "zone": "ZoneRef",
+    "equip_type": "EquipTypeRef",
     "asset": "AssetId",
     "art": "ArtRef",
     "mus": "MusRef",

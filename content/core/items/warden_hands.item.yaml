@@ -4,6 +4,7 @@ name: Warden's Gauntlets
 flavor_text: Articulated steel. Still closes on a haft without a thought.
 item_class: armor
 subclass: plate
+equip_type: core:equip_type.plate
 slot: hands
 rarity: rare
 required_level: 10

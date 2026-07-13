@@ -1,0 +1,43 @@
+# meridian/equip_type@1 — the armor-type and weapon-type catalog (spec §2.1,
+# 2026-07-13 pack-contract/content-schema design). ONE schema; the `category`
+# field distinguishes an armor type (Cloth/Leather/Mail/Plate) from a weapon type
+# (Two-Hand/One-Hand/Wand/Staff). This is rules-data: items reference an
+# equip_type via `item.equip_type`, and (sub-project 2) a class's usable_armor_types
+# / usable_weapon_types reference the same catalog. Data-driven + editable — it
+# replaces hardcoded armor/weapon enums.
+#
+# The `id` uses a LOCAL $defs (equipTypeId) rather than common.defs.yaml#/$defs/
+# contentId: contentId's type alternation is owned by common.defs.yaml (edited by
+# a sibling story), and equip_type is a NEW content type. A uniquely-named local
+# def survives the validators' `$defs.update(common)` merge (README: shared $defs
+# are merged in; same-named keys would be overwritten, distinct ones are kept).
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/equip_type.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, id, name, category]
+properties:
+  schema: { const: "meridian/equip_type@1" }
+  id: { $ref: "#/$defs/equipTypeId" }
+  name: { $ref: "#/$defs/displayName" }
+  description:
+    type: string
+    maxLength: 500
+  category:
+    description: >-
+      armor = a wearable-armor material class (Cloth/Leather/Mail/Plate);
+      weapon = a weapon type (Two-Hand/One-Hand/Wand/Staff). Class proficiencies
+      (sub-project 2) gate equipping by this category.
+    enum: [armor, weapon]
+  slot_class:
+    description: >-
+      Informational grouping — armor: helm/chest/…; weapon: main/off/two_hand.
+      Not enforced by the kernel in sub-project 1; a free-form lowercase token.
+    type: string
+    pattern: "^[a-z][a-z0-9_]*$"
+
+$defs:
+  equipTypeId:
+    description: Fully-qualified equip_type id owned by this file (namespace required).
+    type: string
+    pattern: "^[a-z][a-z0-9_]{1,31}:equip_type\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"

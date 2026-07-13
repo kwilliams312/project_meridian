@@ -18,6 +18,16 @@ properties:
     description: "weapon: sword_1h|sword_2h|axe_1h|axe_2h|mace_1h|mace_2h|dagger|staff|polearm|bow|wand|fist. armor: cloth|leather|mail|plate|shield. Free-form for other classes."
     type: string
     pattern: "^[a-z][a-z0-9_]*$"
+  # ADDITIVE (spec §2.1): references a meridian/equip_type@1 entity — the
+  # armor/weapon-type catalog that class proficiencies gate against (sub-project 2).
+  # Optional for back-compat: existing items without it stay valid; `subclass`
+  # (a free-form descriptor) is retained and unaffected. The reference is a
+  # local $defs (equipTypeRef): equip_type is a new content type not yet in
+  # common.defs.yaml's ref grammar (owned by a sibling story), and a uniquely-named
+  # local def survives the validators' `$defs.update(common)` merge. Resolution to
+  # a defined equip_type id is enforced at the content level (validate_content L011
+  # / mcc), not by file import.
+  equip_type: { $ref: "#/$defs/equipTypeRef" }
   slot:
     enum: [head, shoulders, back, chest, wrist, hands, waist, legs, feet,
            neck, finger, trinket, main_hand, off_hand, two_hand, ranged, bag]
@@ -161,3 +171,12 @@ allOf:
       properties: { item_class: { const: armor } }
     then:
       required: [slot]
+
+$defs:
+  # A reference to a meridian/equip_type@1 id. Optional "<namespace>:" prefix
+  # (resolves to the file's own namespace when omitted), mirroring the ref-def
+  # convention in common.defs.yaml. Local because equip_type is a new content type
+  # (see the `equip_type` property comment above).
+  equipTypeRef:
+    type: string
+    pattern: "^([a-z][a-z0-9_]{1,31}:)?equip_type\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"

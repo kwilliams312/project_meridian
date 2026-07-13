@@ -1,0 +1,6 @@
+schema: meridian/equip_type@1
+id: core:equip_type.two_hand
+name: Two-Hand
+description: A large weapon wielded in both hands for maximum reach and impact.
+category: weapon
+slot_class: two_hand

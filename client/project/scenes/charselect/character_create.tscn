@@ -1,0 +1,139 @@
+; SPDX-License-Identifier: Apache-2.0
+;
+; Project Meridian — character CREATION view (issue #639, char-select redesign).
+; A self-contained full-screen Control the char-select controller reveals on "Create
+; New Character" and hides on create/cancel (NOT an OS window, NOT a modal overlay). A
+; plain Control tree wired to character_create.gd: a large drag-to-rotate paperdoll
+; (built in code into %PreviewHolder), the race/class/hair/face/skin dropdowns, a name
+; field CENTERED at the bottom, and Create / Cancel actions. Nodes use unique names
+; (%Name) so the script's @onready lookups resolve regardless of layout. Reuses the
+; scoped #630 Theme (font size 20) so it reads at the larger window and scales with it.
+
+[gd_scene load_steps=3 format=3 uid="uid://bmeridiancharcreate639"]
+
+[ext_resource type="Script" path="res://scenes/charselect/character_create.gd" id="1_charcreate"]
+
+[sub_resource type="Theme" id="Theme_charcreate639"]
+default_font_size = 20
+
+[node name="CharacterCreate" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme = SubResource("Theme_charcreate639")
+script = ExtResource("1_charcreate")
+
+[node name="Root" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = -16.0
+offset_bottom = -16.0
+
+[node name="Title" type="Label" parent="Root"]
+layout_mode = 2
+text = "Create a Character"
+
+[node name="Body" type="HBoxContainer" parent="Root"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="PaperdollPanel" type="VBoxContainer" parent="Root/Body"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="PaperdollLabel" type="Label" parent="Root/Body/PaperdollPanel"]
+layout_mode = 2
+horizontal_alignment = 1
+text = "Drag to rotate"
+
+[node name="PreviewHolder" type="Control" parent="Root/Body/PaperdollPanel"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(360, 460)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="OptionsPanel" type="VBoxContainer" parent="Root/Body"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="RaceLabel" type="Label" parent="Root/Body/OptionsPanel"]
+layout_mode = 2
+text = "Race"
+
+[node name="RaceOption" type="OptionButton" parent="Root/Body/OptionsPanel"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="ClassLabel" type="Label" parent="Root/Body/OptionsPanel"]
+layout_mode = 2
+text = "Class"
+
+[node name="ClassOption" type="OptionButton" parent="Root/Body/OptionsPanel"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="AppearanceLabel" type="Label" parent="Root/Body/OptionsPanel"]
+layout_mode = 2
+text = "Customization"
+
+[node name="HairLabel" type="Label" parent="Root/Body/OptionsPanel"]
+layout_mode = 2
+text = "Hair"
+
+[node name="HairOption" type="OptionButton" parent="Root/Body/OptionsPanel"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="FaceLabel" type="Label" parent="Root/Body/OptionsPanel"]
+layout_mode = 2
+text = "Face"
+
+[node name="FaceOption" type="OptionButton" parent="Root/Body/OptionsPanel"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="SkinLabel" type="Label" parent="Root/Body/OptionsPanel"]
+layout_mode = 2
+text = "Skin"
+
+[node name="SkinOption" type="OptionButton" parent="Root/Body/OptionsPanel"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="NameCenter" type="CenterContainer" parent="Root"]
+layout_mode = 2
+
+[node name="NameEdit" type="LineEdit" parent="Root/NameCenter"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(360, 0)
+layout_mode = 2
+max_length = 32
+placeholder_text = "Character name"
+alignment = 1
+
+[node name="Actions" type="HBoxContainer" parent="Root"]
+layout_mode = 2
+alignment = 1
+
+[node name="CreateButton" type="Button" parent="Root/Actions"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Create"
+
+[node name="CancelButton" type="Button" parent="Root/Actions"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Cancel"
+
+[node name="ErrorLabel" type="Label" parent="Root"]
+unique_name_in_owner = true
+layout_mode = 2
+horizontal_alignment = 1
+autowrap_mode = 2
+text = ""

@@ -105,6 +105,7 @@ CONTENT_TYPES = (
     "zone",
     "appearance",
     "dye",
+    "equip_type",
 )
 ASSET_PREFIXES = ("art", "mus", "sfx", "amb")
 
@@ -225,7 +226,7 @@ ASSET_BUDGETS: dict[str, dict[str, tuple[int, str]]] = {
 }
 REF_RE = re.compile(
     r"^(?:([a-z][a-z0-9_]{1,31}):)?"
-    r"((npc|item|quest|ability|loot|vendor|spawn|zone)\.[a-z0-9_]+(?:\.[a-z0-9_]+)*)$"
+    r"((npc|item|quest|ability|loot|vendor|spawn|zone|equip_type)\.[a-z0-9_]+(?:\.[a-z0-9_]+)*)$"
 )
 ASSET_RE = re.compile(
     r"^(?:([a-z][a-z0-9_]{1,31}):)?((art|mus|sfx|amb)\.[a-z0-9_]+(?:\.[a-z0-9_]+)*)$"

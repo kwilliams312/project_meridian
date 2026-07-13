@@ -4,6 +4,7 @@ name: Warden's Cuirass
 flavor_text: The breastplate of the Deep Watch — dented, re-forged, never surrendered.
 item_class: armor
 subclass: plate
+equip_type: core:equip_type.plate
 slot: chest
 rarity: rare
 required_level: 10

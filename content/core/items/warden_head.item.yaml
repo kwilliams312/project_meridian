@@ -4,6 +4,7 @@ name: Warden's Helm
 flavor_text: Full steel, cheek to crown. The Wardens see everything and show nothing.
 item_class: armor
 subclass: plate
+equip_type: core:equip_type.plate
 slot: head
 rarity: rare
 required_level: 10
