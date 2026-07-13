@@ -1511,6 +1511,144 @@ class TestEquipType:
 
 
 @pytest.mark.unit
+class TestRace:
+    """meridian/race@1 — a cosmetic playable race (spec §2.3). A race points at an
+    appearance_catalog (its body variant) and optionally tunes attributes via the
+    shared attributeMods def; both are content refs resolved at the tree level
+    (L011, spec §3). One valid fixture; each negative case copies it and mutates
+    one field, per the one-negative-fixture-per-lint convention (Tools PRD §11.1)."""
+
+    # A valid appearance_catalog the race resolves its `appearance` ref against.
+    # (art refs stay unresolved — assets_mode defaults to "ignore" in run().)
+    APPEARANCE_OK = """\
+    schema: meridian/appearance_catalog@1
+    id: tp:appearance.ardent.male
+    race: ardent
+    sex: male
+    skeleton: art.char.ardent.male.skeleton
+    body_model: art.char.ardent.male.base
+    presets:
+      hair: [{ id: 1, model: art.char.ardent.male.hair_short }]
+      face: [{ id: 1, texture: art.char.ardent.male.face_a }]
+      skin: [{ id: 1, palette: art.char.ardent.male.skin_pale }]
+    morphs: []
+    """
+
+    # A fully-valid race: resolvable appearance + one (zeroed, Chibi-style) mod.
+    RACE_OK = """\
+    schema: meridian/race@1
+    id: tp:race.chibi_human
+    name: Chibi Human
+    description: A small round humanfolk.
+    appearance: appearance.ardent.male
+    attribute_mods:
+      - attribute: attribute.strength
+        value: 0
+    """
+
+    def _tree(self, race: str) -> dict[str, str]:
+        return {
+            "tp/appearance/ardent_male.appearance.yaml": self.APPEARANCE_OK,
+            "tp/attributes/strength.attribute.yaml": ATTR_STRENGTH,
+            "tp/races/chibi_human.race.yaml": race,
+        }
+
+    def test_valid_race_passes(self, tmp_path):
+        # Appearance + attribute refs both resolve -> no errors.
+        res = run(tmp_path, self._tree(self.RACE_OK))
+        assert res.errors == [], res.errors
+
+    def test_description_optional(self, tmp_path):
+        race = self.RACE_OK.replace("    description: A small round humanfolk.\n", "")
+        res = run(tmp_path, self._tree(race))
+        assert res.errors == [], res.errors
+
+    def test_attribute_mods_optional(self, tmp_path):
+        # attribute_mods is the only mechanical hook and it is optional; a purely
+        # cosmetic race (Chibi) omits it entirely.
+        race = (
+            "schema: meridian/race@1\n"
+            "id: tp:race.chibi_human\n"
+            "name: Chibi Human\n"
+            "appearance: appearance.ardent.male\n"
+        )
+        res = run(
+            tmp_path,
+            {
+                "tp/appearance/ardent_male.appearance.yaml": self.APPEARANCE_OK,
+                "tp/races/chibi_human.race.yaml": race,
+            },
+        )
+        assert res.errors == [], res.errors
+
+    def test_dangling_appearance_ref_rejected_L011(self, tmp_path):
+        # The appearance id no entity defines is an unresolved reference (spec §3).
+        race = self.RACE_OK.replace(
+            "appearance: appearance.ardent.male", "appearance: appearance.ghost"
+        )
+        res = run(tmp_path, self._tree(race))
+        assert "L011" in codes(res.errors), res.errors
+
+    def test_dangling_attribute_mod_ref_rejected_L011(self, tmp_path):
+        # An attribute_mods entry referencing an unknown attribute id -> L011.
+        race = self.RACE_OK.replace("attribute.strength", "attribute.ghost")
+        res = run(tmp_path, self._tree(race))
+        assert "L011" in codes(res.errors), res.errors
+
+    def test_missing_appearance_fails_schema(self, tmp_path):
+        # appearance is required.
+        race = self.RACE_OK.replace("    appearance: appearance.ardent.male\n", "")
+        res = run(tmp_path, self._tree(race))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_missing_name_fails_schema(self, tmp_path):
+        race = self.RACE_OK.replace("    name: Chibi Human\n", "")
+        res = run(tmp_path, self._tree(race))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_extra_field_rejected(self, tmp_path):
+        # additionalProperties: false — no mechanical fields beyond the tuning hook.
+        race = self.RACE_OK + "    health: 100\n"
+        res = run(tmp_path, self._tree(race))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_bad_appearance_ref_shape_fails_schema(self, tmp_path):
+        # appearanceRef requires an `appearance.` segment; a non-appearance shape
+        # is rejected at the SCHEMA layer before L011 even runs.
+        race = self.RACE_OK.replace(
+            "appearance: appearance.ardent.male", "appearance: npc.dummy"
+        )
+        res = run(tmp_path, self._tree(race))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_attribute_mod_missing_value_fails_schema(self, tmp_path):
+        # attributeMods entries require both `attribute` and `value`.
+        race = self.RACE_OK.replace("        value: 0\n", "")
+        res = run(tmp_path, self._tree(race))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_id_wrong_type_segment_fails_schema(self, tmp_path):
+        # The strict raceId pattern requires a `race.` type segment, so a mismatched
+        # id (e.g. `item.`) is rejected at the SCHEMA layer — a stronger guarantee
+        # than the generic L003 the shared contentId leans on (like equip_type).
+        race = self.RACE_OK.replace(
+            "id: tp:race.chibi_human", "id: tp:item.chibi_human"
+        )
+        res = run(tmp_path, self._tree(race))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_contentid_race_segment_not_in_shared_contentid(self):
+        # race uses a LOCAL raceId def, not common.defs contentId — assert the
+        # shared contentId still does NOT admit a race id (the local def owns it).
+        import re
+
+        from validate_content import load_schemas
+
+        defs = load_schemas(SCHEMA_DIR)["race"].schema["$defs"]
+        assert re.compile(defs["raceId"]["pattern"]).match("core:race.chibi_human")
+
+
+@pytest.mark.unit
 class TestAbilityEffectPalette:
     """Story #653 (SP1.3) — the extended Tier-1 effect-primitive palette.
 

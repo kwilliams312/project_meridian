@@ -1,0 +1,47 @@
+# meridian/race@1 — a playable race (spec §2.3, 2026-07-13 pack-contract/
+# content-schema design). A race is COSMETIC: it names a display identity and
+# points at the appearance/material variant that renders its body. The only
+# mechanical hook is the optional `attribute_mods` tuning capability — reused from
+# common.defs.yaml#/$defs/attributeMods (owned by story 1.2), which the Chibi theme
+# zeroes/omits (the capability exists, the theme won't use it). No other mechanical
+# fields live here; class/ability data model the rules.
+#
+# `appearance` references an appearance_catalog entity (`<ns>:appearance.<name>`)
+# by id via the shared appearanceRef $def; that the id resolves to a defined
+# appearance is a content-level cross-reference check (L011, spec §3), not a schema
+# check. `attribute_mods` entries reference meridian/attribute@1 ids the same way.
+#
+# The `id` uses a LOCAL $defs (raceId) rather than common.defs.yaml#/$defs/
+# contentId: contentId's type alternation is owned by common.defs.yaml (edited by
+# a sibling story), and race is a NEW content type. A uniquely-named local def
+# survives the validators' `$defs.update(common)` merge (README: shared $defs are
+# merged in; same-named keys would be overwritten, distinct ones are kept) — the
+# same pattern equip_type.schema.yaml uses for equipTypeId.
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "meridian://schema/content/race.schema.yaml"
+type: object
+additionalProperties: false
+required: [schema, id, name, appearance]
+properties:
+  schema: { const: "meridian/race@1" }
+  id: { $ref: "#/$defs/raceId" }
+  name: { $ref: "#/$defs/displayName" }
+  description:
+    type: string
+    maxLength: 500
+  appearance:
+    description: >-
+      The appearance_catalog entity this race renders as — the cosmetic body/
+      material variant. Referenced by id; L011 resolves it (spec §3).
+    $ref: "#/$defs/appearanceRef"
+  attribute_mods:
+    description: >-
+      Optional flat per-attribute tuning (spec §2.3). The capability exists for
+      operators; the Chibi theme zeroes/omits it (races are cosmetic there).
+    $ref: "#/$defs/attributeMods"
+
+$defs:
+  raceId:
+    description: Fully-qualified race id owned by this file (namespace required).
+    type: string
+    pattern: "^[a-z][a-z0-9_]{1,31}:race\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"

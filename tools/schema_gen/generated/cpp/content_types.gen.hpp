@@ -26,6 +26,8 @@ struct NpcRef { std::string id; };
 struct ZoneRef { std::string id; };
 struct QuestRef { std::string id; };
 struct ItemRef { std::string id; };
+struct AppearanceRef { std::string id; };
+struct AttributeRef { std::string id; };
 struct ArtRef { std::string id; };
 struct SfxRef { std::string id; };
 struct MusRef { std::string id; };
@@ -866,6 +868,19 @@ struct EquipType {
     std::optional<std::string> description;  // optional
     EquipTypeCategory category;  // armor = a wearable-armor material class (Cloth/Leather/Mail/Plate); weapon = a weapon type (Two-Hand/One-Hand/Wand/Staff). Class proficiencies (sub-project 2) gate equipping by this category.
     std::optional<std::string> slot_class;  // Informational grouping — armor: helm/chest/…; weapon: main/off/two_hand. Not enforced by the kernel in sub-project 1; a free-form lowercase token.
+};
+
+struct AttributeMod {
+    AttributeRef attribute;
+    std::int64_t value;
+};
+
+struct Race {
+    ContentId id;
+    std::string name;
+    std::optional<std::string> description;  // optional
+    AppearanceRef appearance;  // The appearance_catalog entity this race renders as — the cosmetic body/ material variant. Referenced by id; L011 resolves it (spec §3).
+    std::vector<AttributeMod> attribute_mods;  // Optional flat per-attribute tuning (spec §2.3). The capability exists for operators; the Chibi theme zeroes/omits it (races are cosmetic there).
 };
 
 }  // namespace mcc::content

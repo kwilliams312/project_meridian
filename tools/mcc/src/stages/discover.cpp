@@ -25,9 +25,9 @@ namespace {
 // Like the other non-server-emitting types it classifies + flows into the client
 // pck but emits NO world.sql this round.
 // Mirrors validate_content.py's CONTENT_TYPES (the reference validator).
-constexpr std::array<std::string_view, 12> kContentTypes = {
-    "npc", "item", "quest", "ability", "loot", "vendor", "spawn", "zone",
-    "appearance", "dye", "attribute", "equip_type"};
+constexpr std::array<std::string_view, 13> kContentTypes = {
+    "npc", "item", "quest", "ability", "loot", "vendor", "spawn",
+    "zone", "appearance", "dye", "attribute", "equip_type", "race"};
 
 // Split `s` on '.' into its dot-separated parts.
 std::vector<std::string> split_dots(const std::string& s) {
