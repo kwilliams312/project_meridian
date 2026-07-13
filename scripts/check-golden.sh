@@ -165,6 +165,7 @@ STAGED_FILES=(pack.manifest.json pack.contents.jsonl pack.data.json)
 STAGED_ART=(
   "content/core/assets/art/char/sk_ardent_male_base.glb:art/char/ardent/male/base.glb"
   "content/core/assets/art/char/sk_ardent_male_skeleton.glb:art/char/ardent/male/skeleton.glb"
+  "content/core/assets/art/char/sk_dolmen_male_base.glb:art/char/dolmen/male/base.glb"
   "content/core/assets/art/char/sk_dolmen_male_skeleton.glb:art/char/dolmen/male/skeleton.glb"
   "content/core/assets/art/item/weapon/pickaxe_rusty.glb:art/item/weapon/pickaxe_rusty.glb"
   "content/core/assets/art/char/ardent/male/face_1_bc.png:art/char/ardent/male/face_1_bc.png"

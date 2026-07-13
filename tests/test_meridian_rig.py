@@ -671,6 +671,110 @@ def test_body_glb_weights_are_normalized():
                 )
 
 
+# ---------------------------------------------------------------------------
+# Structural checks on the committed DOLMEN body .glb (Race #2 D2). Same
+# read-back-with-pygltflib pattern as the ardent body: the second race's body
+# must ship the identical geoset/LOD/skin structure (8 regions, authored LOD
+# chain, <=4 influences, normalized) skinned to the SAME 63 canonical bone
+# names — only its rest geometry (the dolmen skeleton it was fit to) differs.
+# I020/I022/I023 as they ship in a binary, not just in the pipeline.
+# ---------------------------------------------------------------------------
+DOLMEN_BODY_GLB = REPO / "content/core/assets/art/char/sk_dolmen_male_base.glb"
+
+skip_if_dolmen_body_pointer = pytest.mark.skipif(
+    _is_lfs_pointer(DOLMEN_BODY_GLB),
+    reason="dolmen body .glb is an unsmudged LFS pointer (CI checkout without LFS smudge)",
+)
+
+
+def _load_dolmen_body_gltf():
+    from pygltflib import GLTF2
+
+    return GLTF2().load(str(DOLMEN_BODY_GLB))
+
+
+@pytest.mark.integration
+@skip_if_dolmen_body_pointer
+def test_dolmen_body_glb_lod0_covers_exactly_the_8_geoset_regions():
+    """I022: the eight geoset regions are each present at LOD0 on the dolmen body."""
+    g = _load_dolmen_body_gltf()
+    lod0 = set()
+    for m in g.meshes:
+        mm = _GEO_LOD_RE.match(m.name)
+        assert mm, f"dolmen body mesh '{m.name}' is not geoset-named (geo_<region>_lod<N>)"
+        if int(mm.group("lod")) == 0:
+            lod0.add(mm.group("region"))
+    assert lod0 == set(GEOSET_REGIONS), (
+        f"LOD0 regions {sorted(lod0)} != {sorted(GEOSET_REGIONS)}"
+    )
+
+
+@pytest.mark.integration
+@skip_if_dolmen_body_pointer
+def test_dolmen_body_glb_ships_authored_lod_chain_per_region():
+    """I023: every geoset region carries LOD0 + at least one lower LOD (no 'single')."""
+    g = _load_dolmen_body_gltf()
+    chain: dict[str, set[int]] = {}
+    for m in g.meshes:
+        mm = _GEO_LOD_RE.match(m.name)
+        assert mm, f"dolmen body mesh '{m.name}' is not geoset-named"
+        chain.setdefault(mm.group("region"), set()).add(int(mm.group("lod")))
+    for region in GEOSET_REGIONS:
+        lods = chain.get(region, set())
+        assert 0 in lods, f"region '{region}' has no LOD0"
+        assert any(lod >= 1 for lod in lods), (
+            f"region '{region}' has no LOD1+ — a real body ships an authored chain (I023)"
+        )
+
+
+@pytest.mark.integration
+@skip_if_dolmen_body_pointer
+def test_dolmen_body_glb_skin_joints_are_exactly_the_canonical_bone_set():
+    """I020: the dolmen body's skin joints == the canonical 63 bone names."""
+    g = _load_dolmen_body_gltf()
+    assert g.skins, "dolmen body .glb carries no skin"
+    joint_names = set()
+    for skin in g.skins:
+        for j in skin.joints or []:
+            joint_names.add(g.nodes[j].name)
+    canonical = set(bones.bone_names("dolmen_male"))
+    assert joint_names - canonical == set(), (
+        f"non-canonical joints: {sorted(joint_names - canonical)}"
+    )
+    assert canonical - joint_names == set(), (
+        f"canonical bones missing from skin: {sorted(canonical - joint_names)}"
+    )
+
+
+@pytest.mark.integration
+@skip_if_dolmen_body_pointer
+def test_dolmen_body_glb_vertices_have_at_most_4_influences():
+    """E103: one JOINTS_0/WEIGHTS_0 set only — no JOINTS_1 spillover (>4 influences)."""
+    g = _load_dolmen_body_gltf()
+    for mesh in g.meshes:
+        for prim in mesh.primitives:
+            attrs = prim.attributes
+            assert attrs.JOINTS_0 is not None, f"{mesh.name} is not skinned"
+            assert attrs.WEIGHTS_0 is not None, f"{mesh.name} has no weights"
+            assert getattr(attrs, "JOINTS_1", None) is None, (
+                f"{mesh.name} carries a second influence set (>4 influences)"
+            )
+
+
+@pytest.mark.integration
+@skip_if_dolmen_body_pointer
+def test_dolmen_body_glb_weights_are_normalized():
+    g = _load_dolmen_body_gltf()
+    for mesh in g.meshes:
+        for prim in mesh.primitives:
+            weights = _read_accessor_vec4(g, prim.attributes.WEIGHTS_0)
+            comp = g.accessors[prim.attributes.WEIGHTS_0].componentType
+            scale = 1.0 if comp == 5126 else (255.0 if comp == 5121 else 65535.0)
+            for i, w in enumerate(weights):
+                total = sum(w) / scale
+                assert abs(total - 1.0) < 5e-3, f"{mesh.name} vertex {i} weight sum {total}"
+
+
 # --- restyle_body pure helpers (spec ⑤/S4; bpy-free, unit-tested) ------------
 
 
@@ -758,6 +862,49 @@ def test_restyle_parse_args_requires_input_and_defaults_out():
     assert ns.profile == "ardent_male"
     with pytest.raises(SystemExit):
         restyle_body.parse_args([])  # --in is required
+
+
+# --- Profile-aware fit + geoset partition (Race #2 / Dolmen D2). The restyle
+# fit height and the Voronoi region anchors must follow the TARGET profile's
+# rest geometry, not the ardent reference, or a --profile dolmen_male run would
+# fit a body to ardent's 1.72 m height while skinning it to the 1.51 m dolmen
+# skeleton — a height mismatch. The ardent default stays byte-identical.
+# ---------------------------------------------------------------------------
+def test_group_bbox_profile_defaults_to_ardent():
+    """Omitting the profile is exactly the ardent reference geometry."""
+    assert generate_blockout.group_bbox(["Head", "Neck"], 0.11) == (
+        generate_blockout.group_bbox(["Head", "Neck"], 0.11, profile="ardent_male")
+    )
+
+
+def test_group_bbox_dolmen_head_sits_lower_than_ardent():
+    """Dolmen is shorter, so the head/neck box's crown is below ardent's."""
+    _, hi_ard = generate_blockout.group_bbox(["Head", "Neck"], 0.11, profile="ardent_male")
+    _, hi_dol = generate_blockout.group_bbox(["Head", "Neck"], 0.11, profile="dolmen_male")
+    assert hi_dol[1] < hi_ard[1] - 0.1  # crown Y (table Y-up) clearly lower
+
+
+def test_restyle_rig_bounds_z_defaults_to_ardent():
+    assert restyle_body.rig_bounds_z() == restyle_body.rig_bounds_z("ardent_male")
+
+
+def test_restyle_rig_bounds_z_dolmen_is_shorter_than_ardent():
+    """The dolmen fit target tops out well below ardent's ~1.72 m crown."""
+    _, hi_ard = restyle_body.rig_bounds_z("ardent_male")
+    _, hi_dol = restyle_body.rig_bounds_z("dolmen_male")
+    assert hi_dol < hi_ard - 0.1
+    assert hi_dol == pytest.approx(1.51, abs=0.06)  # dolmen crown ~1.51 m
+
+
+def test_restyle_region_anchors_default_matches_ardent():
+    assert restyle_body.region_anchors() == restyle_body.region_anchors("ardent_male")
+
+
+def test_restyle_region_anchors_dolmen_is_broader_than_ardent():
+    """Dolmen widens every X (1.10x), so its anchors reach further off-centre."""
+    max_x_ard = max(abs(c[0]) for _, c in restyle_body.region_anchors("ardent_male"))
+    max_x_dol = max(abs(c[0]) for _, c in restyle_body.region_anchors("dolmen_male"))
+    assert max_x_dol > max_x_ard
 
 
 # --- restyle_hair pure helpers (spec ⑤/S5; bpy-free, unit-tested) ------------
