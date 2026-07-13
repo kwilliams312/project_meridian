@@ -12,9 +12,10 @@
 #
 # It composes the existing dev scripts:
 #   scripts/dev/build.sh      → server (authd/worldd/meridian-account) + editor GDExtension
-#   scripts/dev/run-local.sh  → throwaway MariaDB + authd(:7100) + worldd(:7200) + account
+#   scripts/dev/run-local.sh  → throwaway MariaDB + authd(:7100) + worldd(:7200) +
+#                               account + a seeded dev realm row (#640)
 #   scripts/dev/add-users.sh  → bulk-provision the N bot accounts (#330)
-#   (+ this script)           → seed a realm row, seed N class-rotated characters,
+#   (+ this script)           → resolve the realm id, seed N class-rotated characters,
 #                               launch N bots, then run scripts/dev/run-client.sh.
 #
 # The N seeded characters rotate through the M0-frozen class roster
@@ -152,17 +153,14 @@ log "bringing up the local realm (scripts/dev/run-local.sh)"
 "${SELF_DIR}/run-local.sh" >/dev/null
 ok "realm up — authd 127.0.0.1:${AUTHD_PORT}, worldd 127.0.0.1:${WORLDD_PORT}"
 
-# --- 3. Seed a realm row pointing at worldd. ---------------------------------
-# The GUI login needs a realm in the auth DB whose address:port is worldd, and whose
-# build range admits the client build. Insert one idempotently.
-log "seeding realm '${REALM_NAME}' (127.0.0.1:${WORLDD_PORT})"
-_dbc meridian_auth -e \
-  "INSERT INTO realm (name, address, port, build_min, build_max, population, flags) \
-   SELECT '${REALM_NAME}', '127.0.0.1', ${WORLDD_PORT}, 0, 100000, 0, 0 \
-   WHERE NOT EXISTS (SELECT 1 FROM realm WHERE address='127.0.0.1' AND port=${WORLDD_PORT});"
+# --- 3. Resolve the realm id (run-local.sh already seeded it). ---------------
+# run-local.sh now idempotently seeds the dev realm row pointing at worldd as part
+# of realm bring-up (#640) — the single source of truth for the seed shape. Here we
+# just look up its id for the bot invocations below (the bot needs --realm <id>).
+log "resolving realm '${REALM_NAME}' (127.0.0.1:${WORLDD_PORT})"
 REALM_ID="$(_dbc -N meridian_auth -e \
   "SELECT id FROM realm WHERE address='127.0.0.1' AND port=${WORLDD_PORT} ORDER BY id LIMIT 1;")"
-[ -n "${REALM_ID}" ] || die "realm not seeded"
+[ -n "${REALM_ID}" ] || die "realm not seeded by run-local.sh (expected 127.0.0.1:${WORLDD_PORT})"
 ok "realm id ${REALM_ID}"
 
 # --- 4. Provision N bot accounts (reuse add-users.sh, #330). -----------------
