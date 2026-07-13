@@ -215,6 +215,15 @@ _CONTENT_REF_DEFS = {
     # contentId); equipTypeRef is a reference to an equip_type (e.g. item.equip_type).
     "equipTypeId": "content",
     "equipTypeRef": "equip_type",
+    # race (pack-contract spec §2.3) is likewise a new content type with a local
+    # self-id def (raceId, like equipTypeId/contentId). appearanceRef/attributeRef
+    # live in common.defs.yaml and are first consumed by race.schema.yaml — a race
+    # references its cosmetic appearance (spec §2.3) and, via attributeMods, tunes
+    # attributes (spec §2.2). (raceRef, a reference TO a race, arrives with the
+    # class schema's race_limits in a later story.)
+    "raceId": "content",
+    "appearanceRef": "appearance",
+    "attributeRef": "attribute",
 }
 _ASSET_REF_DEFS = {
     "artRef": "art",
@@ -445,6 +454,18 @@ class _Lowerer:
                 )
                 self.model.structs.append(nested)
             return NestedType(struct_name)
+        if def_name == "attributeMods":
+            # attributeMods (common.defs §attributeMods, spec §2.2) is a shared
+            # ARRAY def — a list of {attribute, value} — reused by race and class.
+            # Lower it to a vector of a single shared `AttributeMod` element struct,
+            # declared once (like IntRange/Position, but array-valued) so every
+            # consumer shares the element type.
+            element_name = "AttributeMod"
+            if not any(s.name == element_name for s in self.model.structs):
+                item_schema = self.common_defs[def_name]["items"]
+                nested = self._lower_object(element_name, item_schema)
+                self.model.structs.append(nested)
+            return ArrayType(NestedType(element_name))
         raise SchemaError(f"{owner}.{key}: unknown $ref {ref}")
 
     def _register_enum(self, name: str, values: list[str]) -> EnumType:

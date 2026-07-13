@@ -190,6 +190,7 @@ def test_real_schema_generates_all_root_types():
         "dye",
         "attribute",
         "equip_type",
+        "race",
     }
 
 

@@ -25,11 +25,13 @@ namespace {
 // Content reference grammar (validate_content.py REF_RE): an optional
 // "<namespace>:" prefix followed by "<type>.<segment>(.<segment>)*" where the
 // type is one of the referenceable content types (the eight server types plus
-// `attribute` — kernel-blessed stat refs, spec §2.2 — and `equip_type`, referenced
-// by item.equip_type, pack-contract spec §2.1).
+// `attribute` — kernel-blessed stat refs, spec §2.2 — `equip_type`, referenced
+// by item.equip_type, pack-contract spec §2.1 — `appearance`, referenced by a
+// race's cosmetic body variant, spec §2.3/§3, and `race`, referenced by a class's
+// race_limits, spec §2.4/§3).
 // Anchored; std::regex has no ^$ default. Kept in lockstep with REF_RE.
 const std::regex kRefRe(
-    R"(^(?:([a-z][a-z0-9_]{1,31}):)?((npc|item|quest|ability|loot|vendor|spawn|zone|attribute|equip_type)\.[a-z0-9_]+(?:\.[a-z0-9_]+)*)$)");
+    R"(^(?:([a-z][a-z0-9_]{1,31}):)?((npc|item|quest|ability|loot|vendor|spawn|zone|attribute|equip_type|appearance|race)\.[a-z0-9_]+(?:\.[a-z0-9_]+)*)$)");
 
 // A content reference discovered in a file, ready for L011 resolution.
 struct Ref {
