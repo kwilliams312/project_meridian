@@ -466,6 +466,8 @@ def cmd_generate(args: argparse.Namespace) -> int:
         try:
             events.emit(event, **fields)
         except protocol.ProtocolSinkFlushError as exc:
+            if not exc.retry_succeeded:
+                return _report_json_sink_failure()
             if isinstance(exc.original, KeyboardInterrupt):
                 # The interrupted event's full line was accepted. Append only
                 # the cancellation terminal; never rewrite the first delivery.
@@ -475,6 +477,17 @@ def cmd_generate(args: argparse.Namespace) -> int:
                     task_ids=[],
                 )
                 return 130
+            if isinstance(exc.original, Exception):
+                # The retry proved the sink healthy and made the preflight line
+                # durable. Match guarded runtime semantics with one redacted
+                # internal-error terminal, without rewriting the first event.
+                events.emit(
+                    "error",
+                    error_code="internal_error",
+                    message=str(exc.original),
+                    task_ids=[],
+                )
+                return 1
             return _report_json_sink_failure()
         return None
 

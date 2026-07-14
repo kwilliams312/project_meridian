@@ -318,7 +318,7 @@ def test_preflight_flush_keyboard_interrupt_emits_one_cancelled_terminal(
     assert not (tmp_path / "content/core/assets/art/protocol_marker").exists()
 
 
-@pytest.mark.parametrize("flush_failure", [OSError, SystemExit, GeneratorExit])
+@pytest.mark.parametrize("flush_failure", [SystemExit, GeneratorExit])
 def test_preflight_non_cancellation_flush_failure_stays_controlled(
     flush_failure, tmp_path, monkeypatch, capsys
 ):
@@ -355,6 +355,98 @@ def test_preflight_non_cancellation_flush_failure_stays_controlled(
     assert capsys.readouterr().err == (
         "error: Meshy JSON event sink failed; refusing further stdout output\n"
     )
+
+
+@pytest.mark.parametrize("target_event", ["validation.started", "validation.passed"])
+@pytest.mark.parametrize("failure_point", ["before-store", "after-store"])
+def test_preflight_ordinary_flush_error_emits_one_redacted_error_terminal(
+    target_event, failure_point, tmp_path, monkeypatch, capsys
+):
+    secret = "preflight-secret"
+
+    class RecoveringPreflightFlushStream:
+        def __init__(self):
+            self.pending = ""
+            self.durable = ""
+            self.failed = False
+
+        def write(self, value):
+            self.pending += value
+            return len(value)
+
+        def flush(self):
+            if not self.failed and f'"event":"{target_event}"' in self.pending:
+                self.failed = True
+                if failure_point == "after-store":
+                    self.durable += self.pending
+                    self.pending = ""
+                raise OSError(f"flush exposed {secret} and Bearer flush-token")
+            self.durable += self.pending
+            self.pending = ""
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("preflight error must precede client construction")
+
+    monkeypatch.setattr(meshy_main, "_new_client", forbidden)
+    monkeypatch.setenv("MESHY_API_KEY", secret)
+    stream = RecoveringPreflightFlushStream()
+    monkeypatch.setattr(meshy_main.sys, "stdout", stream)
+
+    assert meshy_main.main(_base_args(tmp_path)) == 1
+    assert stream.pending == ""
+    assert secret not in stream.durable
+    assert "flush-token" not in stream.durable
+    events = _events(stream.durable)
+    names = [event["event"] for event in events]
+    assert names.count(target_event) == 1
+    assert names[-1] == "error"
+    assert names.count("error") == 1
+    assert events[-1]["error_code"] == "internal_error"
+    assert events[-1]["message"] == "flush exposed [REDACTED] and [REDACTED]"
+    assert capsys.readouterr().err == ""
+    assert not (tmp_path / "content/core/assets/art/protocol_marker").exists()
+
+
+@pytest.mark.parametrize("target_event", ["validation.started", "validation.passed"])
+def test_persistent_preflight_flush_error_fails_closed_without_terminal_stdout(
+    target_event, tmp_path, monkeypatch, capsys
+):
+    class PersistentPreflightFlushStream:
+        def __init__(self):
+            self.pending = ""
+            self.durable = ""
+            self.failure_started = False
+            self.writes_after_failure = 0
+
+        def write(self, value):
+            if self.failure_started:
+                self.writes_after_failure += 1
+            self.pending += value
+            return len(value)
+
+        def flush(self):
+            if f'"event":"{target_event}"' in self.pending:
+                self.failure_started = True
+                raise OSError("persistent preflight flush failure")
+            self.durable += self.pending
+            self.pending = ""
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("persistent preflight failure must stop before network")
+
+    monkeypatch.setattr(meshy_main, "_new_client", forbidden)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    stream = PersistentPreflightFlushStream()
+    monkeypatch.setattr(meshy_main.sys, "stdout", stream)
+
+    assert meshy_main.main(_base_args(tmp_path)) == 1
+    assert stream.writes_after_failure == 0
+    durable_events = _events(stream.durable)
+    assert not any(event["event"] in {"error", "cancelled"} for event in durable_events)
+    assert capsys.readouterr().err == (
+        "error: Meshy JSON event sink failed; refusing further stdout output\n"
+    )
+    assert not (tmp_path / "content/core/assets/art/protocol_marker").exists()
 
 
 def test_terminal_refusal_flush_interrupt_keeps_single_refusal(
