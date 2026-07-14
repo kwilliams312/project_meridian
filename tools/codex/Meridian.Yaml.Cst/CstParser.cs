@@ -141,11 +141,14 @@ internal sealed class CstParser
         int lastEnd = (int)start.End.Index;
         while (true)
         {
+            int? triviaStart = Is<Comment>() ? (int)Current.Start.Index : null;
             SkipComments();
             if (Is<BlockEnd>())
             {
                 var end = Expect<BlockEnd>();
-                lastEnd = (int)end.Start.Index;
+                lastEnd = node.Entries.Count == 0
+                    ? (int)end.Start.Index
+                    : EndBeforeTrivia(lastEnd, triviaStart ?? (int)end.Start.Index);
                 break;
             }
 
@@ -226,11 +229,14 @@ internal sealed class CstParser
         int lastEnd = (int)start.End.Index;
         while (true)
         {
+            int? triviaStart = Is<Comment>() ? (int)Current.Start.Index : null;
             SkipComments();
             if (Is<BlockEnd>())
             {
                 var end = Expect<BlockEnd>();
-                lastEnd = (int)end.Start.Index;
+                lastEnd = node.Items.Count == 0
+                    ? (int)end.Start.Index
+                    : EndBeforeTrivia(lastEnd, triviaStart ?? (int)end.Start.Index);
                 break;
             }
 
@@ -338,6 +344,14 @@ internal sealed class CstParser
         }
 
         return i;
+    }
+
+    private int EndBeforeTrivia(int fallback, int limit)
+    {
+        int comment = _source.IndexOf('#', fallback, Math.Max(0, limit - fallback));
+        int end = comment >= 0 ? comment : limit;
+        while (end > fallback && char.IsWhiteSpace(_source[end - 1])) end--;
+        return end;
     }
 
     private static ScalarStyle MapStyle(YamlDotNet.Core.ScalarStyle style) => style switch

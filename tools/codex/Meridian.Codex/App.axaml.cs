@@ -4,6 +4,7 @@ using Avalonia.Data.Core.Plugins;
 using Avalonia.Markup.Xaml;
 using Meridian.Codex.ViewModels;
 using Meridian.Codex.Views;
+using Meridian.Codex.SchemaForms;
 
 namespace Meridian.Codex;
 
@@ -22,10 +23,12 @@ public partial class App : Application
             // DataAnnotation validation; remove it to avoid double reports (docs).
             DisableAvaloniaDataAnnotationValidation();
 
-            desktop.MainWindow = new MainWindow
-            {
-                DataContext = new MainWindowViewModel(),
-            };
+            var preview = SchemaFormFileViewModel.TryCreate(desktop.Args, out var previewError);
+            desktop.MainWindow = preview is null
+                ? new MainWindow { DataContext = new MainWindowViewModel() }
+                : new SchemaFormWindow { DataContext = preview };
+            if (previewError is not null)
+                System.Diagnostics.Trace.TraceWarning(previewError);
         }
 
         base.OnFrameworkInitializationCompleted();

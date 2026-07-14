@@ -43,6 +43,12 @@
     <!-- Codex evaluates the same schema + merged $defs as validate_content.py. -->
     <EmbeddedResource Include="..\..\..\schema\content\pack.schema.yaml"
                       Link="Schemas\pack.schema.yaml" />
+    <EmbeddedResource Include="..\..\..\schema\content\npc.schema.yaml"
+                      Link="Schemas\npc.schema.yaml" />
+    <EmbeddedResource Include="..\..\..\schema\content\item.schema.yaml"
+                      Link="Schemas\item.schema.yaml" />
+    <EmbeddedResource Include="..\..\..\schema\content\ability.schema.yaml"
+                      Link="Schemas\ability.schema.yaml" />
     <EmbeddedResource Include="..\..\..\schema\content\common.defs.yaml"
                       Link="Schemas\common.defs.yaml" />
     <EmbeddedResource Include="..\..\..\schema\content\skeleton.defs.yaml"

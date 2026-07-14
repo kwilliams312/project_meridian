@@ -75,7 +75,7 @@ uv sync --locked
 dotnet restore tools/codex/Meridian.Codex.sln
 dotnet build tools/codex/Meridian.Codex.sln --no-restore -m:1 --disable-build-servers
 tools/codex/check-warning-clean.sh
-dotnet test tools/codex/Meridian.Codex.sln --no-restore
+dotnet test tools/codex/Meridian.Codex.sln --no-restore # round-trip, surgical-edit, schema-form, and headless UI coverage
 ```
 
 Tests load the real `content/core` YAML files as fixtures.
@@ -145,6 +145,27 @@ key order, quoting, and every unrelated byte remain unchanged. A clean external
 edit reloads automatically; if disk and unsaved local edits both change, Codex
 keeps the local form state, marks an external conflict, and blocks Save instead
 of overwriting either side.
+
+## Experimental generic schema form
+
+Story #668 adds a reusable Draft 2020-12 form renderer backed directly by the
+embedded content schemas and `Meridian.Yaml.Cst`. It supports strings, enums,
+booleans, numeric ranges, nested objects, ordered arrays, optional/defaulted
+fields, and object `oneOf` branches with destructive-change confirmation. A
+schema construct the renderer cannot represent remains visible but read-only
+with an instruction to edit that value in YAML.
+
+Until the individual content editors migrate to the renderer, an opt-in internal
+preview opens a schema-valid file without changing normal Codex startup:
+
+```bash
+dotnet run --project Meridian.Codex/Meridian.Codex.csproj -- \
+  --schema-form ability /tmp/example.ability.yaml
+```
+
+Accepted schema names are `pack`, `npc`, `item`, and `ability` (or their full
+`*.schema.yaml` filenames). Preview a disposable copy: Save writes
+CST-preserving edits back to the supplied path.
 
 To exercise the UI from this directory:
 
