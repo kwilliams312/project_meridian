@@ -5,19 +5,40 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Warning diagnostics emitted by the supported toolchain layers. Keep this
-# narrower than a raw "warning" substring so branch/file names such as
-# story-720-codex-warning-clean and MSBuild's "0 Warning(s)" summary pass.
-WARNING_PATTERN='(^|[[:space:]:])([[:alnum:]_]*Warning:|warning([[:space:]]+(CS|MSB|NU|NETSDK)[0-9]+|:)|CMake([[:space:]]+Deprecation)?[[:space:]]+Warning([[:space:]]+\(dev\))?([[:space:]]+at|:))|^WARN([[:space:]]|:)'
+# Warning diagnostics emitted by the supported toolchain layers. Structured
+# .NET source diagnostics accept compiler and analyzer code families without
+# treating arbitrary prose, branch/file names, or MSBuild's "0 Warning(s)"
+# summary as warnings.
+WARNING_PATTERN='(^|[[:space:]:])([[:alnum:]_]*Warning:|warning([[:space:]]+(CS|MSB|NU|NETSDK)[0-9]+[[:space:]]*:|:)|CMake([[:space:]]+Deprecation)?[[:space:]]+Warning([[:space:]]+\(dev\))?([[:space:]]+at|:))|\.(cs|fs|vb)(\([0-9]+(,[0-9]+){1,3}\))?[[:space:]]*:[[:space:]]*warning[[:space:]]+[[:alpha:]][[:alnum:]]*[0-9][[:alnum:]]*[[:space:]]*:|^WARN([[:space:]]|:)'
 
 assert_warning_clean() {
   local output="$1"
-  [ -r "$output" ] || { echo "Codex warning-clean assertion failed: cannot read $output" >&2; return 2; }
-  if LC_ALL=C grep -Eiq "$WARNING_PATTERN" "$output"; then
-    echo "Codex warning-clean assertion failed: warning output detected." >&2
-    return 1
+  local scanner_status
+
+  if [ ! -f "$output" ] || [ ! -r "$output" ]; then
+    echo "Codex warning-clean assertion failed: input is not a readable regular file: $output" >&2
+    return 2
   fi
-  echo "Codex warning-clean assertion passed."
+
+  if LC_ALL=C grep -Eiq "$WARNING_PATTERN" "$output"; then
+    scanner_status=0
+  else
+    scanner_status=$?
+  fi
+
+  case "$scanner_status" in
+    0)
+      echo "Codex warning-clean assertion failed: warning output detected." >&2
+      return 1
+      ;;
+    1)
+      echo "Codex warning-clean assertion passed."
+      ;;
+    *)
+      echo "Codex warning-clean assertion failed: warning scanner exited with status $scanner_status." >&2
+      return 2
+      ;;
+  esac
 }
 
 # Input-only mode makes the classifier independently regression-testable without
