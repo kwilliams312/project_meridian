@@ -210,6 +210,51 @@ def test_text_to_3d_happy_path_returns_refine_task_handle(tmp_path):
     assert any(c.method == "POST" for c in calls)
 
 
+def test_client_default_timeout_is_generous_read():
+    # Issue #735: the old hardwired 30s scalar killed slow-but-healthy Meshy
+    # create/poll/download calls. The new default keeps a short connect but a
+    # generous read/write/pool so a slow *response* is waited out, not aborted.
+    client = client_mod.MeshyClient("fake-key")
+    try:
+        assert client.timeout == client_mod.DEFAULT_HTTP_TIMEOUT
+        assert client.timeout.read == 120.0
+        assert client.timeout.connect == 10.0
+        assert client.timeout.write == 120.0
+        assert client.timeout.pool == 120.0
+    finally:
+        client.close()
+
+
+def test_client_scalar_timeout_override_sets_read_keeps_short_connect():
+    # A scalar override raises read/write/pool but must keep the short connect
+    # cap — the failure mode is a slow response, never a slow TCP connect.
+    client = client_mod.MeshyClient("fake-key", timeout=200)
+    try:
+        assert client.timeout.read == 200.0
+        assert client.timeout.write == 200.0
+        assert client.timeout.pool == 200.0
+        assert client.timeout.connect == 10.0
+    finally:
+        client.close()
+
+
+def test_client_passes_timeout_into_httpx_call():
+    # The configured timeout must actually reach the wire: httpx stamps it onto
+    # every request's extensions, which is what the transport ultimately honors.
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.extensions.get("timeout"))
+        return httpx.Response(200, json={"status": "SUCCEEDED", "progress": 100})
+
+    client = client_mod.MeshyClient(
+        "fake-key", transport=httpx.MockTransport(handler), timeout=200
+    )
+    client.poll("task_1", interval_s=0, timeout_s=5)
+    assert seen and seen[0]["read"] == 200.0
+    assert seen[0]["connect"] == 10.0
+
+
 def test_poll_returns_terminal_status():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"status": "SUCCEEDED", "progress": 100})
@@ -413,8 +458,8 @@ def _patch_client(monkeypatch, handler):
     monkeypatch.setattr(
         meshy_main,
         "_new_client",
-        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: client_mod.MeshyClient(
-            api_key, model_version=model_version, transport=transport
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None: client_mod.MeshyClient(
+            api_key, model_version=model_version, transport=transport, timeout=timeout
         ),
     )
 
@@ -469,6 +514,137 @@ def test_generate_happy_path_lands_sidecar_and_prompts(
     assert prompts_doc["task_id"] == "task_refine_1"
     assert prompts_doc["preview_task_id"] == "task_preview_1"
     assert prompts_doc["request"]["prompt"] == "a small barrel"
+
+
+def _run_generate_recording_timeouts(tmp_path, monkeypatch, extra_args=()):
+    """Drive `generate` (prop, happy path) recording every request's httpx
+    timeout, so timeout resolution can be asserted end-to-end into the wire."""
+    glb_bytes = _make_glb(tmp_path / "src.glb", triangle_count=2).read_bytes()
+    handler, _calls = _text_to_3d_handler(glb_bytes=glb_bytes)
+    seen: list[dict] = []
+
+    def recording(request: httpx.Request) -> httpx.Response:
+        seen.append(request.extensions.get("timeout"))
+        return handler(request)
+
+    _patch_client(monkeypatch, recording)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    rc = meshy_main.main(
+        [
+            "generate",
+            "--text",
+            "a small barrel",
+            "--ns",
+            "core",
+            "--name",
+            "test_barrel",
+            "--class",
+            "prop",
+            "--terms-verified",
+            "--content-root",
+            str(tmp_path / "content"),
+            "--poll-interval",
+            "0",
+            "--poll-timeout",
+            "5",
+            *extra_args,
+        ]
+    )
+    return rc, seen
+
+
+def test_generate_uses_default_http_timeout_on_every_call(tmp_path, monkeypatch):
+    rc, seen = _run_generate_recording_timeouts(tmp_path, monkeypatch)
+    assert rc == 0
+    assert seen  # at least one request went out
+    for timeout in seen:
+        assert timeout["read"] == client_mod.DEFAULT_HTTP_TIMEOUT_S
+        assert timeout["connect"] == client_mod.DEFAULT_HTTP_CONNECT_TIMEOUT_S
+
+
+def test_generate_timeout_flag_overrides_default(tmp_path, monkeypatch):
+    rc, seen = _run_generate_recording_timeouts(
+        tmp_path, monkeypatch, extra_args=["--timeout", "200"]
+    )
+    assert rc == 0
+    assert seen
+    for timeout in seen:
+        assert timeout["read"] == 200.0
+
+
+def test_generate_honors_meshy_timeout_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESHY_TIMEOUT", "200")
+    rc, seen = _run_generate_recording_timeouts(tmp_path, monkeypatch)
+    assert rc == 0
+    assert seen
+    for timeout in seen:
+        assert timeout["read"] == 200.0
+
+
+def test_generate_timeout_flag_beats_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESHY_TIMEOUT", "200")
+    rc, seen = _run_generate_recording_timeouts(
+        tmp_path, monkeypatch, extra_args=["--timeout", "45"]
+    )
+    assert rc == 0
+    assert seen
+    for timeout in seen:
+        assert timeout["read"] == 45.0
+
+
+def test_generate_refuses_malformed_meshy_timeout_env(tmp_path, monkeypatch, capsys):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no HTTP call should happen for a malformed timeout")
+
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    monkeypatch.setenv("MESHY_TIMEOUT", "not-a-number")
+    rc = meshy_main.main(
+        [
+            "generate",
+            "--text",
+            "a small barrel",
+            "--ns",
+            "core",
+            "--name",
+            "test_barrel",
+            "--class",
+            "prop",
+            "--terms-verified",
+            "--content-root",
+            str(tmp_path / "content"),
+        ]
+    )
+    assert rc == 2
+    assert "MESHY_TIMEOUT" in capsys.readouterr().err
+
+
+def test_generate_refuses_nonpositive_timeout(tmp_path, monkeypatch, capsys):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no HTTP call should happen for a nonpositive timeout")
+
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    rc = meshy_main.main(
+        [
+            "generate",
+            "--text",
+            "a small barrel",
+            "--ns",
+            "core",
+            "--name",
+            "test_barrel",
+            "--class",
+            "prop",
+            "--terms-verified",
+            "--timeout",
+            "0",
+            "--content-root",
+            str(tmp_path / "content"),
+        ]
+    )
+    assert rc == 2
+    assert "--timeout" in capsys.readouterr().err
 
 
 def _run_kit_piece_generate(tmp_path, monkeypatch, extra_args=()):
