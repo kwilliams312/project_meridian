@@ -23,7 +23,7 @@
 
     <!-- Command + file bar. -->
     <Border DockPanel.Dock="Top" Padding="8" Background="{DynamicResource SystemControlBackgroundListLowBrush}">
-      <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto">
+      <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto" RowDefinitions="Auto,Auto">
         <Button Content="_New" Command="{Binding NewCommand}" Margin="0,0,8,0"
                 AutomationProperties.Name="New item" />
         <Button Grid.Column="1" Content="_Open…" Command="{Binding OpenCommand}" Margin="0,0,8,0"
@@ -37,6 +37,11 @@
                    AutomationProperties.HelpText="The compact selected path. Use Copy full path to access the complete location." />
         <Button Grid.Column="4" Content="Copy full path" Command="{Binding CopyFullPathCommand}"
                 AutomationProperties.Name="Copy full item path" />
+        <TextBox Grid.Row="1" Grid.ColumnSpan="5" Margin="0,8,0,0"
+                 IsVisible="{Binding ShowManualFilePath}" Text="{Binding FilePath}"
+                 Watermark="Manual item YAML path (native picker unavailable)"
+                 AutomationProperties.Name="Manual item file path"
+                 AutomationProperties.HelpText="Fallback path entry used only when this platform has no native open or save picker." />
       </Grid>
     </Border>
 

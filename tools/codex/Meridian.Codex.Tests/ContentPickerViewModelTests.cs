@@ -74,6 +74,98 @@ public sealed class ContentPickerViewModelTests
     }
 
     [Fact]
+    public async Task New_item_save_uses_native_save_picker_and_commits_path_only_after_success()
+    {
+        var path = Path.Combine(TempDirectory(), "created.item.yaml");
+        var dialogs = new FakeDialogs { SaveSelection = path };
+        var vm = new ItemEditorViewModel(dialogs, () => "/content/moonfall") { Name = "Created item" };
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        Assert.Equal(EntityFileKind.Item, dialogs.SaveKind);
+        Assert.Equal("/content/moonfall", dialogs.WorkspacePath);
+        Assert.Equal(Path.GetFullPath(path), vm.FilePath);
+        Assert.True(File.Exists(path));
+        Assert.Contains("name: Created item", File.ReadAllText(path));
+        Assert.False(vm.IsDirty);
+    }
+
+    [Fact]
+    public async Task New_npc_save_uses_native_save_picker()
+    {
+        var path = Path.Combine(TempDirectory(), "created.npc.yaml");
+        var dialogs = new FakeDialogs { SaveSelection = path };
+        var vm = new NpcEditorViewModel(dialogs) { Name = "Created NPC" };
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        Assert.Equal(EntityFileKind.Npc, dialogs.SaveKind);
+        Assert.Equal(Path.GetFullPath(path), vm.FilePath);
+        Assert.True(File.Exists(path));
+        Assert.False(vm.IsDirty);
+    }
+
+    [Fact]
+    public async Task Cancelling_save_picker_keeps_new_item_dirty_and_pathless()
+    {
+        var dialogs = new FakeDialogs { SaveSelection = null };
+        var vm = new ItemEditorViewModel(dialogs) { Name = "Unsaved item" };
+        var beforeStatus = vm.StatusText;
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        Assert.Equal(string.Empty, vm.FilePath);
+        Assert.True(vm.IsDirty);
+        Assert.Equal(beforeStatus, vm.StatusText);
+
+        var pristine = new ItemEditorViewModel(dialogs);
+        await pristine.SaveCommand.ExecuteAsync(null);
+        Assert.False(pristine.IsDirty);
+        Assert.Equal(string.Empty, pristine.FilePath);
+    }
+
+    [Fact]
+    public async Task Picker_and_clipboard_exceptions_are_reported_without_faulting_commands()
+    {
+        var dialogs = new FakeDialogs { PickerException = new IOException("backend unavailable") };
+        var vm = new ItemEditorViewModel(dialogs);
+
+        await vm.OpenCommand.ExecuteAsync(null);
+        Assert.Contains("Open failed: backend unavailable", vm.StatusText);
+
+        await vm.SaveCommand.ExecuteAsync(null);
+        Assert.Contains("Save failed: backend unavailable", vm.StatusText);
+
+        vm.FilePath = "/tmp/example.item.yaml";
+        await vm.CopyFullPathCommand.ExecuteAsync(null);
+        Assert.Contains("Copy path failed: backend unavailable", vm.StatusText);
+    }
+
+    [Fact]
+    public async Task Folder_picker_and_discard_prompt_exceptions_are_reported_inline()
+    {
+        var folderDialogs = new FakeDialogs { PickerException = new IOException("folder backend unavailable") };
+        using var pack = new PackWorkspaceViewModel(
+            new RecentWorkspaceStore(Path.Combine(TempDirectory(), "recent.json")), folderDialogs);
+
+        await pack.OpenCommand.ExecuteAsync(null);
+        Assert.Contains("Open failed: folder backend unavailable", pack.StatusMessage);
+
+        var selected = ContentFixtures.CopyToTemp("items/rusty_pickaxe.item.yaml");
+        var confirmDialogs = new FakeDialogs
+        {
+            EntitySelection = selected,
+            ConfirmException = new IOException("prompt backend unavailable"),
+        };
+        var item = new ItemEditorViewModel(confirmDialogs) { Name = "Keep local" };
+
+        await item.OpenCommand.ExecuteAsync(null);
+        Assert.Contains("Open failed: prompt backend unavailable", item.StatusText);
+        Assert.Equal("Keep local", item.Name);
+        Assert.True(item.IsDirty);
+    }
+
+    [Fact]
     public async Task Pack_folder_cancel_does_not_change_workspace_or_recents()
     {
         var recentPath = Path.Combine(TempDirectory(), "recent.json");
@@ -86,6 +178,37 @@ public sealed class ContentPickerViewModelTests
         Assert.False(vm.IsWorkspaceOpen);
         Assert.Empty(vm.RecentWorkspaces);
         Assert.Equal(beforeStatus, vm.StatusMessage);
+    }
+
+    [Fact]
+    public async Task Unsupported_folder_picker_uses_visible_manual_path_fallback()
+    {
+        var packRoot = CreatePackDirectory();
+        var dialogs = new FakeDialogs { CanPickFolders = false, PickerException = new IOException("must not call") };
+        using var vm = new PackWorkspaceViewModel(
+            new RecentWorkspaceStore(Path.Combine(TempDirectory(), "recent.json")), dialogs)
+        {
+            WorkspacePath = packRoot,
+        };
+
+        await vm.OpenCommand.ExecuteAsync(null);
+
+        Assert.True(vm.ShowManualWorkspacePath);
+        Assert.True(vm.IsWorkspaceOpen);
+        Assert.Equal(0, dialogs.FolderPickerCalls);
+    }
+
+    [Fact]
+    public void Headless_backend_models_file_save_and_folder_capabilities_independently()
+    {
+        var dialogs = HeadlessContentDialogService.Instance;
+
+        Assert.False(dialogs.CanOpenFiles);
+        Assert.False(dialogs.CanSaveFiles);
+        Assert.False(dialogs.CanPickFolders);
+        Assert.True(new ItemEditorViewModel(dialogs).ShowManualFilePath);
+        using var pack = new PackWorkspaceViewModel(new RecentWorkspaceStore(Path.Combine(TempDirectory(), "recent.json")), dialogs);
+        Assert.True(pack.ShowManualWorkspacePath);
     }
 
     [Fact]
@@ -161,32 +284,73 @@ public sealed class ContentPickerViewModelTests
         return path;
     }
 
+    private static string CreatePackDirectory()
+    {
+        var packRoot = Path.Combine(TempDirectory(), "existing");
+        Directory.CreateDirectory(packRoot);
+        File.WriteAllText(Path.Combine(packRoot, "pack.yaml"), """
+            schema: meridian/pack@1
+            namespace: existing
+            name: Existing
+            version: 1.0.0
+            content_schema_version: 1
+            compatibility_version: 1
+            engine:
+              godot: "4.6"
+            license: Apache-2.0
+            """);
+        return packRoot;
+    }
+
     private sealed class FakeDialogs : IContentDialogService
     {
-        public bool IsNativePickerAvailable => true;
+        public bool CanOpenFiles { get; set; } = true;
+        public bool CanSaveFiles { get; set; } = true;
+        public bool CanPickFolders { get; set; } = true;
         public string? EntitySelection { get; set; }
+        public string? SaveSelection { get; set; }
         public string? FolderSelection { get; set; }
+        public Exception? PickerException { get; set; }
+        public Exception? ConfirmException { get; set; }
         public bool ConfirmDiscard { get; set; }
         public EntityFileKind? EntityKind { get; private set; }
+        public EntityFileKind? SaveKind { get; private set; }
         public string? WorkspacePath { get; private set; }
         public int ConfirmCalls { get; private set; }
+        public int FolderPickerCalls { get; private set; }
 
         public Task<string?> PickEntityFileAsync(EntityFileKind kind, string? currentPath, string? workspacePath = null)
         {
+            if (PickerException is not null) throw PickerException;
             EntityKind = kind;
             WorkspacePath = workspacePath;
             return Task.FromResult(EntitySelection);
         }
 
-        public Task<string?> PickFolderAsync(FolderPickerPurpose purpose, string? currentPath) =>
-            Task.FromResult(FolderSelection);
+        public Task<string?> PickEntitySaveFileAsync(EntityFileKind kind, string? currentPath, string? workspacePath = null)
+        {
+            if (PickerException is not null) throw PickerException;
+            SaveKind = kind;
+            WorkspacePath = workspacePath;
+            return Task.FromResult(SaveSelection);
+        }
+
+        public Task<string?> PickFolderAsync(FolderPickerPurpose purpose, string? currentPath)
+        {
+            FolderPickerCalls++;
+            if (PickerException is not null) throw PickerException;
+            return Task.FromResult(FolderSelection);
+        }
 
         public Task<bool> ConfirmDiscardChangesAsync(string documentName)
         {
             ConfirmCalls++;
+            if (ConfirmException is not null) throw ConfirmException;
             return Task.FromResult(ConfirmDiscard);
         }
 
-        public Task CopyPathAsync(string path) => Task.CompletedTask;
+        public Task CopyPathAsync(string path) => PickerException is null
+            ? Task.CompletedTask
+            : Task.FromException(PickerException);
     }
 }

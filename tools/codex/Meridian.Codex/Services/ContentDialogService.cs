@@ -11,8 +11,11 @@ public enum FolderPickerPurpose { OpenPack, CreatePack }
 /// <summary>Portable seam around native desktop selection and confirmation UI.</summary>
 public interface IContentDialogService
 {
-    bool IsNativePickerAvailable { get; }
+    bool CanOpenFiles { get; }
+    bool CanSaveFiles { get; }
+    bool CanPickFolders { get; }
     Task<string?> PickEntityFileAsync(EntityFileKind kind, string? currentPath, string? workspacePath = null);
+    Task<string?> PickEntitySaveFileAsync(EntityFileKind kind, string? currentPath, string? workspacePath = null);
     Task<string?> PickFolderAsync(FolderPickerPurpose purpose, string? currentPath);
     Task<bool> ConfirmDiscardChangesAsync(string documentName);
     Task CopyPathAsync(string path);
@@ -22,8 +25,12 @@ public interface IContentDialogService
 public sealed class HeadlessContentDialogService : IContentDialogService
 {
     public static HeadlessContentDialogService Instance { get; } = new();
-    public bool IsNativePickerAvailable => false;
+    public bool CanOpenFiles => false;
+    public bool CanSaveFiles => false;
+    public bool CanPickFolders => false;
     public Task<string?> PickEntityFileAsync(EntityFileKind kind, string? currentPath, string? workspacePath = null) =>
+        Task.FromResult<string?>(null);
+    public Task<string?> PickEntitySaveFileAsync(EntityFileKind kind, string? currentPath, string? workspacePath = null) =>
         Task.FromResult<string?>(null);
     public Task<string?> PickFolderAsync(FolderPickerPurpose purpose, string? currentPath) => Task.FromResult<string?>(null);
     public Task<bool> ConfirmDiscardChangesAsync(string documentName) => Task.FromResult(false);
@@ -33,7 +40,15 @@ public sealed class HeadlessContentDialogService : IContentDialogService
 /// <summary>Avalonia StorageProvider implementation shared by macOS, Windows, and Linux.</summary>
 public sealed class AvaloniaContentDialogService(Func<Window?> ownerProvider) : IContentDialogService
 {
-    public bool IsNativePickerAvailable => ownerProvider()?.StorageProvider?.CanOpen == true;
+    public bool CanOpenFiles => ReadCapability(storage => storage.CanOpen);
+    public bool CanSaveFiles => ReadCapability(storage => storage.CanSave);
+    public bool CanPickFolders => ReadCapability(storage => storage.CanPickFolder);
+
+    private bool ReadCapability(Func<IStorageProvider, bool> read)
+    {
+        try { return ownerProvider()?.StorageProvider is { } storage && read(storage); }
+        catch (Exception) { return false; }
+    }
 
     public async Task<string?> PickEntityFileAsync(
         EntityFileKind kind, string? currentPath, string? workspacePath = null)
@@ -42,40 +57,58 @@ public sealed class AvaloniaContentDialogService(Func<Window?> ownerProvider) : 
         if (owner?.StorageProvider is not { CanOpen: true } storage) return null;
 
         var suffix = kind == EntityFileKind.Item ? "item" : "npc";
-        var start = await ResolveStartFolderAsync(storage, currentPath, workspacePath);
-        var selected = await storage.OpenFilePickerAsync(new FilePickerOpenOptions
+        try
         {
-            Title = $"Open Meridian {suffix.ToUpperInvariant()}",
-            AllowMultiple = false,
-            SuggestedStartLocation = start,
-            FileTypeFilter =
-            [
-                new FilePickerFileType($"Meridian {suffix} YAML")
-                {
-                    Patterns = [$"*.{suffix}.yaml", $"*.{suffix}.yml"],
-                    MimeTypes = ["application/yaml", "text/yaml", "text/x-yaml"],
-                },
-                new FilePickerFileType("YAML") { Patterns = ["*.yaml", "*.yml"] },
-            ],
-        });
-        owner.Activate();
-        return selected.Count == 1 ? selected[0].TryGetLocalPath() : null;
+            var selected = await storage.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = $"Open Meridian {suffix.ToUpperInvariant()}",
+                AllowMultiple = false,
+                SuggestedStartLocation = await ResolveStartFolderAsync(storage, currentPath, workspacePath),
+                FileTypeFilter = EntityFileTypes(suffix),
+            });
+            return selected.Count == 1 ? selected[0].TryGetLocalPath() : null;
+        }
+        finally { owner.Activate(); }
+    }
+
+    public async Task<string?> PickEntitySaveFileAsync(
+        EntityFileKind kind, string? currentPath, string? workspacePath = null)
+    {
+        var owner = ownerProvider();
+        if (owner?.StorageProvider is not { CanSave: true } storage) return null;
+        var suffix = kind == EntityFileKind.Item ? "item" : "npc";
+        try
+        {
+            var selected = await storage.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = $"Save Meridian {suffix.ToUpperInvariant()}",
+                SuggestedStartLocation = await ResolveStartFolderAsync(storage, currentPath, workspacePath),
+                SuggestedFileName = $"new_{suffix}.{suffix}.yaml",
+                DefaultExtension = "yaml",
+                FileTypeChoices = EntityFileTypes(suffix),
+            });
+            return selected?.TryGetLocalPath();
+        }
+        finally { owner.Activate(); }
     }
 
     public async Task<string?> PickFolderAsync(FolderPickerPurpose purpose, string? currentPath)
     {
         var owner = ownerProvider();
         if (owner?.StorageProvider is not { CanPickFolder: true } storage) return null;
-        var selected = await storage.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        try
         {
-            Title = purpose == FolderPickerPurpose.OpenPack
-                ? "Choose a Meridian pack folder"
-                : "Choose the content folder for the new pack",
-            AllowMultiple = false,
-            SuggestedStartLocation = await ResolveStartFolderAsync(storage, currentPath),
-        });
-        owner.Activate();
-        return selected.Count == 1 ? selected[0].TryGetLocalPath() : null;
+            var selected = await storage.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = purpose == FolderPickerPurpose.OpenPack
+                    ? "Choose a Meridian pack folder"
+                    : "Choose the content folder for the new pack",
+                AllowMultiple = false,
+                SuggestedStartLocation = await ResolveStartFolderAsync(storage, currentPath),
+            });
+            return selected.Count == 1 ? selected[0].TryGetLocalPath() : null;
+        }
+        finally { owner.Activate(); }
     }
 
     public async Task<bool> ConfirmDiscardChangesAsync(string documentName)
@@ -124,18 +157,30 @@ public sealed class AvaloniaContentDialogService(Func<Window?> ownerProvider) : 
         };
         discard.Click += (_, _) => dialog.Close(true);
         cancel.Click += (_, _) => dialog.Close(false);
-        var result = await dialog.ShowDialog<bool>(owner);
-        owner.Activate();
-        return result;
+        try { return await dialog.ShowDialog<bool>(owner); }
+        finally { owner.Activate(); }
     }
 
     public async Task CopyPathAsync(string path)
     {
         var owner = ownerProvider();
-        if (owner?.Clipboard is not null && !string.IsNullOrWhiteSpace(path))
-            await owner.Clipboard.SetTextAsync(path);
-        owner?.Activate();
+        try
+        {
+            if (owner?.Clipboard is not null && !string.IsNullOrWhiteSpace(path))
+                await owner.Clipboard.SetTextAsync(path);
+        }
+        finally { owner?.Activate(); }
     }
+
+    private static IReadOnlyList<FilePickerFileType> EntityFileTypes(string suffix) =>
+    [
+        new FilePickerFileType($"Meridian {suffix} YAML")
+        {
+            Patterns = [$"*.{suffix}.yaml", $"*.{suffix}.yml"],
+            MimeTypes = ["application/yaml", "text/yaml", "text/x-yaml"],
+        },
+        new FilePickerFileType("YAML") { Patterns = ["*.yaml", "*.yml"] },
+    ];
 
     private static async Task<IStorageFolder?> ResolveStartFolderAsync(
         IStorageProvider storage, params string?[] candidates)

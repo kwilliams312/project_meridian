@@ -88,6 +88,7 @@ public sealed partial class ItemEditorViewModel : ViewModelBase
 
     public string DisplayPath => PathPresentation.Compact(FilePath);
     public bool HasFilePath => !string.IsNullOrWhiteSpace(FilePath);
+    public bool ShowManualFilePath => !_dialogs.CanOpenFiles || !_dialogs.CanSaveFiles;
 
     public ItemEditorViewModel() : this(HeadlessContentDialogService.Instance) { }
 
@@ -178,27 +179,32 @@ public sealed partial class ItemEditorViewModel : ViewModelBase
     [RelayCommand]
     private async Task NewAsync()
     {
-        if (IsDirty && !await _dialogs.ConfirmDiscardChangesAsync(DisplayPath)) return;
-        _document = ItemDocument.NewItem();
-        FilePath = string.Empty;
-        RebuildFromDocument();
-        IsDirty = false;
-        StatusText = "New item.";
+        try
+        {
+            if (IsDirty && !await _dialogs.ConfirmDiscardChangesAsync(DisplayPath)) return;
+            _document = ItemDocument.NewItem();
+            FilePath = string.Empty;
+            RebuildFromDocument();
+            IsDirty = false;
+            StatusText = "New item.";
+        }
+        catch (Exception ex) { StatusText = $"New failed: {ex.Message}"; }
     }
 
     /// <summary>Load the item at <see cref="FilePath"/> into the form.</summary>
     [RelayCommand]
     private async Task OpenAsync()
     {
-        var selected = await _dialogs.PickEntityFileAsync(EntityFileKind.Item, FilePath, _workspacePath());
-        if (selected is null)
-        {
-            if (_dialogs.IsNativePickerAvailable || string.IsNullOrWhiteSpace(FilePath)) return;
-            selected = FilePath; // Explicit advanced/headless path entry.
-        }
-
         try
         {
+            var selected = _dialogs.CanOpenFiles
+                ? await _dialogs.PickEntityFileAsync(EntityFileKind.Item, FilePath, _workspacePath())
+                : null;
+            if (selected is null)
+            {
+                if (_dialogs.CanOpenFiles || string.IsNullOrWhiteSpace(FilePath)) return;
+                selected = FilePath; // Explicit advanced/headless path entry.
+            }
             var candidate = ItemDocument.Load(selected);
             if (IsDirty && !await _dialogs.ConfirmDiscardChangesAsync(DisplayPath)) return;
             _document = candidate;
@@ -215,19 +221,8 @@ public sealed partial class ItemEditorViewModel : ViewModelBase
 
     /// <summary>Save the form to <see cref="FilePath"/> (surgical for loaded files, canonical for new).</summary>
     [RelayCommand]
-    private void Save()
+    private async Task SaveAsync()
     {
-        if (string.IsNullOrWhiteSpace(FilePath))
-        {
-            StatusText = "Set a file path before saving.";
-            return;
-        }
-
-        SyncStats();
-        SyncOnEquip();
-        SyncWornModels();
-        SyncWornHides();
-        SyncWornDyeChannels();
         if (!IsValid)
         {
             StatusText = $"Cannot save: {ValidationMessage}";
@@ -236,7 +231,29 @@ public sealed partial class ItemEditorViewModel : ViewModelBase
 
         try
         {
-            _document.Save(FilePath);
+            var selected = FilePath;
+            if (string.IsNullOrWhiteSpace(selected))
+            {
+                if (!_dialogs.CanSaveFiles)
+                {
+                    StatusText = "Enter a file path below before saving on this platform.";
+                    return;
+                }
+                selected = await _dialogs.PickEntitySaveFileAsync(EntityFileKind.Item, FilePath, _workspacePath());
+                if (selected is null) return;
+            }
+            SyncStats();
+            SyncOnEquip();
+            SyncWornModels();
+            SyncWornHides();
+            SyncWornDyeChannels();
+            if (!IsValid)
+            {
+                StatusText = $"Cannot save: {ValidationMessage}";
+                return;
+            }
+            _document.Save(selected);
+            FilePath = Path.GetFullPath(selected);
             IsDirty = false;
             StatusText = $"Saved {System.IO.Path.GetFileName(FilePath)}.";
         }
@@ -249,8 +266,12 @@ public sealed partial class ItemEditorViewModel : ViewModelBase
     [RelayCommand(CanExecute = nameof(HasFilePath))]
     private async Task CopyFullPathAsync()
     {
-        await _dialogs.CopyPathAsync(FilePath);
-        StatusText = "Full path copied to the clipboard.";
+        try
+        {
+            await _dialogs.CopyPathAsync(FilePath);
+            StatusText = "Full path copied to the clipboard.";
+        }
+        catch (Exception ex) { StatusText = $"Copy path failed: {ex.Message}"; }
     }
 
     /// <summary>Append a blank primary-stat row.</summary>

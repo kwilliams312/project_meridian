@@ -33,6 +33,7 @@ public partial class PackWorkspaceViewModel : ViewModelBase, IDisposable
     public bool CanSave => _workspace is not null && !HasExternalConflict && Diagnostics.All(d => d.Severity != DiagnosticSeverity.Error);
     public string DisplayPath => PathPresentation.Compact(WorkspacePath);
     public bool HasWorkspacePath => !string.IsNullOrWhiteSpace(WorkspacePath);
+    public bool ShowManualWorkspacePath => !_dialogs.CanPickFolders;
     public string WorkspaceHeader => _workspace is null ? "No pack open" : $"{Manifest.Namespace} · {Manifest.Version}";
     public string AggregateStatus => _workspace?.GetAggregateStatus().Summary ?? "Validation: not run · Build: not run";
 
@@ -66,15 +67,22 @@ public partial class PackWorkspaceViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private async Task CreateAsync()
     {
-        var selected = await _dialogs.PickFolderAsync(FolderPickerPurpose.CreatePack, WorkspacePath);
-        if (selected is null)
-        {
-            if (_dialogs.IsNativePickerAvailable || string.IsNullOrWhiteSpace(WorkspacePath)) return;
-            selected = WorkspacePath;
-        }
-        if (_workspace is not null && IsDirty && !await _dialogs.ConfirmDiscardChangesAsync(WorkspaceHeader)) return;
         try
         {
+            var selected = _dialogs.CanPickFolders
+                ? await _dialogs.PickFolderAsync(FolderPickerPurpose.CreatePack, WorkspacePath)
+                : null;
+            if (selected is null)
+            {
+                if (_dialogs.CanPickFolders) return;
+                if (string.IsNullOrWhiteSpace(WorkspacePath))
+                {
+                    StatusMessage = "Enter a content-root path below before creating on this platform.";
+                    return;
+                }
+                selected = WorkspacePath;
+            }
+            if (_workspace is not null && IsDirty && !await _dialogs.ConfirmDiscardChangesAsync(WorkspaceHeader)) return;
             ApplyWorkspace(ContentWorkspace.Create(selected, Manifest));
             StatusMessage = $"Created {WorkspacePath}.";
         }
@@ -87,13 +95,24 @@ public partial class PackWorkspaceViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private async Task OpenAsync()
     {
-        var selected = await _dialogs.PickFolderAsync(FolderPickerPurpose.OpenPack, WorkspacePath);
-        if (selected is null)
+        try
         {
-            if (_dialogs.IsNativePickerAvailable || string.IsNullOrWhiteSpace(WorkspacePath)) return;
-            selected = WorkspacePath;
+            var selected = _dialogs.CanPickFolders
+                ? await _dialogs.PickFolderAsync(FolderPickerPurpose.OpenPack, WorkspacePath)
+                : null;
+            if (selected is null)
+            {
+                if (_dialogs.CanPickFolders) return;
+                if (string.IsNullOrWhiteSpace(WorkspacePath))
+                {
+                    StatusMessage = "Enter a pack-folder path below before opening on this platform.";
+                    return;
+                }
+                selected = WorkspacePath;
+            }
+            await OpenPathAsync(selected);
         }
-        await OpenPathAsync(selected);
+        catch (Exception ex) { StatusMessage = $"Open failed: {ex.Message}"; }
     }
 
     private async Task OpenPathAsync(string path)
@@ -121,8 +140,12 @@ public partial class PackWorkspaceViewModel : ViewModelBase, IDisposable
     [RelayCommand(CanExecute = nameof(HasWorkspacePath))]
     private async Task CopyFullPathAsync()
     {
-        await _dialogs.CopyPathAsync(WorkspacePath);
-        StatusMessage = "Full path copied to the clipboard.";
+        try
+        {
+            await _dialogs.CopyPathAsync(WorkspacePath);
+            StatusMessage = "Full path copied to the clipboard.";
+        }
+        catch (Exception ex) { StatusMessage = $"Copy path failed: {ex.Message}"; }
     }
 
     [RelayCommand(CanExecute = nameof(CanSave))]
