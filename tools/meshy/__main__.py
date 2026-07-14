@@ -138,6 +138,17 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     gen.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help=(
+            "per-request HTTP timeout in seconds for each Meshy create/poll/"
+            "download call — NOT the overall poll budget (see --poll-timeout). "
+            "Overrides $MESHY_TIMEOUT; default keeps a short connect but a "
+            f"generous {client_mod.DEFAULT_HTTP_TIMEOUT_S:.0f}s read (issue #735)."
+        ),
+    )
+    gen.add_argument(
         "--json-events",
         action="store_true",
         help="emit only versioned JSON-lines job events on stdout",
@@ -188,10 +199,15 @@ def _origin_url(task_id: str, endpoint: str) -> str:
 
 
 def _new_client(
-    api_key: str, model_version: str = client_mod.DEFAULT_MODEL_VERSION
+    api_key: str,
+    model_version: str = client_mod.DEFAULT_MODEL_VERSION,
+    *,
+    timeout: float | None = None,
 ) -> client_mod.MeshyClient:
     """Client construction seam — tests monkeypatch this to inject a mock transport."""
-    return client_mod.MeshyClient(api_key, model_version=model_version)
+    return client_mod.MeshyClient(
+        api_key, model_version=model_version, timeout=timeout
+    )
 
 
 def _post_commit_hook() -> None:
@@ -517,6 +533,24 @@ def cmd_generate(args: argparse.Namespace) -> int:
     if not api_key:
         return refuse("MESHY_API_KEY is not set")
 
+    # Per-request HTTP timeout: CLI --timeout > $MESHY_TIMEOUT > built-in default
+    # (issue #735). Resolved here so a malformed value is refused before any
+    # network call rather than blowing up mid-generation.
+    http_timeout_s = args.timeout
+    if http_timeout_s is None:
+        env_timeout = os.environ.get("MESHY_TIMEOUT")
+        if env_timeout:
+            try:
+                http_timeout_s = float(env_timeout)
+            except ValueError:
+                return refuse(
+                    f"MESHY_TIMEOUT must be a number of seconds, got {env_timeout!r}"
+                )
+    if http_timeout_s is not None and http_timeout_s <= 0:
+        return refuse(
+            f"--timeout must be a positive number of seconds, got {http_timeout_s}"
+        )
+
     try:
         intake.validate_namespace(args.ns)
         intake.validate_name(args.name)
@@ -595,7 +629,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
         # guarded region.  JSON mode must end in a structured terminal event
         # even when local TLS/environment setup fails before the first request.
         reservation = _TargetReservation.acquire(paths)
-        client = _new_client(api_key, args.model_version)
+        client = _new_client(api_key, args.model_version, timeout=http_timeout_s)
         if args.text:
             handle = client.text_to_3d(
                 args.text,

@@ -49,6 +49,21 @@ DEFAULT_TARGET_POLYCOUNT = 30_000
 DEFAULT_POLL_INTERVAL_S = 5.0
 DEFAULT_POLL_TIMEOUT_S = 600.0
 
+# --- Per-request HTTP timeout (issue #735) --------------------------------
+# The old code hardwired a single 30s httpx timeout, which killed slow-but-
+# healthy Meshy calls: create/refine POSTs and the presigned .glb download can
+# legitimately take well over a minute (SP5 Wave 3 lost 3/7 pieces to a
+# transient 30s read-timeout while 4/7 succeeded in the same run). Keep a short
+# connect cap — a slow *response* is the failure mode, never a slow TCP handshake
+# — but a generous read/write/pool so the client waits the response out instead
+# of aborting it. This per-request budget is DISTINCT from DEFAULT_POLL_TIMEOUT_S,
+# which caps the overall PENDING→terminal poll loop; the two must not be conflated.
+DEFAULT_HTTP_CONNECT_TIMEOUT_S = 10.0
+DEFAULT_HTTP_TIMEOUT_S = 120.0
+DEFAULT_HTTP_TIMEOUT = httpx.Timeout(
+    DEFAULT_HTTP_TIMEOUT_S, connect=DEFAULT_HTTP_CONNECT_TIMEOUT_S
+)
+
 TERMINAL_STATUSES = frozenset({"SUCCEEDED", "FAILED", "CANCELED"})
 PENDING_STATUSES = frozenset({"PENDING", "IN_PROGRESS"})
 # The full documented status vocabulary (docs.meshy.ai). Anything outside this
@@ -56,6 +71,25 @@ PENDING_STATUSES = frozenset({"PENDING", "IN_PROGRESS"})
 # against — poll() fails loudly and immediately rather than spinning until a
 # generic timeout that would mask the real problem.
 KNOWN_STATUSES = TERMINAL_STATUSES | PENDING_STATUSES
+
+
+def resolve_http_timeout(timeout: "httpx.Timeout | float | None") -> httpx.Timeout:
+    """Normalize a caller-supplied per-request timeout into an httpx.Timeout.
+
+    ``None`` → the built-in default (short connect, generous read/write/pool).
+    An ``httpx.Timeout`` is honored verbatim. A scalar (seconds) raises the
+    read/write/pool budget to that value but keeps the short connect cap — a
+    slow connect is never the failure mode issue #735 is about, and letting the
+    connect balloon to minutes would just hide a genuinely unreachable host.
+    """
+    if timeout is None:
+        return DEFAULT_HTTP_TIMEOUT
+    if isinstance(timeout, httpx.Timeout):
+        return timeout
+    seconds = float(timeout)
+    return httpx.Timeout(
+        seconds, connect=min(DEFAULT_HTTP_CONNECT_TIMEOUT_S, seconds)
+    )
 
 
 class MeshyAPIError(RuntimeError):
@@ -127,6 +161,7 @@ class MeshyClient:
         base_url: str = BASE_URL,
         model_version: str = DEFAULT_MODEL_VERSION,
         transport: httpx.BaseTransport | None = None,
+        timeout: "httpx.Timeout | float | None" = None,
     ):
         if not api_key:
             raise ValueError("MeshyClient requires a non-empty api_key")
@@ -139,11 +174,12 @@ class MeshyClient:
                 "MeshyClient requires a pinned model version; 'latest' is refused"
             )
         self.model_version = model_version
+        self.timeout = resolve_http_timeout(timeout)
         self._client = httpx.Client(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {api_key}"},
             transport=transport,
-            timeout=30.0,
+            timeout=self.timeout,
         )
 
     def close(self) -> None:
