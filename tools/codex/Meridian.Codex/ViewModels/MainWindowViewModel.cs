@@ -24,6 +24,7 @@ public partial class MainWindowViewModel : ViewModelBase
     /// <summary>Editor navigation entries — the shell's left rail. Stubs for now.</summary>
     public ObservableCollection<EditorItem> Editors { get; } =
     [
+        new EditorItem("Pack", "pack.yaml — namespace, versions, dependencies, and build status"),
         new EditorItem("NPCs", "npc.schema.yaml — creatures, vendors, quest givers"),
         new EditorItem("Items", "item.schema.yaml — equipment, consumables, quest items"),
         new EditorItem("Abilities", "ability.schema.yaml — spells and combat abilities"),
@@ -43,6 +44,9 @@ public partial class MainWindowViewModel : ViewModelBase
     /// <summary>The item editor (#129), created once and shown when the Items rail entry is active.</summary>
     public ItemEditorViewModel ItemEditor { get; } = new();
 
+    /// <summary>The pack-oriented workspace shell and manifest editor (#667).</summary>
+    public PackWorkspaceViewModel PackWorkspace { get; } = new();
+
     /// <summary>
     /// The editor VM to host in the main content area for the current selection, or
     /// null when the selected editor has no implementation yet (Abilities/Quests
@@ -50,6 +54,7 @@ public partial class MainWindowViewModel : ViewModelBase
     /// </summary>
     public object? ActiveEditor => SelectedEditor?.Name switch
     {
+        "Pack" => PackWorkspace,
         "NPCs" => NpcEditor,
         "Items" => ItemEditor,
         _ => null,

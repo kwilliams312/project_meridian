@@ -78,5 +78,26 @@ dotnet test          # 88 tests: round-trip identity, surgical edit, add/remove,
 
 Tests load the real `content/core` YAML files as fixtures.
 
+## Content Pack Workspace
+
+Codex now opens a pack directory (`content/<namespace>/`) as its unit of work.
+The **Pack** screen can create a minimal manifest, reopen it, edit namespace and
+version contracts, manage exact-pinned dependencies, and persist recent pack
+locations. Field diagnostics mirror `pack.schema.yaml` for namespace, semver,
+content-schema, compatibility, Godot engine pin, dependency, and license values.
+
+Existing `pack.yaml` files use `Meridian.Yaml.Cst`: scalar edits replace only the
+edited token and dependency-list edits replace only that value node. Comments,
+key order, quoting, and every unrelated byte remain unchanged. A clean external
+edit reloads automatically; if disk and unsaved local edits both change, Codex
+keeps the local form state, marks an external conflict, and blocks Save instead
+of overwriting either side.
+
+To exercise the UI from this directory:
+
+```bash
+dotnet run --project Meridian.Codex/Meridian.Codex.csproj
+```
+
 > The library targets `net8.0` per the SAD. `RollForward=Major` lets the assemblies run cleanly on
 > a machine that only ships a newer runtime (e.g. a macOS box with the .NET 9 runtime).

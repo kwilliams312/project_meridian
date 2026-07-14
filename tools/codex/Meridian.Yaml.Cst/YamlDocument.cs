@@ -195,6 +195,48 @@ public sealed class YamlDocument
         AddSplice(new Splice(new Span(insertAt, insertAt), insertion));
     }
 
+    /// <summary>Replace one complete value node with caller-rendered YAML.</summary>
+    /// <remarks>
+    /// This is used for collection-valued form fields where a scalar splice is not
+    /// sufficient. The replacement is indentation-adjusted to the original node and
+    /// every byte outside that node remains verbatim.
+    /// </remarks>
+    public void ReplaceNode(string path, string rawYaml)
+    {
+        var node = Resolve(path) ?? throw new YamlCstException($"ReplaceNode: path '{path}' does not exist.");
+        int indent = ColumnOf(node.Span.Start);
+        string replacement = IndentContinuationLines(rawYaml, indent);
+        AddSplice(new Splice(node.Span, replacement));
+    }
+
+    /// <summary>Add a mapping key whose value is already-rendered YAML.</summary>
+    public void AddRawKey(string? parentPath, string key, string rawYaml)
+    {
+        var parentNode = string.IsNullOrEmpty(parentPath) ? _root : Resolve(parentPath);
+        if (parentNode is not { Kind: CstKind.Mapping } || parentNode.IsFlow || parentNode.Entries.Count == 0)
+        {
+            throw new YamlCstException($"AddRawKey: parent '{parentPath}' is not a non-empty block mapping.");
+        }
+        if (parentNode.FindEntry(key) is not null)
+        {
+            throw new YamlCstException($"AddRawKey: key '{key}' already exists under '{parentPath}'.");
+        }
+
+        var lastEntry = parentNode.Entries[^1];
+        int indent = ColumnOf(lastEntry.KeySpan.Start);
+        int insertAt = lastEntry.EntrySpan.End;
+        string pad = new(' ', indent);
+        string value = IndentContinuationLines(rawYaml, indent + 2);
+        string rendered = rawYaml.Contains('\n')
+            ? $"{pad}{key}:\n{new string(' ', indent + 2)}{value}"
+            : $"{pad}{key}: {value}";
+        string insertion = InsertionNeedsLeadingNewline(insertAt) ? $"\n{rendered}" : $"{rendered}\n";
+        AddSplice(new Splice(new Span(insertAt, insertAt), insertion));
+    }
+
+    private static string IndentContinuationLines(string text, int indent) =>
+        text.Replace("\n", "\n" + new string(' ', indent), StringComparison.Ordinal);
+
     // ---- internals ---------------------------------------------------------
 
     private void AddSplice(Splice splice)

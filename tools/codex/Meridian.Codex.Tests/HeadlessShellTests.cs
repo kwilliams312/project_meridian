@@ -44,14 +44,25 @@ public class HeadlessShellTests
     [AvaloniaFact]
     public void MainWindow_hosts_the_npc_editor_view_for_the_npcs_selection()
     {
-        // The NPCs rail entry is selected by default, so the shell must resolve and
-        // render NpcEditorView (via ViewLocator) with no binding errors.
         var vm = new MainWindowViewModel();
+        vm.SelectedEditor = vm.Editors.Single(e => e.Name == "NPCs");
         var window = new MainWindow { DataContext = vm };
         window.Show();
 
         Assert.Same(vm.NpcEditor, vm.ActiveEditor);
         Assert.NotNull(window.GetVisualDescendants().OfType<NpcEditorView>().FirstOrDefault());
+    }
+
+    [AvaloniaFact]
+    public void MainWindow_opens_on_the_pack_workspace_and_renders_manifest_fields()
+    {
+        var vm = new MainWindowViewModel();
+        var window = new MainWindow { DataContext = vm };
+        window.Show();
+
+        Assert.Same(vm.PackWorkspace, vm.ActiveEditor);
+        Assert.NotNull(window.GetVisualDescendants().OfType<PackWorkspaceView>().FirstOrDefault());
+        Assert.Contains(window.GetVisualDescendants().OfType<TextBox>(), b => b.Text == "my_pack");
     }
 
     [AvaloniaFact]
