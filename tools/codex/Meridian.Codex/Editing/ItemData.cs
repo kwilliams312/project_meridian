@@ -24,7 +24,7 @@ public sealed class ItemData
     private readonly Dictionary<string, string> _values = new(System.StringComparer.Ordinal);
 
     /// <summary>The schema const every item file carries.</summary>
-    public const string SchemaTag = "meridian/item@2";
+    public const string SchemaTag = Item.SchemaTag;
 
     /// <summary>Present leaf paths and their string values (absent optionals are simply missing).</summary>
     public IReadOnlyDictionary<string, string> Values => _values;
@@ -141,7 +141,7 @@ public sealed class ItemData
     public static readonly string[] FixedPaths =
     [
         "id", "name", "flavor_text",
-        "item_class", "subclass", "slot", "rarity",
+        "item_class", "subclass", "equip_type", "slot", "rarity",
         "required_level", "item_level", "unique", "binding", "stack_size",
         "weapon.damage.min", "weapon.damage.max", "weapon.speed_ms", "weapon.school",
         "armor",
@@ -171,6 +171,7 @@ public sealed class ItemData
             FlavorText = Get("flavor_text"),
             ItemClass = EnumFromYaml<ItemClass>(Require("item_class"), "item_class"),
             Subclass = Get("subclass"),
+            EquipType = Has("equip_type") ? new EquipTypeRef(Get("equip_type")!) : null,
             Slot = Has("slot") ? EnumFromYaml<ItemSlot>(Get("slot")!, "slot") : null,
             Rarity = EnumFromYaml<ItemRarity>(Require("rarity"), "rarity"),
             RequiredLevel = OptLong("required_level"),
@@ -196,6 +197,7 @@ public sealed class ItemData
         d.Set("flavor_text", item.FlavorText);
         d.Set("item_class", EnumToYaml(item.ItemClass));
         d.Set("subclass", item.Subclass);
+        d.Set("equip_type", item.EquipType?.Id);
         d.Set("slot", item.Slot is { } slot ? EnumToYaml(slot) : null);
         d.Set("rarity", EnumToYaml(item.Rarity));
         d.Set("required_level", Num(item.RequiredLevel));

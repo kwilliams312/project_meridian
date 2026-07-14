@@ -146,6 +146,9 @@ def _emit_record(w, st: IrStruct) -> None:
         w(f"/// <summary>{_xml_escape(st.description)}</summary>")
     w(f"public sealed record {st.name}")
     w("{")
+    if st.schema_tag is not None:
+        escaped = st.schema_tag.replace("\\", "\\\\").replace('"', '\\"')
+        w(f'    public const string SchemaTag = "{escaped}";')
     for f in st.fields:
         _emit_property(w, f)
     w("}")

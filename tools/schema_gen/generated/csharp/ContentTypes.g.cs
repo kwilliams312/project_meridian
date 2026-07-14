@@ -418,6 +418,7 @@ public sealed record PackDependency
 
 public sealed record Pack
 {
+    public const string SchemaTag = "meridian/pack@1";
     /// <summary>Owns every ID in this pack. "core" is reserved for first-party content.</summary>
     public required string Namespace { get; init; }
     public required string Name { get; init; }
@@ -517,6 +518,7 @@ public sealed record NpcVisual
 
 public sealed record Npc
 {
+    public const string SchemaTag = "meridian/npc@1";
     public required ContentId Id { get; init; }
     public required string Name { get; init; }
     /// <summary>Shown under the name plate, e.g. "Mining Supervisor".</summary>
@@ -598,6 +600,7 @@ public sealed record ItemVisual
 
 public sealed record Item
 {
+    public const string SchemaTag = "meridian/item@2";
     public required ContentId Id { get; init; }
     public required string Name { get; init; }
     public string? FlavorText { get; init; }
@@ -691,6 +694,7 @@ public sealed record AbilityAudioVisual
 
 public sealed record Ability
 {
+    public const string SchemaTag = "meridian/ability@1";
     public required ContentId Id { get; init; }
     public required string Name { get; init; }
     /// <summary>Tooltip text. Supports {amount} substitution from the first effect.</summary>
@@ -753,6 +757,7 @@ public sealed record QuestRewards
 
 public sealed record Quest
 {
+    public const string SchemaTag = "meridian/quest@1";
     public required ContentId Id { get; init; }
     public required string Name { get; init; }
     /// <summary>Quest-log objective text.</summary>
@@ -804,6 +809,7 @@ public sealed record LootGroup
 
 public sealed record Loot
 {
+    public const string SchemaTag = "meridian/loot@1";
     public required ContentId Id { get; init; }
     public IntRange? Money { get; init; }
     public IReadOnlyList<LootEntry>? Entries { get; init; }
@@ -827,6 +833,7 @@ public sealed record VendorItem
 
 public sealed record Vendor
 {
+    public const string SchemaTag = "meridian/vendor@1";
     public required ContentId Id { get; init; }
     public required IReadOnlyList<VendorItem> Items { get; init; }
     /// <summary>Item classes this vendor purchases from players. Omit = buys everything sellable.</summary>
@@ -867,6 +874,7 @@ public sealed record SpawnSpawn
 
 public sealed record Spawn
 {
+    public const string SchemaTag = "meridian/spawn@1";
     public required ContentId Id { get; init; }
     public required ZoneRef Zone { get; init; }
     public required IReadOnlyList<SpawnSpawn> Spawns { get; init; }
@@ -896,6 +904,7 @@ public sealed record ZoneGraveyard
 
 public sealed record Zone
 {
+    public const string SchemaTag = "meridian/zone@1";
     public required ContentId Id { get; init; }
     public required string Name { get; init; }
     public required IntRange LevelRange { get; init; }
@@ -998,6 +1007,7 @@ public sealed record AssetEncode
 
 public sealed record Asset
 {
+    public const string SchemaTag = "meridian/asset@1";
     public required AssetId Id { get; init; }
     /// <summary>Drives import preset (art), encode tier (audio), and budget row selection. Art classes map to the Art SAD §2.3 preset table; audio classes to Music SAD §4.2.</summary>
     public required AssetClass Class { get; init; }
@@ -1064,6 +1074,7 @@ public sealed record AppearanceMorph
 
 public sealed record Appearance
 {
+    public const string SchemaTag = "meridian/appearance_catalog@1";
     public required ContentId Id { get; init; }
     public required RaceName Race { get; init; }
     public required AppearanceSex Sex { get; init; }
@@ -1077,6 +1088,7 @@ public sealed record Appearance
 
 public sealed record Attribute
 {
+    public const string SchemaTag = "meridian/attribute@1";
     public required ContentId Id { get; init; }
     public required string Name { get; init; }
     public required AttributeKind Kind { get; init; }
@@ -1091,6 +1103,7 @@ public sealed record AttributeMod
 
 public sealed record Class
 {
+    public const string SchemaTag = "meridian/class@1";
     public required ContentId Id { get; init; }
     /// <summary>Canonical APPEND-ONLY roster id (1-based; 0 is reserved as unset/invalid). This is the STABLE numeric id the server persists in `character.class` and the client roster mirror (character_roster.gd) sends on create — it is NOT the IF-9 content id (that stays the pack-internal numeric id). The kernel loads race/class from pack data into a runtime Roster keyed by this id (SP2.5 #695). Append-only: a shipped id NEVER changes meaning and is never renumbered (later milestones extend the set). Fits `character.class` TINYINT UNSIGNED, so the range is [1, 255].</summary>
     public required long RosterId { get; init; }
@@ -1116,6 +1129,7 @@ public sealed record Class
 
 public sealed record Dye
 {
+    public const string SchemaTag = "meridian/dye@1";
     public required ContentId Id { get; init; }
     public required string Name { get; init; }
     public required string Color { get; init; }
@@ -1124,6 +1138,7 @@ public sealed record Dye
 
 public sealed record EquipType
 {
+    public const string SchemaTag = "meridian/equip_type@1";
     public required ContentId Id { get; init; }
     public required string Name { get; init; }
     public string? Description { get; init; }
@@ -1135,6 +1150,7 @@ public sealed record EquipType
 
 public sealed record Race
 {
+    public const string SchemaTag = "meridian/race@1";
     public required ContentId Id { get; init; }
     /// <summary>Canonical APPEND-ONLY roster id (1-based; 0 is reserved as unset/invalid). This is the STABLE numeric id the server persists in `character.race` and the client roster mirror (character_roster.gd) sends on create — it is NOT the IF-9 content id (that stays the pack-internal numeric id). The kernel loads race/class from pack data into a runtime Roster keyed by this id (SP2.5 #695). Append-only: a shipped id NEVER changes meaning and is never renumbered (later milestones extend the set). Fits `character.race` TINYINT UNSIGNED, so the range is [1, 255].</summary>
     public required long RosterId { get; init; }
@@ -1166,6 +1182,7 @@ public sealed record TalentGrant
 
 public sealed record Talent
 {
+    public const string SchemaTag = "meridian/talent@1";
     public required ContentId Id { get; init; }
     public required string Name { get; init; }
     public string? Description { get; init; }
@@ -1184,6 +1201,7 @@ public sealed record TalentTreeTier
 
 public sealed record TalentTree
 {
+    public const string SchemaTag = "meridian/talent_tree@1";
     public required ContentId Id { get; init; }
     public required string Name { get; init; }
     public string? Description { get; init; }

@@ -21,6 +21,25 @@ public class ItemEditorTests
     private const string Signet = "items/brens_signet.item.yaml";
 
     [Fact]
+    public void Schema_envelope_comes_from_generated_item_model()
+    {
+        Assert.Equal(Item.SchemaTag, ItemData.SchemaTag);
+        Assert.Equal("meridian/item@2", ItemData.SchemaTag);
+    }
+
+    [Fact]
+    public void Parse_rejects_a_stale_item_envelope()
+    {
+        var yaml = File.ReadAllText(ContentFixtures.ContentCorePath(Pickaxe), Utf8)
+            .Replace(Item.SchemaTag, "meridian/item@1");
+
+        var error = Assert.Throws<FormatException>(() => ItemDocument.Parse(yaml));
+
+        Assert.Contains(Item.SchemaTag, error.Message);
+        Assert.Contains("meridian/item@1", error.Message);
+    }
+
+    [Fact]
     public void Load_maps_a_known_item_onto_the_generated_model()
     {
         var doc = ItemDocument.Load(ContentFixtures.ContentCorePath(Pickaxe));
@@ -211,6 +230,7 @@ public class ItemEditorTests
         doc.Data.Set("flavor_text", "Forged for the test suite.");
         doc.Data.Set("item_class", "weapon");
         doc.Data.Set("subclass", "sword_1h");
+        doc.Data.Set("equip_type", "core:equip_type.sword_1h");
         doc.Data.Set("slot", "main_hand");
         doc.Data.Set("rarity", "rare");
         doc.Data.Set("required_level", "10");
@@ -254,6 +274,7 @@ public class ItemEditorTests
         Item item = reloaded.ToModel();
         Assert.Equal("core:item.test_blade", item.Id.Id);
         Assert.Equal(ItemClass.Weapon, item.ItemClass);
+        Assert.Equal("core:equip_type.sword_1h", item.EquipType!.Value.Id);
         Assert.Equal(ItemSlot.MainHand, item.Slot);
         Assert.Equal(ItemBinding.OnPickup, item.Binding);
         Assert.True(item.Unique);
@@ -272,6 +293,21 @@ public class ItemEditorTests
         Assert.Equal(AttachSocket.MainHand, worn.Attach!.Socket);
         Assert.Equal(AttachSocket.HipL, worn.Attach.SheathSocket);
         Assert.Equal(DyeChannel.Primary, Assert.Single(worn.DyeChannels!));
+    }
+
+    [Fact]
+    public void Equip_type_round_trips_and_existing_edits_are_surgical()
+    {
+        var source = File.ReadAllText(ContentFixtures.ContentCorePath(Pickaxe), Utf8)
+            .Replace("subclass: mace_1h\n", "subclass: mace_1h\nequip_type: core:equip_type.mace_1h\n");
+        var document = ItemDocument.Parse(source);
+
+        Assert.Equal("core:equip_type.mace_1h", document.ToModel().EquipType!.Value.Id);
+        document.Data.Set("equip_type", "core:equip_type.pickaxe");
+
+        Assert.Equal(
+            source.Replace("equip_type: core:equip_type.mace_1h", "equip_type: 'core:equip_type.pickaxe'"),
+            document.ToYaml());
     }
 
     [Fact]

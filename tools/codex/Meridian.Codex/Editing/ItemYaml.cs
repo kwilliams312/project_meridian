@@ -208,6 +208,7 @@ internal static class ItemYaml
         Line(sb, data, 0, "flavor_text");
         Line(sb, data, 0, "item_class");
         Line(sb, data, 0, "subclass");
+        Line(sb, data, 0, "equip_type");
         Line(sb, data, 0, "slot");
         Line(sb, data, 0, "rarity");
         Line(sb, data, 0, "required_level");

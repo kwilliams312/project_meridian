@@ -44,6 +44,13 @@ public sealed class ItemDocument
     public static ItemDocument Parse(string text, string? path = null)
     {
         var doc = YamlDocument.Parse(text);
+        var schemaTag = doc.GetValue("schema");
+        if (!string.Equals(schemaTag, ItemData.SchemaTag, StringComparison.Ordinal))
+        {
+            throw new FormatException(
+                $"Expected item schema envelope '{ItemData.SchemaTag}', got "
+                + (schemaTag is null ? "a missing schema field." : $"'{schemaTag}'."));
+        }
         var original = ItemYaml.Read(doc);
         var working = ItemYaml.Read(doc); // independent editable copy
         return new ItemDocument(path, text, original, working);
