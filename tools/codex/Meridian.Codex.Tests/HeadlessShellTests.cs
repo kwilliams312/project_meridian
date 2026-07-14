@@ -81,4 +81,29 @@ public class HeadlessShellTests
         var boxes = view.GetVisualDescendants().OfType<TextBox>().ToList();
         Assert.Contains(boxes, b => b.Text == "ability.pickaxe_slam");
     }
+
+    [AvaloniaFact]
+    public async Task Pack_workspace_renders_external_conflict_after_malformed_watcher_write()
+    {
+        var contentRoot = Path.Combine(Path.GetTempPath(), "codex-headless-watcher", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(contentRoot);
+        var recent = Path.Combine(contentRoot, "recent.json");
+        using var vm = new PackWorkspaceViewModel(new Meridian.Codex.Services.RecentWorkspaceStore(recent));
+        vm.WorkspacePath = contentRoot;
+        vm.Manifest.Namespace = "moonfall";
+        vm.Manifest.Name = "Moonfall";
+        vm.CreateCommand.Execute(null);
+        Assert.True(vm.IsWorkspaceOpen);
+
+        File.WriteAllText(Path.Combine(vm.WorkspacePath, "pack.yaml"), "schema: [unterminated\n");
+        for (var i = 0; i < 100 && !vm.HasExternalConflict; i++)
+            await Task.Delay(25);
+
+        Assert.True(vm.HasExternalConflict);
+        var view = new PackWorkspaceView { DataContext = vm };
+        var window = new Window { Content = view };
+        window.Show();
+        Assert.Contains(view.GetVisualDescendants().OfType<TextBlock>(),
+            text => text.Text?.Contains("External conflict", StringComparison.Ordinal) == true);
+    }
 }

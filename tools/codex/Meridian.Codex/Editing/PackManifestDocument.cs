@@ -141,40 +141,30 @@ public sealed class PackManifestDocument
 
     private static string RenderDependencies(IEnumerable<PackDependencyData> dependencies) =>
         string.Join("\n", dependencies.Select(d =>
-            $"- namespace: {QuoteIfNeeded(d.Namespace)}\n  version: {QuoteIfNeeded(d.Version)}"));
+            $"- namespace: {YamlDocument.RenderString(d.Namespace)}\n  version: {YamlDocument.RenderString(d.Version)}"));
 
     private static string Emit(PackManifestData data)
     {
         var sb = new StringBuilder();
         sb.AppendLine("schema: meridian/pack@1");
-        sb.AppendLine($"namespace: {QuoteIfNeeded(data.Namespace)}");
-        sb.AppendLine($"name: {QuoteIfNeeded(data.Name)}");
-        if (!string.IsNullOrWhiteSpace(data.Description)) sb.AppendLine($"description: {QuoteIfNeeded(data.Description)}");
-        sb.AppendLine($"version: {QuoteIfNeeded(data.Version)}");
+        sb.AppendLine($"namespace: {YamlDocument.RenderString(data.Namespace)}");
+        sb.AppendLine($"name: {YamlDocument.RenderString(data.Name)}");
+        if (!string.IsNullOrWhiteSpace(data.Description)) sb.AppendLine($"description: {YamlDocument.RenderString(data.Description)}");
+        sb.AppendLine($"version: {YamlDocument.RenderString(data.Version)}");
         sb.AppendLine($"content_schema_version: {data.ContentSchemaVersion}");
         sb.AppendLine($"compatibility_version: {data.CompatibilityVersion}");
         sb.AppendLine("engine:");
-        sb.AppendLine($"  godot: {QuoteIfNeeded(data.GodotVersion)}");
+        sb.AppendLine($"  godot: {YamlDocument.RenderString(data.GodotVersion)}");
         if (data.Dependencies.Count > 0)
         {
             sb.AppendLine("dependencies:");
             foreach (var dependency in data.Dependencies)
             {
-                sb.AppendLine($"  - namespace: {QuoteIfNeeded(dependency.Namespace)}");
-                sb.AppendLine($"    version: {QuoteIfNeeded(dependency.Version)}");
+                sb.AppendLine($"  - namespace: {YamlDocument.RenderString(dependency.Namespace)}");
+                sb.AppendLine($"    version: {YamlDocument.RenderString(dependency.Version)}");
             }
         }
-        sb.AppendLine($"license: {QuoteIfNeeded(data.License)}");
+        sb.AppendLine($"license: {YamlDocument.RenderString(data.License)}");
         return sb.ToString();
-    }
-
-    private static string QuoteIfNeeded(string value)
-    {
-        if (value.Length > 0 && value.All(c => char.IsLetterOrDigit(c) || c is '_' or '-' or '.' or ' ')
-            && value[0] != ' ' && value[^1] != ' ')
-        {
-            return value;
-        }
-        return $"\"{value.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"";
     }
 }

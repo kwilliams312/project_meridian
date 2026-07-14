@@ -63,6 +63,14 @@ public sealed class YamlDocument
     /// </summary>
     public string OriginalText => _source;
 
+    /// <summary>
+    /// Render a logical string as a YAML scalar whose tag cannot be implicitly
+    /// resolved as a number, boolean, or null. Used by new-document emitters
+    /// that do not have an original scalar style to preserve.
+    /// </summary>
+    public static string RenderString(string value) =>
+        ScalarWriter.Render(value, ScalarStyle.DoubleQuoted);
+
     /// <summary>Serialize the document with all pending edits applied.</summary>
     public string ToText()
     {

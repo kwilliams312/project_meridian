@@ -1,5 +1,6 @@
 using System.Text;
 using Meridian.Codex.Editing;
+using Meridian.Yaml.Cst;
 
 namespace Meridian.Codex.Services;
 
@@ -26,6 +27,7 @@ public sealed class ContentWorkspace : IDisposable
     private readonly FileSystemWatcher _watcher;
     private string _lastDiskText;
     private readonly object _refreshGate = new();
+    private IReadOnlyList<WorkspaceDiagnostic> _externalDiagnostics = [];
 
     private ContentWorkspace(string rootPath, PackManifestDocument manifest)
     {
@@ -75,7 +77,7 @@ public sealed class ContentWorkspace : IDisposable
     {
         var fullContentRoot = Path.GetFullPath(contentRoot);
         var manifest = PackManifestDocument.New(values);
-        var validation = WorkspaceValidator.Validate(manifest.Data, fullContentRoot);
+        var validation = WorkspaceValidator.Validate(manifest, fullContentRoot);
         if (validation.State == WorkspaceValidationState.Invalid)
             throw new ArgumentException(validation.Diagnostics[0].Message, nameof(values));
 
@@ -90,7 +92,10 @@ public sealed class ContentWorkspace : IDisposable
 
     public WorkspaceValidationResult Validate()
     {
-        Validation = WorkspaceValidator.Validate(Manifest.Data, ContentRoot);
+        var local = WorkspaceValidator.Validate(Manifest, ContentRoot);
+        Validation = _externalDiagnostics.Count == 0
+            ? local
+            : new WorkspaceValidationResult(local.Diagnostics.Concat(_externalDiagnostics).ToArray());
         return Validation;
     }
 
@@ -117,6 +122,7 @@ public sealed class ContentWorkspace : IDisposable
             _watcher.EnableRaisingEvents = true;
         }
         HasExternalConflict = false;
+        _externalDiagnostics = [];
         Validation = Validate();
     }
 
@@ -126,22 +132,48 @@ public sealed class ContentWorkspace : IDisposable
         {
             if (!File.Exists(ManifestPath))
             {
-                HasExternalConflict = true;
+                SetExternalConflict("pack.yaml was deleted outside Codex.");
                 return ExternalChangeResult.Conflict;
             }
             var disk = File.ReadAllText(ManifestPath, Utf8);
             if (disk == _lastDiskText) return ExternalChangeResult.None;
             if (IsDirty)
             {
-                HasExternalConflict = true;
+                SetExternalConflict("pack.yaml changed outside Codex while local edits are unsaved.");
                 return ExternalChangeResult.Conflict;
             }
-            Manifest = PackManifestDocument.Parse(disk, ManifestPath);
+            PackManifestDocument candidate;
+            try
+            {
+                candidate = PackManifestDocument.Parse(disk, ManifestPath);
+            }
+            catch (YamlCstException ex)
+            {
+                SetExternalConflict($"External pack.yaml is malformed: {ex.Message}");
+                return ExternalChangeResult.Conflict;
+            }
+            var candidateValidation = WorkspaceValidator.Validate(candidate, ContentRoot);
+            if (candidateValidation.State == WorkspaceValidationState.Invalid)
+            {
+                HasExternalConflict = true;
+                _externalDiagnostics = candidateValidation.Diagnostics;
+                Validation = Validate();
+                return ExternalChangeResult.Conflict;
+            }
+            Manifest = candidate;
             _lastDiskText = disk;
             HasExternalConflict = false;
+            _externalDiagnostics = [];
             Validation = Validate();
             return ExternalChangeResult.Reloaded;
         }
+    }
+
+    private void SetExternalConflict(string message)
+    {
+        HasExternalConflict = true;
+        _externalDiagnostics = [new WorkspaceDiagnostic("pack.yaml", message)];
+        Validation = Validate();
     }
 
     public void RecordBuildResult(bool succeeded, string message)

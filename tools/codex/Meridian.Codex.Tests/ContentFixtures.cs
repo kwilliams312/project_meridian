@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 
 namespace Meridian.Codex.Tests;
@@ -37,6 +38,44 @@ public static class ContentFixtures
         var dir = Path.Combine(Path.GetTempPath(), "codex-npc-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         return Path.Combine(dir, fileName);
+    }
+
+    /// <summary>Create a throwaway repo-shaped root for validator parity tests.</summary>
+    public static string NewValidatorRoot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "codex-validator-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "schema"));
+        CopyDirectory(Path.Combine(RepoRoot, "schema", "content"), Path.Combine(root, "schema", "content"));
+        Directory.CreateDirectory(Path.Combine(root, "content"));
+        return root;
+    }
+
+    /// <summary>Run TLS-07's reference validator and return its exit code and output.</summary>
+    public static (int ExitCode, string Output) RunAuthoritativeValidator(string root)
+    {
+        var start = new ProcessStartInfo("uv")
+        {
+            WorkingDirectory = RepoRoot,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        start.ArgumentList.Add("run");
+        start.ArgumentList.Add("tools/validate_content.py");
+        start.ArgumentList.Add("--root");
+        start.ArgumentList.Add(root);
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Could not start validate_content.py.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return (process.ExitCode, stdout + stderr);
+    }
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var file in Directory.EnumerateFiles(source))
+            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)));
     }
 
     private static string FindRepoRoot()

@@ -46,7 +46,7 @@ public class PackManifestDocumentTests
 
         var saved = doc.ToYaml();
 
-        Assert.Contains("dependencies:\n  - namespace: shared\n    version: 2.1.0", saved);
+        Assert.Contains("dependencies:\n  - namespace: \"shared\"\n    version: \"2.1.0\"", saved);
         Assert.Contains("description: First-party content for Project Meridian. Zone-01 starter content.", saved);
         Assert.StartsWith("schema: meridian/pack@1\nnamespace: core", saved);
     }
@@ -63,5 +63,31 @@ public class PackManifestDocumentTests
         Assert.Equal("Moonfall", reopened.Data.Name);
         Assert.Equal("0.1.0", reopened.Data.Version);
         Assert.Equal("4.6", reopened.Data.GodotVersion);
+    }
+
+    [Theory]
+    [InlineData("true")]
+    [InlineData("null")]
+    [InlineData("123")]
+    public void New_manifest_preserves_string_types_and_passes_authoritative_validator(string stringLikeScalar)
+    {
+        var root = ContentFixtures.NewValidatorRoot();
+        var packDirectory = Path.Combine(root, "content", "moonfall");
+        Directory.CreateDirectory(packDirectory);
+        var values = new PackManifestData
+        {
+            Namespace = "moonfall",
+            Name = stringLikeScalar,
+            Description = stringLikeScalar,
+            License = stringLikeScalar,
+        };
+        PackManifestDocument.New(values).Save(Path.Combine(packDirectory, "pack.yaml"));
+
+        var yaml = File.ReadAllText(Path.Combine(packDirectory, "pack.yaml"), Utf8);
+        Assert.Contains($"name: \"{stringLikeScalar}\"", yaml);
+        Assert.Contains("godot: \"4.6\"", yaml);
+        var authoritative = ContentFixtures.RunAuthoritativeValidator(root);
+        Assert.True(authoritative.ExitCode == 0,
+            $"validate_content.py exited {authoritative.ExitCode}:\n{authoritative.Output}");
     }
 }

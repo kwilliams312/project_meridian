@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Meridian.Codex.Editing;
 
 namespace Meridian.Codex.Services;
@@ -15,47 +14,25 @@ public sealed record WorkspaceValidationResult(IReadOnlyList<WorkspaceDiagnostic
     public int ErrorCount => Diagnostics.Count(d => d.Severity == DiagnosticSeverity.Error);
 }
 
-/// <summary>Field-level pack-schema and dependency-load validation for Codex.</summary>
-public static partial class WorkspaceValidator
+/// <summary>Authoritative pack-schema and dependency-load validation for Codex.</summary>
+public static class WorkspaceValidator
 {
-    [GeneratedRegex("^[a-z][a-z0-9_]{1,31}$", RegexOptions.CultureInvariant)]
-    private static partial Regex NamespacePattern();
-    [GeneratedRegex("^\\d+\\.\\d+\\.\\d+$", RegexOptions.CultureInvariant)]
-    private static partial Regex SemverPattern();
-    [GeneratedRegex("^4\\.\\d+$", RegexOptions.CultureInvariant)]
-    private static partial Regex EnginePattern();
-
-    public static WorkspaceValidationResult Validate(PackManifestData data, string contentRoot)
+    public static WorkspaceValidationResult Validate(PackManifestDocument document, string contentRoot)
     {
-        var diagnostics = new List<WorkspaceDiagnostic>();
-        Check(diagnostics, NamespacePattern().IsMatch(data.Namespace), "Namespace",
-            "Use 2–32 lowercase letters, digits, or underscores; start with a letter.");
-        Check(diagnostics, !string.IsNullOrWhiteSpace(data.Name) && data.Name.Length <= 120, "Name",
-            "Name is required and must be 120 characters or fewer.");
-        Check(diagnostics, SemverPattern().IsMatch(data.Version), "Version", "Use semantic version x.y.z.");
-        Check(diagnostics, data.ContentSchemaVersion == "1", "ContentSchemaVersion",
-            "This Codex build supports content schema version 1.");
-        Check(diagnostics, long.TryParse(data.CompatibilityVersion, out var compat) && compat >= 1,
-            "CompatibilityVersion", "Compatibility version must be an integer of 1 or greater.");
-        Check(diagnostics, EnginePattern().IsMatch(data.GodotVersion), "GodotVersion",
-            "Godot engine pin must be a supported 4.x major/minor value (for example 4.6).");
-        Check(diagnostics, !string.IsNullOrWhiteSpace(data.License), "License", "A pack license is required.");
+        var data = document.Data;
+        var diagnostics = PackSchemaValidator.Validate(document.ToYaml()).ToList();
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < data.Dependencies.Count; i++)
         {
             var dependency = data.Dependencies[i];
             var prefix = $"Dependencies[{i}]";
-            Check(diagnostics, NamespacePattern().IsMatch(dependency.Namespace), $"{prefix}.Namespace",
-                "Dependency namespace is invalid.");
-            Check(diagnostics, SemverPattern().IsMatch(dependency.Version), $"{prefix}.Version",
-                "Dependency version must use x.y.z.");
             Check(diagnostics, dependency.Namespace != data.Namespace, $"{prefix}.Namespace",
                 "A pack cannot depend on itself.");
             Check(diagnostics, seen.Add(dependency.Namespace), $"{prefix}.Namespace",
                 "Dependency namespace is listed more than once.");
 
-            if (!NamespacePattern().IsMatch(dependency.Namespace)) continue;
+            if (!IsSafeNamespace(dependency.Namespace)) continue;
             var manifestPath = Path.Combine(contentRoot, dependency.Namespace, "pack.yaml");
             if (!File.Exists(manifestPath))
             {
@@ -66,7 +43,15 @@ public static partial class WorkspaceValidator
 
             try
             {
-                var loaded = PackManifestDocument.Load(manifestPath).Data;
+                var loadedDocument = PackManifestDocument.Load(manifestPath);
+                var dependencySchema = PackSchemaValidator.Validate(loadedDocument.ToYaml());
+                if (dependencySchema.Count > 0)
+                {
+                    diagnostics.Add(new($"{prefix}.Namespace",
+                        $"Dependency '{dependency.Namespace}' has an invalid manifest: {dependencySchema[0].Message}"));
+                    continue;
+                }
+                var loaded = loadedDocument.Data;
                 if (loaded.Namespace != dependency.Namespace)
                 {
                     diagnostics.Add(new($"{prefix}.Namespace",
@@ -87,6 +72,12 @@ public static partial class WorkspaceValidator
 
         return new WorkspaceValidationResult(diagnostics);
     }
+
+    // Path traversal guard only. Validity still comes exclusively from the
+    // authoritative schema; unsafe values must not reach Path.Combine.
+    private static bool IsSafeNamespace(string value) => value.Length is >= 2 and <= 32 &&
+        value[0] is >= 'a' and <= 'z' &&
+        value.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_');
 
     private static void Check(List<WorkspaceDiagnostic> diagnostics, bool condition, string field, string message)
     {
