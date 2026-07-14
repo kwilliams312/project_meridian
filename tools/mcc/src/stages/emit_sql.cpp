@@ -988,16 +988,17 @@ EmitSqlResult emit_sql(const model::ContentModel& model, const LinkResult& linke
            "SET NAMES utf8mb4;\n"
            "SET FOREIGN_KEY_CHECKS = 0;\n\n";
 
-    // world_manifest: one row per pack (SAD §2.6; worldd #89 reads these seven
-    // columns). Emitted first, deterministically ordered by pack_namespace.
+    // world_manifest: one row per pack (SAD §2.6; worldd #89/#698 reads these
+    // eight columns). Emitted first, deterministically ordered by pack_namespace.
     out << "-- world_manifest (boot handshake; worldd reads + verifies this).\n"
            "INSERT INTO world_manifest\n"
-           "  (pack_namespace, pack_version, id_band, content_hash, schema_version, mcc_version, built_at)\n"
+           "  (pack_namespace, pack_version, id_band, content_hash, schema_version, "
+           "compatibility_version, mcc_version, built_at)\n"
            "VALUES\n";
     // Collect pack rows (from pack manifests) sorted by namespace.
     struct PackRow {
         std::string ns, version, hash;
-        std::uint32_t band = 0, schema = 1;
+        std::uint32_t band = 0, schema = 1, compat = 1;
     };
     std::vector<PackRow> packs;
     for (const auto& pf : model.files) {
@@ -1007,6 +1008,12 @@ EmitSqlResult emit_sql(const model::ContentModel& model, const LinkResult& linke
         pr.version = has(pf.root, "version") ? as_str(pf.root["version"]) : "0.0.0";
         pr.schema = has(pf.root, "content_schema_version")
                         ? static_cast<std::uint32_t>(as_int(pf.root["content_schema_version"]))
+                        : 1;
+        // compatibility_version: the pack CONTRACT version (#698 boot compat
+        // gate). Optional at rest — absent defaults to the baseline 1 (matching
+        // pack.schema.yaml + world DDL 00_manifest.sql DEFAULT 1).
+        pr.compat = has(pf.root, "compatibility_version")
+                        ? static_cast<std::uint32_t>(as_int(pf.root["compatibility_version"]))
                         : 1;
         const auto mit = linked.idmaps.find(pr.ns);
         pr.band = mit != linked.idmaps.end() ? mit->second.band : 0;
@@ -1025,7 +1032,7 @@ EmitSqlResult emit_sql(const model::ContentModel& model, const LinkResult& linke
     for (std::size_t i = 0; i < packs.size(); ++i) {
         const PackRow& p = packs[i];
         out << "  (" << sql_quote(p.ns) << ", " << sql_quote(p.version) << ", " << p.band
-            << ", " << sql_quote(p.hash) << ", " << p.schema << ", "
+            << ", " << sql_quote(p.hash) << ", " << p.schema << ", " << p.compat << ", "
             << sql_quote(opts.mcc_version) << ", " << sql_quote(opts.built_at) << ")"
             << (i + 1 < packs.size() ? ",\n" : ";\n");
         ++result.manifest_rows;

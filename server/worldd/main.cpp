@@ -339,8 +339,21 @@ int main(int argc, char** argv) {
         if (!cfg.expected_content_hash.empty()) expected = cfg.expected_content_hash;
         try {
             meridian::db::Connection world_db(cfg.world_db);
+
+            // Boot compat/migration gate (#698): open the CHARACTERS DB (the
+            // durable realm store — realm_content_state survives content reloads,
+            // unlike the wholesale-replaced world DB) so the gate can compare the
+            // loaded pack's compatibility_version against the version this realm
+            // last booted with. Optional: when no characters DB is wired
+            // (MERIDIAN_CHARDB_* unset -> empty user), the gate is SKIPPED, exactly
+            // like the auth-DB-less grant path. Held for the boot check's scope.
+            std::optional<meridian::db::Connection> char_db;
+            if (!cfg.world.char_db.user.empty()) {
+                char_db.emplace(cfg.world.char_db);
+            }
             meridian::worldd::BootReport boot = meridian::worldd::boot_world_db(
-                world_db, expected, cfg.world_db_require_content);
+                world_db, expected, cfg.world_db_require_content,
+                char_db ? &*char_db : nullptr);
             if (boot.hard_fail) {
                 std::fprintf(stderr,
                              "%s: world-DB boot refused [%s]: %s\n", kDaemonName,

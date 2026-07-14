@@ -193,6 +193,10 @@ int main() {
           query_scalar(client, flags, db,
                        "SELECT schema_version FROM world_manifest WHERE pack_namespace='core';",
                        scratch) == "1");
+    check("world_manifest compatibility_version emitted (defaults to 1, #698)",
+          query_scalar(client, flags, db,
+                       "SELECT compatibility_version FROM world_manifest WHERE pack_namespace='core';",
+                       scratch) == "1");
     check("world_manifest content_hash is 64 chars (BLAKE3 hex)",
           query_scalar(client, flags, db,
                        "SELECT CHAR_LENGTH(content_hash) FROM world_manifest WHERE pack_namespace='core';",

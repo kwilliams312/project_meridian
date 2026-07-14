@@ -230,20 +230,21 @@ void test_emit_wellformed() {
            "ability effects_json is canonical (keys sorted) JSON on the ability row");
 
     // The manifest tuple: (pack_namespace, pack_version, id_band, content_hash,
-    // schema_version, mcc_version, built_at).
+    // schema_version, compatibility_version, mcc_version, built_at).
     const std::vector<std::string> cells = parse_manifest_values(sql);
-    report(cells.size() == 7, "manifest row has 7 columns (worldd's read shape)",
+    report(cells.size() == 8, "manifest row has 8 columns (worldd's read shape)",
            "got " + std::to_string(cells.size()));
-    if (cells.size() == 7) {
+    if (cells.size() == 8) {
         report(cells[0] == "core", "pack_namespace = core", cells[0]);
         report(cells[1] == "1.2.3", "pack_version from pack.yaml", cells[1]);
         report(is_lower_hex_64(cells[3]), "content_hash is 64 lowercase-hex (BLAKE3)",
                cells[3]);
         report(cells[4] == "1", "schema_version = 1 (worldd's supported major)",
                cells[4]);
-        report(cells[5] == "test-1.0.0", "mcc_version stamped", cells[5]);
-        report(cells[6] == "2026-07-06 12:00:00", "built_at is the parameterized ts",
-               cells[6]);
+        report(cells[5] == "1", "compatibility_version defaults to 1 (#698)", cells[5]);
+        report(cells[6] == "test-1.0.0", "mcc_version stamped", cells[6]);
+        report(cells[7] == "2026-07-06 12:00:00", "built_at is the parameterized ts",
+               cells[7]);
     }
 }
 
