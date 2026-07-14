@@ -3461,6 +3461,12 @@ struct WorldServer::Impl {
     // keeps every ConnCtx pointer valid.
     chr::Roster roster = chr::Roster::offline_full();
 
+    // The per-class equip-gating + role catalog (SP2.7 #697). Empty until
+    // set_class_catalog() installs the pack-loaded classes at boot; the MapTick role
+    // threat hook borrows it by address (set below). Empty -> threat_multiplier is
+    // 1.0 for every class, so a DB-less run's threat is unscaled.
+    ClassCatalog classes;
+
     // The per-map tick orchestrator (SAD §2.5 phase order; #349). Owned by + run
     // ONLY on the world thread. Each tick it runs the AI -> combat/auras ->
     // spawns/respawns passes for the map's server-controlled creatures + auras +
@@ -3484,6 +3490,11 @@ WorldServer::WorldServer(const Dispatcher& dispatcher, WorldServerConfig cfg)
     // (route_vitals_events → the vitals_egress bus), which mirrors them onto its unit
     // and pushes a VITALS_UPDATE. MapTick owns no egress itself.
     impl_->map.set_report_vitals(true);
+    // SP2.7 #697 role hook: the map borrows the class catalog by address so the
+    // resolver->AI threat seam can scale a Tank caster's threat. The catalog starts
+    // empty (multiplier 1.0 for all) and is filled by set_class_catalog at boot; the
+    // move-assign there preserves this address.
+    impl_->map.set_class_catalog(&impl_->classes);
 }
 
 WorldServer::~WorldServer() { stop(); }
@@ -3611,6 +3622,13 @@ void WorldServer::set_roster(chr::Roster roster) {
     // The object's address is unchanged by a move-assign, so ctx.roster pointers stay
     // valid. Boot-time only (before start()), so no concurrent reader races the swap.
     impl_->roster = std::move(roster);
+}
+
+void WorldServer::set_class_catalog(ClassCatalog classes) {
+    // Move-assign into the catalog the MapTick borrows by address (impl_->classes,
+    // wired in the ctor). The address is unchanged by a move-assign, so the MapTick
+    // pointer stays valid. Boot-time only (before start()), so no reader races it.
+    impl_->classes = std::move(classes);
 }
 
 void WorldServer::world_thread_main() {

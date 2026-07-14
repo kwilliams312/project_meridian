@@ -45,6 +45,99 @@ PYTHONPATH=tools uv run python -m meshy generate \
   --terms-verified
 ```
 
+## Machine-readable job protocol
+
+Codex and other process orchestrators use `generate --json-events`. In this
+mode stdout contains **JSON Lines only**: one UTF-8 JSON object per line,
+flushed immediately. Human-readable diagnostics are suppressed. The versioned
+JSON Schema is [`job-event.schema.json`](job-event.schema.json); consumers must
+check both `schema: meridian/meshy-job-event@1` and `protocol_version: 1` and
+must reject unsupported major versions.
+
+```bash
+PYTHONPATH=tools uv run python -m meshy generate \
+  --text "an original weathered stone marker" \
+  --ns core --name stone_marker --class prop \
+  --terms-verified --model-version meshy-5 --json-events
+```
+
+Every event has monotonically increasing `sequence`, `event`, `schema`, and
+`protocol_version` fields. The successful text-to-3D sequence is:
+
+1. `validation.started`, `validation.passed`
+2. `preview.submitted`, then one or more `poll.progress` events
+3. `refine.submitted`, then one or more `poll.progress` events
+4. `download.started`, `download.completed`
+5. `budget.started`, `budget.passed`
+6. `provenance.started`, `provenance.written`
+7. `completed`
+
+Image-to-3D uses `generation.submitted` instead of the preview/refine pair.
+Failures terminate with `error`; its stable `error_code` distinguishes
+`invalid_request`, `payment_required` (HTTP 402), `rate_limited` (HTTP 429),
+`status_drift`, `timeout`, `budget_failed`, `provider_error`, and
+`internal_error`. Provider HTTP status is included as `http_status` where
+available. Submitted remote IDs are carried on submission events and repeated
+as `task_ids` on terminal `completed`, `cancelled`, and runtime `error` events.
+
+### Cancellation and exit codes
+
+Send SIGINT (normally Ctrl-C) to cancel. The CLI removes only that job's staged
+or sentinel-proven unpublished output before emitting `cancelled`; it never
+removes a completed or unowned final asset. A provider task may continue remotely;
+`task_ids` lets the caller audit or manage it through provider tooling without
+hiding that fact. A cross-platform per-target advisory lock is acquired before
+client setup, so concurrent jobs for the same namespace/name cannot both
+proceed; the OS releases POSIX `flock` or Windows `msvcrt.locking` ownership
+after abnormal process death. Lock and transaction records live outside the
+pack under the system temporary directory (override with
+`MERIDIAN_MESHY_LOCK_DIR`) and are keyed by the canonical target path.
+
+Output is built inside a job-unique staging directory containing `.partial`,
+then all three files become visible together through one atomic directory
+rename after budget and provenance checks pass. A cryptographically random
+sentinel moves *inside* that rename and must match the separately locked
+transaction record before recovery may delete any staging or final directory;
+stray filenames and forged/unknown sentinels always refuse safe. The external
+record's atomic `committed` transition is the commit point. An interrupt before
+it rolls back and emits `cancelled`; an interrupt after it finishes sentinel
+cleanup and emits `completed`. Successful, cancelled, and failed jobs therefore
+leave no protocol files in the pack tree. Existing assets are never overwritten.
+Client teardown occurs before commit: if `close()` fails, publication is rolled
+back and the job emits one `internal_error` with exit `1`, never a `completed`
+event followed by an error.
+
+JSON event delivery supports blocking text sinks whose `write(str)` method
+returns the exact positive number of characters accepted, including valid short
+writes. Returning `None`, a boolean, zero, a non-integer, or an oversized count
+violates that contract. If `write()` raises, a custom sink may already have
+accepted an unreported prefix, so its safe continuation offset is unknowable.
+The emitter then fails closed: it poisons the sink, writes nothing further to
+stdout, prints only a deterministic redacted diagnostic to stderr, and exits
+`1`. Consequently, an exact terminal JSON document cannot be guaranteed when a
+sink violates or obscures this contract. A failure from `flush()` remains
+resumable because the full line's accepted character count is already known:
+the emitter retries the same flush once without rewriting the line and retains
+the delivery for idempotent resumption. Ordinary exceptions and
+`KeyboardInterrupt` retain their normal runtime/error or cancellation semantics.
+Process-control exceptions (`SystemExit` and `GeneratorExit`) raised by a custom
+sink never escape with an arbitrary status; the CLI writes no additional stdout,
+prints the deterministic sink diagnostic to stderr, and exits `1` (even when the
+retry made the already-accepted event durable).
+
+| Exit | Meaning | Terminal JSON event |
+|---:|---|---|
+| `0` | Asset landed successfully | `completed` |
+| `1` | Provider, timeout, status-drift, budget, or internal runtime failure | `error` |
+| `2` | Invalid/refused request; no network call was made | `error` |
+| `130` | Operator cancellation (SIGINT/KeyboardInterrupt) | `cancelled` |
+
+`MESHY_API_KEY` remains environment-only. It is never accepted as an argument
+or included in an event. As defense in depth, event and human error strings are
+recursively scrubbed for the exact key and bearer-token patterns. The model
+release is explicit in validation/submission events and provenance; `latest` is
+refused before client construction.
+
 or from an image reference — an http(s) URL or a local `.png`/`.jpg`/`.jpeg`
 file (local files are base64-encoded into a `data:` URI, the documented
 alternative Meshy's `image_url` field accepts):

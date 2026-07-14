@@ -32,18 +32,38 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import hashlib
+import io
+import json
 import os
+import secrets
+import shutil
 import subprocess
 import sys
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 from . import client as client_mod
 from . import intake
+from . import locking
 from . import mapping
+from . import protocol
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_JSON_SINK_FAILURE_MESSAGE = (
+    "error: Meshy JSON event sink failed; refusing further stdout output"
+)
+
+
+def _report_json_sink_failure() -> int:
+    """Report a poisoned stdout sink without reflecting dynamic data."""
+
+    print(_JSON_SINK_FAILURE_MESSAGE, file=sys.stderr)
+    return 1
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -109,6 +129,19 @@ def _build_parser() -> argparse.ArgumentParser:
     gen.add_argument(
         "--poll-timeout", type=float, default=client_mod.DEFAULT_POLL_TIMEOUT_S
     )
+    gen.add_argument(
+        "--model-version",
+        default=client_mod.DEFAULT_MODEL_VERSION,
+        help=(
+            "explicit Meshy model release recorded in provenance "
+            f"(default: {client_mod.DEFAULT_MODEL_VERSION}; 'latest' is refused)"
+        ),
+    )
+    gen.add_argument(
+        "--json-events",
+        action="store_true",
+        help="emit only versioned JSON-lines job events on stdout",
+    )
 
     conv = sub.add_parser(
         "convert-rig",
@@ -154,120 +187,488 @@ def _origin_url(task_id: str, endpoint: str) -> str:
     return f"{client_mod.BASE_URL}{endpoint}/{task_id}"
 
 
-def _new_client(api_key: str) -> client_mod.MeshyClient:
+def _new_client(
+    api_key: str, model_version: str = client_mod.DEFAULT_MODEL_VERSION
+) -> client_mod.MeshyClient:
     """Client construction seam — tests monkeypatch this to inject a mock transport."""
-    return client_mod.MeshyClient(api_key)
+    return client_mod.MeshyClient(api_key, model_version=model_version)
+
+
+def _post_commit_hook() -> None:
+    """Test seam for an interrupt after commit and before the terminal event."""
+
+
+@dataclass
+class _TargetReservation:
+    """Crash-recoverable ownership of one target and its private staging tree.
+
+    A cross-platform advisory lock provides live-owner exclusion; the OS releases
+    it after abnormal process death.  A random sentinel moves *inside* the atomic
+    staging-directory rename and must match the external transaction record before
+    recovery may delete anything.  The external record's atomic ``committed``
+    transition is the irreversible commit point.
+    """
+
+    paths: intake.LandingPaths
+    token: str
+    target_key: str
+    target_identity: str
+    file_lock: locking.AdvisoryFileLock
+    state_path: Path
+    staging_dir: Path
+    sentinel_path: Path
+    partial_glb: Path
+    partial_prompts: Path
+    partial_sidecar: Path
+    committed: bool = False
+
+    _STATE_SCHEMA = "meridian/meshy-job-lock@1"
+    _SENTINEL_NAME = ".meshy-ownership.json"
+
+    @staticmethod
+    def _lock_root() -> Path:
+        override = os.environ.get("MERIDIAN_MESHY_LOCK_DIR")
+        if override:
+            return Path(override)
+        return Path(tempfile.gettempdir()) / "meridian-meshy-locks"
+
+    @staticmethod
+    def _identity(paths: intake.LandingPaths) -> str:
+        return os.path.normcase(str(paths.asset_dir.resolve(strict=False)))
+
+    @classmethod
+    def acquire(cls, paths: intake.LandingPaths) -> _TargetReservation:
+        paths.asset_dir.parent.mkdir(parents=True, exist_ok=True)
+        identity = cls._identity(paths)
+        target_key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        lock_root = cls._lock_root()
+        file_lock = locking.AdvisoryFileLock(lock_root / f"{target_key}.lock")
+        try:
+            file_lock.acquire()
+        except locking.LockUnavailableError as exc:
+            raise intake.IntakeError(
+                f"output already exists or is reserved under {paths.asset_dir}; "
+                "refusing to overwrite an existing asset"
+            ) from exc
+
+        state_path = lock_root / f"{target_key}.json"
+        staging_dir: Path | None = None
+        try:
+            cls._recover_stale(paths, state_path, identity)
+            if paths.asset_dir.exists():
+                raise intake.IntakeError(
+                    f"output already exists under {paths.asset_dir}; refusing to "
+                    "overwrite an existing asset"
+                )
+
+            token = secrets.token_hex(32)
+            staging_dir = paths.asset_dir.parent / (
+                f".{paths.asset_dir.name}.{token}.partial"
+            )
+            staging_dir.mkdir()
+            sentinel_path = staging_dir / cls._SENTINEL_NAME
+            reservation = cls(
+                paths=paths,
+                token=token,
+                target_key=target_key,
+                target_identity=identity,
+                file_lock=file_lock,
+                state_path=state_path,
+                staging_dir=staging_dir,
+                sentinel_path=sentinel_path,
+                partial_glb=staging_dir / paths.glb_path.name,
+                partial_prompts=staging_dir / paths.prompts_path.name,
+                partial_sidecar=staging_dir / paths.sidecar_path.name,
+            )
+            reservation._write_sentinel()
+            reservation._write_state("staging")
+            return reservation
+        except BaseException:
+            # This process created the random path while holding the target
+            # lock, so setup rollback does not need recovery proof.
+            if staging_dir is not None and staging_dir.is_dir():
+                shutil.rmtree(staging_dir)
+            file_lock.release()
+            raise
+
+    @classmethod
+    def _recover_stale(
+        cls, paths: intake.LandingPaths, state_path: Path, identity: str
+    ) -> None:
+        """Recover only internal sentinels cryptographically bound to state."""
+
+        state = cls._read_document(state_path)
+        valid_state = cls._valid_record(state, identity)
+        token = state["token"] if valid_state else None
+        phase = state["phase"] if valid_state else None
+        candidates = list(
+            paths.asset_dir.parent.glob(f".{paths.asset_dir.name}.*.partial")
+        )
+
+        recoverable_staging = []
+        for staging_dir in candidates:
+            sentinel = cls._read_document(staging_dir / cls._SENTINEL_NAME)
+            if not cls._valid_sentinel(sentinel, identity, token):
+                raise intake.IntakeError(
+                    f"unrecognized Meshy staging ownership under {staging_dir}; "
+                    "refusing unsafe recovery"
+                )
+            recoverable_staging.append(staging_dir)
+
+        for staging_dir in recoverable_staging:
+            shutil.rmtree(staging_dir)
+
+        if paths.asset_dir.is_dir():
+            sentinel = cls._read_document(paths.asset_dir / cls._SENTINEL_NAME)
+            if phase != "committed" and cls._valid_sentinel(sentinel, identity, token):
+                shutil.rmtree(paths.asset_dir)
+            elif phase == "committed" and cls._valid_sentinel(
+                sentinel, identity, token
+            ):
+                (paths.asset_dir / cls._SENTINEL_NAME).unlink(missing_ok=True)
+            # Every other final directory is legitimate or unprovable and is
+            # preserved by the caller's ordinary output-exists refusal.
+
+        if valid_state and phase != "committed" and not paths.asset_dir.exists():
+            state_path.unlink(missing_ok=True)
+
+    @classmethod
+    def _read_document(cls, path: Path) -> dict:
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return {}
+        return document if isinstance(document, dict) else {}
+
+    @classmethod
+    def _valid_record(cls, document: dict, identity: str) -> bool:
+        token = document.get("token")
+        return (
+            document.get("schema") == cls._STATE_SCHEMA
+            and document.get("target") == identity
+            and document.get("phase") in {"staging", "published", "committed"}
+            and isinstance(token, str)
+            and len(token) == 64
+            and all(char in "0123456789abcdef" for char in token)
+        )
+
+    @classmethod
+    def _valid_sentinel(
+        cls, document: dict, identity: str, expected_token: str | None
+    ) -> bool:
+        token = document.get("token")
+        return (
+            expected_token is not None
+            and document.get("schema") == cls._STATE_SCHEMA
+            and document.get("target") == identity
+            and isinstance(token, str)
+            and secrets.compare_digest(token, expected_token)
+        )
+
+    def _document(self, phase: str) -> dict:
+        return {
+            "schema": self._STATE_SCHEMA,
+            "target": self.target_identity,
+            "token": self.token,
+            "phase": phase,
+        }
+
+    def _atomic_write(self, path: Path, document: dict) -> None:
+        temporary = path.with_name(f".{path.name}.{self.token}.tmp")
+        temporary.write_text(
+            json.dumps(document, separators=(",", ":"), sort_keys=True),
+            encoding="utf-8",
+        )
+        temporary.chmod(0o600)
+        temporary.replace(path)
+
+    def _write_sentinel(self) -> None:
+        self._atomic_write(self.sentinel_path, self._document("staging"))
+
+    def _write_state(self, phase: str) -> None:
+        self._atomic_write(self.state_path, self._document(phase))
+
+    def publish(self) -> None:
+        """Publish the complete asset as one atomic directory operation."""
+
+        self.staging_dir.replace(self.paths.asset_dir)
+        self.sentinel_path = self.paths.asset_dir / self._SENTINEL_NAME
+        self._write_state("published")
+
+    def commit(self) -> None:
+        """Mark a published asset complete only after client teardown succeeds."""
+
+        self._write_state("committed")
+        self.committed = True
+        self.sentinel_path.unlink(missing_ok=True)
+
+    def is_committed(self) -> bool:
+        state = self._read_document(self.state_path)
+        return self._valid_record(state, self.target_identity) and (
+            state["token"] == self.token and state["phase"] == "committed"
+        )
+
+    def finish_committed(self) -> None:
+        """Idempotently finish presentation after the atomic commit point."""
+
+        self.committed = self.is_committed()
+        if self.committed:
+            (self.paths.asset_dir / self._SENTINEL_NAME).unlink(missing_ok=True)
+
+    def cleanup(self) -> None:
+        """Rollback this token's unpublished staging/final output and unlock."""
+
+        try:
+            if self.is_committed():
+                self.finish_committed()
+            else:
+                if self.staging_dir.is_dir() and self._valid_sentinel(
+                    self._read_document(self.staging_dir / self._SENTINEL_NAME),
+                    self.target_identity,
+                    self.token,
+                ):
+                    shutil.rmtree(self.staging_dir)
+                elif self.paths.asset_dir.is_dir() and self._valid_sentinel(
+                    self._read_document(self.paths.asset_dir / self._SENTINEL_NAME),
+                    self.target_identity,
+                    self.token,
+                ):
+                    shutil.rmtree(self.paths.asset_dir)
+                self.state_path.unlink(missing_ok=True)
+        finally:
+            self.file_lock.release()
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
-    # --- Refusal gates: BEFORE any network call (TD-09 precondition). ---
-    if not args.terms_verified:
-        print(
-            "refused: --terms-verified is required — Meshy's commercial-terms "
-            "check must be operator-confirmed before generating (TD-09)",
-            file=sys.stderr,
-        )
+    api_key = os.environ.get("MESHY_API_KEY")
+    events = protocol.EventEmitter(
+        secret=api_key, enabled=args.json_events, stream=sys.stdout
+    )
+
+    def refuse(message: str) -> int:
+        if args.json_events:
+            try:
+                events.emit("error", error_code="invalid_request", message=message)
+            except protocol.ProtocolSinkFlushError as exc:
+                # The refusal event is already the terminal outcome. If its
+                # accepted line became durable on retry, preserve exit 2 rather
+                # than append a second terminal document.
+                if exc.retry_succeeded and not exc.is_process_control:
+                    return 2
+                return _report_json_sink_failure()
+        else:
+            print(f"refused: {message}", file=sys.stderr)
         return 2
 
-    api_key = os.environ.get("MESHY_API_KEY")
+    def emit_preflight(event: str, **fields) -> int | None:
+        """Emit an early nonterminal event with runtime-equivalent cancellation."""
+
+        try:
+            events.emit(event, **fields)
+        except protocol.ProtocolSinkFlushError as exc:
+            if not exc.retry_succeeded:
+                return _report_json_sink_failure()
+            if isinstance(exc.original, KeyboardInterrupt):
+                # The interrupted event's full line was accepted. Append only
+                # the cancellation terminal; never rewrite the first delivery.
+                events.emit(
+                    "cancelled",
+                    message="generation cancelled by operator",
+                    task_ids=[],
+                )
+                return 130
+            if isinstance(exc.original, Exception):
+                # The retry proved the sink healthy and made the preflight line
+                # durable. Match guarded runtime semantics with one redacted
+                # internal-error terminal, without rewriting the first event.
+                events.emit(
+                    "error",
+                    error_code="internal_error",
+                    message=str(exc.original),
+                    task_ids=[],
+                )
+                return 1
+            return _report_json_sink_failure()
+        return None
+
+    # --- Refusal gates: BEFORE any network call (TD-09 precondition). ---
+    if (
+        not args.model_version
+        or args.model_version != args.model_version.strip()
+        or args.model_version.casefold() == "latest"
+    ):
+        return refuse(
+            "--model-version must name an explicit pinned Meshy release; "
+            "'latest' is refused"
+        )
+    preflight_result = emit_preflight(
+        "validation.started",
+        mode="text" if args.text else "image",
+        model_version=args.model_version,
+    )
+    if preflight_result is not None:
+        return preflight_result
+    if not args.terms_verified:
+        return refuse(
+            "--terms-verified is required — Meshy's commercial-terms check "
+            "must be operator-confirmed before generating (TD-09)"
+        )
+
     if not api_key:
-        print("refused: MESHY_API_KEY is not set", file=sys.stderr)
-        return 2
+        return refuse("MESHY_API_KEY is not set")
 
     try:
         intake.validate_namespace(args.ns)
         intake.validate_name(args.name)
         image_url = intake.image_ref_to_url(args.image) if args.image else None
     except intake.IntakeError as exc:
-        print(f"refused: {exc}", file=sys.stderr)
-        return 2
-
-    budgets = intake.load_budgets()
-    paths = intake.landing_paths(
-        content_root=args.content_root,
-        ns=args.ns,
-        name=args.name,
-        asset_class=args.asset_class,
-        budgets=budgets,
-    )
+        return refuse(str(exc))
 
     # --- Derive the Meshy target_polycount from the class budget (issue #627),
     # still before any network call. Only text-to-3D takes a polycount, so an
     # override paired with --image is refused rather than silently dropped.
-    target_polycount: int | None = None
-    if args.text:
-        try:
+    try:
+        budgets = intake.load_budgets()
+        paths = intake.landing_paths(
+            content_root=args.content_root,
+            ns=args.ns,
+            name=args.name,
+            asset_class=args.asset_class,
+            budgets=budgets,
+        )
+        target_polycount: int | None = None
+        if args.text:
             target_polycount = intake.derive_target_polycount(
                 args.asset_class, budgets, override=args.target_polycount
             )
-        except intake.IntakeError as exc:
-            print(f"refused: {exc}", file=sys.stderr)
-            return 2
-    elif args.target_polycount is not None:
-        print(
-            "refused: --target-polycount applies to --text generation only "
-            "(image-to-3D does not take a polycount)",
-            file=sys.stderr,
-        )
-        return 2
-
-    client = _new_client(api_key)
-    try:
-        try:
-            if args.text:
-                handle = client.text_to_3d(
-                    args.text,
-                    target_polycount=target_polycount,
-                    poll_interval_s=args.poll_interval,
-                    poll_timeout_s=args.poll_timeout,
-                )
-                endpoint = client_mod.TEXT_TO_3D_PATH
-            else:
-                handle = client.image_to_3d(image_url)
-                endpoint = client_mod.IMAGE_TO_3D_PATH
-        except (client_mod.MeshyAPIError, client_mod.MeshyPollTimeoutError) as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
-
-        try:
-            status = client.poll(
-                handle.task_id,
-                endpoint=endpoint,
-                interval_s=args.poll_interval,
-                timeout_s=args.poll_timeout,
+        elif args.target_polycount is not None:
+            return refuse(
+                "--target-polycount applies to --text generation only "
+                "(image-to-3D does not take a polycount)"
             )
-        except (client_mod.MeshyAPIError, client_mod.MeshyPollTimeoutError) as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
+    except (intake.IntakeError, OSError, ValueError) as exc:
+        return refuse(str(exc))
+
+    preflight_result = emit_preflight(
+        "validation.passed",
+        mode="text" if args.text else "image",
+        model_version=args.model_version,
+    )
+    if preflight_result is not None:
+        return preflight_result
+
+    task_ids: list[str] = []
+    terminal_emitted = False
+
+    def completed() -> int:
+        nonlocal terminal_emitted
+        if args.json_events and events.has_delivery("completed"):
+            events.resume("completed")
+            terminal_emitted = True
+        if not terminal_emitted:
+            asset_id = intake.asset_id(args.ns, args.name)
+            if args.json_events:
+                events.emit(
+                    "completed",
+                    asset_id=asset_id,
+                    path=str(paths.asset_dir),
+                    task_ids=task_ids,
+                )
+            else:
+                print(f"OK — landed {asset_id} at {paths.asset_dir}")
+            # Record completion only after the terminal output is flushed.
+            # EventEmitter journals the exact serialized line and accepted
+            # offset so recovery resumes it rather than writing a duplicate.
+            terminal_emitted = True
+        return 0
+
+    def on_client_event(event: str, **fields) -> None:
+        task_id = fields.get("task_id")
+        if task_id and task_id not in task_ids:
+            task_ids.append(task_id)
+        events.emit(event, model_version=args.model_version, **fields)
+
+    client: client_mod.MeshyClient | None = None
+    reservation: _TargetReservation | None = None
+    try:
+        # Reservation and client construction are deliberately inside this
+        # guarded region.  JSON mode must end in a structured terminal event
+        # even when local TLS/environment setup fails before the first request.
+        reservation = _TargetReservation.acquire(paths)
+        client = _new_client(api_key, args.model_version)
+        if args.text:
+            handle = client.text_to_3d(
+                args.text,
+                target_polycount=target_polycount,
+                poll_interval_s=args.poll_interval,
+                poll_timeout_s=args.poll_timeout,
+                on_event=on_client_event,
+            )
+            endpoint = client_mod.TEXT_TO_3D_PATH
+            final_stage = "refine"
+        else:
+            handle = client.image_to_3d(image_url, on_event=on_client_event)
+            endpoint = client_mod.IMAGE_TO_3D_PATH
+            final_stage = "image"
+
+        status = client.poll(
+            handle.task_id,
+            endpoint=endpoint,
+            interval_s=args.poll_interval,
+            timeout_s=args.poll_timeout,
+            on_status=lambda state: on_client_event(
+                "poll.progress",
+                task_id=state.task_id,
+                stage=final_stage,
+                status=state.status,
+                progress=state.progress,
+            ),
+        )
 
         if not status.succeeded:
-            print(
-                f"error: Meshy task {handle.task_id} ended in status "
-                f"{status.status} (expected SUCCEEDED)",
-                file=sys.stderr,
+            raise client_mod.MeshyAPIError(
+                f"Meshy task {handle.task_id} ended in status {status.status} "
+                "(expected SUCCEEDED)",
+                task_id=handle.task_id,
+                status=status.status,
             )
-            return 1
 
-        try:
-            client.download(
-                handle.task_id, paths.glb_path, status=status, endpoint=endpoint
-            )
-        except client_mod.MeshyAPIError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
+        events.emit(
+            "download.started", task_id=handle.task_id, path=str(paths.glb_path)
+        )
+        client.download(
+            handle.task_id,
+            reservation.partial_glb,
+            status=status,
+            endpoint=endpoint,
+        )
+        events.emit(
+            "download.completed", task_id=handle.task_id, path=str(paths.glb_path)
+        )
 
         # --- Budget pre-check: fail before any sidecar is written. ---
-        lod0_tris = intake.count_glb_triangles(paths.glb_path)
+        events.emit("budget.started", path=str(paths.glb_path))
+        lod0_tris = intake.count_glb_triangles(reservation.partial_glb)
         precheck_doc = intake.build_budget_precheck_doc(args.asset_class, lod0_tris)
         budget_errors = _check_budget(precheck_doc, paths.sidecar_path)
         if budget_errors:
-            paths.glb_path.unlink(missing_ok=True)
-            print("refused: budget pre-check failed —", file=sys.stderr)
-            for err in budget_errors:
-                print(f"  {err}", file=sys.stderr)
+            message = "budget pre-check failed — " + "; ".join(budget_errors)
+            if args.json_events:
+                events.emit(
+                    "error",
+                    error_code="budget_failed",
+                    message=message,
+                    task_ids=task_ids,
+                )
+            else:
+                print("refused: budget pre-check failed —", file=sys.stderr)
+                for err in budget_errors:
+                    print(f"  {err}", file=sys.stderr)
             return 1
+        events.emit("budget.passed", lod0_tris=lod0_tris)
 
         # --- Land the prompts file + sidecar (only now that budget passed). ---
+        events.emit("provenance.started", asset_id=intake.asset_id(args.ns, args.name))
         prompts_doc = intake.build_prompts_doc(
             task_id=handle.task_id,
             preview_task_id=handle.preview_task_id,
@@ -285,17 +686,110 @@ def cmd_generate(args: argparse.Namespace) -> int:
             lod0_tris=lod0_tris,
         )
 
-        paths.prompts_path.write_text(
+        reservation.partial_prompts.write_text(
             yaml.safe_dump(prompts_doc, sort_keys=False), encoding="utf-8"
         )
-        paths.sidecar_path.write_text(
+        reservation.partial_sidecar.write_text(
             yaml.safe_dump(sidecar_doc, sort_keys=False), encoding="utf-8"
         )
-    finally:
+        reservation.publish()
+        events.emit(
+            "provenance.written",
+            asset_id=intake.asset_id(args.ns, args.name),
+            path=str(paths.sidecar_path),
+        )
+        # Teardown is part of a successful job.  If it fails, the generic
+        # handler emits one redacted terminal error and reservation cleanup
+        # rolls the still-owner-marked atomic publication back for a clean retry.
         client.close()
-
-    print(f"OK — landed {intake.asset_id(args.ns, args.name)} at {paths.asset_dir}")
-    return 0
+        client = None
+        reservation.commit()
+        _post_commit_hook()
+        return completed()
+    except protocol.ProtocolSinkFlushError as exc:
+        if exc.is_process_control:
+            return _report_json_sink_failure()
+        if isinstance(exc.original, KeyboardInterrupt):
+            if reservation is not None and reservation.is_committed():
+                reservation.finish_committed()
+                return completed()
+            if args.json_events:
+                events.emit(
+                    "cancelled",
+                    message="generation cancelled by operator",
+                    task_ids=task_ids,
+                )
+            else:
+                print("cancelled: generation interrupted by operator", file=sys.stderr)
+            return 130
+        if reservation is not None and reservation.is_committed():
+            reservation.finish_committed()
+            return completed()
+        if args.json_events:
+            events.emit(
+                "error",
+                error_code="internal_error",
+                message=str(exc.original),
+                task_ids=task_ids,
+            )
+        else:
+            print(f"error: {events.redact(str(exc.original))}", file=sys.stderr)
+        return 1
+    except intake.IntakeError as exc:
+        return refuse(str(exc))
+    except KeyboardInterrupt:
+        if events.sink_poisoned:
+            return _report_json_sink_failure()
+        if reservation is not None and reservation.is_committed():
+            reservation.finish_committed()
+            return completed()
+        if args.json_events:
+            events.emit(
+                "cancelled",
+                message="generation cancelled by operator",
+                task_ids=task_ids,
+            )
+        else:
+            print("cancelled: generation interrupted by operator", file=sys.stderr)
+        return 130
+    except (client_mod.MeshyAPIError, client_mod.MeshyPollTimeoutError) as exc:
+        error_code, http_status = protocol.classify_error(exc)
+        if args.json_events:
+            fields = {
+                "error_code": error_code,
+                "message": str(exc),
+                "task_ids": task_ids,
+            }
+            if http_status is not None:
+                fields["http_status"] = http_status
+            events.emit("error", **fields)
+        else:
+            print(f"error: {events.redact(str(exc))}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # noqa: BLE001 — machine protocol must terminate cleanly
+        if events.sink_poisoned:
+            return _report_json_sink_failure()
+        if reservation is not None and reservation.is_committed():
+            reservation.finish_committed()
+            return completed()
+        if args.json_events:
+            events.emit(
+                "error",
+                error_code="internal_error",
+                message=str(exc),
+                task_ids=task_ids,
+            )
+        else:
+            print(f"error: {events.redact(str(exc))}", file=sys.stderr)
+        return 1
+    finally:
+        if client is not None:
+            # A primary terminal error/cancellation already describes the job.
+            # Teardown must never replace it or create a second terminal event.
+            with contextlib.suppress(Exception):
+                client.close()
+        if reservation is not None:
+            reservation.cleanup()
 
 
 def cmd_convert_rig(args: argparse.Namespace) -> int:
@@ -467,12 +961,42 @@ def _check_budget(doc: dict, rel_path: Path) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    effective_argv = list(argv) if argv is not None else sys.argv[1:]
     parser = _build_parser()
-    args = parser.parse_args(argv)
-    if args.command == "generate":
-        return cmd_generate(args)
-    if args.command == "convert-rig":
-        return cmd_convert_rig(args)
+    if "--json-events" in effective_argv:
+        parse_stderr = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(parse_stderr):
+                args = parser.parse_args(effective_argv)
+        except SystemExit as exc:
+            if exc.code == 0:
+                return 0
+            emitter = protocol.EventEmitter(secret=os.environ.get("MESHY_API_KEY"))
+            try:
+                emitter.emit(
+                    "error",
+                    error_code="invalid_request",
+                    message=parse_stderr.getvalue().strip()
+                    or "invalid command arguments",
+                )
+            except protocol.ProtocolSinkFlushError as exc:
+                if exc.retry_succeeded and not exc.is_process_control:
+                    return 2
+                return _report_json_sink_failure()
+            except protocol.ProtocolSinkError:
+                return _report_json_sink_failure()
+            return 2
+    else:
+        args = parser.parse_args(effective_argv)
+    try:
+        if args.command == "generate":
+            return cmd_generate(args)
+        if args.command == "convert-rig":
+            return cmd_convert_rig(args)
+    except protocol.ProtocolSinkFlushError:
+        return _report_json_sink_failure()
+    except protocol.ProtocolSinkError:
+        return _report_json_sink_failure()
     parser.error(f"unknown command: {args.command}")
     return 2
 

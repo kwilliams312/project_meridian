@@ -130,9 +130,10 @@ struct ActiveAura {
     // --- kBuff / kDebuff — attribute modifier (SP2.3 #693) ------------------
     // The buff/debuff `attribute` contentId ref (verbatim from effects_json). A
     // PRIMARY-stat flat modifier also folds into stat_totals_ (via a StatKey);
-    // percent + derived attributes ride the container's interim attribute ledger —
-    // the #694 effective-stat-framework seam. attr_amount is the PER-STACK signed
-    // modifier; attr_modifier picks flat vs percent.
+    // percent + derived attributes ride the container's attribute ledger, which the
+    // SP2.4 #694 EffectiveStats framework (effective_stats.h) consumes to compute a
+    // character's effective stat. attr_amount is the PER-STACK signed modifier;
+    // attr_modifier picks flat vs percent.
     std::string       attr_ref;
     std::int32_t      attr_amount = 0;
     AttributeModifier attr_modifier = AttributeModifier::kFlat;
@@ -159,9 +160,10 @@ struct ActiveAura {
 
 // The net attribute modifier a buff/debuff query returns (SP2.3 #693). `flat` is in
 // raw attribute units; `percent` is in hundredths of a percent-point (the schema's
-// `modifier: percent` unit). This is the INTERIM representation the #694 effective-
-// stat framework consumes/replaces — the kernel does not yet fold percent + derived
-// attributes into an effective stat.
+// `modifier: percent` unit). This is the live buff/debuff LAYER the SP2.4 #694
+// EffectiveStats framework (effective_stats.h) folds together with a character's
+// base + class/race mods to compute an effective stat (primary AND derived, flat
+// AND percent).
 struct AttributeDelta {
     std::int32_t flat = 0;
     std::int32_t percent = 0;
@@ -285,11 +287,12 @@ public:
     // (SP2.3 #693), so this reflects both authored kAura stat_mods and buff/debuff.
     std::int32_t stat_delta(StatKey stat) const;
 
-    // The net buff/debuff modifier on `attribute_ref` (SP2.3 #693) — the interim
-    // representation the #694 effective-stat framework consumes. Flat + percent are
+    // The net buff/debuff modifier on `attribute_ref` (SP2.3 #693) — the live aura
+    // LAYER the SP2.4 #694 EffectiveStats framework consumes. Flat + percent are
     // summed over active buff/debuff auras (× stacks). For a primary attribute the
     // flat part equals stat_delta(that StatKey); percent + derived attributes live
-    // ONLY here until #694 computes effective stats. Zeroes for an untouched ref.
+    // ONLY here (no StatKey), so EffectiveStats reads them through this query.
+    // Zeroes for an untouched ref.
     AttributeDelta attribute_delta(const std::string& attribute_ref) const;
 
     // --- crowd control (SP2.3 #693) ----------------------------------------
@@ -311,7 +314,8 @@ private:
     Unit& host_;
     std::vector<ActiveAura> auras_;
     std::int32_t stat_totals_[kStatKeyCount] = {0, 0, 0, 0, 0};
-    // Interim buff/debuff attribute ledger (the #694 seam) keyed by attribute ref.
+    // Live buff/debuff attribute ledger keyed by attribute ref — the aura LAYER the
+    // SP2.4 #694 EffectiveStats framework reads via attribute_delta().
     std::unordered_map<std::string, std::int32_t> attr_flat_;
     std::unordered_map<std::string, std::int32_t> attr_percent_;
 };

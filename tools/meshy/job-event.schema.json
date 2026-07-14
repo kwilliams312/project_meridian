@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://projectmeridian.example/schema/tools/meshy-job-event.v1.json",
+  "title": "Meridian Meshy job event protocol v1",
+  "type": "object",
+  "required": ["schema", "protocol_version", "sequence", "event"],
+  "properties": {
+    "schema": {"const": "meridian/meshy-job-event@1"},
+    "protocol_version": {"const": 1},
+    "sequence": {"type": "integer", "minimum": 1},
+    "event": {
+      "enum": [
+        "validation.started", "validation.passed", "preview.submitted",
+        "refine.submitted", "generation.submitted", "poll.progress",
+        "download.started", "download.completed", "budget.started",
+        "budget.passed", "provenance.started", "provenance.written",
+        "completed", "cancelled", "error"
+      ]
+    },
+    "message": {"type": "string"},
+    "mode": {"enum": ["text", "image"]},
+    "model_version": {"type": "string", "pattern": "^(?!latest$).+"},
+    "task_id": {"type": "string", "minLength": 1},
+    "task_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "stage": {"enum": ["preview", "refine", "image"]},
+    "status": {"type": "string"},
+    "progress": {"type": "integer", "minimum": 0, "maximum": 100},
+    "path": {"type": "string"},
+    "asset_id": {"type": "string"},
+    "lod0_tris": {"type": "integer", "minimum": 0},
+    "error_code": {
+      "enum": ["invalid_request", "provider_error", "payment_required", "rate_limited", "status_drift", "timeout", "budget_failed", "internal_error"]
+    },
+    "http_status": {"type": "integer", "minimum": 100, "maximum": 599},
+    "details": {}
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {"properties": {"event": {"enum": ["validation.started", "validation.passed"]}}},
+      "then": {"required": ["mode", "model_version"]}
+    },
+    {
+      "if": {"properties": {"event": {"enum": ["preview.submitted", "refine.submitted", "generation.submitted"]}}},
+      "then": {"required": ["task_id", "stage", "model_version"]}
+    },
+    {
+      "if": {"properties": {"event": {"const": "poll.progress"}}},
+      "then": {"required": ["task_id", "stage", "status", "progress", "model_version"]}
+    },
+    {
+      "if": {"properties": {"event": {"enum": ["download.started", "download.completed"]}}},
+      "then": {"required": ["task_id", "path"]}
+    },
+    {
+      "if": {"properties": {"event": {"const": "budget.started"}}},
+      "then": {"required": ["path"]}
+    },
+    {
+      "if": {"properties": {"event": {"const": "budget.passed"}}},
+      "then": {"required": ["lod0_tris"]}
+    },
+    {
+      "if": {"properties": {"event": {"const": "provenance.started"}}},
+      "then": {"required": ["asset_id"]}
+    },
+    {
+      "if": {"properties": {"event": {"const": "provenance.written"}}},
+      "then": {"required": ["asset_id", "path"]}
+    },
+    {
+      "if": {"properties": {"event": {"const": "completed"}}},
+      "then": {"required": ["asset_id", "path", "task_ids"]}
+    },
+    {
+      "if": {"properties": {"event": {"const": "cancelled"}}},
+      "then": {"required": ["message", "task_ids"]}
+    },
+    {
+      "if": {"properties": {"event": {"const": "error"}}},
+      "then": {"required": ["message", "error_code"]}
+    }
+  ]
+}

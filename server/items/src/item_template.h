@@ -133,6 +133,11 @@ struct ItemTemplate {
     std::string name;                 // display name (item_template.name)
     ItemClass item_class = ItemClass::kTradeGood;
     ItemSlot slot = ItemSlot::kNone;  // equip slot type; kNone = not equippable
+    // equip_type numeric id (world DB item_template.equip_type_id -> equip_type.content_id;
+    // schema item.equip_type). 0 = none (accessory / legacy item). The worldd class
+    // kernel gates equipping against this (SP2.7 #697); the items lib carries it as a
+    // faithful template field but does not itself gate (it has no class context).
+    std::uint32_t equip_type_id = 0;
     Rarity rarity = Rarity::kCommon;
     std::uint16_t required_level = 1;  // min character level to EQUIP (item_template.required_level)
     std::uint16_t item_level = 1;      // itemization tier (ITM-03/M2); inert in M1

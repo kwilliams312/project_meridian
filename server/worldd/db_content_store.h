@@ -52,6 +52,9 @@
 
 #include "ability_store.h"    // meridian::worldd::AbilityStore — DB-loaded ability catalog (#481)
 #include "area_triggers.h"    // meridian::worldd::TriggerVolume — DB-loaded POI volumes (#398)
+#include "class_kernel.h"     // meridian::worldd::EquipTypeCatalog / ClassCatalog — equip-gating (#697)
+#include "effective_stats.h"  // meridian::worldd::AttributeCatalog — DB-loaded attribute framework (#694)
+#include "talent_catalog.h"   // meridian::worldd::TalentCatalog — DB-loaded talents/trees (#697)
 #include "combat_unit.h"      // meridian::worldd::UnitStats / Faction / Position (spawn stats, #486)
 #include "item_template.h"    // meridian::items::TemplateStore / ItemTemplate
 #include "loot_table.h"       // meridian::loot::LootTableStore / LootTable
@@ -216,6 +219,27 @@ struct WorldContent {
     // retired compiled enum. Always populated by load_world_content (the fallback
     // alone is non-empty), so std::optional only marks "a world DB was loaded".
     std::optional<meridian::characters::Roster> roster;
+    // The attribute framework (SP2.4 #694) — the base attribute vocabulary + the
+    // per-class/per-race attribute_mods loaded from the `attribute` /
+    // `class_attribute_mod` / `race_attribute_mod` tables. Consumed by the kernel's
+    // EffectiveStats computation (effective_stats.h): a character's effective stats =
+    // base + class mods + race mods + the live buff/debuff aura layer. Always
+    // populated by load_world_content (empty tables load an empty catalog).
+    AttributeCatalog attributes;
+    // The equip-type catalog (SP2.7 #697) — the armor/weapon type vocabulary
+    // (equip_type rows) the class kernel gates equipping against. Empty when the
+    // world DB has no equip_type rows.
+    EquipTypeCatalog equip_types;
+    // The per-class equip-gating + role/talent rules (SP2.7 #697) — usable armor/
+    // weapon types, role(s), and talent tree id, loaded from `class` +
+    // `class_usable_equip_type` + `class_role`, keyed by roster_id. Consumed by the
+    // kernel's gate_equip / threat_multiplier hooks.
+    ClassCatalog classes;
+    // The talents + talent trees (SP2.7 #697) — loaded from `talent` /
+    // `talent_grant` / `talent_tree` / `talent_tree_tier` / `talent_tree_tier_talent`.
+    // Consumed by apply_talents (talent grants -> usable abilities + passive
+    // effective-stat deltas). Empty when the world DB authors no talents.
+    TalentCatalog talents;
     // The authored spawn placements (spawn_point rows resolved against npc_template,
     // #486). Spawned into the live world at boot via WorldServer::install_spawns() so
     // the seeded quest-givers/creatures EXIST, are AoI-visible (ENTITY_ENTER), and are
@@ -238,6 +262,33 @@ AbilityStore load_db_ability_store(db::Connection& world_db);
 // same-id fallback entry (the pack is the source of truth). Throws
 // meridian::db::DbError on a query failure (same fail-fast policy as the others).
 meridian::characters::Roster load_db_roster(db::Connection& world_db);
+
+// Load the attribute framework from the world DB (SP2.4 #694): the base attribute
+// vocabulary (`attribute` table — ref/name/kind) plus the per-class/per-race
+// `attribute_mods` (`class_attribute_mod` / `race_attribute_mod`, keyed by roster_id)
+// into an AttributeCatalog the EffectiveStats computation consumes. Empty tables
+// load an empty catalog (no throw). Throws meridian::db::DbError on a query failure
+// (same fail-fast policy as the others).
+AttributeCatalog load_db_attributes(db::Connection& world_db);
+
+// Load the equip-type catalog from the world DB (SP2.7 #697): the `equip_type` rows
+// (numeric id + ref + name + category + slot_class) into an EquipTypeCatalog the
+// class kernel gates equipping against. Empty tables load an empty catalog (no
+// throw). Throws meridian::db::DbError on a query failure.
+EquipTypeCatalog load_db_equip_types(db::Connection& world_db);
+
+// Load the per-class equip-gating + role rules from the world DB (SP2.7 #697): the
+// `class` identity + `class_usable_equip_type` (usable armor/weapon types) +
+// `class_role` (role set) rows into a ClassCatalog keyed by roster_id, plus the
+// class.talent_tree_id link. Empty tables load an empty catalog. Throws
+// meridian::db::DbError on a query failure.
+ClassCatalog load_db_class_catalog(db::Connection& world_db);
+
+// Load the talents + talent trees from the world DB (SP2.7 #697): `talent` +
+// `talent_grant` + `talent_tree` + `talent_tree_tier` + `talent_tree_tier_talent`
+// into a TalentCatalog the apply_talents hook consumes. Empty tables load an empty
+// catalog. Throws meridian::db::DbError on a query failure.
+TalentCatalog load_db_talents(db::Connection& world_db);
 
 // Load every content store from the (already-boot-verified) world DB connection.
 // Throws meridian::db::DbError on a query failure — the caller treats a load fault

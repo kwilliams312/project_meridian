@@ -103,6 +103,13 @@ fs::path make_fixture() {
                "rarity: rare\n"
                "effects:\n  on_use: ability.zap\n"
                "price:\n  sell: 100\n");
+    // A base attribute (SP2.4 #694) — the kernel vocabulary emits to the `attribute`
+    // table keyed by its contentId ref, carrying the primary/derived `kind`.
+    write_file(core / "attributes" / "strength.attribute.yaml",
+               "schema: meridian/attribute@1\n"
+               "id: core:attribute.strength\n"
+               "name: Strength\n"
+               "kind: primary\n");
     return content.string();
 }
 
@@ -228,6 +235,14 @@ void test_emit_wellformed() {
     report(sql.find(R"('[{"amount":{"max":20,"min":10},"kind":"damage"}]')") !=
                std::string::npos,
            "ability effects_json is canonical (keys sorted) JSON on the ability row");
+    // SP2.4 #694: the base attribute vocabulary emits to the `attribute` table,
+    // keyed by the contentId ref, carrying its primary/derived kind.
+    report(sql.find("INSERT INTO attribute (attr_ref, content_id, name, kind)") !=
+               std::string::npos,
+           "attribute content INSERT present");
+    report(sql.find("'core:attribute.strength'") != std::string::npos &&
+               sql.find("'Strength', 'primary'") != std::string::npos,
+           "attribute row carries the verbatim ref + name + kind");
 
     // The manifest tuple: (pack_namespace, pack_version, id_band, content_hash,
     // schema_version, compatibility_version, mcc_version, built_at).

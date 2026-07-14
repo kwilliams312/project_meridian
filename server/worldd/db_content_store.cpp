@@ -693,7 +693,7 @@ DbTemplateStore::DbTemplateStore(db::Connection& world_db) {
         "SELECT id, name, item_class, slot, rarity, required_level, item_level, "
         "       is_unique, binding, stack_size, "
         "       weapon_damage_min, weapon_damage_max, weapon_speed_ms, armor, "
-        "       price_sell, price_buy "
+        "       price_sell, price_buy, equip_type_id "
         "FROM item_template ORDER BY id");
     for (const db::Row& r : items.rows) {
         itm::ItemTemplate t;
@@ -717,6 +717,7 @@ DbTemplateStore::DbTemplateStore(db::Connection& world_db) {
         t.armor = as_u32(r[13]);
         t.sell_price = as_opt_copper(r[14]);
         t.buy_price = as_opt_copper(r[15]);
+        t.equip_type_id = as_u32(r[16]);  // SP2.7 #697 — 0 (NULL) = no equip_type
         by_id_.emplace(t.id, std::move(t));
     }
 
@@ -1300,6 +1301,198 @@ meridian::characters::Roster load_db_roster(db::Connection& world_db) {
     return roster;
 }
 
+AttributeCatalog load_db_attributes(db::Connection& world_db) {
+    // The base attribute vocabulary (kernel-blessed primary/derived set) + the
+    // per-class/per-race attribute_mods operators tune (SP2.4 #694). Keyed by the
+    // attribute's contentId ref string — the SAME key the buff/debuff aura ledger
+    // uses — so the EffectiveStats framework joins the pack mods, the live auras, and
+    // the base on one string with no id round-trip.
+    AttributeCatalog catalog;
+    db::Result attrs = world_db.execute(
+        "SELECT attr_ref, name, kind, content_id FROM attribute ORDER BY content_id");
+    for (const db::Row& r : attrs.rows) {
+        AttributeDef def;
+        def.ref = as_str(r[0]);
+        def.name = as_str(r[1]);
+        def.kind = as_str(r[2]) == "derived" ? AttributeKind::kDerived
+                                             : AttributeKind::kPrimary;
+        def.content_id = as_u32(r[3]);
+        catalog.add_attribute(std::move(def));
+    }
+    db::Result class_mods = world_db.execute(
+        "SELECT class_roster_id, attr_ref, value FROM class_attribute_mod "
+        "ORDER BY class_roster_id, attr_ref");
+    for (const db::Row& r : class_mods.rows) {
+        catalog.add_class_mod(static_cast<std::uint8_t>(as_i64(r[0])), as_str(r[1]),
+                              static_cast<std::int32_t>(as_i64(r[2])));
+    }
+    db::Result race_mods = world_db.execute(
+        "SELECT race_roster_id, attr_ref, value FROM race_attribute_mod "
+        "ORDER BY race_roster_id, attr_ref");
+    for (const db::Row& r : race_mods.rows) {
+        catalog.add_race_mod(static_cast<std::uint8_t>(as_i64(r[0])), as_str(r[1]),
+                             static_cast<std::int32_t>(as_i64(r[2])));
+    }
+    return catalog;
+}
+
+// =============================================================================
+// load_db_equip_types  (equip_type — armor/weapon type catalog, SP2.7 #697)
+// =============================================================================
+EquipTypeCatalog load_db_equip_types(db::Connection& world_db) {
+    EquipTypeCatalog catalog;
+    db::Result rows = world_db.execute(
+        "SELECT content_id, equip_ref, name, category, slot_class "
+        "FROM equip_type ORDER BY content_id");
+    for (const db::Row& r : rows.rows) {
+        EquipTypeDef def;
+        def.content_id = as_u32(r[0]);
+        def.ref = as_str(r[1]);
+        def.name = as_str(r[2]);
+        // Unknown/NULL category degrades to armor (the safest default — an unknown
+        // type gates like armor rather than throwing; the pack is malformed).
+        (void)parse_equip_category(as_str(r[3]), def.category);
+        def.slot_class = as_str(r[4]);
+        catalog.add(std::move(def));
+    }
+    return catalog;
+}
+
+// =============================================================================
+// load_db_class_catalog  (class + class_usable_equip_type + class_role, SP2.7 #697)
+// =============================================================================
+ClassCatalog load_db_class_catalog(db::Connection& world_db) {
+    ClassCatalog catalog;
+    // Identity + talent tree link. touch() creates the record; the child passes fill
+    // the usable-type sets + role set.
+    db::Result classes = world_db.execute(
+        "SELECT roster_id, name, talent_tree_id FROM class ORDER BY roster_id");
+    for (const db::Row& r : classes.rows) {
+        const auto roster_id = static_cast<std::uint8_t>(as_i64(r[0]));
+        if (roster_id == 0) continue;  // 0 reserved as unset/invalid
+        ClassRecord& rec = catalog.touch(roster_id);
+        rec.name = as_str(r[1]);
+        rec.talent_tree_id = as_u32(r[2]);  // 0 (NULL) = no tree
+    }
+
+    // usable_armor_types / usable_weapon_types — one row per (class, equip_type). The
+    // `list` column records which authoring list it came from, so the row lands in
+    // the matching usable set. (A class row absent from the identity pass is skipped —
+    // FK-less, but the identity pass loads every class.)
+    db::Result usable = world_db.execute(
+        "SELECT class_roster_id, equip_type_id, list FROM class_usable_equip_type "
+        "ORDER BY class_roster_id, equip_type_id");
+    for (const db::Row& r : usable.rows) {
+        const auto roster_id = static_cast<std::uint8_t>(as_i64(r[0]));
+        const ClassRecord* existing = catalog.find(roster_id);
+        if (existing == nullptr) continue;  // usable type for an unknown class — skip
+        ClassRecord& rec = catalog.touch(roster_id);
+        const std::uint32_t et_id = as_u32(r[1]);
+        if (as_str(r[2]) == "weapon") {
+            rec.usable_weapon_types.insert(et_id);
+        } else {
+            rec.usable_armor_types.insert(et_id);
+        }
+    }
+
+    // role(s) — one row per role (single-role class: 1 row; hybrid: 2-4).
+    db::Result roles = world_db.execute(
+        "SELECT class_roster_id, role FROM class_role ORDER BY class_roster_id, role");
+    for (const db::Row& r : roles.rows) {
+        const auto roster_id = static_cast<std::uint8_t>(as_i64(r[0]));
+        if (catalog.find(roster_id) == nullptr) continue;  // role for an unknown class — skip
+        CombatRole role;
+        if (!parse_combat_role(as_str(r[1]), role)) continue;  // unknown token — skip
+        catalog.touch(roster_id).roles.push_back(role);
+    }
+    return catalog;
+}
+
+// =============================================================================
+// load_db_talents  (talent + talent_grant + talent_tree + tiers, SP2.7 #697)
+// =============================================================================
+TalentCatalog load_db_talents(db::Connection& world_db) {
+    TalentCatalog catalog;
+
+    // Talents (identity).
+    db::Result talents = world_db.execute(
+        "SELECT content_id, talent_ref, name, rank_max FROM talent ORDER BY content_id");
+    for (const db::Row& r : talents.rows) {
+        const std::uint32_t id = as_u32(r[0]);
+        if (id == 0) continue;
+        TalentDef& d = catalog.touch_talent(id);
+        d.ref = as_str(r[1]);
+        d.name = as_str(r[2]);
+        d.rank_max = as_u16(r[3], 1);
+    }
+
+    // Grants (ordered by ordinal) — appended to their talent.
+    db::Result grants = world_db.execute(
+        "SELECT talent_id, ordinal, kind, ability_id, attribute_ref, amount, "
+        "       modifier, duration_ms, max_stacks "
+        "FROM talent_grant ORDER BY talent_id, ordinal");
+    for (const db::Row& r : grants.rows) {
+        const std::uint32_t talent_id = as_u32(r[0]);
+        if (catalog.find_talent(talent_id) == nullptr) continue;  // orphan grant — skip
+        TalentGrant g;
+        const std::string kind = as_str(r[2]);
+        if (kind == "ability") {
+            g.kind = TalentGrant::Kind::kAbility;
+            g.ability_id = as_u32(r[3]);
+        } else {
+            g.kind = (kind == "debuff") ? TalentGrant::Kind::kDebuff
+                                        : TalentGrant::Kind::kBuff;
+            g.attribute_ref = as_str(r[4]);
+            g.amount = static_cast<std::int32_t>(as_i64(r[5]));
+            g.modifier = (as_str(r[6]) == "percent") ? AttributeModifier::kPercent
+                                                     : AttributeModifier::kFlat;
+            g.duration_ms = as_u32(r[7]);       // 0 (NULL) = permanent passive
+            g.max_stacks = as_u16(r[8], 1);
+        }
+        catalog.touch_talent(talent_id).grants.push_back(std::move(g));
+    }
+
+    // Trees (identity).
+    db::Result trees = world_db.execute(
+        "SELECT content_id, tree_ref, name, description FROM talent_tree ORDER BY content_id");
+    for (const db::Row& r : trees.rows) {
+        const std::uint32_t id = as_u32(r[0]);
+        if (id == 0) continue;
+        TalentTreeDef& d = catalog.touch_tree(id);
+        d.ref = as_str(r[1]);
+        d.name = as_str(r[2]);
+    }
+
+    // Tiers (ordered by tier_ordinal) — appended to their tree.
+    db::Result tiers = world_db.execute(
+        "SELECT talent_tree_id, tier_ordinal, required_points FROM talent_tree_tier "
+        "ORDER BY talent_tree_id, tier_ordinal");
+    for (const db::Row& r : tiers.rows) {
+        const std::uint32_t tree_id = as_u32(r[0]);
+        if (catalog.find_tree(tree_id) == nullptr) continue;  // orphan tier — skip
+        TalentTreeTier tier;
+        tier.required_points = as_u32(r[2]);
+        catalog.touch_tree(tree_id).tiers.push_back(std::move(tier));
+    }
+
+    // Tier talents (ordered by tier_ordinal, ordinal) — appended to the matching
+    // tier (by array position; tiers were loaded in tier_ordinal order above, so the
+    // Nth tier in the vector is tier_ordinal N).
+    db::Result tier_talents = world_db.execute(
+        "SELECT talent_tree_id, tier_ordinal, ordinal, talent_id "
+        "FROM talent_tree_tier_talent ORDER BY talent_tree_id, tier_ordinal, ordinal");
+    for (const db::Row& r : tier_talents.rows) {
+        const std::uint32_t tree_id = as_u32(r[0]);
+        const TalentTreeDef* tree = catalog.find_tree(tree_id);
+        if (tree == nullptr) continue;
+        const auto tier_ord = static_cast<std::size_t>(as_i64(r[1]));
+        TalentTreeDef& t = catalog.touch_tree(tree_id);
+        if (tier_ord >= t.tiers.size()) continue;  // orphan tier ref — skip
+        t.tiers[tier_ord].talent_ids.push_back(as_u32(r[3]));
+    }
+    return catalog;
+}
+
 WorldContent load_world_content(db::Connection& world_db) {
     WorldContent content;
     content.items = std::make_unique<DbTemplateStore>(world_db);
@@ -1310,6 +1503,10 @@ WorldContent load_world_content(db::Connection& world_db) {
     content.area_triggers = load_area_trigger_volumes(world_db);
     content.abilities = std::make_unique<AbilityStore>(load_db_ability_store(world_db));
     content.roster = load_db_roster(world_db);
+    content.attributes = load_db_attributes(world_db);
+    content.equip_types = load_db_equip_types(world_db);
+    content.classes = load_db_class_catalog(world_db);
+    content.talents = load_db_talents(world_db);
     content.spawns = load_spawn_points(world_db);
     return content;
 }

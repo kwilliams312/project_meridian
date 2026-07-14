@@ -613,6 +613,15 @@ public:
     // default Roster::offline_full() (the full M0 set) so a DB-less run still creates.
     void set_roster(meridian::characters::Roster roster);
 
+    // Install the pack-loaded per-class equip-gating + role catalog (SP2.7 #697) —
+    // the `class` + `class_usable_equip_type` + `class_role` rows. The live MapTick
+    // borrows it (wired in the ctor) for the ROLE threat hook: a Tank-role player's
+    // threat is scaled by threat_multiplier so it holds aggro. Move-assigned into the
+    // catalog the map borrows by address, so its address stays valid. Call at boot
+    // BEFORE start(); not thread-safe. When never called, the catalog is empty and
+    // every class's threat multiplier is 1.0 (a DB-less run's threat is unscaled).
+    void set_class_catalog(ClassCatalog classes);
+
 private:
     void world_thread_main();
 
