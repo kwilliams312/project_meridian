@@ -5,11 +5,13 @@
              xmlns:vm="using:Meridian.Codex.ViewModels"
              xmlns:edit="using:Meridian.Codex.Editing"
              xmlns:svc="using:Meridian.Codex.Services"
+             xmlns:controls="using:Meridian.Codex.Controls"
              mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="700"
              x:Class="Meridian.Codex.Views.PackWorkspaceView"
              x:DataType="vm:PackWorkspaceViewModel">
-  <ScrollViewer>
-    <StackPanel Margin="24" Spacing="16" MaxWidth="980">
+  <Grid RowDefinitions="*,Auto">
+    <ScrollViewer Grid.Row="0">
+      <StackPanel Margin="24" Spacing="16" MaxWidth="980">
       <StackPanel Spacing="4">
         <TextBlock Text="Content Pack Workspace" FontSize="26" FontWeight="SemiBold" />
         <TextBlock Text="Open a namespace folder or create one under a content root. Codex owns pack.yaml; raw YAML editing is not required."
@@ -23,7 +25,6 @@
           <StackPanel Orientation="Horizontal" Spacing="8">
             <Button Content="Create pack" Command="{Binding CreateCommand}" />
             <Button Content="Open pack" Command="{Binding OpenCommand}" />
-            <Button Content="Save manifest" Command="{Binding SaveCommand}" />
           </StackPanel>
           <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" />
           <ItemsControl ItemsSource="{Binding RecentWorkspaces}">
@@ -95,6 +96,12 @@
           </ItemsControl>
         </StackPanel>
       </Border>
-    </StackPanel>
-  </ScrollViewer>
+      </StackPanel>
+    </ScrollViewer>
+    <controls:EditorActionBar Grid.Row="1"
+                              ActionText="Save manifest"
+                              ActionCommand="{Binding SaveCommand}"
+                              IsActionEnabled="{Binding CanSave}"
+                              StateDescription="{Binding SaveStateDescription}" />
+  </Grid>
 </UserControl>
