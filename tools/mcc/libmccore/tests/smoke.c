@@ -109,7 +109,7 @@ int main(void) {
     check(idx != NULL && st == MCCORE_OK, "mccore_index_json() returns the index");
     check(contains(idx, "\"schema\": \"meridian/id-index@1\""),
           "index carries the meridian/id-index@1 schema");
-    check(contains(idx, "\"id_count\": 183"), "index reports id_count 183 (matches mcc index)");
+    check(contains(idx, "\"id_count\": 184"), "index reports id_count 184 (matches mcc index)");
     check(contains(idx, "core:item.kobold_ear"), "index contains core:item.kobold_ear");
     mccore_free(idx);
 
