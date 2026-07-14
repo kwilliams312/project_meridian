@@ -1,0 +1,42 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:sf="using:Meridian.Codex.SchemaForms"
+             xmlns:views="using:Meridian.Codex.Views"
+             xmlns:conv="using:Avalonia.Data.Converters"
+             x:Class="Meridian.Codex.Views.SchemaFieldView"
+             x:DataType="sf:SchemaFieldViewModel">
+  <Border Margin="0,0,0,10">
+    <Grid ColumnDefinitions="180,*">
+      <StackPanel Grid.Column="0" Margin="0,4,16,0">
+        <TextBlock Text="{Binding Label}" FontWeight="SemiBold" TextWrapping="Wrap" />
+        <TextBlock Text="{Binding Help}" Opacity="0.72" FontSize="12" TextWrapping="Wrap" />
+      </StackPanel>
+      <StackPanel Grid.Column="1" Spacing="6">
+        <Button Content="Add optional field" Command="{Binding AddOptionalCommand}" IsVisible="{Binding CanAddOptional}" HorizontalAlignment="Left" />
+        <Button Content="Remove optional field" Command="{Binding RemoveOptionalCommand}" IsVisible="{Binding CanRemoveOptional}" HorizontalAlignment="Left" />
+        <TextBox Text="{Binding TextValue}" IsVisible="{Binding ShowScalar}" IsEnabled="{Binding CanEdit}" />
+        <NumericUpDown Value="{Binding NumericValue}" Minimum="{Binding Field.Minimum}" Maximum="{Binding Field.Maximum}"
+                       Increment="{Binding NumericIncrement}" IsVisible="{Binding ShowNumeric}" IsEnabled="{Binding CanEdit}" />
+        <CheckBox IsChecked="{Binding BoolValue}" IsVisible="{Binding ShowBoolean}" IsEnabled="{Binding CanEdit}" />
+        <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding SelectedChoice}" IsVisible="{Binding ShowEnum}" IsEnabled="{Binding CanEdit}" />
+        <ComboBox ItemsSource="{Binding VariantChoices}" SelectedItem="{Binding SelectedVariant}"
+                  IsVisible="{Binding HasVariants}" />
+        <TextBlock Text="{Binding UnsupportedReason}" IsVisible="{Binding IsUnsupported}" Foreground="Orange" TextWrapping="Wrap" />
+        <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding IsArrayItem}">
+          <Button Content="Move up" Command="{Binding MoveSelfUpCommand}" />
+          <Button Content="Move down" Command="{Binding MoveSelfDownCommand}" />
+          <Button Content="Remove" Command="{Binding RemoveSelfCommand}" />
+        </StackPanel>
+        <Button Content="Add item" Command="{Binding AddArrayItemCommand}" IsVisible="{Binding CanAddArrayItem}" HorizontalAlignment="Left" />
+        <ItemsControl ItemsSource="{Binding Children}" Margin="12,4,0,0" IsVisible="{Binding IsPresent}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="sf:SchemaFieldViewModel"><views:SchemaFieldView /></DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <TextBlock Text="{Binding BranchWarning}" Foreground="Orange" TextWrapping="Wrap" />
+        <Button Content="Confirm branch change" Command="{Binding ConfirmBranchChangeCommand}"
+                IsVisible="{Binding BranchWarning, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" HorizontalAlignment="Left" />
+      </StackPanel>
+    </Grid>
+  </Border>
+</UserControl>
