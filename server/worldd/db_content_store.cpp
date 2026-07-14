@@ -228,8 +228,46 @@ StatKey ability_stat_from_db(const std::string& s) {
     return StatKey::kStrength;
 }
 
+// --- SP2.2 full-palette effects_json enum mappings (#692) ---------------------
+// The richer palette's small string enums, mapped from the effects_json payload.
+// Each falls back to the schema DEFAULT / first variant so a malformed value
+// degrades rather than throwing (client SAD §2.4 "never crash").
+
+// buff/debuff effects[].modifier ENUM('flat','percent') — schema default 'flat'.
+AttributeModifier ability_modifier_from_json(const std::string& s) {
+    if (s == "percent") return AttributeModifier::kPercent;
+    return AttributeModifier::kFlat;
+}
+
+// cc effects[].type ENUM('stun','root','silence').
+CrowdControlKind ability_cc_from_json(const std::string& s) {
+    if (s == "root") return CrowdControlKind::kRoot;
+    if (s == "silence") return CrowdControlKind::kSilence;
+    return CrowdControlKind::kStun;
+}
+
+// resource effects[].pool ENUM('mana','rage','energy').
+ResourcePool ability_resource_pool_from_json(const std::string& s) {
+    if (s == "rage") return ResourcePool::kRage;
+    if (s == "energy") return ResourcePool::kEnergy;
+    return ResourcePool::kMana;
+}
+
+// resource effects[].operation ENUM('grant','drain').
+ResourceOp ability_resource_op_from_json(const std::string& s) {
+    if (s == "drain") return ResourceOp::kDrain;
+    return ResourceOp::kGrant;
+}
+
+// movement effects[].motion ENUM('knockback','pull','dash').
+MovementMotion ability_motion_from_json(const std::string& s) {
+    if (s == "pull") return MovementMotion::kPull;
+    if (s == "dash") return MovementMotion::kDash;
+    return MovementMotion::kKnockback;
+}
+
 // =============================================================================
-// effects_json — minimal deserializer (SP2.1, #691)
+// effects_json — full-palette deserializer (SP2.1 #691 → SP2.2 #692)
 // =============================================================================
 // The `ability.effects_json` column carries the ordered effects[] recipe as
 // canonical JSON (schema/sql/world/30_ability.sql; mcc emit-sql). The repo links
@@ -237,13 +275,14 @@ StatKey ability_stat_from_db(const std::string& s) {
 // purpose-built reader too), so a compact recursive-descent parser reads the
 // small, machine-emitted array here.
 //
-// SP2.1 SCOPE (deliberately minimal — full-palette runtime is story 2.2 / #692):
-// this materializes only the FOUR EffectKinds the runtime model already carries
-// (damage/heal/aura/threat). The richer palette (dot/hot/buff/debuff/shield/cc/
-// resource/movement/summon) round-trips through the DB as data — it is stored and
-// loaded intact in effects_json — but is NOT yet turned into a runtime
-// AbilityEffect; such effects are skipped, never misread (client SAD §2.4 "never
-// crash"). A malformed payload yields an effect-less ability rather than throwing.
+// SP2.2 SCOPE (#692): materializes the FULL Tier-1 effect palette into the runtime
+// AbilityEffect tagged union — the SP1 originals (damage/heal/aura/threat) PLUS the
+// SP2.1-authorable palette (dot/hot/buff/debuff/shield/cc/resource/movement/summon).
+// This is LOAD/representation only: the runtime variants exist and populate; the
+// combat EXECUTION of the new kinds is story #693 (combat_resolver). A truly unknown
+// kind is SKIPPED (still preserved verbatim in effects_json), never misread (client
+// SAD §2.4 "never crash"); a malformed payload yields an effect-less ability rather
+// than throwing.
 
 // A parsed JSON value (object member order preserved; small payloads, linear
 // lookup is fine).
@@ -451,10 +490,10 @@ private:
     }
 };
 
-// Deserialize one effect JSON object into an AbilityEffect. Returns false when the
-// kind is outside the SP2.1 runtime set (damage/heal/aura/threat) or the object is
-// malformed — the caller then SKIPS it (the effect is still preserved verbatim in
-// the effects_json column; runtime support for the richer palette is story 2.2).
+// Deserialize one effect JSON object into an AbilityEffect. Handles the FULL Tier-1
+// palette (SP2.2 #692). Returns false only for a truly unknown `kind` or a malformed
+// object — the caller then SKIPS it (the effect is still preserved verbatim in the
+// effects_json column). Combat EXECUTION of the new kinds is story #693.
 bool effect_from_json(const JsonValue& e, AbilityEffect& out) {
     if (!e.is_obj()) return false;
     const JsonValue* kind = e.member("kind");
@@ -468,6 +507,28 @@ bool effect_from_json(const JsonValue& e, AbilityEffect& out) {
         if (const JsonValue* mx = obj.member("max"); mx != nullptr && mx->is_num()) {
             hi = static_cast<std::uint32_t>(mx->as_int());
         }
+    };
+    // Scalar member readers — leave `dst` at its AbilityEffect default when the key
+    // is absent / the wrong JSON type (schema optionals: max_stacks, coefficient, …).
+    auto read_u32 = [](const JsonValue& o, const char* key, std::uint32_t& dst) {
+        if (const JsonValue* v = o.member(key); v != nullptr && v->is_num())
+            dst = static_cast<std::uint32_t>(v->as_int());
+    };
+    auto read_u16 = [](const JsonValue& o, const char* key, std::uint16_t& dst) {
+        if (const JsonValue* v = o.member(key); v != nullptr && v->is_num())
+            dst = static_cast<std::uint16_t>(v->as_int());
+    };
+    auto read_i32 = [](const JsonValue& o, const char* key, std::int32_t& dst) {
+        if (const JsonValue* v = o.member(key); v != nullptr && v->is_num())
+            dst = static_cast<std::int32_t>(v->as_int());
+    };
+    auto read_f32 = [](const JsonValue& o, const char* key, float& dst) {
+        if (const JsonValue* v = o.member(key); v != nullptr && v->is_num())
+            dst = static_cast<float>(v->num_v);
+    };
+    auto read_str = [](const JsonValue& o, const char* key, std::string& dst) {
+        if (const JsonValue* v = o.member(key); v != nullptr && v->is_str())
+            dst = v->str_v;
     };
 
     if (k == "damage" || k == "heal") {
@@ -522,7 +583,87 @@ bool effect_from_json(const JsonValue& e, AbilityEffect& out) {
         }
         return true;
     }
-    return false;  // dot/hot/buff/… — SP2.2 territory; preserved in JSON, skipped here.
+
+    // ─── SP2.2 full palette (#692) ──────────────────────────────────────────
+
+    if (k == "dot" || k == "hot") {
+        // Periodic damage/heal: per-tick `amount` intRange over `duration_ms` at
+        // `tick_ms`. A DISTINCT kind from aura (its own amount, not periodic_*).
+        out.kind = (k == "dot") ? EffectKind::kDot : EffectKind::kHot;
+        if (const JsonValue* a = e.member("amount"); a != nullptr && a->is_obj()) {
+            read_range(*a, out.amount_min, out.amount_max);
+        }
+        read_u32(e, "duration_ms", out.duration_ms);
+        read_u32(e, "tick_ms", out.tick_ms);
+        read_u16(e, "max_stacks", out.max_stacks);
+        read_f32(e, "coefficient", out.coefficient);
+        return true;
+    }
+    if (k == "buff" || k == "debuff") {
+        // Signed `amount` modifier to `attribute` (a contentId ref, kept verbatim)
+        // for `duration_ms`; `modifier` selects flat vs percent (schema default flat).
+        out.kind = (k == "buff") ? EffectKind::kBuff : EffectKind::kDebuff;
+        read_str(e, "attribute", out.attribute);
+        read_i32(e, "amount", out.attribute_amount);
+        if (const JsonValue* md = e.member("modifier"); md != nullptr && md->is_str()) {
+            out.attribute_modifier = ability_modifier_from_json(md->str_v);
+        }
+        read_u32(e, "duration_ms", out.duration_ms);
+        read_u16(e, "max_stacks", out.max_stacks);
+        return true;
+    }
+    if (k == "shield") {
+        // Absorb pool = `amount` intRange for `duration_ms` (+ max_stacks, coefficient).
+        out.kind = EffectKind::kShield;
+        if (const JsonValue* a = e.member("amount"); a != nullptr && a->is_obj()) {
+            read_range(*a, out.amount_min, out.amount_max);
+        }
+        read_u32(e, "duration_ms", out.duration_ms);
+        read_u16(e, "max_stacks", out.max_stacks);
+        read_f32(e, "coefficient", out.coefficient);
+        return true;
+    }
+    if (k == "cc") {
+        // Crowd control: `type` category (stun/root/silence) for `duration_ms`.
+        out.kind = EffectKind::kCc;
+        if (const JsonValue* t = e.member("type"); t != nullptr && t->is_str()) {
+            out.cc_kind = ability_cc_from_json(t->str_v);
+        }
+        read_u32(e, "duration_ms", out.duration_ms);
+        return true;
+    }
+    if (k == "resource") {
+        // Grant/drain a resource pool. `amount` is a plain integer (NOT an intRange).
+        out.kind = EffectKind::kResource;
+        if (const JsonValue* p = e.member("pool"); p != nullptr && p->is_str()) {
+            out.resource_pool = ability_resource_pool_from_json(p->str_v);
+        }
+        if (const JsonValue* op = e.member("operation"); op != nullptr && op->is_str()) {
+            out.resource_op = ability_resource_op_from_json(op->str_v);
+        }
+        read_u32(e, "amount", out.resource_amount);
+        return true;
+    }
+    if (k == "movement") {
+        // Forced `motion` of `distance_m` metres.
+        out.kind = EffectKind::kMovement;
+        if (const JsonValue* m = e.member("motion"); m != nullptr && m->is_str()) {
+            out.movement_motion = ability_motion_from_json(m->str_v);
+        }
+        read_f32(e, "distance_m", out.distance_m);
+        return true;
+    }
+    if (k == "summon") {
+        // Summon `count` of NPC `npc` (a contentId ref, kept verbatim), optional
+        // `duration_ms` (omitted => permanent, i.e. the AbilityEffect default 0).
+        out.kind = EffectKind::kSummon;
+        read_str(e, "npc", out.summon_npc);
+        read_u16(e, "count", out.summon_count);
+        read_u32(e, "duration_ms", out.duration_ms);
+        return true;
+    }
+
+    return false;  // a truly unknown kind — preserved in effects_json, skipped here.
 }
 
 // Parse an `effects_json` cell into the runtime effect vector. A NULL / empty /
@@ -985,9 +1126,10 @@ std::vector<TriggerVolume> load_area_trigger_volumes(db::Connection& world_db) {
 // The per-kind ability_effect / ability_effect_stat_mod child tables are retired —
 // the effect palette is transported as canonical JSON in ability.effects_json.
 // FLOAT columns (range_m) read directly via as_f32 (the #413 FLOAT-as-text
-// round-trip fix is merged). The SP2.1 loader materializes the four runtime
-// EffectKinds (damage/heal/aura/threat); the richer palette round-trips in the DB
-// and gets its runtime deserialize in story 2.2 (#692). See effects_from_json.
+// round-trip fix is merged). SP2.2 (#692): the loader now materializes the FULL
+// Tier-1 palette (damage/heal/aura/threat + dot/hot/buff/debuff/shield/cc/resource/
+// movement/summon) into the runtime AbilityEffect union; combat execution of the new
+// kinds is story #693. See effects_from_json.
 AbilityStore load_db_ability_store(db::Connection& world_db) {
     std::vector<Ability> abilities;
 

@@ -191,10 +191,62 @@ const char* resource_type_name(AbilityResourceType r) {
 
 const char* effect_kind_name(EffectKind k) {
     switch (k) {
-        case EffectKind::kDamage: return "damage";
-        case EffectKind::kHeal:   return "heal";
-        case EffectKind::kAura:   return "aura";
-        case EffectKind::kThreat: return "threat";
+        case EffectKind::kDamage:   return "damage";
+        case EffectKind::kHeal:     return "heal";
+        case EffectKind::kAura:     return "aura";
+        case EffectKind::kThreat:   return "threat";
+        case EffectKind::kDot:      return "dot";
+        case EffectKind::kHot:      return "hot";
+        case EffectKind::kBuff:     return "buff";
+        case EffectKind::kDebuff:   return "debuff";
+        case EffectKind::kShield:   return "shield";
+        case EffectKind::kCc:       return "cc";
+        case EffectKind::kResource: return "resource";
+        case EffectKind::kMovement: return "movement";
+        case EffectKind::kSummon:   return "summon";
+    }
+    return "unknown";
+}
+
+const char* attribute_modifier_name(AttributeModifier m) {
+    switch (m) {
+        case AttributeModifier::kFlat:    return "flat";
+        case AttributeModifier::kPercent: return "percent";
+    }
+    return "unknown";
+}
+
+const char* crowd_control_kind_name(CrowdControlKind c) {
+    switch (c) {
+        case CrowdControlKind::kStun:    return "stun";
+        case CrowdControlKind::kRoot:    return "root";
+        case CrowdControlKind::kSilence: return "silence";
+    }
+    return "unknown";
+}
+
+const char* resource_pool_name(ResourcePool p) {
+    switch (p) {
+        case ResourcePool::kMana:   return "mana";
+        case ResourcePool::kRage:   return "rage";
+        case ResourcePool::kEnergy: return "energy";
+    }
+    return "unknown";
+}
+
+const char* resource_op_name(ResourceOp o) {
+    switch (o) {
+        case ResourceOp::kGrant: return "grant";
+        case ResourceOp::kDrain: return "drain";
+    }
+    return "unknown";
+}
+
+const char* movement_motion_name(MovementMotion m) {
+    switch (m) {
+        case MovementMotion::kKnockback: return "knockback";
+        case MovementMotion::kPull:      return "pull";
+        case MovementMotion::kDash:      return "dash";
     }
     return "unknown";
 }

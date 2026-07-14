@@ -1,15 +1,16 @@
 # Seed skeleton pack (SP1.8 integration proof) — a ranged burn that also weakens
-# the target. Reworked (#688 CI fix) from a dot + armor-debuff onto the
-# currently-emittable `aura` primitive: periodic fire damage (the burn) plus a
-# stat_mods entry that weakens the target's strength (the "softening"). The
-# world-DB DDL (schema/sql/world/30_ability.sql) only carries the SP1 effect
-# palette — damage / heal / aura / threat — so the dot/debuff kinds the ability
-# *schema* gained in #653 have no world.sql emission yet. Extending the
-# `ability_effect` DDL + mcc emit-sql per new kind is real kernel-consumption work
-# and is DEFERRED to sub-project 2 (kernel ability-engine). New-effect-kind
-# coverage still lives in the tests/ validation fixtures, which never emit to the
-# DB. (armor is a derived attribute, not a v1 primary statKey, so the weakening
-# rides on strength here.)
+# the target. Modelled on the `aura` primitive: periodic fire damage (the burn)
+# plus a stat_mods entry that weakens the target's strength (the "softening").
+#
+# NOTE (SP2 — #691/#692): the world DB now transports the FULL effect palette. The
+# `ability` row carries the ordered effects[] recipe as a generic `effects_json`
+# JSON payload (schema/sql/world/30_ability.sql; the per-kind `ability_effect` DDL
+# is retired), so `mcc emit-sql` emits ANY kind without a per-kind DDL change and
+# worldd deserializes the full palette at load (server/worldd/db_content_store.cpp,
+# SP2.2). Re-authoring this into a `dot` (the burn) + `debuff` (the softening)
+# would emit + load cleanly; it is left on `aura` here — an optional follow-up — to
+# avoid a golden/staged-pack rewrite. (armor is a derived attribute, not a v1
+# primary statKey, so the weakening rides on strength here.)
 schema: meridian/ability@1
 id: core:ability.searing_brand
 name: Searing Brand
