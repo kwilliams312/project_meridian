@@ -17,6 +17,8 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace meridian::worldd {
 namespace {
@@ -172,11 +174,12 @@ std::uint8_t trainer_class_from_db(const db::Cell& c) {
     return 0;
 }
 
-// --- ability_* ENUM columns -> ability_store.h enums (#481) -------------------
-// The world DDL `ability` / `ability_effect` / `ability_effect_stat_mod` ENUM
-// string columns mapped 1:1 to the compiled model. Unknown/NULL falls back to the
-// safest default (matching the DDL DEFAULTs) so a malformed pack degrades rather
-// than throwing (client SAD §2.4 "never crash").
+// --- ability_* columns -> ability_store.h enums (#481, SP2.1 #691) ------------
+// The world DDL `ability` header ENUM string columns (school/target/resource) map
+// 1:1 to the compiled model; the effect palette rides in the generic effects_json
+// payload (deserialized below). Unknown/NULL falls back to the safest default
+// (matching the DDL DEFAULTs) so a malformed pack degrades rather than throwing
+// (client SAD §2.4 "never crash").
 
 School ability_school_from_db(const std::string& s) {
     if (s == "physical") return School::kPhysical;
@@ -206,25 +209,16 @@ AbilityResourceType ability_resource_from_db(const db::Cell& c) {
     return AbilityResourceType::kNone;
 }
 
-EffectKind ability_effect_kind_from_db(const std::string& s) {
-    if (s == "damage") return EffectKind::kDamage;
-    if (s == "heal") return EffectKind::kHeal;
-    if (s == "aura") return EffectKind::kAura;
-    if (s == "threat") return EffectKind::kThreat;
-    return EffectKind::kDamage;
-}
-
-// periodic_kind ENUM('damage','heal') NULL — NULL => kNone (aura has no tick).
-PeriodicKind ability_periodic_from_db(const db::Cell& c) {
-    if (!c.has_value()) return PeriodicKind::kNone;
-    const std::string& s = *c;
+// effects[].periodic.kind — the aura periodic sub-kind, now read from the
+// effects_json payload string ('damage'/'heal'); anything else => kNone (no tick).
+PeriodicKind ability_periodic_kind_from_json(const std::string& s) {
     if (s == "damage") return PeriodicKind::kDamage;
     if (s == "heal") return PeriodicKind::kHeal;
     return PeriodicKind::kNone;
 }
 
-// ability_effect_stat_mod.stat ENUM -> the aura StatKey (worldd::StatKey; distinct
-// from items::StatKey used by item_stat above, though the value names coincide).
+// effects[].stat_mods[].stat -> the aura StatKey (worldd::StatKey; distinct from
+// items::StatKey used by item_stat above, though the value names coincide).
 StatKey ability_stat_from_db(const std::string& s) {
     if (s == "strength") return StatKey::kStrength;
     if (s == "agility") return StatKey::kAgility;
@@ -234,10 +228,317 @@ StatKey ability_stat_from_db(const std::string& s) {
     return StatKey::kStrength;
 }
 
-// A composite (ability_id, ordinal) key for locating an already-built effect when
-// its stat-mod children stream in (ordinal is SMALLINT — max 4 per ability).
-std::uint64_t effect_key(AbilityId ability_id, std::uint32_t ordinal) {
-    return (static_cast<std::uint64_t>(ability_id) << 20) | ordinal;
+// =============================================================================
+// effects_json — minimal deserializer (SP2.1, #691)
+// =============================================================================
+// The `ability.effects_json` column carries the ordered effects[] recipe as
+// canonical JSON (schema/sql/world/30_ability.sql; mcc emit-sql). The repo links
+// no JSON library (clean-room; the characters appearance record uses a
+// purpose-built reader too), so a compact recursive-descent parser reads the
+// small, machine-emitted array here.
+//
+// SP2.1 SCOPE (deliberately minimal — full-palette runtime is story 2.2 / #692):
+// this materializes only the FOUR EffectKinds the runtime model already carries
+// (damage/heal/aura/threat). The richer palette (dot/hot/buff/debuff/shield/cc/
+// resource/movement/summon) round-trips through the DB as data — it is stored and
+// loaded intact in effects_json — but is NOT yet turned into a runtime
+// AbilityEffect; such effects are skipped, never misread (client SAD §2.4 "never
+// crash"). A malformed payload yields an effect-less ability rather than throwing.
+
+// A parsed JSON value (object member order preserved; small payloads, linear
+// lookup is fine).
+struct JsonValue {
+    enum class Type { Null, Bool, Number, String, Array, Object };
+    Type type = Type::Null;
+    bool bool_v = false;
+    double num_v = 0.0;
+    std::string str_v;
+    std::vector<JsonValue> arr_v;
+    std::vector<std::pair<std::string, JsonValue>> obj_v;
+
+    bool is_num() const { return type == Type::Number; }
+    bool is_str() const { return type == Type::String; }
+    bool is_obj() const { return type == Type::Object; }
+    bool is_arr() const { return type == Type::Array; }
+    std::int64_t as_int() const { return static_cast<std::int64_t>(num_v); }
+    const JsonValue* member(const char* key) const {
+        for (const auto& kv : obj_v) {
+            if (kv.first == key) return &kv.second;
+        }
+        return nullptr;
+    }
+};
+
+// Recursive-descent parser for the JSON subset mcc emits (objects, arrays,
+// strings, numbers, true/false/null). Returns false on any malformed input; the
+// caller then treats the ability as effect-less. Not a general validator.
+class JsonParser {
+public:
+    explicit JsonParser(const std::string& s) : s_(s) {}
+    bool parse(JsonValue& out) {
+        skip_ws();
+        if (!parse_value(out)) return false;
+        skip_ws();
+        return pos_ == s_.size();  // reject trailing junk
+    }
+
+private:
+    const std::string& s_;
+    std::size_t pos_ = 0;
+
+    void skip_ws() {
+        while (pos_ < s_.size()) {
+            const char c = s_[pos_];
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+                ++pos_;
+            } else {
+                break;
+            }
+        }
+    }
+
+    bool parse_value(JsonValue& out) {
+        skip_ws();
+        if (pos_ >= s_.size()) return false;
+        switch (s_[pos_]) {
+            case '{': return parse_object(out);
+            case '[': return parse_array(out);
+            case '"': out.type = JsonValue::Type::String; return parse_string(out.str_v);
+            case 't': case 'f': return parse_bool(out);
+            case 'n': return parse_null(out);
+            default: return parse_number(out);
+        }
+    }
+
+    bool parse_object(JsonValue& out) {
+        out.type = JsonValue::Type::Object;
+        ++pos_;  // consume '{'
+        skip_ws();
+        if (pos_ < s_.size() && s_[pos_] == '}') { ++pos_; return true; }
+        for (;;) {
+            skip_ws();
+            if (pos_ >= s_.size() || s_[pos_] != '"') return false;
+            std::string key;
+            if (!parse_string(key)) return false;
+            skip_ws();
+            if (pos_ >= s_.size() || s_[pos_] != ':') return false;
+            ++pos_;  // consume ':'
+            JsonValue val;
+            if (!parse_value(val)) return false;
+            out.obj_v.emplace_back(std::move(key), std::move(val));
+            skip_ws();
+            if (pos_ >= s_.size()) return false;
+            if (s_[pos_] == ',') { ++pos_; continue; }
+            if (s_[pos_] == '}') { ++pos_; return true; }
+            return false;
+        }
+    }
+
+    bool parse_array(JsonValue& out) {
+        out.type = JsonValue::Type::Array;
+        ++pos_;  // consume '['
+        skip_ws();
+        if (pos_ < s_.size() && s_[pos_] == ']') { ++pos_; return true; }
+        for (;;) {
+            JsonValue val;
+            if (!parse_value(val)) return false;
+            out.arr_v.push_back(std::move(val));
+            skip_ws();
+            if (pos_ >= s_.size()) return false;
+            if (s_[pos_] == ',') { ++pos_; continue; }
+            if (s_[pos_] == ']') { ++pos_; return true; }
+            return false;
+        }
+    }
+
+    bool parse_string(std::string& out) {
+        if (pos_ >= s_.size() || s_[pos_] != '"') return false;
+        ++pos_;  // consume opening quote
+        while (pos_ < s_.size()) {
+            const char c = s_[pos_++];
+            if (c == '"') return true;
+            if (c != '\\') { out += c; continue; }
+            if (pos_ >= s_.size()) return false;
+            const char e = s_[pos_++];
+            switch (e) {
+                case '"': out += '"'; break;
+                case '\\': out += '\\'; break;
+                case '/': out += '/'; break;
+                case 'n': out += '\n'; break;
+                case 't': out += '\t'; break;
+                case 'r': out += '\r'; break;
+                case 'b': out += '\b'; break;
+                case 'f': out += '\f'; break;
+                case 'u': {
+                    if (pos_ + 4 > s_.size()) return false;
+                    unsigned cp = 0;
+                    for (int i = 0; i < 4; ++i) {
+                        const char h = s_[pos_++];
+                        cp <<= 4;
+                        if (h >= '0' && h <= '9') cp |= static_cast<unsigned>(h - '0');
+                        else if (h >= 'a' && h <= 'f') cp |= static_cast<unsigned>(h - 'a' + 10);
+                        else if (h >= 'A' && h <= 'F') cp |= static_cast<unsigned>(h - 'A' + 10);
+                        else return false;
+                    }
+                    append_utf8(out, cp);  // BMP only; content is ASCII in practice
+                    break;
+                }
+                default: return false;
+            }
+        }
+        return false;  // unterminated string
+    }
+
+    static void append_utf8(std::string& out, unsigned cp) {
+        if (cp < 0x80) {
+            out += static_cast<char>(cp);
+        } else if (cp < 0x800) {
+            out += static_cast<char>(0xC0 | (cp >> 6));
+            out += static_cast<char>(0x80 | (cp & 0x3F));
+        } else {
+            out += static_cast<char>(0xE0 | (cp >> 12));
+            out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (cp & 0x3F));
+        }
+    }
+
+    bool parse_number(JsonValue& out) {
+        const std::size_t start = pos_;
+        bool any = false;
+        while (pos_ < s_.size()) {
+            const char c = s_[pos_];
+            if ((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.' ||
+                c == 'e' || c == 'E') {
+                ++pos_;
+                any = true;
+            } else {
+                break;
+            }
+        }
+        if (!any) return false;
+        try {
+            out.num_v = std::stod(s_.substr(start, pos_ - start));
+        } catch (...) {
+            return false;
+        }
+        out.type = JsonValue::Type::Number;
+        return true;
+    }
+
+    bool parse_bool(JsonValue& out) {
+        if (s_.compare(pos_, 4, "true") == 0) {
+            pos_ += 4;
+            out.type = JsonValue::Type::Bool;
+            out.bool_v = true;
+            return true;
+        }
+        if (s_.compare(pos_, 5, "false") == 0) {
+            pos_ += 5;
+            out.type = JsonValue::Type::Bool;
+            out.bool_v = false;
+            return true;
+        }
+        return false;
+    }
+
+    bool parse_null(JsonValue& out) {
+        if (s_.compare(pos_, 4, "null") == 0) {
+            pos_ += 4;
+            out.type = JsonValue::Type::Null;
+            return true;
+        }
+        return false;
+    }
+};
+
+// Deserialize one effect JSON object into an AbilityEffect. Returns false when the
+// kind is outside the SP2.1 runtime set (damage/heal/aura/threat) or the object is
+// malformed — the caller then SKIPS it (the effect is still preserved verbatim in
+// the effects_json column; runtime support for the richer palette is story 2.2).
+bool effect_from_json(const JsonValue& e, AbilityEffect& out) {
+    if (!e.is_obj()) return false;
+    const JsonValue* kind = e.member("kind");
+    if (kind == nullptr || !kind->is_str()) return false;
+    const std::string& k = kind->str_v;
+
+    auto read_range = [](const JsonValue& obj, std::uint32_t& lo, std::uint32_t& hi) {
+        if (const JsonValue* mn = obj.member("min"); mn != nullptr && mn->is_num()) {
+            lo = static_cast<std::uint32_t>(mn->as_int());
+        }
+        if (const JsonValue* mx = obj.member("max"); mx != nullptr && mx->is_num()) {
+            hi = static_cast<std::uint32_t>(mx->as_int());
+        }
+    };
+
+    if (k == "damage" || k == "heal") {
+        out.kind = (k == "damage") ? EffectKind::kDamage : EffectKind::kHeal;
+        if (const JsonValue* a = e.member("amount"); a != nullptr && a->is_obj()) {
+            read_range(*a, out.amount_min, out.amount_max);
+        }
+        if (const JsonValue* c = e.member("coefficient"); c != nullptr && c->is_num()) {
+            out.coefficient = static_cast<float>(c->num_v);
+        }
+        return true;
+    }
+    if (k == "threat") {
+        // threat.amount is a plain integer (NOT an intRange) — see ability.schema.yaml.
+        out.kind = EffectKind::kThreat;
+        if (const JsonValue* a = e.member("amount"); a != nullptr && a->is_num()) {
+            out.threat_amount = static_cast<std::int32_t>(a->as_int());
+        }
+        return true;
+    }
+    if (k == "aura") {
+        out.kind = EffectKind::kAura;
+        if (const JsonValue* d = e.member("duration_ms"); d != nullptr && d->is_num()) {
+            out.duration_ms = static_cast<std::uint32_t>(d->as_int());
+        }
+        if (const JsonValue* ms = e.member("max_stacks"); ms != nullptr && ms->is_num()) {
+            out.max_stacks = static_cast<std::uint16_t>(ms->as_int());
+        }
+        if (const JsonValue* p = e.member("periodic"); p != nullptr && p->is_obj()) {
+            if (const JsonValue* pk = p->member("kind"); pk != nullptr && pk->is_str()) {
+                out.periodic_kind = ability_periodic_kind_from_json(pk->str_v);
+            }
+            if (const JsonValue* pa = p->member("amount"); pa != nullptr && pa->is_obj()) {
+                read_range(*pa, out.periodic_amount_min, out.periodic_amount_max);
+            }
+            if (const JsonValue* tk = p->member("tick_ms"); tk != nullptr && tk->is_num()) {
+                out.periodic_tick_ms = static_cast<std::uint32_t>(tk->as_int());
+            }
+        }
+        if (const JsonValue* sm = e.member("stat_mods"); sm != nullptr && sm->is_arr()) {
+            for (const JsonValue& m : sm->arr_v) {
+                if (!m.is_obj()) continue;
+                StatMod mod;
+                if (const JsonValue* st = m.member("stat"); st != nullptr && st->is_str()) {
+                    mod.stat = ability_stat_from_db(st->str_v);
+                }
+                if (const JsonValue* am = m.member("amount"); am != nullptr && am->is_num()) {
+                    mod.amount = static_cast<std::int32_t>(am->as_int());
+                }
+                out.stat_mods.push_back(mod);
+            }
+        }
+        return true;
+    }
+    return false;  // dot/hot/buff/… — SP2.2 territory; preserved in JSON, skipped here.
+}
+
+// Parse an `effects_json` cell into the runtime effect vector. A NULL / empty /
+// malformed / non-array payload yields no effects (the ability still loads).
+std::vector<AbilityEffect> effects_from_json(const db::Cell& cell) {
+    std::vector<AbilityEffect> effects;
+    const std::string s = as_str(cell);
+    if (s.empty()) return effects;
+    JsonValue root;
+    if (!JsonParser(s).parse(root) || !root.is_arr()) return effects;
+    effects.reserve(root.arr_v.size());
+    for (const JsonValue& e : root.arr_v) {
+        AbilityEffect ae;
+        if (effect_from_json(e, ae)) effects.push_back(std::move(ae));
+    }
+    return effects;
 }
 
 }  // namespace
@@ -679,18 +980,20 @@ std::vector<TriggerVolume> load_area_trigger_volumes(db::Connection& world_db) {
 // 0xF000_0000 band and answered UNKNOWN_ABILITY (#481). Loading the authored ids
 // here makes ctx.abilities->find(1) resolve, so the cast starts.
 //
-// Three passes mirror the DbLootTableStore assembly: ability scalars, then the
-// effects[] children (ordered by ordinal), then the aura stat_mods[] grandchildren
-// located by (ability_id, ordinal). FLOAT columns (range_m, coefficient) read
-// directly via as_f32 (the #413 FLOAT-as-text round-trip fix is merged).
+// One pass (SP2.1, #691): read the ability scalars + the generic effects_json
+// payload, deserializing the ordered effects[] recipe inline (effects_from_json).
+// The per-kind ability_effect / ability_effect_stat_mod child tables are retired —
+// the effect palette is transported as canonical JSON in ability.effects_json.
+// FLOAT columns (range_m) read directly via as_f32 (the #413 FLOAT-as-text
+// round-trip fix is merged). The SP2.1 loader materializes the four runtime
+// EffectKinds (damage/heal/aura/threat); the richer palette round-trips in the DB
+// and gets its runtime deserialize in story 2.2 (#692). See effects_from_json.
 AbilityStore load_db_ability_store(db::Connection& world_db) {
     std::vector<Ability> abilities;
-    std::unordered_map<AbilityId, std::size_t> index;  // ability id -> abilities[] idx
 
-    // 1. ability scalars. One row per ability.
     db::Result arows = world_db.execute(
         "SELECT id, name, school, target, range_m, cast_time_ms, cast_channel_ms, "
-        "       cooldown_ms, triggers_gcd, resource_type, resource_amount "
+        "       cooldown_ms, triggers_gcd, resource_type, resource_amount, effects_json "
         "FROM ability ORDER BY id");
     abilities.reserve(arows.rows.size());
     for (const db::Row& r : arows.rows) {
@@ -706,53 +1009,8 @@ AbilityStore load_db_ability_store(db::Connection& world_db) {
         a.triggers_gcd = r[8].has_value() ? as_bool(r[8]) : true;  // DDL DEFAULT TRUE
         a.resource_type = ability_resource_from_db(r[9]);
         a.resource_amount = as_u32(r[10]);
-        index.emplace(a.id, abilities.size());
+        a.effects = effects_from_json(r[11]);  // effects_json -> runtime effects[]
         abilities.push_back(std::move(a));
-    }
-
-    // 2. effects[] (1..4, in ordinal order). Record each effect's slot so its aura
-    //    stat_mods can find it in pass 3.
-    struct EffectSlot { std::size_t ability_idx; std::size_t effect_idx; };
-    std::unordered_map<std::uint64_t, EffectSlot> effect_slots;
-    db::Result erows = world_db.execute(
-        "SELECT ability_id, ordinal, kind, amount_min, amount_max, coefficient, "
-        "       threat_amount, duration_ms, max_stacks, periodic_kind, "
-        "       periodic_amount_min, periodic_amount_max, periodic_tick_ms "
-        "FROM ability_effect ORDER BY ability_id, ordinal");
-    for (const db::Row& r : erows.rows) {
-        auto it = index.find(as_u32(r[0]));
-        if (it == index.end()) continue;  // effect for an unknown ability — skip
-        Ability& a = abilities[it->second];
-        AbilityEffect e;
-        e.kind = ability_effect_kind_from_db(as_str(r[2]));
-        e.amount_min = as_u32(r[3]);
-        e.amount_max = as_u32(r[4]);
-        e.coefficient = as_f32(r[5]);
-        e.threat_amount = static_cast<std::int32_t>(as_i64(r[6]));
-        e.duration_ms = as_u32(r[7]);
-        e.max_stacks = as_u16(r[8], 1);  // DDL DEFAULT 1
-        e.periodic_kind = ability_periodic_from_db(r[9]);
-        e.periodic_amount_min = as_u32(r[10]);
-        e.periodic_amount_max = as_u32(r[11]);
-        e.periodic_tick_ms = as_u32(r[12]);
-        a.effects.push_back(std::move(e));
-        effect_slots.emplace(effect_key(as_u32(r[0]), as_u32(r[1])),
-                             EffectSlot{it->second, a.effects.size() - 1});
-    }
-
-    // 3. aura stat_mods[] — attach each to its parent effect by (ability_id, ordinal).
-    db::Result srows = world_db.execute(
-        "SELECT ability_id, ordinal, stat, amount "
-        "FROM ability_effect_stat_mod ORDER BY ability_id, ordinal, stat");
-    for (const db::Row& r : srows.rows) {
-        auto it = effect_slots.find(effect_key(as_u32(r[0]), as_u32(r[1])));
-        if (it == effect_slots.end()) continue;  // stat mod for an unknown effect — skip
-        StatMod sm;
-        sm.stat = ability_stat_from_db(as_str(r[2]));
-        sm.amount = static_cast<std::int32_t>(as_i64(r[3]));
-        abilities[it->second.ability_idx]
-            .effects[it->second.effect_idx]
-            .stat_mods.push_back(sm);
     }
 
     // A duplicate id is a content fault (mcc/IF-9 assign unique ids) — from_abilities

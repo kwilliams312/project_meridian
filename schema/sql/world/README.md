@@ -63,7 +63,7 @@ prefixes are the load/declaration order the DML dump follows, tools SAD §2.6).
 | `00_manifest.sql` | `world_manifest` + session/charset preamble; `SET FOREIGN_KEY_CHECKS=0` | tools SAD §2.6, server SAD §4.3 |
 | `10_npc.sql` | `npc_template`, `npc_ability` | `npc.schema.yaml` |
 | `20_item.sql` | `item_template`, `item_stat`, `item_effect_on_equip` | `item.schema.yaml` |
-| `30_ability.sql` | `ability`, `ability_effect`, `ability_effect_stat_mod` | `ability.schema.yaml` |
+| `30_ability.sql` | `ability` (effects[] as generic `effects_json`, SP2.1) | `ability.schema.yaml` |
 | `40_quest.sql` | `quest_template`, `quest_objective`, `quest_prereq`, `quest_reward` | `quest.schema.yaml` |
 | `50_loot.sql` | `loot_table`, `loot_group`, `loot_entry` | `loot.schema.yaml` |
 | `60_vendor.sql` | `vendor_inventory`, `vendor_inventory_item`, `vendor_inventory_buys` | `vendor.schema.yaml` |
@@ -116,8 +116,8 @@ server. What is validated in-repo:
 2. **Syntax self-review.** MariaDB-specific constructs a CI MariaDB-service job will
    validate: `ENUM(...)`, `BOOLEAN` (alias for `TINYINT(1)`), `INT UNSIGNED`
    PKs without `AUTO_INCREMENT`, composite-key foreign keys
-   (`loot_entry → loot_group (loot_table_id, ordinal)`,
-   `ability_effect_stat_mod → ability_effect (ability_id, ordinal)`), and the
+   (`loot_entry → loot_group (loot_table_id, ordinal)`), the `JSON` column type
+   (`ability.effects_json`, LONGTEXT + a `JSON_VALID` CHECK), and the
    forward-reference create order guarded by `FOREIGN_KEY_CHECKS`.
 
 ## References

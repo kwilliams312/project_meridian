@@ -9,7 +9,27 @@
 --     cast.*      -> cast_time_ms / cast_channel_ms
 --     resource.*  -> resource_type / resource_amount
 --     audio_visual.* -> av_* (client-facing anim + asset refs)
---     effects[]   -> ability_effect child table (oneOf discriminated by kind)
+--     effects[]   -> effects_json (generic canonical-JSON payload; SP2.1)
+--
+--   SP2.1 (kernel ability engine): the ordered `effects[]` recipe is carried as a
+--   single generic `effects_json` payload instead of exploded into per-kind
+--   relational columns. The kernel deserializes the payload into a runtime
+--   AbilityEffect tagged union covering the FULL effect-primitive palette
+--   (damage/heal/aura/threat + dot/hot/buff/debuff/shield/cc/resource/movement/
+--   summon). A new effect kind is now a schema + engine change, never a world-DDL
+--   migration — the DB stays a transport for pack data rather than a rigid second
+--   schema (SP2 design §2.1). This retired the restrictive per-kind `kind` ENUM
+--   and the `ability_effect` / `ability_effect_stat_mod` child tables (the aura
+--   stat mods fold into the effect payload), which is what unblocked the richer
+--   palette the ability *schema* gained in #653 (the SP1.8 world-DB gap).
+--
+--   effects_json is authored-canonical JSON: the `effects[]` array with object
+--   keys recursively sorted (deterministic byte order so content_hash/golden stay
+--   stable), emitted by `mcc emit-sql`. `intRange` amounts serialize as
+--   {"min":N,"max":M}; every field keeps its schema name (NOT the old flattened
+--   column names). NOT NULL — the schema requires >=1 effect, so the array is
+--   always present and non-empty. MariaDB JSON is LONGTEXT + a JSON_VALID CHECK,
+--   so a malformed payload is rejected at load.
 -- ---------------------------------------------------------------------
 CREATE TABLE ability (
   id               INT UNSIGNED NOT NULL,                   -- IF-9 numeric id
@@ -37,51 +57,8 @@ CREATE TABLE ability (
   av_impact_vfx_id INT UNSIGNED NULL,
   av_impact_sfx_id INT UNSIGNED NULL,
 
+  -- effects[] -> generic canonical-JSON recipe (SP2.1; see header note).
+  effects_json     JSON NOT NULL,
+
   PRIMARY KEY (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- ---------------------------------------------------------------------
--- ability_effect — effects[] (1..4), oneOf discriminated by `kind`.
---   damage/heal: amount_min/max (+ coefficient)
---   aura:        duration_ms, max_stacks, and periodic_* (inline periodic)
---   threat:      threat_amount (flat)
---   aura.stat_mods[] -> ability_effect_stat_mod child table.
--- ---------------------------------------------------------------------
-CREATE TABLE ability_effect (
-  ability_id       INT UNSIGNED NOT NULL,                   -- -> ability.id
-  ordinal          SMALLINT UNSIGNED NOT NULL,              -- array position (max 4)
-  kind             ENUM('damage','heal','aura','threat') NOT NULL,
-
-  -- damage / heal
-  amount_min       INT UNSIGNED NULL,                       -- amount (intRange)
-  amount_max       INT UNSIGNED NULL,
-  coefficient      FLOAT NULL,                              -- 0..2
-
-  -- threat
-  threat_amount    INT NULL,                                -- flat threat (signed)
-
-  -- aura
-  duration_ms      INT UNSIGNED NULL,
-  max_stacks       SMALLINT UNSIGNED NULL DEFAULT 1,
-  -- aura.periodic.* (inline; single object)
-  periodic_kind    ENUM('damage','heal') NULL,
-  periodic_amount_min INT UNSIGNED NULL,                    -- periodic.amount (intRange)
-  periodic_amount_max INT UNSIGNED NULL,
-  periodic_tick_ms INT UNSIGNED NULL,
-
-  PRIMARY KEY (ability_id, ordinal),
-  CONSTRAINT fk_ableffect_abl FOREIGN KEY (ability_id) REFERENCES ability (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- ---------------------------------------------------------------------
--- ability_effect_stat_mod — aura effect stat_mods[]
--- ---------------------------------------------------------------------
-CREATE TABLE ability_effect_stat_mod (
-  ability_id  INT UNSIGNED NOT NULL,                        -- -> ability_effect.ability_id
-  ordinal     SMALLINT UNSIGNED NOT NULL,                   -- -> ability_effect.ordinal
-  stat        ENUM('strength','agility','stamina','intellect','spirit') NOT NULL,
-  amount      INT NOT NULL,                                 -- signed
-  PRIMARY KEY (ability_id, ordinal, stat),
-  CONSTRAINT fk_statmod_effect FOREIGN KEY (ability_id, ordinal)
-    REFERENCES ability_effect (ability_id, ordinal)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

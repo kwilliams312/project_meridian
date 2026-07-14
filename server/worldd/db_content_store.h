@@ -202,8 +202,9 @@ struct WorldContent {
     // player positions — carries the real `poi` so explore objectives credit against
     // authored content (#398). Empty when the world DB has no `area` rows.
     std::vector<TriggerVolume>        area_triggers;
-    // The authored ability catalog (ability / ability_effect / ability_effect_stat_mod
-    // rows), keyed by IF-9 numeric id (#481). Installed onto the live cast path via
+    // The authored ability catalog (ability rows; the effects[] recipe rides in the
+    // generic effects_json payload since SP2.1), keyed by IF-9 numeric id (#481).
+    // Installed onto the live cast path via
     // WorldServer::set_abilities() so a client casting an authored id (minor_healing=1)
     // resolves against real content instead of the placeholder store's synthetic ids.
     std::unique_ptr<AbilityStore>     abilities;
@@ -215,9 +216,10 @@ struct WorldContent {
     std::vector<SpawnPlacement>       spawns;
 };
 
-// Load the authored ability catalog (ability + ability_effect + ability_effect_stat_mod)
-// from the world DB into an AbilityStore keyed by IF-9 numeric id (#481). The read path
-// #390 left open — installed on the live cast path in place of the M1 placeholder store.
+// Load the authored ability catalog (ability rows; effects[] deserialized from the
+// generic effects_json payload since SP2.1) from the world DB into an AbilityStore
+// keyed by IF-9 numeric id (#481). The read path #390 left open — installed on the
+// live cast path in place of the M1 placeholder store.
 // Throws meridian::db::DbError on a query failure (same fail-fast policy as the others).
 AbilityStore load_db_ability_store(db::Connection& world_db);
 

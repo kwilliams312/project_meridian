@@ -77,8 +77,7 @@ void create_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS loot_table",      "DROP TABLE IF EXISTS vendor_inventory_item",
         "DROP TABLE IF EXISTS vendor_inventory", "DROP TABLE IF EXISTS npc_trainer_ability",
         "DROP TABLE IF EXISTS npc_trainer",      "DROP TABLE IF EXISTS npc_template",
-        "DROP TABLE IF EXISTS area",             "DROP TABLE IF EXISTS ability_effect_stat_mod",
-        "DROP TABLE IF EXISTS ability_effect",   "DROP TABLE IF EXISTS ability",
+        "DROP TABLE IF EXISTS area",             "DROP TABLE IF EXISTS ability",
         "DROP TABLE IF EXISTS spawn_point",
     };
     for (const char* d : drops) c.execute(d);
@@ -167,6 +166,8 @@ void create_tables(db::Connection& c) {
         "  pos_x FLOAT NOT NULL, pos_y FLOAT NOT NULL, pos_z FLOAT NOT NULL,"
         "  discovery_radius_m FLOAT NOT NULL DEFAULT 40, discovery_xp INT UNSIGNED NOT NULL DEFAULT 0,"
         "  PRIMARY KEY (zone_id, poi)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // ability — SP2.1 (#691): effects[] rides in effects_json; the per-kind child
+    // tables are retired. Columns mirror schema/sql/world/30_ability.sql.
     c.execute(
         "CREATE TABLE ability (id INT UNSIGNED NOT NULL, name VARCHAR(80) NOT NULL,"
         "  school ENUM('physical','fire','frost','nature','shadow','holy','arcane') NOT NULL,"
@@ -174,19 +175,8 @@ void create_tables(db::Connection& c) {
         "  cast_time_ms INT UNSIGNED NULL DEFAULT 0, cast_channel_ms INT UNSIGNED NULL,"
         "  cooldown_ms INT UNSIGNED NOT NULL DEFAULT 0, triggers_gcd BOOLEAN NOT NULL DEFAULT TRUE,"
         "  resource_type ENUM('mana','rage','energy') NULL, resource_amount INT UNSIGNED NULL,"
+        "  effects_json JSON NOT NULL,"
         "  PRIMARY KEY (id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
-    c.execute(
-        "CREATE TABLE ability_effect (ability_id INT UNSIGNED NOT NULL, ordinal SMALLINT UNSIGNED NOT NULL,"
-        "  kind ENUM('damage','heal','aura','threat') NOT NULL, amount_min INT UNSIGNED NULL,"
-        "  amount_max INT UNSIGNED NULL, coefficient FLOAT NULL, threat_amount INT NULL,"
-        "  duration_ms INT UNSIGNED NULL, max_stacks SMALLINT UNSIGNED NULL DEFAULT 1,"
-        "  periodic_kind ENUM('damage','heal') NULL, periodic_amount_min INT UNSIGNED NULL,"
-        "  periodic_amount_max INT UNSIGNED NULL, periodic_tick_ms INT UNSIGNED NULL,"
-        "  PRIMARY KEY (ability_id, ordinal)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
-    c.execute(
-        "CREATE TABLE ability_effect_stat_mod (ability_id INT UNSIGNED NOT NULL, ordinal SMALLINT UNSIGNED NOT NULL,"
-        "  stat ENUM('strength','agility','stamina','intellect','spirit') NOT NULL, amount INT NOT NULL,"
-        "  PRIMARY KEY (ability_id, ordinal, stat)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
     // spawn_point — the #486 loader's PASS 1. Columns mirror schema/sql/world/70_spawn.sql.
     c.execute(
         "CREATE TABLE spawn_point (id INT UNSIGNED NOT NULL, zone_ref_id INT UNSIGNED NOT NULL DEFAULT 0,"
@@ -205,8 +195,7 @@ void drop_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS loot_table",      "DROP TABLE IF EXISTS vendor_inventory_item",
         "DROP TABLE IF EXISTS vendor_inventory", "DROP TABLE IF EXISTS npc_trainer_ability",
         "DROP TABLE IF EXISTS npc_trainer",      "DROP TABLE IF EXISTS npc_template",
-        "DROP TABLE IF EXISTS area",             "DROP TABLE IF EXISTS ability_effect_stat_mod",
-        "DROP TABLE IF EXISTS ability_effect",   "DROP TABLE IF EXISTS ability",
+        "DROP TABLE IF EXISTS area",             "DROP TABLE IF EXISTS ability",
         "DROP TABLE IF EXISTS spawn_point",
     };
     for (const char* d : drops) c.execute(d);

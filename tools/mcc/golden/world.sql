@@ -78,28 +78,13 @@ INSERT INTO item_stat (item_id, stat, amount) VALUES
   (107, 'stamina', 3);
 
 -- ability (6 rows)
-INSERT INTO ability (id, name, description, school, target, range_m, cast_time_ms, cast_channel_ms, cooldown_ms, triggers_gcd, resource_type, resource_amount, av_cast_anim, av_cast_vfx_id, av_cast_sfx_id, av_impact_vfx_id, av_impact_sfx_id) VALUES
-  (1, 'Minor Healing', 'Restores {amount} health.', 'holy', 'self', 0, 0, NULL, 60000, FALSE, NULL, NULL, NULL, 14, 33, NULL, NULL),
-  (2, 'Pickaxe Slam', 'Slams the target for {amount} physical damage and leaves them bleeding.', 'physical', 'enemy', 5, 0, NULL, 10000, TRUE, 'energy', 20, 'attack_overhead', NULL, NULL, 15, 32),
-  (133, 'Cleave Strike', 'A sweeping blow that hits for {amount} physical damage.', 'physical', 'enemy', 5, 0, NULL, 6000, TRUE, 'rage', 15, NULL, NULL, NULL, NULL, NULL),
-  (134, 'Iron Resolve', 'Steels the body, increasing stamina for a time.', 'physical', 'self', 0, 0, NULL, 45000, FALSE, 'rage', 10, NULL, NULL, NULL, NULL, NULL),
-  (135, 'Mending Word', 'A whispered blessing that restores {amount} health.', 'holy', 'friendly', 30, 1500, NULL, 0, TRUE, 'mana', 25, NULL, NULL, NULL, NULL, NULL),
-  (136, 'Searing Brand', 'Marks the target with fire, dealing {amount} damage over time and weakening it.', 'fire', 'enemy', 30, 0, NULL, 12000, TRUE, 'mana', 20, NULL, NULL, NULL, NULL, NULL);
-
--- ability_effect (7 rows)
-INSERT INTO ability_effect (ability_id, ordinal, kind, amount_min, amount_max, coefficient, threat_amount, duration_ms, max_stacks, periodic_kind, periodic_amount_min, periodic_amount_max, periodic_tick_ms) VALUES
-  (1, 0, 'heal', 40, 60, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-  (2, 0, 'damage', 8, 13, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-  (2, 1, 'aura', NULL, NULL, NULL, NULL, 9000, NULL, 'damage', 2, 3, 3000),
-  (133, 0, 'damage', 12, 18, 0.4, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-  (134, 0, 'aura', NULL, NULL, NULL, NULL, 12000, NULL, NULL, NULL, NULL, NULL),
-  (135, 0, 'heal', 30, 45, 0.6, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-  (136, 0, 'aura', NULL, NULL, NULL, NULL, 9000, NULL, 'damage', 4, 6, 3000);
-
--- ability_effect_stat_mod (2 rows)
-INSERT INTO ability_effect_stat_mod (ability_id, ordinal, stat, amount) VALUES
-  (134, 0, 'stamina', 8),
-  (136, 0, 'strength', -5);
+INSERT INTO ability (id, name, description, school, target, range_m, cast_time_ms, cast_channel_ms, cooldown_ms, triggers_gcd, resource_type, resource_amount, av_cast_anim, av_cast_vfx_id, av_cast_sfx_id, av_impact_vfx_id, av_impact_sfx_id, effects_json) VALUES
+  (1, 'Minor Healing', 'Restores {amount} health.', 'holy', 'self', 0, 0, NULL, 60000, FALSE, NULL, NULL, NULL, 14, 33, NULL, NULL, '[{"amount":{"max":60,"min":40},"kind":"heal"}]'),
+  (2, 'Pickaxe Slam', 'Slams the target for {amount} physical damage and leaves them bleeding.', 'physical', 'enemy', 5, 0, NULL, 10000, TRUE, 'energy', 20, 'attack_overhead', NULL, NULL, 15, 32, '[{"amount":{"max":13,"min":8},"kind":"damage"},{"duration_ms":9000,"kind":"aura","periodic":{"amount":{"max":3,"min":2},"kind":"damage","tick_ms":3000}}]'),
+  (133, 'Cleave Strike', 'A sweeping blow that hits for {amount} physical damage.', 'physical', 'enemy', 5, 0, NULL, 6000, TRUE, 'rage', 15, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":18,"min":12},"coefficient":0.4,"kind":"damage"}]'),
+  (134, 'Iron Resolve', 'Steels the body, increasing stamina for a time.', 'physical', 'self', 0, 0, NULL, 45000, FALSE, 'rage', 10, NULL, NULL, NULL, NULL, NULL, '[{"duration_ms":12000,"kind":"aura","stat_mods":[{"amount":8,"stat":"stamina"}]}]'),
+  (135, 'Mending Word', 'A whispered blessing that restores {amount} health.', 'holy', 'friendly', 30, 1500, NULL, 0, TRUE, 'mana', 25, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":45,"min":30},"coefficient":0.6,"kind":"heal"}]'),
+  (136, 'Searing Brand', 'Marks the target with fire, dealing {amount} damage over time and weakening it.', 'fire', 'enemy', 30, 0, NULL, 12000, TRUE, 'mana', 20, NULL, NULL, NULL, NULL, NULL, '[{"duration_ms":9000,"kind":"aura","periodic":{"amount":{"max":6,"min":4},"kind":"damage","tick_ms":3000},"stat_mods":[{"amount":-5,"stat":"strength"}]}]');
 
 -- quest_template (10 rows)
 INSERT INTO quest_template (id, name, summary, offer_text, completion_text, level, required_level, zone_ref_id, giver_npc_id, turn_in_npc_id, reward_xp, reward_money) VALUES
