@@ -44,14 +44,25 @@ public class HeadlessShellTests
     [AvaloniaFact]
     public void MainWindow_hosts_the_npc_editor_view_for_the_npcs_selection()
     {
-        // The NPCs rail entry is selected by default, so the shell must resolve and
-        // render NpcEditorView (via ViewLocator) with no binding errors.
         var vm = new MainWindowViewModel();
+        vm.SelectedEditor = vm.Editors.Single(e => e.Name == "NPCs");
         var window = new MainWindow { DataContext = vm };
         window.Show();
 
         Assert.Same(vm.NpcEditor, vm.ActiveEditor);
         Assert.NotNull(window.GetVisualDescendants().OfType<NpcEditorView>().FirstOrDefault());
+    }
+
+    [AvaloniaFact]
+    public void MainWindow_opens_on_the_pack_workspace_and_renders_manifest_fields()
+    {
+        var vm = new MainWindowViewModel();
+        var window = new MainWindow { DataContext = vm };
+        window.Show();
+
+        Assert.Same(vm.PackWorkspace, vm.ActiveEditor);
+        Assert.NotNull(window.GetVisualDescendants().OfType<PackWorkspaceView>().FirstOrDefault());
+        Assert.Contains(window.GetVisualDescendants().OfType<TextBox>(), b => b.Text == "my_pack");
     }
 
     [AvaloniaFact]
@@ -69,5 +80,64 @@ public class HeadlessShellTests
 
         var boxes = view.GetVisualDescendants().OfType<TextBox>().ToList();
         Assert.Contains(boxes, b => b.Text == "ability.pickaxe_slam");
+    }
+
+    [AvaloniaFact]
+    public async Task Pack_workspace_renders_external_conflict_after_malformed_watcher_write()
+    {
+        var contentRoot = Path.Combine(Path.GetTempPath(), "codex-headless-watcher", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(contentRoot);
+        var recent = Path.Combine(contentRoot, "recent.json");
+        using var vm = new PackWorkspaceViewModel(new Meridian.Codex.Services.RecentWorkspaceStore(recent));
+        vm.WorkspacePath = contentRoot;
+        vm.Manifest.Namespace = "moonfall";
+        vm.Manifest.Name = "Moonfall";
+        vm.CreateCommand.Execute(null);
+        Assert.True(vm.IsWorkspaceOpen);
+
+        File.WriteAllText(Path.Combine(vm.WorkspacePath, "pack.yaml"), "schema: [unterminated\n");
+        for (var i = 0; i < 100 && !vm.HasExternalConflict; i++)
+            await Task.Delay(25);
+
+        Assert.True(vm.HasExternalConflict);
+        var view = new PackWorkspaceView { DataContext = vm };
+        var window = new Window { Content = view };
+        window.Show();
+        Assert.Contains(view.GetVisualDescendants().OfType<TextBlock>(),
+            text => text.Text?.Contains("External conflict", StringComparison.Ordinal) == true);
+    }
+
+    [AvaloniaFact]
+    public async Task Pack_workspace_reenables_save_when_exact_baseline_is_restored()
+    {
+        var contentRoot = Path.Combine(Path.GetTempPath(), "codex-headless-recovery", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(contentRoot);
+        using var vm = new PackWorkspaceViewModel(new Meridian.Codex.Services.RecentWorkspaceStore(
+            Path.Combine(contentRoot, "recent.json")));
+        vm.WorkspacePath = contentRoot;
+        vm.Manifest.Namespace = "moonfall";
+        vm.Manifest.Name = "Moonfall";
+        vm.CreateCommand.Execute(null);
+        Assert.True(vm.IsWorkspaceOpen);
+        var manifestPath = Path.Combine(vm.WorkspacePath, "pack.yaml");
+        var original = File.ReadAllText(manifestPath);
+        string[] invalidDocuments =
+        [
+            "schema: [unterminated\n",
+            original.Replace("schema: meridian/pack@1", "schema: meridian/pack@9"),
+        ];
+
+        foreach (var invalid in invalidDocuments)
+        {
+            File.WriteAllText(manifestPath, invalid);
+            for (var i = 0; i < 100 && !vm.HasExternalConflict; i++) await Task.Delay(25);
+            Assert.True(vm.HasExternalConflict);
+            Assert.False(vm.CanSave);
+
+            File.WriteAllText(manifestPath, original);
+            for (var i = 0; i < 100 && vm.HasExternalConflict; i++) await Task.Delay(25);
+            Assert.False(vm.HasExternalConflict);
+            Assert.True(vm.CanSave);
+        }
     }
 }

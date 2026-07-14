@@ -25,6 +25,7 @@ public class MainWindowViewModelTests
 
         Assert.NotEmpty(vm.Editors);
         Assert.Same(vm.Editors.First(), vm.SelectedEditor);
+        Assert.Equal("Pack", vm.SelectedEditor!.Name);
     }
 
     [Fact]

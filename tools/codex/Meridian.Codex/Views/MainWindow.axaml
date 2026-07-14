@@ -16,11 +16,11 @@
 
   <DockPanel>
 
-    <!-- Menu bar stub. -->
     <Menu DockPanel.Dock="Top">
       <MenuItem Header="_File">
-        <MenuItem Header="_New" />
-        <MenuItem Header="_Open…" />
+        <MenuItem Header="_New pack" Command="{Binding PackWorkspace.CreateCommand}" />
+        <MenuItem Header="_Open pack" Command="{Binding PackWorkspace.OpenCommand}" />
+        <MenuItem Header="_Save manifest" Command="{Binding PackWorkspace.SaveCommand}" />
         <Separator />
         <MenuItem Header="E_xit" />
       </MenuItem>
@@ -29,10 +29,12 @@
       </MenuItem>
     </Menu>
 
-    <!-- Status bar stub. -->
     <Border DockPanel.Dock="Bottom" Padding="8,4"
             Background="{DynamicResource SystemControlBackgroundListLowBrush}">
-      <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" />
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Text="{Binding PackWorkspace.AggregateStatus}" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="1" Text="{Binding PackWorkspace.WorkspaceHeader}" FontWeight="SemiBold" VerticalAlignment="Center" />
+      </Grid>
     </Border>
 
     <!-- Left editor rail + main content. -->

@@ -34,6 +34,23 @@
     <PackageReference Include="Avalonia.Diagnostics" Version="11.2.1"
                       Condition="'$(Configuration)' == 'Debug'" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.3.2" />
+    <!-- Draft 2020-12 evaluation over Meridian's checked-in schema contract. -->
+    <PackageReference Include="JsonSchema.Net" Version="7.2.3" />
+    <PackageReference Include="YamlDotNet" Version="16.2.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Codex evaluates the same schema + merged $defs as validate_content.py. -->
+    <EmbeddedResource Include="..\..\..\schema\content\pack.schema.yaml"
+                      Link="Schemas\pack.schema.yaml" />
+    <EmbeddedResource Include="..\..\..\schema\content\common.defs.yaml"
+                      Link="Schemas\common.defs.yaml" />
+    <EmbeddedResource Include="..\..\..\schema\content\skeleton.defs.yaml"
+                      Link="Schemas\skeleton.defs.yaml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Meridian.Codex.Tests" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,0 +1,100 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Meridian.Codex.ViewModels"
+             xmlns:edit="using:Meridian.Codex.Editing"
+             xmlns:svc="using:Meridian.Codex.Services"
+             mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="700"
+             x:Class="Meridian.Codex.Views.PackWorkspaceView"
+             x:DataType="vm:PackWorkspaceViewModel">
+  <ScrollViewer>
+    <StackPanel Margin="24" Spacing="16" MaxWidth="980">
+      <StackPanel Spacing="4">
+        <TextBlock Text="Content Pack Workspace" FontSize="26" FontWeight="SemiBold" />
+        <TextBlock Text="Open a namespace folder or create one under a content root. Codex owns pack.yaml; raw YAML editing is not required."
+                   TextWrapping="Wrap" Opacity="0.75" />
+      </StackPanel>
+
+      <Border Padding="14" CornerRadius="6" Background="{DynamicResource SystemControlBackgroundListLowBrush}">
+        <StackPanel Spacing="8">
+          <TextBlock Text="Workspace location" FontWeight="SemiBold" />
+          <TextBox Text="{Binding WorkspacePath}" Watermark="/path/to/content (Create) or /path/to/content/my_pack (Open)" />
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Content="Create pack" Command="{Binding CreateCommand}" />
+            <Button Content="Open pack" Command="{Binding OpenCommand}" />
+            <Button Content="Save manifest" Command="{Binding SaveCommand}" />
+          </StackPanel>
+          <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" />
+          <ItemsControl ItemsSource="{Binding RecentWorkspaces}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <Button Content="{Binding}" Command="{Binding $parent[UserControl].((vm:PackWorkspaceViewModel)DataContext).OpenRecentCommand}"
+                        CommandParameter="{Binding}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" />
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Border>
+
+      <Border Padding="14" BorderThickness="1" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}" CornerRadius="6">
+        <StackPanel Spacing="10">
+          <TextBlock Text="Manifest" FontSize="20" FontWeight="SemiBold" />
+          <Grid ColumnDefinitions="180,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+            <TextBlock Grid.Row="0" Text="Namespace" VerticalAlignment="Center" />
+            <StackPanel Grid.Row="0" Grid.Column="1" Margin="6,3"><TextBox Text="{Binding Manifest.Namespace}"/><TextBlock Text="{Binding NamespaceError}" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}" TextWrapping="Wrap"/></StackPanel>
+            <TextBlock Grid.Row="1" Text="Name" VerticalAlignment="Center" />
+            <StackPanel Grid.Row="1" Grid.Column="1" Margin="6,3"><TextBox Text="{Binding Manifest.Name}"/><TextBlock Text="{Binding NameError}" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}" TextWrapping="Wrap"/></StackPanel>
+            <TextBlock Grid.Row="2" Text="Description" VerticalAlignment="Center" />
+            <TextBox Grid.Row="2" Grid.Column="1" Margin="6,3" Text="{Binding Manifest.Description}" AcceptsReturn="True" MinHeight="64" TextWrapping="Wrap" />
+            <TextBlock Grid.Row="3" Text="Pack version" VerticalAlignment="Center" />
+            <StackPanel Grid.Row="3" Grid.Column="1" Margin="6,3"><TextBox Text="{Binding Manifest.Version}"/><TextBlock Text="{Binding VersionError}" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}"/></StackPanel>
+            <TextBlock Grid.Row="4" Text="Content schema" VerticalAlignment="Center" />
+            <StackPanel Grid.Row="4" Grid.Column="1" Margin="6,3"><TextBox Text="{Binding Manifest.ContentSchemaVersion}"/><TextBlock Text="{Binding ContentSchemaVersionError}" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}"/></StackPanel>
+            <TextBlock Grid.Row="5" Text="Compatibility" VerticalAlignment="Center" />
+            <StackPanel Grid.Row="5" Grid.Column="1" Margin="6,3"><TextBox Text="{Binding Manifest.CompatibilityVersion}"/><TextBlock Text="{Binding CompatibilityVersionError}" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}"/></StackPanel>
+            <TextBlock Grid.Row="6" Text="Godot engine pin" VerticalAlignment="Center" />
+            <StackPanel Grid.Row="6" Grid.Column="1" Margin="6,3"><TextBox Text="{Binding Manifest.GodotVersion}"/><TextBlock Text="{Binding GodotVersionError}" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}"/></StackPanel>
+            <TextBlock Grid.Row="7" Text="License" VerticalAlignment="Center" />
+            <StackPanel Grid.Row="7" Grid.Column="1" Margin="6,3"><TextBox Text="{Binding Manifest.License}"/><TextBlock Text="{Binding LicenseError}" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}"/></StackPanel>
+          </Grid>
+        </StackPanel>
+      </Border>
+
+      <Border Padding="14" BorderThickness="1" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}" CornerRadius="6">
+        <StackPanel Spacing="8">
+          <TextBlock Text="Dependencies (exact version pins)" FontSize="18" FontWeight="SemiBold" />
+          <Grid ColumnDefinitions="*,160,Auto">
+            <TextBox Margin="0,0,8,0" Text="{Binding NewDependencyNamespace}" Watermark="namespace" />
+            <TextBox Grid.Column="1" Margin="0,0,8,0" Text="{Binding NewDependencyVersion}" Watermark="x.y.z" />
+            <Button Grid.Column="2" Content="Add" Command="{Binding AddDependencyCommand}" />
+          </Grid>
+          <ListBox ItemsSource="{Binding Manifest.Dependencies}" SelectedItem="{Binding SelectedDependency}" MinHeight="48">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="edit:PackDependencyData">
+                <TextBlock><Run Text="{Binding Namespace}"/><Run Text="  "/><Run Text="{Binding Version}"/></TextBlock>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+          <Button Content="Remove selected dependency" Command="{Binding RemoveDependencyCommand}" HorizontalAlignment="Left" />
+        </StackPanel>
+      </Border>
+
+      <Border Padding="14" CornerRadius="6" Background="{DynamicResource SystemControlBackgroundListLowBrush}">
+        <StackPanel Spacing="6">
+          <TextBlock Text="Workspace status" FontWeight="SemiBold" />
+          <TextBlock Text="{Binding AggregateStatus}" TextWrapping="Wrap" />
+          <ItemsControl ItemsSource="{Binding Diagnostics}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="svc:WorkspaceDiagnostic">
+                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}">
+                  <Run Text="{Binding Field}"/><Run Text=": "/><Run Text="{Binding Message}"/>
+                </TextBlock>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Border>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

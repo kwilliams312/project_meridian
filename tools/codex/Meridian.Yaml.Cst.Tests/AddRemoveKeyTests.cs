@@ -93,6 +93,108 @@ public class AddRemoveKeyTests
         Assert.Equal("tuning pass 2", ((YamlScalarNode)map.Children[new YamlScalarNode("notes")]).Value);
     }
 
+    [Fact]
+    public void AddKey_SequentialSameMapping_AppendsInCallOrder_AndPreservesOriginalBytes()
+    {
+        const string original = "schema: meridian/pack@1\nlicense: Apache-2.0\n";
+        var doc = YamlDocument.Parse(original);
+
+        doc.AddKey(null, "description", "Moonfall pack");
+        doc.AddKey(null, "compatibility_version", "2");
+
+        var edited = doc.ToText();
+        Assert.Equal(original + "description: Moonfall pack\ncompatibility_version: 2\n", edited);
+        var map = LoadMapping(edited);
+        Assert.Equal("Moonfall pack", ((YamlScalarNode)map.Children[new YamlScalarNode("description")]).Value);
+        Assert.Equal("2", ((YamlScalarNode)map.Children[new YamlScalarNode("compatibility_version")]).Value);
+    }
+
+    [Fact]
+    public void AddKey_SequentialDuplicate_IsRejected()
+    {
+        var doc = YamlDocument.Parse("name: Moonfall\n");
+        doc.AddKey(null, "description", "first");
+
+        Assert.Throws<YamlCstException>(() => doc.AddKey(null, "description", "second"));
+    }
+
+    [Fact]
+    public void AddKey_RootAndFinalNestedMappingAtEof_EmitsNestedBeforeRoot()
+    {
+        const string original = "name: Moonfall\nengine:\n  godot: 4.6";
+        var doc = YamlDocument.Parse(original);
+
+        doc.AddKey(null, "license", "Apache-2.0");
+        doc.AddKey("engine", "renderer", "gl_compatibility");
+
+        var edited = doc.ToText();
+        Assert.Equal(original + "\n  renderer: gl_compatibility\nlicense: Apache-2.0", edited);
+        var root = LoadMapping(edited);
+        var engine = Assert.IsType<YamlMappingNode>(root.Children[new YamlScalarNode("engine")]);
+        Assert.Equal("gl_compatibility", Scalar(engine, "renderer"));
+        Assert.Equal("Apache-2.0", Scalar(root, "license"));
+    }
+
+    [Fact]
+    public void AddKey_ThreeMappingsSharingEof_OrdersByDepthRegardlessOfReverseCalls()
+    {
+        const string original = "root_value: keep\nouter:\n  middle:\n    leaf: original\n";
+        var doc = YamlDocument.Parse(original);
+
+        doc.AddKey("outer.middle", "deep_first_call", "one");
+        doc.AddKey(null, "root_second_call", "two");
+        doc.AddKey("outer", "outer_third_call", "three");
+        doc.AddKey("outer.middle", "deep_fourth_call", "four");
+
+        var edited = doc.ToText();
+        var root = LoadMapping(edited);
+        var outer = Assert.IsType<YamlMappingNode>(root.Children[new YamlScalarNode("outer")]);
+        var middle = Assert.IsType<YamlMappingNode>(outer.Children[new YamlScalarNode("middle")]);
+        Assert.Equal(new[] { "leaf", "deep_first_call", "deep_fourth_call" },
+            middle.Children.Keys.Cast<YamlScalarNode>().Select(k => k.Value));
+        Assert.Equal("three", Scalar(outer, "outer_third_call"));
+        Assert.Equal("two", Scalar(root, "root_second_call"));
+        Assert.Equal(edited, YamlDocument.Parse(edited).ToText());
+    }
+
+    [Fact]
+    public void AddKey_FinalSequenceChildAndRootAtEof_ReparsesWithSemanticIdentity()
+    {
+        const string original = "name: Moonfall\nengines:\n  - godot: 4.6";
+        var doc = YamlDocument.Parse(original);
+
+        doc.AddKey(null, "license", "Apache-2.0");
+        doc.AddKey("engines[0]", "renderer", "gl_compatibility");
+
+        var edited = doc.ToText();
+        Assert.Equal(original + "\n    renderer: gl_compatibility\nlicense: Apache-2.0", edited);
+        var root = LoadMapping(edited);
+        var engines = Assert.IsType<YamlSequenceNode>(root.Children[new YamlScalarNode("engines")]);
+        var first = Assert.IsType<YamlMappingNode>(engines.Children[0]);
+        Assert.Equal("4.6", Scalar(first, "godot"));
+        Assert.Equal("gl_compatibility", Scalar(first, "renderer"));
+        Assert.Equal("Apache-2.0", Scalar(root, "license"));
+        Assert.Equal(edited, YamlDocument.Parse(edited).ToText());
+    }
+
+    [Fact]
+    public void AddKey_DuplicateDetectionIsScopedToOwningMapping()
+    {
+        var doc = YamlDocument.Parse("name: Moonfall\nmetadata:\n  author: Meridian\n");
+
+        doc.AddKey(null, "description", "root");
+        doc.AddKey("metadata", "description", "nested");
+
+        Assert.Throws<YamlCstException>(() => doc.AddKey("metadata", "description", "duplicate"));
+        var root = LoadMapping(doc.ToText());
+        var metadata = Assert.IsType<YamlMappingNode>(root.Children[new YamlScalarNode("metadata")]);
+        Assert.Equal("root", Scalar(root, "description"));
+        Assert.Equal("nested", Scalar(metadata, "description"));
+    }
+
+    private static string? Scalar(YamlMappingNode mapping, string key) =>
+        Assert.IsType<YamlScalarNode>(mapping.Children[new YamlScalarNode(key)]).Value;
+
     private static YamlMappingNode LoadMapping(string text)
     {
         var yaml = new YamlStream();

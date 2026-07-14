@@ -21,6 +21,8 @@ public sealed class YamlDocument
     private readonly string _source;
     private readonly CstNode _root;
     private readonly List<Splice> _splices = new();
+    private readonly HashSet<(CstNode Mapping, string Key)> _addedKeys = new();
+    private int _nextSpliceOrder;
 
     private YamlDocument(string source, CstNode root)
     {
@@ -63,6 +65,14 @@ public sealed class YamlDocument
     /// </summary>
     public string OriginalText => _source;
 
+    /// <summary>
+    /// Render a logical string as a YAML scalar whose tag cannot be implicitly
+    /// resolved as a number, boolean, or null. Used by new-document emitters
+    /// that do not have an original scalar style to preserve.
+    /// </summary>
+    public static string RenderString(string value) =>
+        ScalarWriter.Render(value, ScalarStyle.DoubleQuoted);
+
     /// <summary>Serialize the document with all pending edits applied.</summary>
     public string ToText()
     {
@@ -71,7 +81,17 @@ public sealed class YamlDocument
             return _source; // guarantee (2): untouched document is byte-identical.
         }
 
-        var ordered = _splices.OrderBy(s => s.Span.Start).ToList();
+        var ordered = _splices
+            .OrderBy(s => s.Span.Start)
+            .ThenBy(s => s.Span.Length == 0 ? 0 : 1)
+            // A final descendant mapping can share its insertion offset with
+            // every ancestor up to the root. Emit deepest mappings first so
+            // their indentation remains inside the owning mapping.
+            .ThenByDescending(s => s.MappingDepth)
+            .ThenByDescending(s => s.MappingSpan?.Start ?? -1)
+            // Multiple additions to one mapping preserve API call order.
+            .ThenBy(s => s.Order)
+            .ToList();
         var sb = new StringBuilder(_source.Length + 16);
         int cursor = 0;
         foreach (var splice in ordered)
@@ -178,6 +198,10 @@ public sealed class YamlDocument
                 "AddKey: adding to an empty block mapping is not supported by surgical edit; " +
                 "reformat with mcc fmt to edit.");
         }
+        if (!_addedKeys.Add((parentNode, key)))
+        {
+            throw new YamlCstException($"AddKey: key '{key}' already exists under '{parentPath}'.");
+        }
 
         var lastEntry = parentNode.Entries[^1];
         int indent = ColumnOf(lastEntry.KeySpan.Start);
@@ -192,26 +216,84 @@ public sealed class YamlDocument
             ? $"\n{pad}{key}: {rendered}"
             : $"{pad}{key}: {rendered}\n";
 
-        AddSplice(new Splice(new Span(insertAt, insertAt), insertion));
+        AddSplice(MappingInsertion(parentPath, parentNode, insertAt, insertion));
     }
+
+    /// <summary>Replace one complete value node with caller-rendered YAML.</summary>
+    /// <remarks>
+    /// This is used for collection-valued form fields where a scalar splice is not
+    /// sufficient. The replacement is indentation-adjusted to the original node and
+    /// every byte outside that node remains verbatim.
+    /// </remarks>
+    public void ReplaceNode(string path, string rawYaml)
+    {
+        var node = Resolve(path) ?? throw new YamlCstException($"ReplaceNode: path '{path}' does not exist.");
+        int indent = ColumnOf(node.Span.Start);
+        string replacement = IndentContinuationLines(rawYaml, indent);
+        AddSplice(new Splice(node.Span, replacement));
+    }
+
+    /// <summary>Add a mapping key whose value is already-rendered YAML.</summary>
+    public void AddRawKey(string? parentPath, string key, string rawYaml)
+    {
+        var parentNode = string.IsNullOrEmpty(parentPath) ? _root : Resolve(parentPath);
+        if (parentNode is not { Kind: CstKind.Mapping } || parentNode.IsFlow || parentNode.Entries.Count == 0)
+        {
+            throw new YamlCstException($"AddRawKey: parent '{parentPath}' is not a non-empty block mapping.");
+        }
+        if (parentNode.FindEntry(key) is not null || !_addedKeys.Add((parentNode, key)))
+        {
+            throw new YamlCstException($"AddRawKey: key '{key}' already exists under '{parentPath}'.");
+        }
+
+        var lastEntry = parentNode.Entries[^1];
+        int indent = ColumnOf(lastEntry.KeySpan.Start);
+        int insertAt = lastEntry.EntrySpan.End;
+        string pad = new(' ', indent);
+        string value = IndentContinuationLines(rawYaml, indent + 2);
+        string rendered = rawYaml.Contains('\n')
+            ? $"{pad}{key}:\n{new string(' ', indent + 2)}{value}"
+            : $"{pad}{key}: {value}";
+        string insertion = InsertionNeedsLeadingNewline(insertAt) ? $"\n{rendered}" : $"{rendered}\n";
+        AddSplice(MappingInsertion(parentPath, parentNode, insertAt, insertion));
+    }
+
+    private static string IndentContinuationLines(string text, int indent) =>
+        text.Replace("\n", "\n" + new string(' ', indent), StringComparison.Ordinal);
 
     // ---- internals ---------------------------------------------------------
 
     private void AddSplice(Splice splice)
     {
+        splice = splice with { Order = _nextSpliceOrder++ };
         // Guard against two edits touching the same region within one save.
         foreach (var existing in _splices)
         {
             bool disjoint = splice.Span.End <= existing.Span.Start || splice.Span.Start >= existing.Span.End;
             bool bothInsertAtSamePoint = splice.Span.Length == 0 && existing.Span.Length == 0
                 && splice.Span.Start == existing.Span.Start;
-            if (!disjoint || bothInsertAtSamePoint)
+            if (bothInsertAtSamePoint)
+            {
+                if (splice.MappingPath is not null && existing.MappingPath is not null)
+                {
+                    continue;
+                }
+                throw new YamlCstException("Conflicting edit: two edits target the same insertion point.");
+            }
+            if (!disjoint)
             {
                 throw new YamlCstException("Conflicting edit: two edits target overlapping spans.");
             }
         }
 
         _splices.Add(splice);
+    }
+
+    private static Splice MappingInsertion(string? parentPath, CstNode mapping, int insertAt, string insertion)
+    {
+        List<PathSegment> segments = string.IsNullOrEmpty(parentPath) ? [] : PathParser.Parse(parentPath);
+        var canonicalPath = segments.Count == 0 ? "$" : PathParser.Render(segments);
+        return new(new Span(insertAt, insertAt), insertion, canonicalPath, mapping.Span, segments.Count);
     }
 
     private CstNode? ResolveInternal(string path, out CstNode? parent, out string? lastSegment)
@@ -294,5 +376,11 @@ public sealed class YamlDocument
         return insertAt > 0 && _source[insertAt - 1] != '\n';
     }
 
-    private readonly record struct Splice(Span Span, string Replacement);
+    private readonly record struct Splice(
+        Span Span,
+        string Replacement,
+        string? MappingPath = null,
+        Span? MappingSpan = null,
+        int MappingDepth = -1,
+        int Order = 0);
 }
