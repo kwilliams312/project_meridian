@@ -35,23 +35,31 @@ SET FOREIGN_KEY_CHECKS = 0;   -- tables are declared in dependency order, but
 --   content_hash (sent in HandshakeOk so client .pck and server data are
 --   provably the same compile).
 --
---   IF-4 PRODUCER SIDE (follow-up, tracked with #89): worldd's boot-time READ +
---   VERIFY of these columns is implemented (server/worldd/world_boot.*). The
---   PRODUCER — mcc `emit-sql` populating this table (one INSERT per pack with the
---   BLAKE3 content_hash, pack_version, id_band, schema_version, mcc_version,
---   built_at) — is not yet implemented: tools/mcc's emit-sql/bake stages are
---   declared (tools/mcc/src/stages/stages.h) but stubbed. worldd reads exactly
---   these seven columns; mcc must emit exactly these seven columns. The
---   content-schema major mcc stamps here MUST equal
---   worldd's kSupportedContentSchemaVersion (currently 1 — the world DDL v1).
+--   IF-4 PRODUCER SIDE: worldd's boot-time READ + VERIFY of these columns is
+--   implemented (server/worldd/world_boot.*), and mcc `emit-sql` populates this
+--   table (one INSERT per pack with the BLAKE3 content_hash, pack_version,
+--   id_band, schema_version, compatibility_version, mcc_version, built_at).
+--   worldd reads exactly these EIGHT columns; mcc must emit exactly these eight
+--   columns. The content-schema major mcc stamps here MUST equal worldd's
+--   kSupportedContentSchemaVersion (currently 1 — the world DDL v1).
+--
+--   compatibility_version (SP2.8 #698): the pack CONTRACT version, distinct from
+--   the semver pack_version — it bumps ONLY on a breaking (non-additive) id
+--   change (a removed/renumbered id), never on additive edits (schema/content/
+--   pack.schema.yaml `compatibility_version`; `mcc diff` classifies + enforces
+--   the bump). worldd's boot-time compat gate compares THIS loaded value against
+--   the realm's persisted `realm_content_state.compatibility_version` (characters
+--   DB) and refuses to boot on a breaking change until an operator migrates. An
+--   absent pack value defaults to the baseline 1 (mcc stamps 1).
 -- ---------------------------------------------------------------------
 CREATE TABLE world_manifest (
-  pack_namespace  VARCHAR(32)  NOT NULL,                  -- pack.namespace; owns an ID band
-  pack_version    VARCHAR(32)  NOT NULL,                  -- pack.version (semver)
-  id_band         INT UNSIGNED NOT NULL,                  -- IF-9 numeric band base for this pack
-  content_hash    CHAR(64)     NOT NULL,                  -- BLAKE3 of the pack's canonical source tree (hex)
-  schema_version  INT UNSIGNED NOT NULL,                  -- content schema major (pack.content_schema_version)
-  mcc_version     VARCHAR(32)  NOT NULL,                  -- compiler version that produced this row
-  built_at        DATETIME     NOT NULL,                  -- build timestamp (server-sad §4.3 manifest field)
+  pack_namespace         VARCHAR(32)  NOT NULL,           -- pack.namespace; owns an ID band
+  pack_version           VARCHAR(32)  NOT NULL,           -- pack.version (semver)
+  id_band                INT UNSIGNED NOT NULL,           -- IF-9 numeric band base for this pack
+  content_hash           CHAR(64)     NOT NULL,           -- BLAKE3 of the pack's canonical source tree (hex)
+  schema_version         INT UNSIGNED NOT NULL,           -- content schema major (pack.content_schema_version)
+  compatibility_version  INT UNSIGNED NOT NULL DEFAULT 1, -- pack contract version (pack.compatibility_version); boot compat gate (#698)
+  mcc_version            VARCHAR(32)  NOT NULL,           -- compiler version that produced this row
+  built_at               DATETIME     NOT NULL,           -- build timestamp (server-sad §4.3 manifest field)
   PRIMARY KEY (pack_namespace)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

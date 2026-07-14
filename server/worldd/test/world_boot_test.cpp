@@ -69,6 +69,24 @@ ManifestRow good_row(const std::string& ns = "core",
     return r;
 }
 
+// A loaded manifest row carrying a specific compatibility_version (for the gate).
+ManifestRow loaded_pack(const std::string& ns, std::uint32_t compat,
+                        const std::string& hash = kGoodHash) {
+    ManifestRow r = good_row(ns, "1.0.0", hash);
+    r.compatibility_version = compat;
+    return r;
+}
+
+// A persisted realm-state row (what the realm last booted with) for the gate.
+RealmCompatRow persisted_pack(const std::string& ns, std::uint32_t compat) {
+    RealmCompatRow r;
+    r.pack_namespace = ns;
+    r.compatibility_version = compat;
+    r.content_hash = kGoodHash;
+    r.pack_version = "1.0.0";
+    return r;
+}
+
 }  // namespace
 
 int main() {
@@ -171,8 +189,80 @@ int main() {
               rm.verdict == BootVerdict::kSchemaMismatch && rm.hard_fail);
     }
 
+    // -----------------------------------------------------------------------
+    // Boot-time compat / migration gate (#698) — PURE verify_compat_gate.
+    // -----------------------------------------------------------------------
+
+    // J. FRESH realm (no persisted state): every loaded pack is recorded, boots.
+    {
+        CompatGateResult g = verify_compat_gate({loaded_pack("core", 1)}, {});
+        check("J fresh realm -> not breaking", !g.breaking);
+        check("J fresh realm -> records the loaded pack", g.to_record.size() == 1);
+        check("J fresh realm -> no refusal reason", g.reason.empty());
+    }
+
+    // K. COMPATIBLE: loaded compatibility_version equals the persisted one
+    //    (identical, or an additive change that never bumps it) -> boots + records.
+    {
+        CompatGateResult g =
+            verify_compat_gate({loaded_pack("core", 3)}, {persisted_pack("core", 3)});
+        check("K compatible -> not breaking", !g.breaking);
+        check("K compatible -> re-records the pack", g.to_record.size() == 1);
+    }
+
+    // L. BREAKING forward: loaded compatibility_version > persisted -> refuse,
+    //    record nothing, name the offending pack.
+    {
+        CompatGateResult g =
+            verify_compat_gate({loaded_pack("core", 2)}, {persisted_pack("core", 1)});
+        check("L breaking forward -> breaking", g.breaking);
+        check("L breaking forward -> records nothing", g.to_record.empty());
+        check("L breaking forward -> reason names the pack + versions",
+              g.reason.find("core") != std::string::npos &&
+                  g.reason.find("1 (realm last booted) -> 2 (loaded pack)") !=
+                      std::string::npos);
+        check("L breaking forward -> reason is actionable (mcc diff + migrate)",
+              g.reason.find("mcc diff") != std::string::npos &&
+                  g.reason.find("BREAKING") != std::string::npos);
+    }
+
+    // M. BREAKING rollback: loaded compatibility_version < persisted -> refuse.
+    {
+        CompatGateResult g =
+            verify_compat_gate({loaded_pack("core", 1)}, {persisted_pack("core", 4)});
+        check("M breaking rollback -> breaking", g.breaking);
+        check("M breaking rollback -> reason notes the rollback",
+              g.reason.find("rolled back") != std::string::npos);
+    }
+
+    // N. REMOVED pack: a persisted pack absent from the loaded set -> refuse.
+    {
+        CompatGateResult g = verify_compat_gate(
+            {loaded_pack("core", 1)},
+            {persisted_pack("core", 1), persisted_pack("dlc1", 1)});
+        check("N removed pack -> breaking", g.breaking);
+        check("N removed pack -> names the vanished pack",
+              g.reason.find("dlc1") != std::string::npos &&
+                  g.reason.find("ABSENT") != std::string::npos);
+    }
+
+    // O. MULTI-PACK: one compatible + one breaking -> refuse overall, and the
+    //    compatible pack is NOT recorded (record nothing on any refusal).
+    {
+        CompatGateResult g = verify_compat_gate(
+            {loaded_pack("core", 1), loaded_pack("dlc1", 2)},
+            {persisted_pack("core", 1), persisted_pack("dlc1", 1)});
+        check("O mixed -> breaking", g.breaking);
+        check("O mixed -> records nothing (even the compatible pack)",
+              g.to_record.empty());
+        check("O mixed -> reason names only the breaking pack",
+              g.reason.find("dlc1") != std::string::npos);
+    }
+
     // verdict name mapping (diagnostics).
     check("boot_verdict_name kOk", std::string(boot_verdict_name(BootVerdict::kOk)) == "ok");
+    check("boot_verdict_name kCompatBreaking",
+          std::string(boot_verdict_name(BootVerdict::kCompatBreaking)) == "compat-breaking");
 
     if (g_fail == 0) {
         std::printf("PASS: all world-DB boot verify checks passed\n");

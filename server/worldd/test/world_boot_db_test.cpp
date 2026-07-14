@@ -68,27 +68,48 @@ void ensure_manifest_table(db::Connection& db) {
     db.execute("DROP TABLE IF EXISTS world_manifest");
     db.execute(
         "CREATE TABLE world_manifest ("
-        "  pack_namespace  VARCHAR(32)  NOT NULL,"
-        "  pack_version    VARCHAR(32)  NOT NULL,"
-        "  id_band         INT UNSIGNED NOT NULL,"
-        "  content_hash    CHAR(64)     NOT NULL,"
-        "  schema_version  INT UNSIGNED NOT NULL,"
-        "  mcc_version     VARCHAR(32)  NOT NULL,"
-        "  built_at        DATETIME     NOT NULL,"
+        "  pack_namespace         VARCHAR(32)  NOT NULL,"
+        "  pack_version           VARCHAR(32)  NOT NULL,"
+        "  id_band                INT UNSIGNED NOT NULL,"
+        "  content_hash           CHAR(64)     NOT NULL,"
+        "  schema_version         INT UNSIGNED NOT NULL,"
+        "  compatibility_version  INT UNSIGNED NOT NULL DEFAULT 1,"
+        "  mcc_version            VARCHAR(32)  NOT NULL,"
+        "  built_at               DATETIME     NOT NULL,"
+        "  PRIMARY KEY (pack_namespace)"
+        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+}
+
+// realm_content_state (characters DB, migration 0004) — the realm's PERSISTED
+// compat state the boot gate reads. Created here so the test is self-contained
+// against any MariaDB (same connection as the manifest, since both live in one
+// throwaway instance for the test).
+void ensure_realm_state_table(db::Connection& db) {
+    db.execute("DROP TABLE IF EXISTS realm_content_state");
+    db.execute(
+        "CREATE TABLE realm_content_state ("
+        "  pack_namespace         VARCHAR(32)  NOT NULL,"
+        "  compatibility_version  INT UNSIGNED NOT NULL,"
+        "  content_hash           CHAR(64)     NOT NULL,"
+        "  pack_version           VARCHAR(32)  NOT NULL,"
+        "  recorded_at            DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP "
+        "                         ON UPDATE CURRENT_TIMESTAMP,"
         "  PRIMARY KEY (pack_namespace)"
         ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 }
 
 void seed_core_pack(db::Connection& db, const std::string& hash,
-                    std::uint32_t schema_version) {
+                    std::uint32_t schema_version,
+                    std::uint32_t compatibility_version = 1) {
     db.execute("DELETE FROM world_manifest");
     db.execute(
         "INSERT INTO world_manifest "
         "(pack_namespace, pack_version, id_band, content_hash, schema_version, "
-        " mcc_version, built_at) "
-        "VALUES ('core', '1.0.0', 1000, ?, ?, 'mcc-0.1.0', '2026-07-06 00:00:00')",
+        " compatibility_version, mcc_version, built_at) "
+        "VALUES ('core', '1.0.0', 1000, ?, ?, ?, 'mcc-0.1.0', '2026-07-06 00:00:00')",
         {db::Param{hash},
-         db::Param{static_cast<std::int64_t>(schema_version)}});
+         db::Param{static_cast<std::int64_t>(schema_version)},
+         db::Param{static_cast<std::int64_t>(compatibility_version)}});
 }
 
 }  // namespace
@@ -190,7 +211,85 @@ int main() {
             check("pinned-hash mismatch -> bootable (advisory)", !r.hard_fail);
         }
 
-        // Cleanup — drop the table this test owns.
+        // -------------------------------------------------------------------
+        // 7. Boot-time compat / migration gate (#698), DB-backed end to end.
+        //    Uses the SAME connection as both the world DB and the characters DB
+        //    (one throwaway instance holds both tables the test creates).
+        // -------------------------------------------------------------------
+        ensure_realm_state_table(conn);
+
+        // 7a. FRESH realm (no persisted state) boots AND records what it booted.
+        {
+            conn.execute("DELETE FROM realm_content_state");
+            seed_core_pack(conn, kGoodHash, kSupportedContentSchemaVersion,
+                           /*compatibility_version=*/2);
+            BootReport r = boot_world_db(conn, std::nullopt, false, &conn);
+            check("gate: fresh realm boots (kOk)", r.verdict == BootVerdict::kOk);
+            check("gate: fresh realm -> bootable", !r.hard_fail);
+            const std::vector<RealmCompatRow> st = read_realm_compat_state(conn);
+            check("gate: fresh realm RECORDED the loaded compat version",
+                  st.size() == 1 && st[0].pack_namespace == "core" &&
+                      st[0].compatibility_version == 2);
+        }
+
+        // 7b. ADDITIVE change (same compatibility_version, new content hash) boots
+        //     freely and refreshes the recorded hash.
+        {
+            seed_core_pack(conn, kOtherHash, kSupportedContentSchemaVersion,
+                           /*compatibility_version=*/2);
+            BootReport r = boot_world_db(conn, std::nullopt, false, &conn);
+            check("gate: additive change boots (kOk)", r.verdict == BootVerdict::kOk);
+            check("gate: additive change -> bootable", !r.hard_fail);
+            const std::vector<RealmCompatRow> st = read_realm_compat_state(conn);
+            check("gate: additive change refreshed the recorded hash",
+                  st.size() == 1 && st[0].compatibility_version == 2 &&
+                      st[0].content_hash == kOtherHash);
+        }
+
+        // 7c. BREAKING change (compatibility_version bumped past the recorded one)
+        //     REFUSES to boot with the actionable report, and does NOT touch the
+        //     recorded state (the operator migration advances it, not worldd).
+        {
+            seed_core_pack(conn, kGoodHash, kSupportedContentSchemaVersion,
+                           /*compatibility_version=*/3);
+            BootReport r = boot_world_db(conn, std::nullopt, false, &conn);
+            check("gate: breaking change -> kCompatBreaking",
+                  r.verdict == BootVerdict::kCompatBreaking);
+            check("gate: breaking change -> hard_fail (refuses to boot)", r.hard_fail);
+            check("gate: breaking refusal is actionable (BREAKING + mcc diff)",
+                  r.reason.find("BREAKING") != std::string::npos &&
+                      r.reason.find("mcc diff") != std::string::npos &&
+                      r.reason.find("core") != std::string::npos);
+            const std::vector<RealmCompatRow> st = read_realm_compat_state(conn);
+            check("gate: breaking refusal did NOT advance the recorded version",
+                  st.size() == 1 && st[0].compatibility_version == 2);
+        }
+
+        // 7d. After an operator migration (persisted version advanced to 3), the
+        //     same breaking pack now boots (recorded == loaded).
+        {
+            conn.execute(
+                "UPDATE realm_content_state SET compatibility_version = 3 "
+                "WHERE pack_namespace = 'core'");
+            seed_core_pack(conn, kGoodHash, kSupportedContentSchemaVersion,
+                           /*compatibility_version=*/3);
+            BootReport r = boot_world_db(conn, std::nullopt, false, &conn);
+            check("gate: post-migration boots (kOk)", r.verdict == BootVerdict::kOk);
+            check("gate: post-migration -> bootable", !r.hard_fail);
+        }
+
+        // 7e. Gate is SKIPPED when no characters DB is wired (char_db == nullptr):
+        //     a breaking pack still boots, exactly like the pre-#698 behaviour.
+        {
+            seed_core_pack(conn, kGoodHash, kSupportedContentSchemaVersion,
+                           /*compatibility_version=*/9);
+            BootReport r = boot_world_db(conn, std::nullopt, false, nullptr);
+            check("gate: no char_db -> gate skipped, boots (kOk)",
+                  r.verdict == BootVerdict::kOk && !r.hard_fail);
+        }
+
+        // Cleanup — drop the tables this test owns.
+        conn.execute("DROP TABLE IF EXISTS realm_content_state");
         conn.execute("DROP TABLE IF EXISTS world_manifest");
     } catch (const db::DbError& e) {
         std::printf("FAIL: DB error: %s\n", e.what());

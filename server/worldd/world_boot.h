@@ -65,6 +65,9 @@ struct ManifestRow {
     std::uint32_t id_band = 0;      // IF-9 numeric band base for this pack
     std::string   content_hash;     // BLAKE3 of the pack source tree (64 hex)
     std::uint32_t schema_version = 0;  // content schema major (must match ours)
+    std::uint32_t compatibility_version = 1;  // pack CONTRACT version (#698); the
+                                    // boot compat gate compares this against the
+                                    // realm's persisted state. Absent -> 1.
     std::string   mcc_version;      // compiler version that produced the row
     std::string   built_at;         // build timestamp (DATETIME text)
 };
@@ -81,6 +84,9 @@ enum class BootVerdict {
     kMalformedManifest,    // a row is structurally invalid (bad hash width, empty
                            // required field) — a truncated / partial load
     kSchemaMismatch,       // a row's schema_version != kSupportedContentSchemaVersion
+    kCompatBreaking,       // the loaded pack's compatibility_version differs from
+                           // the realm's persisted state — a BREAKING pack change
+                           // that refuses to boot until an operator migrates (#698)
 };
 
 // The outcome of the boot check: the verdict, a human-readable reason (for the
@@ -132,11 +138,71 @@ BootReport verify_world_manifest(
 // world DB) — the caller (boot_world_db) turns that into a hard fail.
 std::vector<ManifestRow> read_world_manifest(db::Connection& world_db);
 
+// ---------------------------------------------------------------------------
+// Boot-time compatibility / migration gate (SP2.8, issue #698)
+// ---------------------------------------------------------------------------
+//
+// The realm's PERSISTED compatibility state — the compatibility_version the realm
+// last successfully booted with, PER pack namespace. Lives in the CHARACTERS DB
+// (realm_content_state, migration 0004) because it must survive a content reload:
+// the world DB is a read-only mcc artifact replaced wholesale on every build, so
+// persisting the marker there would reset it to the loaded value and make the gate
+// a no-op. One row per pack namespace, mirroring world_manifest's granularity.
+struct RealmCompatRow {
+    std::string   pack_namespace;             // pack.namespace (PK)
+    std::uint32_t compatibility_version = 1;  // the version the realm booted with
+    std::string   content_hash;               // the pack hash last booted (context)
+    std::string   pack_version;               // the semver last booted (context)
+};
+
+// The outcome of the compat gate over already-read rows (PURE — see below).
+struct CompatGateResult {
+    bool breaking = false;   // a breaking mismatch was found -> refuse boot
+    std::string reason;      // actionable report naming each broken pack (mirrors
+                             // `mcc diff`'s vocabulary); empty when not breaking
+    // The packs to (re)record into realm_content_state on a SAFE boot: every
+    // loaded pack that is fresh (no persisted row) or compatible (loaded
+    // compatibility_version equals the persisted one). Empty when `breaking`
+    // (worldd records nothing on a refusal — the operator migration advances the
+    // persisted version after migrating character data).
+    std::vector<ManifestRow> to_record;
+};
+
+// PURE compat gate (no DB, no I/O — unit-testable). Compare the LOADED packs
+// (world_manifest rows just read from the world DB) against the realm's PERSISTED
+// state, per pack namespace, per the umbrella §6.5 contract:
+//   * a pack with no persisted row            -> FRESH: record it, boot freely;
+//   * loaded compatibility_version == persisted -> COMPATIBLE (identical, or an
+//     additive change that never bumps the version): record (refresh hash), boot;
+//   * loaded compatibility_version != persisted -> BREAKING: a removed/renumbered
+//     id crossed the compatibility boundary (a higher loaded value) or the pack
+//     was rolled back below one (a lower value) -> refuse to boot;
+//   * a persisted pack absent from the loaded set -> BREAKING: the whole pack (all
+//     its ids) was removed from the content the realm booted with.
+// A breaking result names every offending pack in `reason` and records nothing.
+CompatGateResult verify_compat_gate(const std::vector<ManifestRow>& loaded,
+                                    const std::vector<RealmCompatRow>& persisted);
+
+// Read the realm's persisted compat state from the connected characters DB (every
+// realm_content_state row). Thin SELECT; throws db::DbError on a query failure
+// (e.g. the table does not exist -> a characters DB not migrated to 0004).
+std::vector<RealmCompatRow> read_realm_compat_state(db::Connection& char_db);
+
+// Record (UPSERT) the given loaded packs into the characters DB
+// realm_content_state — "worldd records the pack compatibility_version it booted
+// with" (#698). Called only for the SAFE packs the gate returned in `to_record`.
+// One INSERT ... ON DUPLICATE KEY UPDATE per pack. Throws db::DbError on failure.
+void record_realm_compat_state(db::Connection& char_db,
+                               const std::vector<ManifestRow>& rows);
+
 // Full boot-time content check: read the manifest from `world_db`, verify it,
 // and LOG the outcome prominently (the loaded content version + hash on success;
 // the reason on warn/fail/degrade). Returns the BootReport; the caller decides
-// whether to refuse to boot (report.hard_fail). A DB/read failure is captured as
-// a kMissingManifest report with the DB error in `reason` (never throws).
+// whether to refuse to boot (report.hard_fail). A world_db read failure is
+// captured as a kMissingManifest report with the DB error in `reason` (the
+// world-DB path never throws). A CHARACTERS-DB failure during the compat gate
+// (below) does propagate as db::DbError — the caller already treats that as a
+// hard boot failure.
 //
 // `expected_content_hash` is the optional operator pin (see verify_world_manifest).
 //
@@ -151,10 +217,22 @@ std::vector<ManifestRow> read_world_manifest(db::Connection& world_db);
 // world DB then hard-fails as before. INTEGRITY faults (kMalformedManifest,
 // kSchemaMismatch — corrupt or unserveable content) ALWAYS hard-fail regardless
 // of this flag; only the empty/missing case degrades.
+//
+// `char_db` is the CHARACTERS DB connection the boot compat gate (#698) uses.
+// When non-null AND the manifest verdict is bootable (kOk / kSoftWarn), the gate
+// runs: it reads the realm's persisted compatibility state (realm_content_state)
+// and compares it against the loaded packs. A BREAKING mismatch flips the report
+// to kCompatBreaking + hard_fail with an actionable reason (mirroring `mcc diff`);
+// a fresh/compatible boot RECORDS the loaded state (worldd "records the pack
+// compatibility_version it booted with"). Null (no characters DB wired) SKIPS the
+// gate — the daemon still boots, exactly like the auth-DB-less grant path. The
+// gate never runs on a degraded / missing / malformed manifest (no content to
+// gate).
 BootReport boot_world_db(
     db::Connection& world_db,
     const std::optional<std::string>& expected_content_hash = std::nullopt,
-    bool require_content = false);
+    bool require_content = false,
+    db::Connection* char_db = nullptr);
 
 // Human-readable name for a verdict (logs / test diagnostics).
 const char* boot_verdict_name(BootVerdict v);
