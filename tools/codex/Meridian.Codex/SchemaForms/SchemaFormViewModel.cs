@@ -70,6 +70,13 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
                 : Field.Default is not null
                     ? "Optional; a default is provided"
                     : "Optional";
+    public string RequirementStateText => Field.Constant is not null
+        ? "Fixed"
+        : IsRequiredForForm
+            ? "Required"
+            : Field.Default is not null
+                ? "Optional (default)"
+                : "Optional";
     public string Help => Field.Ui?.Help ?? Field.Description ?? KindHelp;
     public string? ExampleText => Field.Ui?.Example is { } example ? $"Example: {Display(example)}" : null;
     public string? UnitText => Field.Ui?.Unit is { } unit ? $"Unit: {UnitName(unit)}" : null;
@@ -89,10 +96,9 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
             ? "Choose a type to show its fields. Switching type preserves earlier values and asks before removing active fields."
             : null;
     public bool HasAvailabilityText => AvailabilityText is not null;
-    public string AutomationName => FieldName;
-    public string AutomationHelp => string.Join(" ", new[]
+    public string InformationText => string.Join(" ", new[]
     {
-        RequirementText + ".",
+        RequirementText != RequirementStateText ? RequirementText + "." : null,
         Help,
         UnitText,
         DefaultText,
@@ -100,6 +106,15 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
         ConstraintText is { } constraint ? $"Constraint: {constraint}" : null,
         AvailabilityText,
         DocumentationText,
+    }.Where(value => !string.IsNullOrWhiteSpace(value)));
+    public bool HasInformation => !string.IsNullOrWhiteSpace(InformationText);
+    public string InformationAutomationName => $"More information about {FieldName}";
+    public string InformationAutomationId => "SchemaFieldInfo_" + Path.Replace('.', '_').Replace('[', '_').Replace("]", string.Empty, StringComparison.Ordinal);
+    public string AutomationName => FieldName;
+    public string AutomationHelp => string.Join(" ", new[]
+    {
+        RequirementStateText + ".",
+        InformationText,
         HasDiagnostic ? $"Error: {DiagnosticText}" : null,
     }.Where(value => !string.IsNullOrWhiteSpace(value)));
     public string AutomationId => "SchemaField_" + Path.Replace('.', '_').Replace('[', '_').Replace("]", string.Empty, StringComparison.Ordinal);
@@ -369,6 +384,9 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(Label));
         OnPropertyChanged(nameof(RequirementText));
+        OnPropertyChanged(nameof(RequirementStateText));
+        OnPropertyChanged(nameof(InformationText));
+        OnPropertyChanged(nameof(HasInformation));
         OnPropertyChanged(nameof(AutomationHelp));
         OnPropertyChanged(nameof(AutomationStatus));
         OnPropertyChanged(nameof(IsRequiredForForm));

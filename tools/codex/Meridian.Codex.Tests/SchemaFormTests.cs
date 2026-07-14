@@ -2,6 +2,8 @@ using System.Text.Json.Nodes;
 using Avalonia.Controls;
 using Avalonia.Automation;
 using Avalonia.Headless.XUnit;
+using Avalonia.Input;
+using Avalonia.Media;
 using Avalonia.VisualTree;
 using Meridian.Codex.SchemaForms;
 using Meridian.Codex.Views;
@@ -299,9 +301,11 @@ public sealed class SchemaFormTests
 
         Assert.Equal("Display name *", name.Label);
         Assert.Equal("Required", name.RequirementText);
+        Assert.Equal("Required", name.RequirementStateText);
         Assert.True(name.IsRequiredForForm);
         Assert.Contains("Ability name", name.AutomationHelp, StringComparison.Ordinal);
         Assert.Equal("Optional; a default is provided", cooldown.RequirementText);
+        Assert.Equal("Optional (default)", cooldown.RequirementStateText);
         Assert.Equal("Unit: milliseconds (ms)", cooldown.UnitText);
         Assert.Equal("Default: 0", cooldown.DefaultText);
         Assert.Equal("Example: 6000", cooldown.ExampleText);
@@ -668,6 +672,58 @@ public sealed class SchemaFormHeadlessTests
     }
 
     [AvaloniaFact]
+    public void Explanatory_prose_uses_a_focusable_native_tooltip_without_weakening_control_help()
+    {
+        var catalog = new SchemaCatalog();
+        var yaml = File.ReadAllText(ContentFixtures.ContentCorePath("abilities/cleave_strike.ability.yaml"));
+        var vm = new SchemaFormViewModel(new SchemaFormDocument(catalog.GetRoot("ability.schema.yaml"), yaml));
+        var cooldown = vm.Root.Children.Single(field => field.Path == "cooldown_ms");
+        var view = new SchemaFormView { DataContext = vm };
+        var window = new Window { Content = view };
+        window.Show();
+
+        var persistentText = view.GetVisualDescendants().OfType<TextBlock>()
+            .Where(block => ReferenceEquals(block.DataContext, cooldown))
+            .Select(block => block.Text)
+            .ToArray();
+        Assert.Contains("Cooldown", persistentText);
+        Assert.Contains("Optional (default)", persistentText);
+        Assert.DoesNotContain(cooldown.Help, persistentText);
+        Assert.DoesNotContain(cooldown.UnitText, persistentText);
+        Assert.DoesNotContain(cooldown.DefaultText, persistentText);
+        Assert.DoesNotContain(cooldown.ExampleText, persistentText);
+        Assert.DoesNotContain(cooldown.ConstraintText, persistentText);
+        Assert.DoesNotContain(cooldown.DocumentationText, persistentText);
+
+        var information = view.GetVisualDescendants().OfType<Button>()
+            .Single(button => AutomationProperties.GetAutomationId(button) == cooldown.InformationAutomationId);
+        Assert.True(information.Focusable);
+        Assert.True(information.IsTabStop);
+        Assert.Equal("More information about Cooldown", AutomationProperties.GetName(information));
+        Assert.Equal(cooldown.InformationText, AutomationProperties.GetHelpText(information));
+        var tooltip = Assert.IsType<TextBlock>(ToolTip.GetTip(information));
+        Assert.Equal(cooldown.InformationText, tooltip.Text);
+        Assert.Equal(380, tooltip.MaxWidth);
+        Assert.Equal(TextWrapping.Wrap, tooltip.TextWrapping);
+        Assert.Equal(250, ToolTip.GetShowDelay(information));
+
+        var input = view.GetVisualDescendants().OfType<NumericUpDown>()
+            .Single(control => control.IsVisible && ReferenceEquals(control.DataContext, cooldown));
+        var controlHelp = AutomationProperties.GetHelpText(input);
+        Assert.Contains(cooldown.Help, controlHelp, StringComparison.Ordinal);
+        Assert.Contains(cooldown.UnitText!, controlHelp, StringComparison.Ordinal);
+        Assert.Contains(cooldown.ExampleText!, controlHelp, StringComparison.Ordinal);
+        Assert.Contains(cooldown.DocumentationText!, controlHelp, StringComparison.Ordinal);
+
+        Assert.True(information.Focus(NavigationMethod.Tab));
+        Assert.True(information.IsFocused);
+        Assert.True(ToolTip.GetIsOpen(information));
+        Assert.True(input.Focus(NavigationMethod.Tab));
+        Assert.False(ToolTip.GetIsOpen(information));
+        window.Close();
+    }
+
+    [AvaloniaFact]
     public void Item_class_transitions_update_visible_and_accessible_conditional_required_state()
     {
         var copy = ContentFixtures.CopyToTemp("items/rusty_pickaxe.item.yaml");
@@ -680,17 +736,23 @@ public sealed class SchemaFormHeadlessTests
             .Single(control => control.IsVisible && AutomationProperties.GetAutomationId(control) == "SchemaField_slot");
         var slotLabel = view.GetVisualDescendants().OfType<TextBlock>()
             .Single(block => ReferenceEquals(block.DataContext, slotField) && block.Text == "Slot *");
-        var requirement = view.GetVisualDescendants().OfType<TextBlock>()
-            .Single(block => ReferenceEquals(block.DataContext, slotField) && block.Text == "Required because Item class is Weapon");
+        var requirementState = view.GetVisualDescendants().OfType<TextBlock>()
+            .Single(block => ReferenceEquals(block.DataContext, slotField) && block.Text == "Required");
+        var information = view.GetVisualDescendants().OfType<Button>()
+            .Single(button => AutomationProperties.GetAutomationId(button) == slotField.InformationAutomationId);
 
         Assert.True(AutomationProperties.GetIsRequiredForForm(slot));
         Assert.Contains("Required because Item class is Weapon", AutomationProperties.GetItemStatus(slot), StringComparison.Ordinal);
+        var tooltip = Assert.IsType<TextBlock>(ToolTip.GetTip(information));
+        Assert.Contains("Required because Item class is Weapon", tooltip.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain(view.GetVisualDescendants().OfType<TextBlock>(), block =>
+            ReferenceEquals(block.DataContext, slotField) && block.Text?.Contains("Item class is Weapon", StringComparison.Ordinal) == true);
 
         file.Document.Set("item_class", JsonValue.Create("trade_good"));
 
         Assert.False(AutomationProperties.GetIsRequiredForForm(slot));
         Assert.Equal("Slot", slotLabel.Text);
-        Assert.StartsWith("Optional now", requirement.Text, StringComparison.Ordinal);
+        Assert.Equal("Optional", requirementState.Text);
         Assert.StartsWith("Optional now", AutomationProperties.GetItemStatus(slot), StringComparison.Ordinal);
         Assert.True(slotField.CanRemoveOptional);
 
@@ -705,6 +767,7 @@ public sealed class SchemaFormHeadlessTests
         Assert.False(file.IsValid);
         Assert.True(slotField.IsRequiredForForm);
         Assert.Equal("Slot *", slotLabel.Text);
+        Assert.Equal("Required", requirementState.Text);
         Assert.True(AutomationProperties.GetIsRequiredForForm(slot));
         Assert.Equal("Add required field", add.Content);
         Assert.Contains("required", AutomationProperties.GetName(add), StringComparison.OrdinalIgnoreCase);
@@ -712,6 +775,7 @@ public sealed class SchemaFormHeadlessTests
         Assert.True(slotField.HasDiagnostic);
         Assert.Contains("add the required field", slotField.DiagnosticText, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Error:", slotField.AutomationHelp, StringComparison.Ordinal);
+        Assert.DoesNotContain("Error:", tooltip.Text, StringComparison.Ordinal);
 
         file.Document.Set("item_class", JsonValue.Create("armor"));
         Assert.True(slotField.IsRequiredForForm);
