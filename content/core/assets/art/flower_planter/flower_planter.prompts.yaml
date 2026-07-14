@@ -1,0 +1,10 @@
+task_id: 019f617e-08b3-71ea-9858-ea392e067379
+model_version: meshy-5
+preview_task_id: 019f617d-33ba-7a45-a9f7-053422bfb710
+request:
+  mode: preview
+  prompt: a chibi flower planter box, chibi, colored rounded pill / clay toy aesthetic,
+    bright saturated colors, big cute friendly, clean readable silhouette, game-ready,
+    matching a whimsical fairytale pill-mascot village
+  ai_model: meshy-5
+  target_polycount: 2400

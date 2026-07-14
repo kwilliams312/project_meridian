@@ -1,0 +1,16 @@
+schema: meridian/asset@1
+id: core:art.fairytale_castle
+class: hero_landmark
+source: assets/art/fairytale_castle/sm_fairytale_castle.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors:
+  - meridian-contributors
+  origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/019f6176-dc15-7df4-a5ac-b3242d3888f2
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: fairytale_castle.prompts.yaml
+budget:
+  lod0_tris: 66143
+restyle_status: pending

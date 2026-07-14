@@ -1,0 +1,10 @@
+task_id: 019f616c-c360-73bb-8264-8889656eb8e0
+model_version: meshy-5
+preview_task_id: 019f616b-0de2-7009-9735-767d7d4b6071
+request:
+  mode: preview
+  prompt: a chibi striped market stall, chibi, colored rounded pill / clay toy aesthetic,
+    bright saturated colors, big cute friendly, clean readable silhouette, game-ready,
+    matching a whimsical fairytale pill-mascot village
+  ai_model: meshy-5
+  target_polycount: 2400

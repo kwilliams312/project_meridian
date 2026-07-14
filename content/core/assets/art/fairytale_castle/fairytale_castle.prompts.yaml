@@ -1,0 +1,11 @@
+task_id: 019f6176-dc15-7df4-a5ac-b3242d3888f2
+model_version: meshy-5
+preview_task_id: 019f6175-b34b-7fce-b0d3-e20cceec867e
+request:
+  mode: preview
+  prompt: a grand chibi fairytale castle with many blue-roofed towers and flags, chibi,
+    colored rounded pill / clay toy aesthetic, bright saturated colors, big cute friendly,
+    clean readable silhouette, game-ready, matching a whimsical fairytale pill-mascot
+    village
+  ai_model: meshy-5
+  target_polycount: 64000

@@ -1,0 +1,16 @@
+schema: meridian/asset@1
+id: core:art.signpost
+class: prop
+source: assets/art/signpost/sm_signpost.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors:
+  - meridian-contributors
+  origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/019f617b-fa3c-7157-b35c-1179ac1dc3ec
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: signpost.prompts.yaml
+budget:
+  lod0_tris: 2458
+restyle_status: pending
