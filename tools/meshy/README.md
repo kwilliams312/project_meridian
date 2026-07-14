@@ -83,19 +83,29 @@ as `task_ids` on terminal `completed`, `cancelled`, and runtime `error` events.
 ### Cancellation and exit codes
 
 Send SIGINT (normally Ctrl-C) to cancel. The CLI removes only that job's staged
-or owner-marked unpublished output before emitting `cancelled`; it never removes
-a completed or unowned final asset. A provider task may continue remotely;
+or sentinel-proven unpublished output before emitting `cancelled`; it never
+removes a completed or unowned final asset. A provider task may continue remotely;
 `task_ids` lets the caller audit or manage it through provider tooling without
-hiding that fact. A per-target advisory lock is acquired before client setup,
-so concurrent jobs for the same namespace/name cannot both proceed; locks are
-released automatically by the OS after abnormal process death. Output is built
-inside a job-unique staging directory containing `.partial`, then all three
-files become visible together through one atomic directory rename after budget
-and provenance checks pass. An owner marker permits safe rollback or stale-job
-recovery until client teardown succeeds. Existing assets are never overwritten.
-Client teardown is part of the transaction: if `close()` fails, the owned atomic
-publication is rolled back and the job emits one `internal_error` with exit `1`,
-never a `completed` event followed by an error.
+hiding that fact. A cross-platform per-target advisory lock is acquired before
+client setup, so concurrent jobs for the same namespace/name cannot both
+proceed; the OS releases POSIX `flock` or Windows `msvcrt.locking` ownership
+after abnormal process death. Lock and transaction records live outside the
+pack under the system temporary directory (override with
+`MERIDIAN_MESHY_LOCK_DIR`) and are keyed by the canonical target path.
+
+Output is built inside a job-unique staging directory containing `.partial`,
+then all three files become visible together through one atomic directory
+rename after budget and provenance checks pass. A cryptographically random
+sentinel moves *inside* that rename and must match the separately locked
+transaction record before recovery may delete any staging or final directory;
+stray filenames and forged/unknown sentinels always refuse safe. The external
+record's atomic `committed` transition is the commit point. An interrupt before
+it rolls back and emits `cancelled`; an interrupt after it finishes sentinel
+cleanup and emits `completed`. Successful, cancelled, and failed jobs therefore
+leave no protocol files in the pack tree. Existing assets are never overwritten.
+Client teardown occurs before commit: if `close()` fails, publication is rolled
+back and the job emits one `internal_error` with exit `1`, never a `completed`
+event followed by an error.
 
 | Exit | Meaning | Terminal JSON event |
 |---:|---|---|

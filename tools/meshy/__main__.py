@@ -33,21 +33,23 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import fcntl
+import hashlib
 import io
+import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
-import uuid
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO
 
 import yaml
 
 from . import client as client_mod
 from . import intake
+from . import locking
 from . import mapping
 from . import protocol
 
@@ -182,117 +184,249 @@ def _new_client(
     return client_mod.MeshyClient(api_key, model_version=model_version)
 
 
+def _post_commit_hook() -> None:
+    """Test seam for an interrupt after commit and before the terminal event."""
+
+
 @dataclass
 class _TargetReservation:
     """Crash-recoverable ownership of one target and its private staging tree.
 
-    A persistent lock file plus ``flock`` provides live-owner exclusion; the OS
-    releases it after abnormal process death.  A tokenized owner marker makes an
-    interrupted atomic publish distinguishable from a completed asset.  All three
-    artifacts live in one staging directory and become visible together through a
-    single same-filesystem directory rename.
+    A cross-platform advisory lock provides live-owner exclusion; the OS releases
+    it after abnormal process death.  A random sentinel moves *inside* the atomic
+    staging-directory rename and must match the external transaction record before
+    recovery may delete anything.  The external record's atomic ``committed``
+    transition is the irreversible commit point.
     """
 
     paths: intake.LandingPaths
     token: str
-    lock_path: Path
-    lock_handle: IO[bytes]
-    owner_path: Path
+    target_key: str
+    target_identity: str
+    file_lock: locking.AdvisoryFileLock
+    state_path: Path
     staging_dir: Path
+    sentinel_path: Path
     partial_glb: Path
     partial_prompts: Path
     partial_sidecar: Path
     committed: bool = False
 
+    _STATE_SCHEMA = "meridian/meshy-job-lock@1"
+    _SENTINEL_NAME = ".meshy-ownership.json"
+
+    @staticmethod
+    def _lock_root() -> Path:
+        override = os.environ.get("MERIDIAN_MESHY_LOCK_DIR")
+        if override:
+            return Path(override)
+        return Path(tempfile.gettempdir()) / "meridian-meshy-locks"
+
+    @staticmethod
+    def _identity(paths: intake.LandingPaths) -> str:
+        return os.path.normcase(str(paths.asset_dir.resolve(strict=False)))
+
     @classmethod
     def acquire(cls, paths: intake.LandingPaths) -> _TargetReservation:
         paths.asset_dir.parent.mkdir(parents=True, exist_ok=True)
-        lock_path = paths.asset_dir.parent / f".{paths.asset_dir.name}.meshy.lock"
-        lock_handle = lock_path.open("a+b")
+        identity = cls._identity(paths)
+        target_key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        lock_root = cls._lock_root()
+        file_lock = locking.AdvisoryFileLock(lock_root / f"{target_key}.lock")
         try:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            lock_handle.close()
+            file_lock.acquire()
+        except locking.LockUnavailableError as exc:
             raise intake.IntakeError(
                 f"output already exists or is reserved under {paths.asset_dir}; "
                 "refusing to overwrite an existing asset"
             ) from exc
 
+        state_path = lock_root / f"{target_key}.json"
+        staging_dir: Path | None = None
         try:
-            cls._recover_stale(paths)
+            cls._recover_stale(paths, state_path, identity)
             if paths.asset_dir.exists():
                 raise intake.IntakeError(
                     f"output already exists under {paths.asset_dir}; refusing to "
                     "overwrite an existing asset"
                 )
 
-            token = uuid.uuid4().hex
-            owner_path = paths.asset_dir.parent / (
-                f".{paths.asset_dir.name}.{token}.owner"
-            )
+            token = secrets.token_hex(32)
             staging_dir = paths.asset_dir.parent / (
                 f".{paths.asset_dir.name}.{token}.partial"
             )
-            owner_path.write_text(token, encoding="ascii")
             staging_dir.mkdir()
-            return cls(
+            sentinel_path = staging_dir / cls._SENTINEL_NAME
+            reservation = cls(
                 paths=paths,
                 token=token,
-                lock_path=lock_path,
-                lock_handle=lock_handle,
-                owner_path=owner_path,
+                target_key=target_key,
+                target_identity=identity,
+                file_lock=file_lock,
+                state_path=state_path,
                 staging_dir=staging_dir,
+                sentinel_path=sentinel_path,
                 partial_glb=staging_dir / paths.glb_path.name,
                 partial_prompts=staging_dir / paths.prompts_path.name,
                 partial_sidecar=staging_dir / paths.sidecar_path.name,
             )
+            reservation._write_sentinel()
+            reservation._write_state("staging")
+            return reservation
         except BaseException:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-            lock_handle.close()
+            # This process created the random path while holding the target
+            # lock, so setup rollback does not need recovery proof.
+            if staging_dir is not None and staging_dir.is_dir():
+                shutil.rmtree(staging_dir)
+            file_lock.release()
             raise
 
     @classmethod
-    def _recover_stale(cls, paths: intake.LandingPaths) -> None:
-        """Remove only artifacts carrying a dead job's explicit owner token."""
+    def _recover_stale(
+        cls, paths: intake.LandingPaths, state_path: Path, identity: str
+    ) -> None:
+        """Recover only internal sentinels cryptographically bound to state."""
 
-        parent = paths.asset_dir.parent
-        prefix = f".{paths.asset_dir.name}."
-        for owner_path in parent.glob(f"{prefix}*.owner"):
-            token = owner_path.name[len(prefix) : -len(".owner")]
-            staging_dir = parent / f"{prefix}{token}.partial"
-            if staging_dir.is_dir():
-                shutil.rmtree(staging_dir)
-            # The rename moves (rather than copies) the staging directory.  A
-            # missing stage plus surviving owner marker therefore proves this
-            # token published the final directory but never completed.
-            elif paths.asset_dir.is_dir():
+        state = cls._read_document(state_path)
+        valid_state = cls._valid_record(state, identity)
+        token = state["token"] if valid_state else None
+        phase = state["phase"] if valid_state else None
+        candidates = list(
+            paths.asset_dir.parent.glob(f".{paths.asset_dir.name}.*.partial")
+        )
+
+        recoverable_staging = []
+        for staging_dir in candidates:
+            sentinel = cls._read_document(staging_dir / cls._SENTINEL_NAME)
+            if not cls._valid_sentinel(sentinel, identity, token):
+                raise intake.IntakeError(
+                    f"unrecognized Meshy staging ownership under {staging_dir}; "
+                    "refusing unsafe recovery"
+                )
+            recoverable_staging.append(staging_dir)
+
+        for staging_dir in recoverable_staging:
+            shutil.rmtree(staging_dir)
+
+        if paths.asset_dir.is_dir():
+            sentinel = cls._read_document(paths.asset_dir / cls._SENTINEL_NAME)
+            if phase != "committed" and cls._valid_sentinel(sentinel, identity, token):
                 shutil.rmtree(paths.asset_dir)
-            owner_path.unlink(missing_ok=True)
+            elif phase == "committed" and cls._valid_sentinel(
+                sentinel, identity, token
+            ):
+                (paths.asset_dir / cls._SENTINEL_NAME).unlink(missing_ok=True)
+            # Every other final directory is legitimate or unprovable and is
+            # preserved by the caller's ordinary output-exists refusal.
+
+        if valid_state and phase != "committed" and not paths.asset_dir.exists():
+            state_path.unlink(missing_ok=True)
+
+    @classmethod
+    def _read_document(cls, path: Path) -> dict:
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return {}
+        return document if isinstance(document, dict) else {}
+
+    @classmethod
+    def _valid_record(cls, document: dict, identity: str) -> bool:
+        token = document.get("token")
+        return (
+            document.get("schema") == cls._STATE_SCHEMA
+            and document.get("target") == identity
+            and document.get("phase") in {"staging", "published", "committed"}
+            and isinstance(token, str)
+            and len(token) == 64
+            and all(char in "0123456789abcdef" for char in token)
+        )
+
+    @classmethod
+    def _valid_sentinel(
+        cls, document: dict, identity: str, expected_token: str | None
+    ) -> bool:
+        token = document.get("token")
+        return (
+            expected_token is not None
+            and document.get("schema") == cls._STATE_SCHEMA
+            and document.get("target") == identity
+            and isinstance(token, str)
+            and secrets.compare_digest(token, expected_token)
+        )
+
+    def _document(self, phase: str) -> dict:
+        return {
+            "schema": self._STATE_SCHEMA,
+            "target": self.target_identity,
+            "token": self.token,
+            "phase": phase,
+        }
+
+    def _atomic_write(self, path: Path, document: dict) -> None:
+        temporary = path.with_name(f".{path.name}.{self.token}.tmp")
+        temporary.write_text(
+            json.dumps(document, separators=(",", ":"), sort_keys=True),
+            encoding="utf-8",
+        )
+        temporary.chmod(0o600)
+        temporary.replace(path)
+
+    def _write_sentinel(self) -> None:
+        self._atomic_write(self.sentinel_path, self._document("staging"))
+
+    def _write_state(self, phase: str) -> None:
+        self._atomic_write(self.state_path, self._document(phase))
 
     def publish(self) -> None:
         """Publish the complete asset as one atomic directory operation."""
 
         self.staging_dir.replace(self.paths.asset_dir)
+        self.sentinel_path = self.paths.asset_dir / self._SENTINEL_NAME
+        self._write_state("published")
 
     def commit(self) -> None:
         """Mark a published asset complete only after client teardown succeeds."""
 
-        self.owner_path.unlink()
+        self._write_state("committed")
         self.committed = True
+        self.sentinel_path.unlink(missing_ok=True)
+
+    def is_committed(self) -> bool:
+        state = self._read_document(self.state_path)
+        return self._valid_record(state, self.target_identity) and (
+            state["token"] == self.token and state["phase"] == "committed"
+        )
+
+    def finish_committed(self) -> None:
+        """Idempotently finish presentation after the atomic commit point."""
+
+        self.committed = self.is_committed()
+        if self.committed:
+            (self.paths.asset_dir / self._SENTINEL_NAME).unlink(missing_ok=True)
 
     def cleanup(self) -> None:
         """Rollback this token's unpublished staging/final output and unlock."""
 
         try:
-            if not self.committed and self.owner_path.exists():
-                if self.staging_dir.is_dir():
+            if self.is_committed():
+                self.finish_committed()
+            else:
+                if self.staging_dir.is_dir() and self._valid_sentinel(
+                    self._read_document(self.staging_dir / self._SENTINEL_NAME),
+                    self.target_identity,
+                    self.token,
+                ):
                     shutil.rmtree(self.staging_dir)
-                elif self.paths.asset_dir.is_dir():
+                elif self.paths.asset_dir.is_dir() and self._valid_sentinel(
+                    self._read_document(self.paths.asset_dir / self._SENTINEL_NAME),
+                    self.target_identity,
+                    self.token,
+                ):
                     shutil.rmtree(self.paths.asset_dir)
-                self.owner_path.unlink(missing_ok=True)
+                self.state_path.unlink(missing_ok=True)
         finally:
-            fcntl.flock(self.lock_handle.fileno(), fcntl.LOCK_UN)
-            self.lock_handle.close()
+            self.file_lock.release()
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
@@ -371,6 +505,23 @@ def cmd_generate(args: argparse.Namespace) -> int:
     )
 
     task_ids: list[str] = []
+    terminal_emitted = False
+
+    def completed() -> int:
+        nonlocal terminal_emitted
+        if not terminal_emitted:
+            terminal_emitted = True
+            asset_id = intake.asset_id(args.ns, args.name)
+            if args.json_events:
+                events.emit(
+                    "completed",
+                    asset_id=asset_id,
+                    path=str(paths.asset_dir),
+                    task_ids=task_ids,
+                )
+            else:
+                print(f"OK — landed {asset_id} at {paths.asset_dir}")
+        return 0
 
     def on_client_event(event: str, **fields) -> None:
         task_id = fields.get("task_id")
@@ -494,9 +645,14 @@ def cmd_generate(args: argparse.Namespace) -> int:
         client.close()
         client = None
         reservation.commit()
+        _post_commit_hook()
+        return completed()
     except intake.IntakeError as exc:
         return refuse(str(exc))
     except KeyboardInterrupt:
+        if reservation is not None and reservation.is_committed():
+            reservation.finish_committed()
+            return completed()
         if args.json_events:
             events.emit(
                 "cancelled",
@@ -521,6 +677,9 @@ def cmd_generate(args: argparse.Namespace) -> int:
             print(f"error: {events.redact(str(exc))}", file=sys.stderr)
         return 1
     except Exception as exc:  # noqa: BLE001 — machine protocol must terminate cleanly
+        if reservation is not None and reservation.is_committed():
+            reservation.finish_committed()
+            return completed()
         if args.json_events:
             events.emit(
                 "error",
@@ -539,18 +698,6 @@ def cmd_generate(args: argparse.Namespace) -> int:
                 client.close()
         if reservation is not None:
             reservation.cleanup()
-
-    asset_id = intake.asset_id(args.ns, args.name)
-    if args.json_events:
-        events.emit(
-            "completed",
-            asset_id=asset_id,
-            path=str(paths.asset_dir),
-            task_ids=task_ids,
-        )
-    else:
-        print(f"OK — landed {asset_id} at {paths.asset_dir}")
-    return 0
 
 
 def cmd_convert_rig(args: argparse.Namespace) -> int:

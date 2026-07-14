@@ -6,10 +6,14 @@ never contact Meshy (or any other external service).
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import subprocess
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -20,8 +24,14 @@ sys.path.insert(0, str(REPO / "tools"))
 
 import meshy.__main__ as meshy_main  # noqa: E402
 import meshy.client as client_mod  # noqa: E402
+import meshy.locking as locking_mod  # noqa: E402
 import meshy.protocol as protocol  # noqa: E402
 from test_meshy import _make_glb, _text_to_3d_handler  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolated_lock_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("MERIDIAN_MESHY_LOCK_DIR", str(tmp_path / "job-locks"))
 
 
 def _events(stdout: str) -> list[dict]:
@@ -79,6 +89,72 @@ def test_protocol_schema_accepts_every_documented_event_shape():
             error_code="provider_error",
         )
         assert list(validator.iter_errors(event)) == []
+
+
+@pytest.mark.parametrize("platform", ["posix", "nt"])
+def test_advisory_lock_uses_platform_backend_without_cross_platform_import(
+    platform, tmp_path
+):
+    calls = []
+    if platform == "nt":
+        backend = SimpleNamespace(
+            LK_NBLCK=1,
+            LK_UNLCK=2,
+            locking=lambda fd, mode, length: calls.append((fd, mode, length)),
+        )
+        lock = locking_mod.AdvisoryFileLock(
+            tmp_path / "windows.lock", platform="nt", msvcrt_module=backend
+        )
+    else:
+        backend = SimpleNamespace(
+            LOCK_EX=1,
+            LOCK_NB=2,
+            LOCK_UN=4,
+            flock=lambda fd, mode: calls.append((fd, mode)),
+        )
+        lock = locking_mod.AdvisoryFileLock(
+            tmp_path / "posix.lock", platform="posix", fcntl_module=backend
+        )
+
+    lock.acquire()
+    lock.release()
+
+    if platform == "nt":
+        assert [call[1:] for call in calls] == [
+            (backend.LK_NBLCK, 1),
+            (backend.LK_UNLCK, 1),
+        ]
+    else:
+        assert [call[1] for call in calls] == [
+            backend.LOCK_EX | backend.LOCK_NB,
+            backend.LOCK_UN,
+        ]
+
+
+def test_meshy_and_convert_rig_import_when_fcntl_is_unavailable():
+    script = """
+import builtins
+real_import = builtins.__import__
+def without_fcntl(name, *args, **kwargs):
+    if name == 'fcntl':
+        raise ModuleNotFoundError('simulated Windows: no fcntl')
+    return real_import(name, *args, **kwargs)
+builtins.__import__ = without_fcntl
+import meshy.__main__ as cli
+args = cli._build_parser().parse_args(
+    ['convert-rig', 'input.glb', '--meshy-version', 'meshy-5', '--out', 'out.glb']
+)
+assert args.command == 'convert-rig'
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=REPO,
+        env={**os.environ, "PYTHONPATH": str(REPO / "tools")},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_emitter_redacts_api_key_and_bearer_tokens_recursively(capsys):
@@ -415,6 +491,7 @@ def test_atomic_publish_boundary_failure_rolls_back_and_allows_retry(
     assert not (parent / "protocol_marker").exists()
     assert not list(parent.glob(".protocol_marker.*.partial"))
     assert not list(parent.glob(".protocol_marker.*.owner"))
+    assert list(parent.iterdir()) == []
 
     # The failed publication leaves no poisoned reservation or raw final file.
     monkeypatch.setattr(meshy_main._TargetReservation, "publish", original_publish)
@@ -422,6 +499,71 @@ def test_atomic_publish_boundary_failure_rolls_back_and_allows_retry(
     assert (parent / "protocol_marker/sm_protocol_marker.glb").read_bytes() == (
         glb.read_bytes()
     )
+
+
+@pytest.mark.parametrize("transition", ["commit-state", "sentinel", "terminal"])
+def test_interrupt_after_commit_point_resolves_to_one_completed_event(
+    transition, tmp_path, monkeypatch, capsys
+):
+    glb = _make_glb(tmp_path / "source.glb", triangle_count=2)
+    handler, _calls = _text_to_3d_handler(glb_bytes=glb.read_bytes())
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        meshy_main,
+        "_new_client",
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+            client_mod.MeshyClient(
+                api_key, model_version=model_version, transport=transport
+            )
+        ),
+    )
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+
+    if transition == "commit-state":
+        original_write = meshy_main._TargetReservation._write_state
+
+        def interrupt_after_state(reservation, phase):
+            original_write(reservation, phase)
+            if phase == "committed":
+                raise KeyboardInterrupt
+
+        monkeypatch.setattr(
+            meshy_main._TargetReservation, "_write_state", interrupt_after_state
+        )
+    elif transition == "sentinel":
+        original_commit = meshy_main._TargetReservation.commit
+
+        def interrupt_after_sentinel(reservation):
+            original_commit(reservation)
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(
+            meshy_main._TargetReservation, "commit", interrupt_after_sentinel
+        )
+    else:
+        monkeypatch.setattr(
+            meshy_main,
+            "_post_commit_hook",
+            lambda: (_ for _ in ()).throw(KeyboardInterrupt),
+        )
+
+    assert meshy_main.main(_base_args(tmp_path)) == 0
+    events = _events(capsys.readouterr().out)
+    terminals = [
+        event
+        for event in events
+        if event["event"] in {"completed", "cancelled", "error"}
+    ]
+    assert [event["event"] for event in terminals] == ["completed"]
+    final = tmp_path / "content/core/assets/art/protocol_marker"
+    assert (final / "sm_protocol_marker.glb").read_bytes() == glb.read_bytes()
+    assert not (final / ".meshy-ownership.json").exists()
+    assert {entry.name for entry in final.parent.iterdir()} == {"protocol_marker"}
+    assert {entry.name for entry in final.iterdir()} == {
+        "sm_protocol_marker.glb",
+        "protocol_marker.asset.yaml",
+        "protocol_marker.prompts.yaml",
+    }
 
 
 def test_client_close_failure_emits_one_redacted_error_and_rolls_back(
@@ -463,7 +605,9 @@ def test_client_close_failure_emits_one_redacted_error_and_rolls_back(
     assert terminals[0]["event"] == "error"
     assert terminals[0]["error_code"] == "internal_error"
     assert terminals[0]["message"] == ("teardown echoed [REDACTED] and [REDACTED]")
-    assert not (tmp_path / "content/core/assets/art/protocol_marker").exists()
+    parent = tmp_path / "content/core/assets/art"
+    assert not (parent / "protocol_marker").exists()
+    assert list(parent.iterdir()) == []
 
 
 @pytest.mark.parametrize("phase", ["staging", "published"])
@@ -474,15 +618,26 @@ def test_dead_owner_artifacts_are_recovered_but_live_lock_is_not_stolen(
 
     parent = tmp_path / "content/core/assets/art"
     parent.mkdir(parents=True)
-    token = "deadbeef"
-    owner = parent / f".protocol_marker.{token}.owner"
+    token = "de" * 32
     staging = parent / f".protocol_marker.{token}.partial"
     final = parent / "protocol_marker"
-    owner.write_text(token, encoding="ascii")
     stale_dir = staging if phase == "staging" else final
     stale_dir.mkdir()
     (stale_dir / "raw-unpublished.glb").write_bytes(b"must not survive")
-    (parent / ".protocol_marker.meshy.lock").touch()
+    identity = os.path.normcase(str(final.resolve(strict=False)))
+    record = {
+        "schema": meshy_main._TargetReservation._STATE_SCHEMA,
+        "target": identity,
+        "token": token,
+        "phase": phase,
+    }
+    (stale_dir / ".meshy-ownership.json").write_text(
+        json.dumps(record), encoding="utf-8"
+    )
+    lock_root = tmp_path / "job-locks"
+    lock_root.mkdir()
+    key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    (lock_root / f"{key}.json").write_text(json.dumps(record), encoding="utf-8")
 
     glb = _make_glb(tmp_path / "source.glb", triangle_count=2)
     handler, _calls = _text_to_3d_handler(glb_bytes=glb.read_bytes())
@@ -499,10 +654,58 @@ def test_dead_owner_artifacts_are_recovered_but_live_lock_is_not_stolen(
     monkeypatch.setenv("MESHY_API_KEY", "fake-key")
 
     assert meshy_main.main(_base_args(tmp_path)) == 0
-    assert not owner.exists()
     assert not staging.exists()
     assert not (final / "raw-unpublished.glb").exists()
     assert (final / "sm_protocol_marker.glb").read_bytes() == glb.read_bytes()
+
+
+def test_forged_owner_names_and_sentinel_never_authorize_final_deletion(
+    tmp_path, monkeypatch, capsys
+):
+    parent = tmp_path / "content/core/assets/art"
+    final = parent / "protocol_marker"
+    final.mkdir(parents=True)
+    valuable = final / "sm_protocol_marker.glb"
+    valuable.write_bytes(b"legitimate completed asset")
+    forged_token = "ab" * 32
+    (parent / f".protocol_marker.{forged_token}.owner").write_text(
+        forged_token, encoding="ascii"
+    )
+    (final / ".meshy-ownership.json").write_text(
+        json.dumps(
+            {
+                "schema": meshy_main._TargetReservation._STATE_SCHEMA,
+                "target": os.path.normcase(str(final.resolve(strict=False))),
+                "token": forged_token,
+                "phase": "published",
+            }
+        ),
+        encoding="utf-8",
+    )
+    identity = os.path.normcase(str(final.resolve(strict=False)))
+    key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    lock_root = tmp_path / "job-locks"
+    lock_root.mkdir()
+    (lock_root / f"{key}.json").write_text(
+        json.dumps(
+            {
+                "schema": meshy_main._TargetReservation._STATE_SCHEMA,
+                "target": identity,
+                "token": "cd" * 32,
+                "phase": "published",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+
+    assert meshy_main.main(_base_args(tmp_path)) == 2
+    events = _events(capsys.readouterr().out)
+    assert events[-1]["event"] == "error"
+    assert events[-1]["error_code"] == "invalid_request"
+    assert valuable.read_bytes() == b"legitimate completed asset"
+    assert (final / ".meshy-ownership.json").exists()
+    assert (parent / f".protocol_marker.{forged_token}.owner").exists()
 
 
 def test_keyboard_interrupt_emits_cancel_and_removes_partial_output(
@@ -537,3 +740,4 @@ def test_keyboard_interrupt_emits_cancel_and_removes_partial_output(
     assert not asset_dir.exists()
     assert not list(asset_dir.parent.glob(".protocol_marker.*.partial"))
     assert not list(asset_dir.parent.glob(".protocol_marker.*.owner"))
+    assert list(asset_dir.parent.iterdir()) == []
