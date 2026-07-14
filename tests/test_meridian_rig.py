@@ -230,8 +230,10 @@ def test_chibi_arm_span_materially_smaller_than_ardent():
     ard_hand_x = abs(ardent["RightHand"].tail_m[0])
     chi_hand_x = abs(chibi["RightHand"].tail_m[0])
     assert chi_hand_x < ard_hand_x
-    # "Materially" smaller: at most a third of ardent's reach (well inside the pill).
-    assert chi_hand_x < 0.34 * ard_hand_x
+    # "Materially" smaller: well under half ardent's full human reach — the chibi
+    # hand reaches only out to the pill's little stubby T-pose arms, not human
+    # arm-span, which is what keeps the arm/hand geosets off the proxy fallback.
+    assert chi_hand_x < 0.45 * ard_hand_x
 
 
 def test_chibi_is_much_more_compact_than_ardent():

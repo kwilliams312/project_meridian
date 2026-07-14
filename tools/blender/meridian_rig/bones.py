@@ -279,7 +279,7 @@ def _dolmen_pt(p: Vec3) -> Vec3:
 _CHIBI_HIP_Y = 0.95  # pelvis line: legs below, torso/arms/head above (as reference)
 _CHIBI_LEG_SCALE = 0.42  # legs very short + lifted so foot/lower-leg anchors sit in the pill
 _CHIBI_TORSO_SCALE = 0.46  # short torso: drops the shoulder line into the wide belly band
-_CHIBI_WIDTH_SCALE = 0.24  # pull arms/hands/hips hard inward (hand |X| 0.82 -> ~0.20)
+_CHIBI_WIDTH_SCALE = 0.40  # arms reach OUT to the pill's stubby T-pose arms (hand |X| 0.82 -> ~0.33)
 _CHIBI_DEPTH_SCALE = 0.55  # tuck fingers/feet fore-aft inside the shallow pill depth
 
 
@@ -292,9 +292,12 @@ def _chibi_pt(p: Vec3) -> Vec3:
     preserved automatically) -- only far more compact, and with the depth axis
     (Z) scaled too. X (arm span, hip width) and Z (finger/foot depth) pull hard
     toward the axis so every limb joint -- hence every one of the eight geoset
-    region anchors -- lands INSIDE the compact pill instead of out at human
-    reach, where the arm/hand geosets would otherwise fall back to floating
-    proxy boxes.
+    region anchors -- lands INSIDE the compact pill rather than out at the full
+    ardent human reach, where the arm/hand geosets would fall back to floating
+    proxy boxes. The pill's own arms are short and stubby (a chibi T-pose), so
+    the arm span shrinks a lot (hand |X| 0.82 -> ~0.33, well under half ardent)
+    but still reaches OUT to where those little arms actually are, so the hand
+    bone runs the length of the arm instead of stopping short in the torso.
     """
     x, y, z = p
     if y <= _CHIBI_HIP_Y:
