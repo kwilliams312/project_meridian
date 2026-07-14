@@ -135,7 +135,13 @@ public class HeadlessShellTests
             Assert.False(vm.CanSave);
 
             File.WriteAllText(manifestPath, original);
-            for (var i = 0; i < 100 && vm.HasExternalConflict; i++) await Task.Delay(25);
+            // FileSystemWatcher refreshes the workspace on its worker thread, then
+            // the VM posts diagnostics/command state to Avalonia's UI dispatcher.
+            // On Linux the workspace conflict can clear one dispatcher turn before
+            // CanSave observes the refreshed diagnostics. Wait for the complete UI
+            // state rather than using the background workspace flag as the barrier.
+            for (var i = 0; i < 100 && (vm.HasExternalConflict || !vm.CanSave); i++)
+                await Task.Delay(25);
             Assert.False(vm.HasExternalConflict);
             Assert.True(vm.CanSave);
         }
