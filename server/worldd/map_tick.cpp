@@ -44,6 +44,17 @@ const char* reject_name(CastReject r) {
         case CastReject::kOutOfRange:            return "OUT_OF_RANGE";
         case CastReject::kNoLineOfSight:         return "NO_LINE_OF_SIGHT";
         case CastReject::kInterrupted:           return "INTERRUPTED";
+        case CastReject::kCasterStunned:         return "CASTER_STUNNED";
+        case CastReject::kCasterSilenced:        return "CASTER_SILENCED";
+    }
+    return "?";
+}
+
+const char* motion_name(MovementMotion m) {
+    switch (m) {
+        case MovementMotion::kKnockback: return "knockback";
+        case MovementMotion::kPull:      return "pull";
+        case MovementMotion::kDash:      return "dash";
     }
     return "?";
 }
@@ -71,10 +82,38 @@ const char* ai_state_name(AiState s) {
 
 std::string u(std::uint64_t v) { return std::to_string(v); }
 
-// Whether an ability has any DIRECT (damage/heal) effect the resolver applies.
+// Whether an ability has any DIRECT (damage/heal) effect — gates the "resolve"
+// golden line + the AI threat feed.
 bool has_direct_effect(const Ability& a) {
     for (const AbilityEffect& e : a.effects) {
         if (e.kind == EffectKind::kDamage || e.kind == EffectKind::kHeal) return true;
+    }
+    return false;
+}
+
+// Whether an ability has any effect the RESOLVER executes on the Units directly:
+// the direct damage/heal PLUS the SP2.3 #693 instantaneous primitives (resource,
+// movement). Timed kinds go to the AuraContainer; summon to the map tick — those do
+// NOT need resolve_ability. Gates whether we roll + call resolve_ability at all.
+bool has_resolver_effect(const Ability& a) {
+    for (const AbilityEffect& e : a.effects) {
+        switch (e.kind) {
+            case EffectKind::kDamage:
+            case EffectKind::kHeal:
+            case EffectKind::kResource:
+            case EffectKind::kMovement:
+                return true;
+            default:
+                break;
+        }
+    }
+    return false;
+}
+
+// Whether an ability has any `summon` effect (the map tick executes it, #693).
+bool has_summon_effect(const Ability& a) {
+    for (const AbilityEffect& e : a.effects) {
+        if (e.kind == EffectKind::kSummon) return true;
     }
     return false;
 }
@@ -181,6 +220,10 @@ std::vector<TickEvent> MapTick::advance() {
     //    route through the single on_unit_died hook (corpse+XP side effects).
     phase_combat_auras(out);
 
+    // 4a2) despawn timed summons whose lifetime elapsed (SP2.3 #693), in the combat
+    //      phase after casts/auras so a summon cast this tick lives at least one tick.
+    phase_summon_expiry(out);
+
     // 4b) movement-derived (fall/swim) environmental damage (#362), evaluated in
     //     the combat phase after casts/auras: fall damage on landing + drowning while
     //     breath is exhausted, applied via Unit::apply_damage. A lethal fall/drown
@@ -231,8 +274,10 @@ void MapTick::phase_drain_inbound(std::vector<TickEvent>& out) {
             target = unit_for_guid(tguid);
         }
 
+        bool stunned = false, silenced = false;
+        caster_control(cmd.caster_guid, stunned, silenced);
         const CastDecision d = begin_ability_use(pc.combat, *ab, pc.unit, target, tguid,
-                                                 flat_map_los, now_ms_);
+                                                 flat_map_los, now_ms_, stunned, silenced);
         if (!d.accepted) {
             emit(out, TickPhase::kInbound,
                  "cast_rejected caster=" + u(cmd.caster_guid) + " ability=" + u(ab->id) +
@@ -339,6 +384,16 @@ void MapTick::phase_combat_auras(std::vector<TickEvent>& out) {
         } else {
             target = unit_for_guid(tguid);
         }
+        // A stun/silence that landed DURING the cast fizzles it (SP2.3 #693 cast-time
+        // interrupt): a silenced or stunned caster cannot complete a cast.
+        bool stunned = false, silenced = false;
+        caster_control(g, stunned, silenced);
+        if (stunned || silenced) {
+            emit(out, TickPhase::kCombat,
+                 "cast_fizzle caster=" + u(g) + " ability=" + u(ab->id) + " reason=" +
+                     std::string(stunned ? "CASTER_STUNNED" : "CASTER_SILENCED"));
+            continue;
+        }
         // Re-validate on completion: the target may have died / left / moved out of
         // range while the cast ran (SAD §2.5 cast-time interrupt/fizzle).
         const CastReject why = validate_target(*ab, pc.unit, target, flat_map_los);
@@ -443,36 +498,132 @@ void MapTick::resolve_and_log(const Ability& ability, Unit& caster, ObjectGuid c
                  u(caster.resource()));
     }
 
-    // Direct damage/heal: roll the attack table + apply (skips kAura/kThreat).
-    if (has_direct_effect(ability)) {
+    // Resolver-executed effects (SP2.3 #693): the direct damage/heal PLUS the
+    // instantaneous resource/movement primitives. Roll the attack table ONCE and
+    // apply (skips the timed kinds + threat + summon).
+    if (has_resolver_effect(ability)) {
         const ResolveResult rr = resolve_ability(ability, caster, target, rng_);
-        emit(out, phase,
-             "resolve caster=" + u(caster_guid) + " target=" + u(target_guid) + " ability=" +
-                 u(ability.id) + " outcome=" + outcome_name(rr.outcome) + " amount=" +
-                 u(rr.amount) + " heal=" + u(rr.is_heal ? 1 : 0) + " target_hp=" +
-                 u(rr.target_health) + " died=" + u(rr.target_died ? 1 : 0));
+
+        // The "resolve" golden line stays the direct-damage/heal report (unchanged
+        // format — byte-stable for the pre-#693 goldens); a utility-only ability
+        // (resource/movement, no damage/heal) does not emit it.
+        if (has_direct_effect(ability)) {
+            emit(out, phase,
+                 "resolve caster=" + u(caster_guid) + " target=" + u(target_guid) +
+                     " ability=" + u(ability.id) + " outcome=" + outcome_name(rr.outcome) +
+                     " amount=" + u(rr.amount) + " heal=" + u(rr.is_heal ? 1 : 0) +
+                     " target_hp=" + u(rr.target_health) + " died=" + u(rr.target_died ? 1 : 0));
+        }
+        // A shield on the target soaked part of the hit (#693) — reported separately
+        // so the "resolve" line stays byte-stable when nothing is absorbed.
+        if (rr.absorbed > 0) {
+            emit(out, phase,
+                 "shield_absorb target=" + u(target_guid) + " ability=" + u(ability.id) +
+                     " absorbed=" + u(rr.absorbed) + " shield_left=" + u(target.absorb()));
+        }
+        // `resource` primitive executed on the target's pool (#693).
+        if (rr.resource_granted > 0 || rr.resource_drained > 0) {
+            emit(out, phase,
+                 "resource_effect target=" + u(target_guid) + " ability=" + u(ability.id) +
+                     " granted=" + u(rr.resource_granted) + " drained=" +
+                     u(rr.resource_drained) + " pool=" + u(target.resource()));
+        }
+        // `movement` primitive executed — a forced displacement (#693).
+        if (rr.moved) {
+            emit(out, phase,
+                 "movement guid=" + u(rr.moved_guid) + " ability=" + u(ability.id) +
+                     " x=" + std::to_string(static_cast<long long>(std::lround(rr.moved_to.x))) +
+                     " y=" + std::to_string(static_cast<long long>(std::lround(rr.moved_to.y))));
+        }
+
         if (rr.target_died)
             // THE single death hook: corpse+ghost for a player (#359), kill XP for a
             // creature (#360). caster_guid is the direct killer.
             on_unit_died(target_guid, target, caster_guid, u(caster_guid), phase, out);
 
         // Resolver → AI threat seam (#347): landing (or attempting) an attack on a
-        // creature adds threat and pulls it into combat on the attacker. A miss
-        // still aggros (a swing is a swing), so floor the threat at 1.
-        if (ai_.creature(target_guid) != nullptr) {
+        // creature adds threat and pulls it into combat on the attacker. Only a
+        // DIRECT attack aggros (a swing is a swing), so floor the threat at 1; a
+        // pure-utility ability does not generate threat.
+        if (has_direct_effect(ability) && ai_.creature(target_guid) != nullptr) {
             const float threat = static_cast<float>(rr.amount > 0 ? rr.amount : 1);
             ai_.add_threat(target_guid, caster_guid, threat);
         }
     }
 
-    // Aura effects: the resolver SKIPS kAura, so the tick applies them to the
-    // target's container (the §2.5 "combat/auras" integration point).
+    // Timed effects: the resolver SKIPS aura/dot/hot/buff/debuff/shield/cc, so the
+    // tick applies them to the target's container (the §2.5 "combat/auras"
+    // integration point). rng_ rolls a shield's absorb amount deterministically.
     if (AuraContainer* tc = auras_for(target_guid)) {
-        const std::size_t n = tc->apply_ability_auras(ability, caster_guid);
+        const std::size_t n = tc->apply_ability_effects(ability, caster_guid,
+                                                        DispelType::kNone, &rng_);
         if (n > 0)
             emit(out, phase,
                  "aura_applied target=" + u(target_guid) + " ability=" + u(ability.id) +
                      " count=" + u(n));
+    }
+
+    // `summon` primitive: spawn the summoned creatures near the caster (#693).
+    if (has_summon_effect(ability)) {
+        execute_summons(ability, caster, caster_guid, phase, out);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Summon execution + lifetime (SP2.3 #693).
+// ---------------------------------------------------------------------------
+void MapTick::execute_summons(const Ability& ability, Unit& caster, ObjectGuid caster_guid,
+                              TickPhase phase, std::vector<TickEvent>& out) {
+    for (const AbilityEffect& e : ability.effects) {
+        if (e.kind != EffectKind::kSummon) continue;
+
+        CreatureSpawnDef def;
+        const bool resolved = summon_resolver_ && summon_resolver_(e.summon_npc, def);
+        if (!resolved) {
+            // No resolver / unresolved ref — the contentId→spawn wiring is the
+            // documented content-pipeline seam. Recognised + reported, never crash.
+            emit(out, phase,
+                 "summon_unresolved caster=" + u(caster_guid) + " ability=" + u(ability.id) +
+                     " npc=" + e.summon_npc);
+            continue;
+        }
+
+        // Spawn `count` creatures AT THE CASTER (the summon origin). Ascending order,
+        // deterministic guids. A finite duration records an expiry for despawn.
+        def.home = caster.position();
+        const std::uint16_t count = e.summon_count == 0 ? 1 : e.summon_count;
+        for (std::uint16_t i = 0; i < count; ++i) {
+            const ObjectGuid g = ai_.add_spawn(def);
+            prev_ai_state_[g] = ai_.state_of(g);  // register for AI transition edges
+            if (e.duration_ms > 0)
+                summon_expiry_.emplace_back(g, now_ms_ + e.duration_ms);
+            emit(out, phase,
+                 "summon caster=" + u(caster_guid) + " ability=" + u(ability.id) + " npc=" +
+                     e.summon_npc + " guid=" + u(g) + " dur_ms=" + u(e.duration_ms));
+        }
+    }
+}
+
+void MapTick::phase_summon_expiry(std::vector<TickEvent>& out) {
+    // Despawn expired summons, back-to-front so erasures don't disturb the scan.
+    for (std::size_t i = summon_expiry_.size(); i-- > 0;) {
+        if (now_ms_ < summon_expiry_[i].second) continue;
+        const ObjectGuid g = summon_expiry_[i].first;
+        if (ai_.despawn(g)) {
+            creature_auras_.erase(g);
+            prev_ai_state_.erase(g);
+            emit(out, TickPhase::kCombat, "summon_expire guid=" + u(g));
+        }
+        summon_expiry_.erase(summon_expiry_.begin() + static_cast<std::ptrdiff_t>(i));
+    }
+}
+
+void MapTick::caster_control(ObjectGuid caster_guid, bool& stunned, bool& silenced) {
+    stunned = false;
+    silenced = false;
+    if (const AuraContainer* c = auras_for(caster_guid)) {
+        stunned = c->is_stunned();
+        silenced = c->is_silenced();
     }
 }
 

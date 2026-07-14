@@ -943,6 +943,24 @@ target_link_libraries(worldd-combat-golden-test
 set_target_properties(worldd-combat-golden-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-combat-golden COMMAND worldd-combat-golden-test)
 
+# --- Tier-1 ability-engine PRIMITIVE EXECUTION test (SP2.3; #693). -------------
+# PURE (no DB, no socket): drives the ability engine (combat_resolver + AuraContainer
+# + MapTick) with a FIXED CombatRng seed and asserts that EVERY effect primitive
+# EXECUTES server-authoritatively + deterministically — dot/hot periodic ticks,
+# buff/debuff attribute modifiers (StatKey + the #694 interim ledger), shield absorb,
+# cc gating (stun/root/silence), resource grant/drain, movement displacement, summon
+# spawn+despawn, and an ordered multi-primitive boss-slam chain. SP2.2 (#692) proved
+# these LOAD; this proves they RUN. Always runs in the plain server ctest.
+add_executable(worldd-ability-primitives-test
+  test/ability_primitives_test.cpp
+)
+target_link_libraries(worldd-ability-primitives-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-ability-primitives-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-ability-primitives COMMAND worldd-ability-primitives-test)
+
 # --- XP curve / leveling UNIT test (CHR-03 #360). -----------------------------
 # PURE (no DB, no socket, no clock, no RNG): drives the leveling curve directly —
 # xp_to_next_level monotonicity, xp_for_kill grey-mob falloff, and grant_xp

@@ -346,6 +346,16 @@ std::vector<Ability> placeholder_ability_set();
 // until epic #28's DB loader replaces the source behind AbilityStore).
 AbilityStore load_placeholder_ability_store();
 
+// Resolve a buff/debuff `attribute` contentId ref (e.g. "core:attribute.strength",
+// carried VERBATIM out of effects_json by SP2.2 #692) to a primary-stat StatKey.
+// Returns true + sets `out` when the ref's trailing token names one of the five
+// primary attributes (strength/agility/stamina/intellect/spirit); false for a
+// derived attribute (armor/crit/haste/…) or a malformed ref. This is the SP2.3
+// #693 resolution of the deferred `attribute` ref: a primary-stat modifier folds
+// into the existing StatKey delta layer; the rest is carried on the interim
+// attribute ledger for the #694 effective-stat framework (see aura_container.h).
+bool primary_attribute_stat(const std::string& attribute_ref, StatKey& out);
+
 // Human-readable enum names (logs / tooling / test diagnostics; not the hot path).
 const char* school_name(School s);
 const char* target_kind_name(TargetKind t);

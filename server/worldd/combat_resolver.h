@@ -112,6 +112,8 @@ enum class CastReject : std::uint8_t {
     kOutOfRange,
     kNoLineOfSight,
     kInterrupted,
+    kCasterStunned,   // a `cc` stun on the caster blocks all ability use (#693)
+    kCasterSilenced,  // a `cc` silence on the caster blocks casting (#693)
 };
 
 // ---------------------------------------------------------------------------
@@ -181,13 +183,26 @@ bool is_heal_ability(const Ability& ability);
 // #345 — resolution.
 // ---------------------------------------------------------------------------
 
-// The result of resolving one ability use against a target.
+// The result of resolving one ability use against a target. Beyond the direct
+// damage/heal (the #345 originals), it reports the SP2.3 #693 instantaneous
+// primitives the resolver executes on the Units directly — `resource` (grant/drain)
+// and `movement` (forced displacement) — so the map tick can log + relay them.
 struct ResolveResult {
     AttackOutcome outcome = AttackOutcome::kHit;
     std::uint32_t amount = 0;       // total damage or heal actually applied
+    std::uint32_t absorbed = 0;     // damage soaked by a shield (not removed from HP, #693)
     bool is_heal = false;           // true = healed, false = damaged
     bool target_died = false;       // this resolution drove the target to 0 HP
     std::uint32_t target_health = 0;  // target health AFTER application
+
+    // `resource` primitive (#693): net resource granted / drained on the target.
+    std::uint32_t resource_granted = 0;
+    std::uint32_t resource_drained = 0;
+
+    // `movement` primitive (#693): a forced displacement was applied this resolution.
+    bool          moved = false;
+    ObjectGuid    moved_guid = 0;   // whose position changed (caster for dash, else target)
+    Position      moved_to;         // its new position after the displacement
 };
 
 // Validate target legality + range + line-of-sight for `ability` cast by `caster`
@@ -202,11 +217,15 @@ CastReject validate_target(const Ability& ability, const Unit& caster,
 // damage table) using `rng`. Pure w.r.t. Units — just the roll.
 AttackOutcome roll_attack(const Ability& ability, CombatRng& rng);
 
-// Apply an ability's DIRECT effects to `target` given a rolled `outcome`, using
-// `rng` for the amount roll. Damage effects are avoided on miss/dodge/parry
-// (0 applied); crit doubles the amount. Heal effects are never avoided. Triggers
-// the target's death transition when damage reaches 0 HP. kAura (#346) and
-// kThreat (CMB-04) effects are SKIPPED. Assumes validate_target already passed.
+// Apply an ability's DIRECT + instantaneous effects to `target` given a rolled
+// `outcome`, using `rng` for amount rolls. Damage effects are avoided on
+// miss/dodge/parry (0 applied); crit doubles the amount; a shield on the target
+// absorbs first. Heal effects are never avoided. The SP2.3 #693 instantaneous
+// primitives ALWAYS apply (they carry no attack-table roll, like auras): `resource`
+// grants/drains the target's pool, `movement` displaces caster/target. Triggers the
+// target's death transition when damage reaches 0 HP. Timed kinds (kAura/kDot/kHot/
+// kBuff/kDebuff/kShield/kCc — the AuraContainer's job), kThreat (CMB-04), and
+// kSummon (the map tick's job) are SKIPPED here. Assumes validate_target passed.
 ResolveResult apply_outcome(const Ability& ability, Unit& caster, Unit& target,
                             AttackOutcome outcome, CombatRng& rng);
 
@@ -286,10 +305,17 @@ struct CastDecision {
 // PendingCast so cast completion knows whom to resolve against. This mutates
 // `combat` ONLY on accept (no partial state on a reject — the rollback stays
 // clean). Resource is spent at RESOLUTION, not here.
+//
+// `caster_stunned` / `caster_silenced` are the caster's current crowd-control state
+// (SP2.3 #693), read by the map tick from the caster's AuraContainer and passed in
+// (the resolver core has no container dependency). A stun blocks ALL ability use; a
+// silence blocks casting. Both default false — an un-CC'd caster is unaffected, so
+// the existing call path is unchanged.
 CastDecision begin_ability_use(CombatSession& combat, const Ability& ability,
                                Unit& caster, const Unit* target,
                                ObjectGuid target_guid, const LineOfSightFn& los,
-                               std::uint64_t now_ms);
+                               std::uint64_t now_ms, bool caster_stunned = false,
+                               bool caster_silenced = false);
 
 }  // namespace meridian::worldd
 

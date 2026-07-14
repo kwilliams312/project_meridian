@@ -130,9 +130,13 @@ struct UnitStats {
 // The result of applying damage to a Unit: how much HP was actually removed
 // (clamped to remaining health) and whether THIS damage killed it (drove health
 // to 0). `lethal` fires exactly once — the call that crosses the threshold.
+// `absorbed` is how much of the incoming amount a `shield` effect (SP2.3 #693)
+// soaked BEFORE it reached health — mitigation, not HP loss. `absorbed` is kept
+// as a trailing field (zero-default) so the existing brace-inits stay valid.
 struct DamageResult {
     std::uint32_t applied = 0;
     bool lethal = false;
+    std::uint32_t absorbed = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -203,6 +207,21 @@ public:
     bool spend_resource(std::uint32_t amount);
     // Restore up to `amount` resource (clamped to max_resource).
     void restore_resource(std::uint32_t amount);
+    // Drain up to `amount` of the secondary resource (clamped to what is left) and
+    // return how much was actually removed — the partial counterpart to
+    // spend_resource's all-or-nothing charge (a `resource` drain primitive, #693).
+    std::uint32_t drain_resource(std::uint32_t amount);
+
+    // --- absorb pool (the `shield` primitive substrate, SP2.3 #693) ----------
+    // A shield grants an absorb pool that soaks incoming damage BEFORE health. The
+    // pool lives on the Unit because apply_damage is the single choke point every
+    // damage source (direct hit, DoT tick, fall/drown) flows through, so ALL of them
+    // respect shields with no per-site plumbing. The DURATION of a shield (and its
+    // rollback on expiry) is owned by the AuraContainer, which grants here on apply
+    // and reclaims the unspent remainder on expiry.
+    std::uint32_t absorb() const { return absorb_; }
+    void add_absorb(std::uint32_t amount);      // grant absorb (saturating)
+    void remove_absorb(std::uint32_t amount);   // reclaim (clamped to what remains)
 
 protected:
     std::uint16_t level_ = 1;
@@ -214,6 +233,8 @@ protected:
     ResourceType resource_type_ = ResourceType::kNone;
     std::uint32_t max_resource_ = 0;
     std::uint32_t resource_ = 0;
+
+    std::uint32_t absorb_ = 0;  // shield pool (soaked before health; #693)
 
     LifeState life_state_ = LifeState::kAlive;
 };

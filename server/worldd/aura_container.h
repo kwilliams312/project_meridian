@@ -54,6 +54,8 @@
 #define MERIDIAN_WORLDD_AURA_CONTAINER_H
 
 #include <cstdint>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "ability_store.h"     // AbilityId / Ability / AbilityEffect / PeriodicKind / StatKey / StatMod
@@ -110,7 +112,12 @@ struct ActiveAura {
     std::uint32_t effect_index = 0;   // which AbilityEffect of the ability
     ObjectGuid    caster_guid = 0;    // who applied it (independent-instance key)
 
-    // --- config snapshot (from the kAura AbilityEffect) ---
+    // --- config snapshot (from the source AbilityEffect) ---
+    // The source primitive (SP2.3 #693): kAura for a classic aura, or one of the
+    // timed extension kinds (kDot/kHot/kBuff/kDebuff/kShield/kCc) this container now
+    // hosts. Drives the extension handling on apply/expiry beyond the shared
+    // duration/periodic/stat machinery below.
+    EffectKind    kind = EffectKind::kAura;
     std::uint32_t duration_ms = 0;    // full duration; a refresh resets remaining to this
     std::uint16_t max_stacks = 1;     // 1 = refresh-only; > 1 = stack-count aura
     PeriodicKind  periodic_kind = PeriodicKind::kNone;
@@ -120,6 +127,24 @@ struct ActiveAura {
     std::vector<StatMod> stat_mods;         // stat deltas contributed PER STACK
     DispelType dispel_type = DispelType::kNone;  // dispel class; kNone = undispellable
 
+    // --- kBuff / kDebuff — attribute modifier (SP2.3 #693) ------------------
+    // The buff/debuff `attribute` contentId ref (verbatim from effects_json). A
+    // PRIMARY-stat flat modifier also folds into stat_totals_ (via a StatKey);
+    // percent + derived attributes ride the container's interim attribute ledger —
+    // the #694 effective-stat-framework seam. attr_amount is the PER-STACK signed
+    // modifier; attr_modifier picks flat vs percent.
+    std::string       attr_ref;
+    std::int32_t      attr_amount = 0;
+    AttributeModifier attr_modifier = AttributeModifier::kFlat;
+
+    // --- kShield — absorb pool contribution (SP2.3 #693) --------------------
+    // The absorb this instance still contributes to host_.absorb(). Granted to the
+    // host on apply; reclaimed (clamped) on expiry/removal. Rolled once at apply.
+    std::uint32_t shield_amount = 0;
+
+    // --- kCc — crowd-control category (SP2.3 #693) --------------------------
+    CrowdControlKind cc_kind = CrowdControlKind::kStun;
+
     // --- runtime state ---
     std::uint16_t stacks = 1;              // current stack count in [1, max_stacks]
     std::uint32_t remaining_ms = 0;        // time left before expiry
@@ -128,6 +153,18 @@ struct ActiveAura {
     bool is_periodic() const {
         return periodic_kind != PeriodicKind::kNone && periodic_tick_ms > 0;
     }
+    bool is_control() const { return kind == EffectKind::kCc; }
+    bool is_shield() const { return kind == EffectKind::kShield; }
+};
+
+// The net attribute modifier a buff/debuff query returns (SP2.3 #693). `flat` is in
+// raw attribute units; `percent` is in hundredths of a percent-point (the schema's
+// `modifier: percent` unit). This is the INTERIM representation the #694 effective-
+// stat framework consumes/replaces — the kernel does not yet fold percent + derived
+// attributes into an effective stat.
+struct AttributeDelta {
+    std::int32_t flat = 0;
+    std::int32_t percent = 0;
 };
 
 // What apply() did to the container — so a caller (and the tests) can tell a fresh
@@ -184,15 +221,24 @@ public:
     // stores it on the instance; a refresh/stack keeps the original instance's tag
     // (the classification is fixed at first application). It defaults to kNone —
     // an unclassified aura is UNDISPELLABLE.
+    // `rng` (when non-null) rolls a kShield effect's absorb amount at apply time
+    // (deterministic seeded roll, SP2.3 #693); null falls back to amount_min so a
+    // shieldless caller stays deterministic without an RNG. It is unused by every
+    // other kind (their amounts are rolled at tick time, or are fixed).
     AuraApplyResult apply(const Ability& ability, std::uint32_t effect_index,
                           ObjectGuid caster_guid,
-                          DispelType dispel_type = DispelType::kNone);
+                          DispelType dispel_type = DispelType::kNone,
+                          CombatRng* rng = nullptr);
 
-    // Convenience: apply EVERY kAura effect of `ability` (non-aura effects skipped),
-    // tagging each with `dispel_type`. Returns how many aura effects were applied
-    // (added/refreshed/stacked).
-    std::size_t apply_ability_auras(const Ability& ability, ObjectGuid caster_guid,
-                                    DispelType dispel_type = DispelType::kNone);
+    // Convenience: apply EVERY container-hosted timed effect of `ability` — the
+    // classic kAura AND the SP2.3 #693 timed extensions (dot/hot/buff/debuff/shield/
+    // cc). Instantaneous kinds (damage/heal/threat/resource/movement/summon) are
+    // skipped here (the resolver / map tick execute those). Each applied effect is
+    // tagged with `dispel_type`; `rng` rolls shield amounts. Returns how many effects
+    // were applied (added/refreshed/stacked).
+    std::size_t apply_ability_effects(const Ability& ability, ObjectGuid caster_guid,
+                                      DispelType dispel_type = DispelType::kNone,
+                                      CombatRng* rng = nullptr);
 
     // Advance every aura by `dt_ms`, firing due periodic ticks into the host and
     // expiring auras whose duration has elapsed. Periodic amounts are rolled from
@@ -235,16 +281,39 @@ public:
     // stat-mod aura "applies to the Unit": the Unit's effective stat is its base
     // stat plus this delta (base stats land with the stat system; the aura layer
     // is this container). O(1) — maintained incrementally on apply/stack/expire.
+    // A kBuff/kDebuff on a PRIMARY attribute with a FLAT modifier also folds in here
+    // (SP2.3 #693), so this reflects both authored kAura stat_mods and buff/debuff.
     std::int32_t stat_delta(StatKey stat) const;
 
+    // The net buff/debuff modifier on `attribute_ref` (SP2.3 #693) — the interim
+    // representation the #694 effective-stat framework consumes. Flat + percent are
+    // summed over active buff/debuff auras (× stacks). For a primary attribute the
+    // flat part equals stat_delta(that StatKey); percent + derived attributes live
+    // ONLY here until #694 computes effective stats. Zeroes for an untouched ref.
+    AttributeDelta attribute_delta(const std::string& attribute_ref) const;
+
+    // --- crowd control (SP2.3 #693) ----------------------------------------
+    // Whether a live kCc aura of the given kind is currently on the host. The map
+    // tick reads these to gate actions: a stun or silence blocks casting, a root (or
+    // stun) blocks self-movement. Any active instance suffices (stacking is refresh-
+    // only for cc). O(n) over the flat vector (n is tiny).
+    bool has_control(CrowdControlKind kind) const;
+    bool is_stunned() const { return has_control(CrowdControlKind::kStun); }
+    bool is_rooted() const { return has_control(CrowdControlKind::kRoot); }
+    bool is_silenced() const { return has_control(CrowdControlKind::kSilence); }
+
 private:
-    // Fold this aura's stat_mods into the net totals: sign = +1 to add
-    // `stack_count` stacks' worth, -1 to remove.
-    void fold_stat_mods(const ActiveAura& aura, std::uint16_t stack_count, int sign);
+    // Fold this aura's modifiers (kAura stat_mods AND a kBuff/kDebuff attribute mod)
+    // into the net ledgers: sign = +1 to add `stack_count` stacks' worth, -1 to
+    // remove. Reclaims a shield's absorb from the host when sign = -1.
+    void fold_modifiers(const ActiveAura& aura, std::uint16_t stack_count, int sign);
 
     Unit& host_;
     std::vector<ActiveAura> auras_;
     std::int32_t stat_totals_[kStatKeyCount] = {0, 0, 0, 0, 0};
+    // Interim buff/debuff attribute ledger (the #694 seam) keyed by attribute ref.
+    std::unordered_map<std::string, std::int32_t> attr_flat_;
+    std::unordered_map<std::string, std::int32_t> attr_percent_;
 };
 
 }  // namespace meridian::worldd

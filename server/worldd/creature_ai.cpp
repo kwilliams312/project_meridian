@@ -99,6 +99,10 @@ ObjectGuid CreatureAi::add_spawn(const CreatureSpawnDef& def) {
     return guid;
 }
 
+bool CreatureAi::despawn(ObjectGuid guid) {
+    return instances_.erase(guid) > 0;
+}
+
 std::vector<ObjectGuid> CreatureAi::load_placeholder_spawns(const Position& origin) {
     std::vector<ObjectGuid> out;
 

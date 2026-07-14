@@ -154,6 +154,27 @@ AbilityStore load_placeholder_ability_store() {
 }
 
 // ---------------------------------------------------------------------------
+// Attribute ref resolution (SP2.3 #693) — the buff/debuff `attribute` ref that
+// SP2.2 carried verbatim out of effects_json → a primary-stat StatKey.
+// ---------------------------------------------------------------------------
+
+bool primary_attribute_stat(const std::string& attribute_ref, StatKey& out) {
+    // The ref is a contentId "<ns>:attribute.<name>" (schema/content/ability.schema.yaml
+    // buff/debuff `attribute` pattern). We key off the FINAL dot-segment (the leaf
+    // name) so any namespace resolves — the primary vocabulary is fixed by the kernel
+    // (spec §2.3 "the kernel ships the base attribute vocabulary"), matching StatKey.
+    const std::string::size_type dot = attribute_ref.find_last_of('.');
+    const std::string leaf =
+        dot == std::string::npos ? attribute_ref : attribute_ref.substr(dot + 1);
+    if (leaf == "strength")  { out = StatKey::kStrength;  return true; }
+    if (leaf == "agility")   { out = StatKey::kAgility;   return true; }
+    if (leaf == "stamina")   { out = StatKey::kStamina;   return true; }
+    if (leaf == "intellect") { out = StatKey::kIntellect; return true; }
+    if (leaf == "spirit")    { out = StatKey::kSpirit;    return true; }
+    return false;  // a derived attribute (armor/crit/haste/…) — the #694 seam.
+}
+
+// ---------------------------------------------------------------------------
 // Enum name helpers (logs / tooling / diagnostics — not the hot path)
 // ---------------------------------------------------------------------------
 

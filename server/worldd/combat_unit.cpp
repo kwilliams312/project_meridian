@@ -58,12 +58,19 @@ void Unit::spawn() {
 }
 
 DamageResult Unit::apply_damage(std::uint32_t amount) {
-    if (life_state_ == LifeState::kDead) return DamageResult{0, false};
+    if (life_state_ == LifeState::kDead) return DamageResult{0, false, 0};
+
+    // A shield (SP2.3 #693) soaks incoming damage first; only the overflow reaches
+    // health. absorb() == 0 (the common case) is a no-op, so shieldless damage is
+    // byte-identical to the pre-shield behaviour (the combat goldens stay stable).
+    const std::uint32_t absorbed = std::min(amount, absorb_);
+    absorb_ -= absorbed;
+    amount -= absorbed;
 
     const std::uint32_t applied = std::min(amount, health_);
     health_ -= applied;
 
-    DamageResult result{applied, false};
+    DamageResult result{applied, false, absorbed};
     if (health_ == 0) {
         life_state_ = LifeState::kDead;
         result.lethal = true;
@@ -99,6 +106,22 @@ bool Unit::spend_resource(std::uint32_t amount) {
 
 void Unit::restore_resource(std::uint32_t amount) {
     resource_ = add_clamped(resource_, amount, max_resource_);
+}
+
+std::uint32_t Unit::drain_resource(std::uint32_t amount) {
+    const std::uint32_t drained = std::min(amount, resource_);
+    resource_ -= drained;
+    return drained;
+}
+
+void Unit::add_absorb(std::uint32_t amount) {
+    // Saturating add — an absurd content value can never wrap the pool.
+    if (amount > (UINT32_MAX - absorb_)) absorb_ = UINT32_MAX;
+    else absorb_ += amount;
+}
+
+void Unit::remove_absorb(std::uint32_t amount) {
+    absorb_ -= std::min(amount, absorb_);
 }
 
 // ---------------------------------------------------------------------------
