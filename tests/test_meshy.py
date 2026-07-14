@@ -413,7 +413,9 @@ def _patch_client(monkeypatch, handler):
     monkeypatch.setattr(
         meshy_main,
         "_new_client",
-        lambda api_key: client_mod.MeshyClient(api_key, transport=transport),
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: client_mod.MeshyClient(
+            api_key, model_version=model_version, transport=transport
+        ),
     )
 
 
