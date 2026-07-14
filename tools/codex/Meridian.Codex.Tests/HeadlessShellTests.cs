@@ -1,6 +1,7 @@
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
@@ -50,6 +51,58 @@ public class HeadlessShellTests
         Assert.Equal(Color.Parse("#1476A8"), Assert.IsType<SolidColorBrush>(accent).Color);
         Assert.Equal(Color.Parse("#FF9B9B"), Assert.IsType<SolidColorBrush>(error).Color);
         Assert.Equal(36d, height);
+    }
+
+    [AvaloniaFact]
+    public void Rendered_semantic_states_meet_contrast_targets()
+    {
+        var enabledPrimary = new Button { Content = "Save", IsEnabled = true };
+        enabledPrimary.Classes.Add("primary");
+        var disabledPrimary = new Button { Content = "Save", IsEnabled = false };
+        disabledPrimary.Classes.Add("primary");
+        var secondary = new Button { Content = "Open", IsEnabled = true };
+        var error = new TextBlock { Text = "Invalid value" };
+        error.Classes.Add("validation-error");
+        var errorSurface = new Border { Classes = { "card" }, Child = error };
+        var stack = new StackPanel { Children = { enabledPrimary, disabledPrimary, secondary, errorSurface } };
+        var window = new Window { Content = stack };
+        window.Show();
+
+        var enabledRatio = ContrastRatio(enabledPrimary.Foreground, RenderedBackground(enabledPrimary));
+        var disabledRatio = ContrastRatio(disabledPrimary.Foreground, RenderedBackground(disabledPrimary));
+        var secondaryRatio = ContrastRatio(secondary.Foreground, RenderedBackground(secondary));
+        var errorRatio = ContrastRatio(error.Foreground, errorSurface.Background);
+
+        Assert.True(enabledRatio >= 4.5, $"Enabled primary contrast was {enabledRatio:F2}:1.");
+        Assert.True(disabledRatio >= 4.5, $"Disabled primary contrast was {disabledRatio:F2}:1.");
+        Assert.True(secondaryRatio >= 4.5, $"Secondary contrast was {secondaryRatio:F2}:1.");
+        Assert.True(errorRatio >= 4.5, $"Error contrast was {errorRatio:F2}:1.");
+        Assert.False(disabledPrimary.IsEffectivelyEnabled);
+        Assert.Equal(FontWeight.Normal, disabledPrimary.FontWeight);
+        Assert.NotEqual(RenderedColor(enabledPrimary.Background), RenderedColor(disabledPrimary.Background));
+    }
+
+    private static IBrush? RenderedBackground(Button button) =>
+        button.GetVisualDescendants().OfType<ContentPresenter>().FirstOrDefault()?.Background ?? button.Background;
+
+    private static double ContrastRatio(IBrush? foreground, IBrush? background)
+    {
+        var light = RelativeLuminance(RenderedColor(foreground));
+        var dark = RelativeLuminance(RenderedColor(background));
+        return (Math.Max(light, dark) + 0.05) / (Math.Min(light, dark) + 0.05);
+    }
+
+    private static Color RenderedColor(IBrush? brush) =>
+        brush is ISolidColorBrush solid ? solid.Color : throw new Xunit.Sdk.XunitException(
+            $"Expected a resolved solid brush, received {brush?.GetType().Name ?? "null"}.");
+
+    private static double RelativeLuminance(Color color) =>
+        0.2126 * LinearChannel(color.R) + 0.7152 * LinearChannel(color.G) + 0.0722 * LinearChannel(color.B);
+
+    private static double LinearChannel(byte value)
+    {
+        var channel = value / 255d;
+        return channel <= 0.04045 ? channel / 12.92 : Math.Pow((channel + 0.055) / 1.055, 2.4);
     }
 
     [AvaloniaFact]

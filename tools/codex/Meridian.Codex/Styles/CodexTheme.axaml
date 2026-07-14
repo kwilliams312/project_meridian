@@ -82,6 +82,21 @@
     <Setter Property="Foreground" Value="{DynamicResource CodexDisabledTextBrush}" />
     <Setter Property="Opacity" Value="1" />
   </Style>
+  <!-- Disabled primary actions become neutral secondary-shaped controls instead
+       of keeping the blue action fill. IsEnabled removes focus/invocation and
+       normal font weight supplies a non-colour distinction from enabled Save. -->
+  <Style Selector="Button.primary:disabled">
+    <Setter Property="Background" Value="{DynamicResource CodexRaisedSurfaceBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource CodexBorderBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource CodexDisabledTextBrush}" />
+    <Setter Property="FontWeight" Value="Normal" />
+    <Setter Property="Opacity" Value="1" />
+  </Style>
+  <Style Selector="Button.primary:disabled /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource CodexRaisedSurfaceBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource CodexBorderBrush}" />
+    <Setter Property="Opacity" Value="1" />
+  </Style>
   <Style Selector="Button:focus-visible">
     <Setter Property="BorderBrush" Value="{DynamicResource CodexFocusBrush}" />
     <Setter Property="BorderThickness" Value="2" />
