@@ -546,7 +546,22 @@ void MapTick::resolve_and_log(const Ability& ability, Unit& caster, ObjectGuid c
         // DIRECT attack aggros (a swing is a swing), so floor the threat at 1; a
         // pure-utility ability does not generate threat.
         if (has_direct_effect(ability) && ai_.creature(target_guid) != nullptr) {
-            const float threat = static_cast<float>(rr.amount > 0 ? rr.amount : 1);
+            // ROLE hook (SP2.7 #697): a Tank-role player caster amplifies its threat
+            // so it can hold aggro. threat_multiplier is 1.0 for every other role and
+            // when no class catalog is installed (DB-free tests), so the base threat
+            // is unchanged there. The caster's class comes from its live Player unit.
+            float role_mult = 1.0f;
+            if (class_catalog_ != nullptr) {
+                const auto pit = players_.find(caster_guid);
+                if (pit != players_.end()) {
+                    if (const ClassRecord* rec =
+                            class_catalog_->find(pit->second->unit.char_class())) {
+                        role_mult = threat_multiplier(*rec);
+                    }
+                }
+            }
+            const float threat =
+                static_cast<float>(rr.amount > 0 ? rr.amount : 1) * role_mult;
             ai_.add_threat(target_guid, caster_guid, threat);
         }
     }

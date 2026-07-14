@@ -514,6 +514,12 @@ int main(int argc, char** argv) {
     // create path keeps Roster::offline_full() for DB-free dispatch/tooling.
     if (content.roster) world.set_roster(std::move(*content.roster));
 
+    // Install the pack-loaded per-class equip-gating + role catalog (SP2.7 #697) so
+    // the live map's resolver->AI threat seam scales a Tank-role player's threat
+    // (threat_multiplier). No-op semantics when no world DB is wired: the catalog is
+    // empty, so every class's multiplier is 1.0 and threat is unscaled.
+    world.set_class_catalog(std::move(content.classes));
+
     // Spawn the authored content placements into the live world (NPC-01 spawn seam,
     // #486): read from spawn_point at boot, each becomes a live creature in the map
     // tick AND an AoI-visible entity (ENTITY_ENTER with #430 vitals + name), so the
