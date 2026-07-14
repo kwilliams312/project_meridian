@@ -34,6 +34,7 @@ add_library(world-dispatch STATIC
   creature_ai.cpp
   combat_resolver.cpp
   aura_container.cpp
+  effective_stats.cpp
   death_state.cpp
   leveling.cpp
   quest_def.cpp
@@ -763,6 +764,25 @@ target_link_libraries(worldd-content-load-db-test
 set_target_properties(worldd-content-load-db-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-content-load-db COMMAND worldd-content-load-db-test)
 
+# --- Effective-stat framework DB-backed integration test (SP2.4 #694). ----------
+# The MANDATORY DB-backed proof: seed the `attribute` / `class_attribute_mod` /
+# `race_attribute_mod` tables (mcc emit-sql's shape) into a real MariaDB, read them
+# back with load_db_attributes, and prove a character's effective stats reflect
+# base + class mods + race mods loaded from the DB, a buff modifies the right
+# effective attribute (FLAT and PERCENT), a DERIVED attribute (armor) computes, and
+# aura expiry rolls back. Self-seeds minimal no-FK tables. Reads MERIDIAN_WORLDDB_*
+# (falls back to MERIDIAN_DB_*) and SKIPS (exit 0) when none are set — inert in the
+# plain server ctest, real only under test.sh --db / the DB CI job.
+add_executable(worldd-effective-stats-db-test
+  test/effective_stats_db_it.cpp
+)
+target_link_libraries(worldd-effective-stats-db-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-effective-stats-db-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-effective-stats-db COMMAND worldd-effective-stats-db-test)
+
 # --- Content SPAWN load + spawn-into-world DB-backed integration test (#486). ----
 # The acceptance bar for the spawn story: seed a world DB with authored spawn_point
 # rows (a friendly quest-giver NPC + a hostile creature) resolved against npc_template,
@@ -960,6 +980,23 @@ target_link_libraries(worldd-ability-primitives-test
 )
 set_target_properties(worldd-ability-primitives-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-ability-primitives COMMAND worldd-ability-primitives-test)
+
+# --- Effective-stat framework UNIT test (SP2.4; #694). ------------------------
+# PURE (no DB, no socket): drives AttributeCatalog + EffectiveStats + AuraContainer
+# directly — base + class/race attribute_mods + the live buff/debuff layer fold into
+# one effective value (primary AND derived, flat AND percent), and effective() read
+# straight off the SP2.3 aura ledger (attribute_delta) matches + rolls back on expiry.
+# This is the framework's logic; the DB-backed proof (mods loaded from a real MariaDB)
+# is the separate worldd-effective-stats-db test. Always runs in the plain server ctest.
+add_executable(worldd-effective-stats-test
+  test/effective_stats_test.cpp
+)
+target_link_libraries(worldd-effective-stats-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-effective-stats-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-effective-stats COMMAND worldd-effective-stats-test)
 
 # --- XP curve / leveling UNIT test (CHR-03 #360). -----------------------------
 # PURE (no DB, no socket, no clock, no RNG): drives the leveling curve directly —

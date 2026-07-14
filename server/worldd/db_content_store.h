@@ -52,6 +52,7 @@
 
 #include "ability_store.h"    // meridian::worldd::AbilityStore — DB-loaded ability catalog (#481)
 #include "area_triggers.h"    // meridian::worldd::TriggerVolume — DB-loaded POI volumes (#398)
+#include "effective_stats.h"  // meridian::worldd::AttributeCatalog — DB-loaded attribute framework (#694)
 #include "combat_unit.h"      // meridian::worldd::UnitStats / Faction / Position (spawn stats, #486)
 #include "item_template.h"    // meridian::items::TemplateStore / ItemTemplate
 #include "loot_table.h"       // meridian::loot::LootTableStore / LootTable
@@ -216,6 +217,13 @@ struct WorldContent {
     // retired compiled enum. Always populated by load_world_content (the fallback
     // alone is non-empty), so std::optional only marks "a world DB was loaded".
     std::optional<meridian::characters::Roster> roster;
+    // The attribute framework (SP2.4 #694) — the base attribute vocabulary + the
+    // per-class/per-race attribute_mods loaded from the `attribute` /
+    // `class_attribute_mod` / `race_attribute_mod` tables. Consumed by the kernel's
+    // EffectiveStats computation (effective_stats.h): a character's effective stats =
+    // base + class mods + race mods + the live buff/debuff aura layer. Always
+    // populated by load_world_content (empty tables load an empty catalog).
+    AttributeCatalog attributes;
     // The authored spawn placements (spawn_point rows resolved against npc_template,
     // #486). Spawned into the live world at boot via WorldServer::install_spawns() so
     // the seeded quest-givers/creatures EXIST, are AoI-visible (ENTITY_ENTER), and are
@@ -238,6 +246,14 @@ AbilityStore load_db_ability_store(db::Connection& world_db);
 // same-id fallback entry (the pack is the source of truth). Throws
 // meridian::db::DbError on a query failure (same fail-fast policy as the others).
 meridian::characters::Roster load_db_roster(db::Connection& world_db);
+
+// Load the attribute framework from the world DB (SP2.4 #694): the base attribute
+// vocabulary (`attribute` table — ref/name/kind) plus the per-class/per-race
+// `attribute_mods` (`class_attribute_mod` / `race_attribute_mod`, keyed by roster_id)
+// into an AttributeCatalog the EffectiveStats computation consumes. Empty tables
+// load an empty catalog (no throw). Throws meridian::db::DbError on a query failure
+// (same fail-fast policy as the others).
+AttributeCatalog load_db_attributes(db::Connection& world_db);
 
 // Load every content store from the (already-boot-verified) world DB connection.
 // Throws meridian::db::DbError on a query failure — the caller treats a load fault

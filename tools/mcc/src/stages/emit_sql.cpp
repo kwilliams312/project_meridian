@@ -559,6 +559,41 @@ void emit_ability(std::uint32_t id, const YAML::Node& n, const std::string& ns,
 // traceability. Only the identity (id + name + description) is emitted; the richer
 // class rules columns are deferred to #696/#697 (SP2 design §2.2). `roster_id` is a
 // schema-required integer in [1,255], so it fits the TINYINT UNSIGNED PK.
+// attribute -> the attribute-framework vocabulary table (SP2.4 #694). Keyed (like
+// the aura ledger + the class/race mods) by the attribute's contentId REF string,
+// so every effective-stat layer joins on one key; the IF-9 numeric id is kept in
+// `content_id` for traceability. Ordered by content_id for a deterministic dump.
+void emit_attribute(std::uint32_t id, const YAML::Node& n, const std::string& /*ns*/,
+                    const std::string& /*file*/, Ctx& cx) {
+    Row& r = new_row(cx.tbl("attribute"), id);
+    r.cells = {
+        Val::str(as_str(n["id"])),  // attr_ref (verbatim contentId, e.g. core:attribute.strength)
+        Val::u(id),                 // content_id (IF-9)
+        Val::str(as_str(n["name"])),
+        Val::str(as_str(n["kind"])),  // ENUM('primary','derived')
+    };
+}
+
+// Emit a race/class's `attribute_mods[]` (SP2.4 #694) into `mod_table`, keyed by the
+// entity's roster_id + the referenced attribute's contentId ref (kept verbatim — the
+// SAME key the `attribute` table + the aura ledger use, no numeric round-trip). Rows
+// sort by (roster_id, attr_ref) for a deterministic dump. A race/class with no
+// attribute_mods (the chibi races) emits nothing.
+void emit_attribute_mods(const YAML::Node& n, std::uint64_t roster_id,
+                         const std::string& mod_table, Ctx& cx) {
+    if (!has(n, "attribute_mods") || !n["attribute_mods"].IsSequence()) return;
+    for (const auto& m : n["attribute_mods"]) {
+        const std::string attr_ref = as_str(m["attribute"]);
+        Row& mr = new_row(cx.tbl(mod_table), roster_id);
+        mr.sort_key2 = attr_ref;  // stable secondary order within a roster id
+        mr.cells = {
+            Val::u(static_cast<std::uint32_t>(roster_id)),
+            Val::str(attr_ref),
+            Val::num(as_int(m["value"])),
+        };
+    }
+}
+
 void emit_race(std::uint32_t id, const YAML::Node& n, const std::string& /*ns*/,
                const std::string& /*file*/, Ctx& cx) {
     const auto roster_id = static_cast<std::uint64_t>(as_int(n["roster_id"]));
@@ -569,6 +604,7 @@ void emit_race(std::uint32_t id, const YAML::Node& n, const std::string& /*ns*/,
         Val::str(as_str(n["name"])),
         has(n, "description") ? Val::str(as_str(n["description"])) : Val::null(),
     };
+    emit_attribute_mods(n, roster_id, "race_attribute_mod", cx);
 }
 
 void emit_class(std::uint32_t id, const YAML::Node& n, const std::string& /*ns*/,
@@ -581,6 +617,7 @@ void emit_class(std::uint32_t id, const YAML::Node& n, const std::string& /*ns*/
         Val::str(as_str(n["name"])),
         has(n, "description") ? Val::str(as_str(n["description"])) : Val::null(),
     };
+    emit_attribute_mods(n, roster_id, "class_attribute_mod", cx);
 }
 
 void emit_quest(std::uint32_t id, const YAML::Node& n, const std::string& ns,
@@ -877,6 +914,12 @@ std::map<std::string, Table> make_tables() {
     // roster (SP2.5 #695) — keyed by roster_id, not the IF-9 id (see emit_race).
     add("race", {"roster_id","content_id","name","description"});
     add("class", {"roster_id","content_id","name","description"});
+    // attribute framework (SP2.4 #694) — the base attribute vocabulary keyed by its
+    // contentId ref, + the per-class/per-race attribute_mods keyed by roster_id (see
+    // emit_attribute / emit_race / emit_class).
+    add("attribute", {"attr_ref","content_id","name","kind"});
+    add("class_attribute_mod", {"class_roster_id","attr_ref","value"});
+    add("race_attribute_mod", {"race_roster_id","attr_ref","value"});
     add("quest_template", {"id","name","summary","offer_text","completion_text","level","required_level",
         "zone_ref_id","giver_npc_id","turn_in_npc_id","reward_xp","reward_money"});
     add("quest_objective", {"quest_id","ordinal","type","target_npc_id","item_id","to_npc_id","zone_ref_id","poi","count"});
@@ -906,7 +949,9 @@ const std::vector<std::string> kEmitOrder = {
     "npc_template", "npc_ability", "npc_trainer", "npc_trainer_ability",
     "item_template", "item_stat", "item_effect_on_equip",
     "ability",
+    "attribute",
     "race", "class",
+    "class_attribute_mod", "race_attribute_mod",
     "quest_template", "quest_objective", "quest_prereq", "quest_reward",
     "loot_table", "loot_group", "loot_entry",
     "vendor_inventory", "vendor_inventory_item", "vendor_inventory_buys",
@@ -1003,6 +1048,7 @@ EmitSqlResult emit_sql(const model::ContentModel& model, const LinkResult& linke
         else if (type == "ability") emit_ability(id, n, ns, file, cx);
         else if (type == "race") emit_race(id, n, ns, file, cx);
         else if (type == "class") emit_class(id, n, ns, file, cx);
+        else if (type == "attribute") emit_attribute(id, n, ns, file, cx);
         else if (type == "quest") emit_quest(id, n, ns, file, cx);
         else if (type == "loot") emit_loot(id, n, ns, file, cx);
         else if (type == "vendor") emit_vendor(id, n, ns, file, cx);

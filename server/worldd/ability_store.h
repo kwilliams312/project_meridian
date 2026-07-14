@@ -352,8 +352,9 @@ AbilityStore load_placeholder_ability_store();
 // primary attributes (strength/agility/stamina/intellect/spirit); false for a
 // derived attribute (armor/crit/haste/…) or a malformed ref. This is the SP2.3
 // #693 resolution of the deferred `attribute` ref: a primary-stat modifier folds
-// into the existing StatKey delta layer; the rest is carried on the interim
-// attribute ledger for the #694 effective-stat framework (see aura_container.h).
+// into the existing StatKey delta layer; the rest is carried on the aura attribute
+// ledger the SP2.4 #694 EffectiveStats framework consumes (see aura_container.h /
+// effective_stats.h).
 bool primary_attribute_stat(const std::string& attribute_ref, StatKey& out);
 
 // Human-readable enum names (logs / tooling / test diagnostics; not the hot path).

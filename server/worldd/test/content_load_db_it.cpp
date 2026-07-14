@@ -223,6 +223,23 @@ void create_tables(db::Connection& c) {
         "  roster_id TINYINT UNSIGNED NOT NULL, content_id INT UNSIGNED NOT NULL,"
         "  name VARCHAR(64) NOT NULL, description VARCHAR(500) NULL,"
         "  PRIMARY KEY (roster_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // attribute framework — the SP2.4 #694 loader load_world_content now also reads
+    // (load_db_attributes). Without these tables it throws "Table 'attribute' doesn't
+    // exist". Columns mirror schema/sql/world/36_attribute.sql (no FKs — the loader
+    // only SELECTs, like the other self-seeded content tables here).
+    c.execute(
+        "CREATE TABLE attribute ("
+        "  attr_ref VARCHAR(64) NOT NULL, content_id INT UNSIGNED NOT NULL,"
+        "  name VARCHAR(64) NOT NULL, kind ENUM('primary','derived') NOT NULL,"
+        "  PRIMARY KEY (attr_ref)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    c.execute(
+        "CREATE TABLE class_attribute_mod ("
+        "  class_roster_id TINYINT UNSIGNED NOT NULL, attr_ref VARCHAR(64) NOT NULL, value INT NOT NULL,"
+        "  PRIMARY KEY (class_roster_id, attr_ref)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    c.execute(
+        "CREATE TABLE race_attribute_mod ("
+        "  race_roster_id TINYINT UNSIGNED NOT NULL, attr_ref VARCHAR(64) NOT NULL, value INT NOT NULL,"
+        "  PRIMARY KEY (race_roster_id, attr_ref)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 }
 
 void drop_tables(db::Connection& c) {
@@ -236,6 +253,8 @@ void drop_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS npc_trainer",      "DROP TABLE IF EXISTS npc_template",
         "DROP TABLE IF EXISTS area",             "DROP TABLE IF EXISTS ability",
         "DROP TABLE IF EXISTS spawn_point",
+        "DROP TABLE IF EXISTS class_attribute_mod", "DROP TABLE IF EXISTS race_attribute_mod",
+        "DROP TABLE IF EXISTS attribute",
         "DROP TABLE IF EXISTS race",             "DROP TABLE IF EXISTS class",
     };
     for (const char* d : drops) c.execute(d);
@@ -349,6 +368,16 @@ void seed_fixture(db::Connection& c) {
     c.execute("INSERT INTO class (roster_id, content_id, name, description) VALUES "
               "(1, 137, 'Vanguard', 'A front-line melee defender who holds the line.'),"
               "(3, 138, 'Warden', 'A ranged hybrid who mends allies and burns foes at distance.')");
+    // attribute framework (SP2.4 #694) — the seed-pack vocabulary (a primary + a
+    // derived) and the Vanguard's class attribute_mods (strength +2, stamina +1).
+    // load_db_attributes reads these into WorldContent.attributes.
+    c.execute("INSERT INTO attribute (attr_ref, content_id, name, kind) VALUES "
+              "('core:attribute.strength', 132, 'Strength', 'primary'),"
+              "('core:attribute.stamina', 131, 'Stamina', 'primary'),"
+              "('core:attribute.armor', 127, 'Armor', 'derived')");
+    c.execute("INSERT INTO class_attribute_mod (class_roster_id, attr_ref, value) VALUES "
+              "(1, 'core:attribute.strength', 2),"
+              "(1, 'core:attribute.stamina', 1)");
 }
 
 // Find an objective of a given type in a quest def.
@@ -655,6 +684,25 @@ int main() {
                 }
                 check("create with an unknown race id is refused (InvalidRace)", refused);
             }
+        }
+
+        // ---- Attribute framework (SP2.4 #694) — load_world_content reads the
+        // `attribute` + `class_attribute_mod` tables into WorldContent.attributes.
+        // Full effective-stat math is proven in worldd-effective-stats(-db); here we
+        // just confirm the catalog is populated on the same load path.
+        {
+            const worldd::AttributeCatalog& a = content.attributes;
+            check("attributes: 3 loaded (2 primary + 1 derived)",
+                  a.attribute_count() == 3 && a.primary_count() == 2 && a.derived_count() == 1);
+            check("attributes: strength is primary",
+                  a.is_primary("core:attribute.strength"));
+            check("attributes: armor is derived",
+                  a.find("core:attribute.armor") != nullptr &&
+                      !a.is_primary("core:attribute.armor"));
+            check("attributes: Vanguard(1) strength mod +2",
+                  a.class_mod(1, "core:attribute.strength") == 2);
+            check("attributes: Vanguard(1) stamina mod +1",
+                  a.class_mod(1, "core:attribute.stamina") == 1);
         }
 
         drop_tables(conn);

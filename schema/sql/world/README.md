@@ -64,6 +64,8 @@ prefixes are the load/declaration order the DML dump follows, tools SAD §2.6).
 | `10_npc.sql` | `npc_template`, `npc_ability` | `npc.schema.yaml` |
 | `20_item.sql` | `item_template`, `item_stat`, `item_effect_on_equip` | `item.schema.yaml` |
 | `30_ability.sql` | `ability` (effects[] as generic `effects_json`, SP2.1) | `ability.schema.yaml` |
+| `35_roster.sql` | `race`, `class` (playable roster, keyed by `roster_id`, SP2.5) | `race.schema.yaml`, `class.schema.yaml` |
+| `36_attribute.sql` | `attribute`, `class_attribute_mod`, `race_attribute_mod` (attribute framework, SP2.4) | `attribute.schema.yaml` (+ `$defs/attributeMods`) |
 | `40_quest.sql` | `quest_template`, `quest_objective`, `quest_prereq`, `quest_reward` | `quest.schema.yaml` |
 | `50_loot.sql` | `loot_table`, `loot_group`, `loot_entry` | `loot.schema.yaml` |
 | `60_vendor.sql` | `vendor_inventory`, `vendor_inventory_item`, `vendor_inventory_buys` | `vendor.schema.yaml` |

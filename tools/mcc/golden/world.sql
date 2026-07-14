@@ -86,6 +86,16 @@ INSERT INTO ability (id, name, description, school, target, range_m, cast_time_m
   (135, 'Mending Word', 'A whispered blessing that restores {amount} health.', 'holy', 'friendly', 30, 1500, NULL, 0, TRUE, 'mana', 25, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":45,"min":30},"coefficient":0.6,"kind":"heal"}]'),
   (136, 'Searing Brand', 'Marks the target with fire, dealing {amount} damage over time and weakening it.', 'fire', 'enemy', 30, 0, NULL, 12000, TRUE, 'mana', 20, NULL, NULL, NULL, NULL, NULL, '[{"duration_ms":9000,"kind":"aura","periodic":{"amount":{"max":6,"min":4},"kind":"damage","tick_ms":3000},"stat_mods":[{"amount":-5,"stat":"strength"}]}]');
 
+-- attribute (7 rows)
+INSERT INTO attribute (attr_ref, content_id, name, kind) VALUES
+  ('core:attribute.agility', 126, 'Agility', 'primary'),
+  ('core:attribute.armor', 127, 'Armor', 'derived'),
+  ('core:attribute.crit', 128, 'Critical Strike', 'derived'),
+  ('core:attribute.haste', 129, 'Haste', 'derived'),
+  ('core:attribute.intellect', 130, 'Intellect', 'primary'),
+  ('core:attribute.stamina', 131, 'Stamina', 'primary'),
+  ('core:attribute.strength', 132, 'Strength', 'primary');
+
 -- race (2 rows)
 INSERT INTO race (roster_id, content_id, name, description) VALUES
   (1, 139, 'Ardent', 'Resilient folk of the central realm.'),
@@ -95,6 +105,12 @@ INSERT INTO race (roster_id, content_id, name, description) VALUES
 INSERT INTO class (roster_id, content_id, name, description) VALUES
   (1, 137, 'Vanguard', 'A front-line melee defender who holds the line.'),
   (3, 138, 'Warden', 'A ranged hybrid who mends allies and burns foes at distance.');
+
+-- class_attribute_mod (3 rows)
+INSERT INTO class_attribute_mod (class_roster_id, attr_ref, value) VALUES
+  (1, 'core:attribute.stamina', 1),
+  (1, 'core:attribute.strength', 2),
+  (3, 'core:attribute.agility', 2);
 
 -- quest_template (10 rows)
 INSERT INTO quest_template (id, name, summary, offer_text, completion_text, level, required_level, zone_ref_id, giver_npc_id, turn_in_npc_id, reward_xp, reward_money) VALUES
