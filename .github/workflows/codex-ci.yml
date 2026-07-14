@@ -1,0 +1,61 @@
+# Codex warning/safety gate (#720).
+name: codex-ci
+
+on:
+  pull_request:
+    paths:
+      - "tools/codex/**"
+      - "tools/schema_gen/**"
+      - "schema/content/**"
+      - "tests/schema_gen/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/codex-ci.yml"
+  push:
+    branches: [dev]
+    paths:
+      - "tools/codex/**"
+      - "tools/schema_gen/**"
+      - "schema/content/**"
+      - "tests/schema_gen/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/codex-ci.yml"
+
+jobs:
+  warning-clean:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Prepare locked Python environment
+        run: uv sync --locked
+
+      - name: Restore with online vulnerability audit
+        run: dotnet restore tools/codex/Meridian.Codex.sln -m:1 --disable-parallel
+
+      - name: Build with zero warnings
+        run: tools/codex/check-warning-clean.sh
+
+      - name: Test Codex and schema generator
+        run: |
+          dotnet test tools/codex/Meridian.Codex.sln --no-restore -m:1 --disable-build-servers
+          uv run pytest -q tests/schema_gen
+
+      - name: Schema generation failure must fail the build
+        run: |
+          set -euo pipefail
+          if UV_CACHE_DIR=/dev/null dotnet build tools/codex/Meridian.Codex.sln \
+              --no-restore -m:1 --disable-build-servers >negative-build.log 2>&1; then
+            cat negative-build.log
+            echo "FAIL: Codex build ignored a forced schema-generator cache failure." >&2
+            exit 1
+          fi
+          cat negative-build.log
+          grep -q "Build FAILED" negative-build.log

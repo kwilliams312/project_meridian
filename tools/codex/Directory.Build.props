@@ -1,0 +1,13 @@
+<Project>
+  <!--
+    Codex builds are warning-clean by contract. NU1900 means the online security
+    audit could not run; NU1901-NU1904 are actual vulnerability findings. Both
+    classes are actionable in the normal online path, so neither is suppressed.
+    See README.md for the explicit offline restore path.
+  -->
+  <PropertyGroup>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NuGetAudit Condition="'$(NuGetAudit)' == ''">true</NuGetAudit>
+    <WarningsAsErrors>$(WarningsAsErrors);NU1900;NU1901;NU1902;NU1903;NU1904</WarningsAsErrors>
+  </PropertyGroup>
+</Project>
