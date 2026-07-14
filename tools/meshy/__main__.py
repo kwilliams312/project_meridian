@@ -447,10 +447,36 @@ def cmd_generate(args: argparse.Namespace) -> int:
 
     def refuse(message: str) -> int:
         if args.json_events:
-            events.emit("error", error_code="invalid_request", message=message)
+            try:
+                events.emit("error", error_code="invalid_request", message=message)
+            except protocol.ProtocolSinkFlushError as exc:
+                # The refusal event is already the terminal outcome. If its
+                # accepted line became durable on retry, preserve exit 2 rather
+                # than append a second terminal document.
+                if exc.retry_succeeded and not exc.is_process_control:
+                    return 2
+                return _report_json_sink_failure()
         else:
             print(f"refused: {message}", file=sys.stderr)
         return 2
+
+    def emit_preflight(event: str, **fields) -> int | None:
+        """Emit an early nonterminal event with runtime-equivalent cancellation."""
+
+        try:
+            events.emit(event, **fields)
+        except protocol.ProtocolSinkFlushError as exc:
+            if isinstance(exc.original, KeyboardInterrupt):
+                # The interrupted event's full line was accepted. Append only
+                # the cancellation terminal; never rewrite the first delivery.
+                events.emit(
+                    "cancelled",
+                    message="generation cancelled by operator",
+                    task_ids=[],
+                )
+                return 130
+            return _report_json_sink_failure()
+        return None
 
     # --- Refusal gates: BEFORE any network call (TD-09 precondition). ---
     if (
@@ -462,11 +488,13 @@ def cmd_generate(args: argparse.Namespace) -> int:
             "--model-version must name an explicit pinned Meshy release; "
             "'latest' is refused"
         )
-    events.emit(
+    preflight_result = emit_preflight(
         "validation.started",
         mode="text" if args.text else "image",
         model_version=args.model_version,
     )
+    if preflight_result is not None:
+        return preflight_result
     if not args.terms_verified:
         return refuse(
             "--terms-verified is required — Meshy's commercial-terms check "
@@ -508,11 +536,13 @@ def cmd_generate(args: argparse.Namespace) -> int:
     except (intake.IntakeError, OSError, ValueError) as exc:
         return refuse(str(exc))
 
-    events.emit(
+    preflight_result = emit_preflight(
         "validation.passed",
         mode="text" if args.text else "image",
         model_version=args.model_version,
     )
+    if preflight_result is not None:
+        return preflight_result
 
     task_ids: list[str] = []
     terminal_emitted = False

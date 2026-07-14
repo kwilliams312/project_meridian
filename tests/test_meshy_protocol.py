@@ -278,6 +278,114 @@ def test_json_protocol_refuses_unpinned_model_before_http(
     assert "pinned" in final["message"]
 
 
+@pytest.mark.parametrize("target_event", ["validation.started", "validation.passed"])
+def test_preflight_flush_keyboard_interrupt_emits_one_cancelled_terminal(
+    target_event, tmp_path, monkeypatch, capsys
+):
+    class InterruptingPreflightFlushStream:
+        def __init__(self):
+            self.pending = ""
+            self.durable = ""
+            self.interrupted = False
+
+        def write(self, value):
+            self.pending += value
+            return len(value)
+
+        def flush(self):
+            if not self.interrupted and f'"event":"{target_event}"' in self.pending:
+                self.interrupted = True
+                raise KeyboardInterrupt
+            self.durable += self.pending
+            self.pending = ""
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("preflight cancellation must precede client construction")
+
+    monkeypatch.setattr(meshy_main, "_new_client", forbidden)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    stream = InterruptingPreflightFlushStream()
+    monkeypatch.setattr(meshy_main.sys, "stdout", stream)
+
+    assert meshy_main.main(_base_args(tmp_path)) == 130
+    assert stream.pending == ""
+    events = _events(stream.durable)
+    names = [event["event"] for event in events]
+    assert names.count(target_event) == 1
+    assert names[-1] == "cancelled"
+    assert names.count("cancelled") == 1
+    assert capsys.readouterr().err == ""
+    assert not (tmp_path / "content/core/assets/art/protocol_marker").exists()
+
+
+@pytest.mark.parametrize("flush_failure", [OSError, SystemExit, GeneratorExit])
+def test_preflight_non_cancellation_flush_failure_stays_controlled(
+    flush_failure, tmp_path, monkeypatch, capsys
+):
+    class FailingPreflightFlushStream:
+        def __init__(self):
+            self.pending = ""
+            self.durable = ""
+            self.failed = False
+            self.writes_after_failure = 0
+
+        def write(self, value):
+            if self.failed:
+                self.writes_after_failure += 1
+            self.pending += value
+            return len(value)
+
+        def flush(self):
+            if not self.failed:
+                self.failed = True
+                raise flush_failure("injected preflight flush failure")
+            self.durable += self.pending
+            self.pending = ""
+
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    stream = FailingPreflightFlushStream()
+    monkeypatch.setattr(meshy_main.sys, "stdout", stream)
+
+    assert meshy_main.main(_base_args(tmp_path)) == 1
+    assert stream.pending == ""
+    assert stream.writes_after_failure == 0
+    assert [event["event"] for event in _events(stream.durable)] == [
+        "validation.started"
+    ]
+    assert capsys.readouterr().err == (
+        "error: Meshy JSON event sink failed; refusing further stdout output\n"
+    )
+
+
+def test_terminal_refusal_flush_interrupt_keeps_single_refusal(
+    tmp_path, monkeypatch, capsys
+):
+    class InterruptingRefusalFlushStream:
+        def __init__(self):
+            self.output = ""
+            self.interrupted = False
+
+        def write(self, value):
+            self.output += value
+            return len(value)
+
+        def flush(self):
+            if not self.interrupted:
+                self.interrupted = True
+                raise KeyboardInterrupt
+
+    stream = InterruptingRefusalFlushStream()
+    monkeypatch.setattr(meshy_main.sys, "stdout", stream)
+    args = _base_args(tmp_path)
+    args[args.index("meshy-5")] = "latest"
+
+    assert meshy_main.main(args) == 2
+    events = _events(stream.output)
+    assert [event["event"] for event in events] == ["error"]
+    assert events[0]["error_code"] == "invalid_request"
+    assert capsys.readouterr().err == ""
+
+
 def test_json_protocol_wraps_argument_parser_errors(capsys):
     rc = meshy_main.main(["generate", "--json-events"])
 
