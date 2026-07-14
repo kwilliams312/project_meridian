@@ -42,8 +42,63 @@ UI_WIDGETS = {
 UI_UNITS = {"ms", "m", "mps", "percent", "copper", "scale"}
 ASSET_KEYS = {"allowed_classes", "eligible_generators"}
 ELIGIBLE_GENERATORS = {"meshy"}
+MESHY_ASSET_CLASSES = {
+    "character_model",
+    "creature_model",
+    "weapon_model",
+    "armor_model",
+    "kit_piece",
+    "prop",
+    "foliage",
+    "hero_landmark",
+}
+ASSET_REFERENCE_CLASSES = {
+    "artRef": {
+        "character_model",
+        "creature_model",
+        "weapon_model",
+        "armor_model",
+        "kit_piece",
+        "prop",
+        "foliage",
+        "hero_landmark",
+        "texture_set",
+        "icon",
+        "vfx",
+        "ui_art",
+    },
+    "musRef": {"music_stem", "music_stinger"},
+    "sfxRef": {"sfx", "ui_sound"},
+    "ambRef": {"ambience_bed", "ambience_emitter"},
+}
+REFERENCE_TYPES = {
+    "contentId": "content:content",
+    "npcRef": "content:npc",
+    "itemRef": "content:item",
+    "questRef": "content:quest",
+    "abilityRef": "content:ability",
+    "lootRef": "content:loot",
+    "vendorRef": "content:vendor",
+    "zoneRef": "content:zone",
+    "dyeRef": "content:dye",
+    "appearanceRef": "content:appearance",
+    "attributeRef": "content:attribute",
+    "equipTypeRef": "content:equip_type",
+    "raceRef": "content:race",
+    "talentRef": "content:talent",
+    "talentTreeRef": "content:talent_tree",
+    "equipTypeId": "content:content",
+    "raceId": "content:content",
+    "talentId": "content:content",
+    "talentTreeId": "content:content",
+    "classId": "content:content",
+    "artRef": "asset:art",
+    "musRef": "asset:mus",
+    "sfxRef": "asset:sfx",
+    "ambRef": "asset:amb",
+    "assetId": "asset:asset",
+}
 _SLUG = re.compile(r"^[a-z][a-z0-9_]*$")
-_REFERENCE_TYPE = re.compile(r"^(content|asset):[a-z][a-z0-9_]*$")
 
 
 def emit(schema_dir: Path) -> str:
@@ -97,7 +152,7 @@ def _collect(
             )
         descriptor: dict[str, Any] = {"path": field_path}
         if ui is not None:
-            descriptor["ui"] = _validate_ui(ui, schema_file, field_path)
+            descriptor["ui"] = _validate_ui(ui, schema_file, field_path, node)
         if asset is not None:
             descriptor["asset"] = _validate_asset(
                 asset, schema_file, field_path, node, asset_classes
@@ -122,27 +177,56 @@ def _collect(
                 _collect(variant, field_path, schema_file, fields, asset_classes)
 
 
-def _validate_ui(value: Any, schema_file: str, path: str) -> dict[str, Any]:
+def _validate_ui(
+    value: Any, schema_file: str, path: str, field: dict[str, Any]
+) -> dict[str, Any]:
     annotation = _mapping(value, UI_KEY, schema_file, path)
     _known_keys(annotation, UI_KEYS, UI_KEY, schema_file, path)
     for key in ("group", "label", "help", "constraint"):
         if key in annotation and not _nonempty_string(annotation[key]):
             _error(schema_file, path, f"{UI_KEY}.{key} must be a non-empty string")
-    if "group" in annotation and not _SLUG.fullmatch(annotation["group"]):
+    if "group" in annotation and (
+        not isinstance(annotation["group"], str)
+        or not _SLUG.fullmatch(annotation["group"])
+    ):
         _error(schema_file, path, f"{UI_KEY}.group must be a lower_snake_case slug")
-    if "widget" in annotation and annotation["widget"] not in UI_WIDGETS:
+    if "widget" in annotation and (
+        not isinstance(annotation["widget"], str)
+        or annotation["widget"] not in UI_WIDGETS
+    ):
         _error(schema_file, path, f"{UI_KEY}.widget must be one of {sorted(UI_WIDGETS)}")
-    if "unit" in annotation and annotation["unit"] not in UI_UNITS:
+    if "unit" in annotation and (
+        not isinstance(annotation["unit"], str)
+        or annotation["unit"] not in UI_UNITS
+    ):
         _error(schema_file, path, f"{UI_KEY}.unit must be one of {sorted(UI_UNITS)}")
     if "reference_type" in annotation:
         reference_type = annotation["reference_type"]
-        if not isinstance(reference_type, str) or not _REFERENCE_TYPE.fullmatch(reference_type):
+        if not isinstance(reference_type, str) or reference_type not in set(
+            REFERENCE_TYPES.values()
+        ):
             _error(
                 schema_file,
                 path,
-                f"{UI_KEY}.reference_type must be content:<type> or asset:<type>",
+                f"{UI_KEY}.reference_type must be one of {sorted(set(REFERENCE_TYPES.values()))}",
             )
-    if "example" in annotation and isinstance(annotation["example"], (dict, list)):
+        # A field-local annotation must describe the exact typed $ref it accompanies;
+        # pattern-only strings cannot claim a reference type without a schema ref.
+        reference = field.get("$ref")
+        annotation_ref = (
+            REFERENCE_TYPES.get(reference.rsplit("/", 1)[-1])
+            if isinstance(reference, str)
+            else None
+        )
+        if annotation_ref != reference_type:
+            _error(
+                schema_file,
+                path,
+                f"{UI_KEY}.reference_type {reference_type!r} is incompatible with field reference {reference!r}",
+            )
+    if "example" in annotation and annotation["example"] is not None and not isinstance(
+        annotation["example"], (str, int, float, bool)
+    ):
         _error(schema_file, path, f"{UI_KEY}.example must be a scalar")
     return annotation
 
@@ -157,12 +241,8 @@ def _validate_asset(
     annotation = _mapping(value, ASSET_KEY, schema_file, path)
     _known_keys(annotation, ASSET_KEYS, ASSET_KEY, schema_file, path)
     reference = field.get("$ref")
-    if not isinstance(reference, str) or reference.rsplit("/", 1)[-1] not in {
-        "artRef",
-        "musRef",
-        "sfxRef",
-        "ambRef",
-    }:
+    reference_name = reference.rsplit("/", 1)[-1] if isinstance(reference, str) else None
+    if reference_name not in ASSET_REFERENCE_CLASSES:
         _error(schema_file, path, f"{ASSET_KEY} requires an asset-reference field")
     if asset_classes_contract is None:
         _error(
@@ -174,6 +254,7 @@ def _validate_asset(
     if (
         not isinstance(asset_classes, list)
         or not asset_classes
+        or not all(isinstance(asset_class, str) for asset_class in asset_classes)
         or any(asset_class not in asset_classes_contract for asset_class in asset_classes)
     ):
         _error(
@@ -183,9 +264,20 @@ def _validate_asset(
         )
     if len(asset_classes) != len(set(asset_classes)):
         _error(schema_file, path, f"{ASSET_KEY}.allowed_classes must be unique")
+    compatible_classes = ASSET_REFERENCE_CLASSES[reference_name]
+    if not set(asset_classes).issubset(compatible_classes):
+        _error(
+            schema_file,
+            path,
+            f"{ASSET_KEY}.allowed_classes must be compatible with {reference_name}: {sorted(compatible_classes)}",
+        )
     generators = annotation.get("eligible_generators", [])
-    if not isinstance(generators, list) or any(
-        generator not in ELIGIBLE_GENERATORS for generator in generators
+    if (
+        not isinstance(generators, list)
+        or not all(isinstance(generator, str) for generator in generators)
+        or any(
+            generator not in ELIGIBLE_GENERATORS for generator in generators
+        )
     ):
         _error(
             schema_file,
@@ -194,6 +286,12 @@ def _validate_asset(
         )
     if len(generators) != len(set(generators)):
         _error(schema_file, path, f"{ASSET_KEY}.eligible_generators must be unique")
+    if "meshy" in generators and not set(asset_classes).issubset(MESHY_ASSET_CLASSES):
+        _error(
+            schema_file,
+            path,
+            f"{ASSET_KEY}.eligible_generators includes meshy but allowed_classes must be a subset of {sorted(MESHY_ASSET_CLASSES)}",
+        )
     return annotation
 
 

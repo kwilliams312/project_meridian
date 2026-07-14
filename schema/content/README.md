@@ -89,7 +89,7 @@ their vocabulary and emits the checked-in Codex form-descriptor manifest.
 | `label` | Non-empty human-facing field label. |
 | `widget` | `single_line`, `multiline`, `slug`, `semver`, `number`, `asset_picker`, `reference_picker`, or `animation`. |
 | `unit` | `ms`, `m`, `mps`, `percent`, `copper`, or `scale`. |
-| `reference_type` | Typed target in `content:<type>` or `asset:<type>` form. |
+| `reference_type` | Typed target matching the field's `$ref`; finite vocabulary below. |
 | `help` | Optional task-oriented explanation beyond the schema description. |
 | `example` | Optional scalar example; never a default. |
 | `constraint` | Optional plain-language summary of a schema-owned constraint. |
@@ -100,6 +100,23 @@ non-empty, unique subset of `asset.schema.yaml`'s `class` enum.
 only `meshy`. An omitted or empty list means selection only. Generator
 eligibility is explicit and field-local: for example a creature model may be
 Meshy-eligible while an icon, VFX, SFX, or canonical skeleton is not.
+
+Reference types are closed and must agree with the referenced schema definition:
+`content:content`, `content:npc`, `content:item`, `content:quest`,
+`content:ability`, `content:loot`, `content:vendor`, `content:zone`, `content:dye`,
+`content:appearance`, `content:attribute`, `content:equip_type`, `content:race`,
+`content:talent`, `content:talent_tree`, `asset:art`, `asset:mus`, `asset:sfx`,
+`asset:amb`, and `asset:asset`. For example an
+`abilityRef` accepts only `content:ability`; pattern-only strings cannot claim a
+reference type.
+
+Meshy eligibility is limited to 3D classes: `character_model`,
+`creature_model`, `weapon_model`, `armor_model`, `kit_piece`, `prop`, `foliage`,
+and `hero_landmark`. When `meshy` is listed, every `allowed_classes` entry must
+come from that set. Image, VFX, and audio classes remain selection-only.
+Asset classes must also match the field reference: `artRef` accepts art classes,
+`musRef` accepts `music_stem|music_stinger`, `sfxRef` accepts `sfx|ui_sound`,
+and `ambRef` accepts `ambience_bed|ambience_emitter`.
 
 ```yaml
 model:

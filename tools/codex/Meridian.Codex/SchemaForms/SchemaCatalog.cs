@@ -11,6 +11,11 @@ namespace Meridian.Codex.SchemaForms;
 /// </summary>
 public sealed class SchemaCatalog
 {
+    private static readonly string[] ManifestKeys = ["schema", "schemas"];
+    private static readonly string[] ManifestSchemaKeys = ["schema_file", "schema_id", "content_schema", "fields"];
+    private static readonly string[] ManifestFieldKeys = ["path", "ui", "asset"];
+    private static readonly string[] ManifestUiKeys = ["group", "label", "widget", "unit", "reference_type", "help", "example", "constraint"];
+    private static readonly string[] ManifestAssetKeys = ["allowed_classes", "eligible_generators"];
     private static readonly string[] SupportedKeywords =
     [
         "$schema", "$id", "$defs", "$ref", "type", "properties", "required",
@@ -282,7 +287,8 @@ public sealed class SchemaCatalog
 
     private static IReadOnlyDictionary<string, IReadOnlyDictionary<string, JsonObject>> ParseDescriptors(JsonObject manifest)
     {
-        if (Text(manifest, "schema") != "meridian/codex-form-descriptors@1")
+        EnsureKnownKeys(manifest, ManifestKeys, "manifest");
+        if (OptionalString(manifest, "schema", "manifest") != "meridian/codex-form-descriptors@1")
             throw new InvalidDataException("Unsupported or missing Codex form-descriptor manifest version.");
         if (manifest["schemas"] is not JsonArray schemas)
             throw new InvalidDataException("Codex form-descriptor manifest has no schemas array.");
@@ -290,16 +296,26 @@ public sealed class SchemaCatalog
         var result = new Dictionary<string, IReadOnlyDictionary<string, JsonObject>>(StringComparer.Ordinal);
         foreach (var node in schemas)
         {
-            if (node is not JsonObject schema || Text(schema, "schema_file") is not { Length: > 0 } schemaFile)
+            if (node is not JsonObject schema)
+                throw new InvalidDataException("Codex form-descriptor schemas entries must be objects.");
+            EnsureKnownKeys(schema, ManifestSchemaKeys, "schema entry");
+            if (OptionalString(schema, "schema_file", "schema entry") is not { Length: > 0 } schemaFile)
                 throw new InvalidDataException("Codex form-descriptor schema entry is missing schema_file.");
+            OptionalString(schema, "schema_id", $"schema '{schemaFile}'");
+            OptionalString(schema, "content_schema", $"schema '{schemaFile}'");
             if (schema["fields"] is not JsonArray fields)
                 throw new InvalidDataException($"Codex form-descriptor entry '{schemaFile}' has no fields array.");
 
             var byPath = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
             foreach (var fieldNode in fields)
             {
-                if (fieldNode is not JsonObject field || field["path"] is not JsonValue pathNode || !pathNode.TryGetValue<string>(out var path))
+                if (fieldNode is not JsonObject field)
+                    throw new InvalidDataException($"Codex form-descriptor entry '{schemaFile}' fields must be objects.");
+                if (field["path"] is not JsonValue pathNode || !pathNode.TryGetValue<string>(out var path))
                     throw new InvalidDataException($"Codex form-descriptor entry '{schemaFile}' has a field without a string path.");
+                var location = $"{schemaFile}:{(path.Length == 0 ? "<root>" : path)}";
+                EnsureKnownKeys(field, ManifestFieldKeys, location);
+                ValidateFieldDescriptor(field, location);
                 if (!byPath.TryAdd(path, field))
                     throw new InvalidDataException($"Codex form-descriptor entry '{schemaFile}' repeats path '{path}'.");
             }
@@ -307,6 +323,76 @@ public sealed class SchemaCatalog
                 throw new InvalidDataException($"Codex form-descriptor manifest repeats schema '{schemaFile}'.");
         }
         return result;
+    }
+
+    private static void ValidateFieldDescriptor(JsonObject field, string location)
+    {
+        var hasUi = field.ContainsKey("ui");
+        var hasAsset = field.ContainsKey("asset");
+        if (!hasUi && !hasAsset)
+            throw new InvalidDataException($"Codex form-descriptor {location}: field must contain ui or asset metadata.");
+
+        if (hasUi)
+        {
+            if (field["ui"] is not JsonObject ui)
+                throw new InvalidDataException($"Codex form-descriptor {location}: ui must be an object.");
+            EnsureKnownKeys(ui, ManifestUiKeys, location, "ui");
+            foreach (var key in ManifestUiKeys.Where(key => key != "example"))
+                OptionalString(ui, key, location, "ui");
+            if (ui.ContainsKey("example") && ui["example"] is JsonObject or JsonArray)
+                throw new InvalidDataException($"Codex form-descriptor {location}: ui.example must be a scalar.");
+        }
+
+        if (hasAsset)
+        {
+            if (field["asset"] is not JsonObject asset)
+                throw new InvalidDataException($"Codex form-descriptor {location}: asset must be an object.");
+            EnsureKnownKeys(asset, ManifestAssetKeys, location, "asset");
+            var allowed = StringArray(asset, "allowed_classes", location, "asset", required: true);
+            if (allowed.Count == 0)
+                throw new InvalidDataException($"Codex form-descriptor {location}: asset.allowed_classes must not be empty.");
+            StringArray(asset, "eligible_generators", location, "asset", required: false);
+        }
+    }
+
+    private static void EnsureKnownKeys(JsonObject value, IReadOnlyList<string> allowed, string location, string? prefix = null)
+    {
+        var unknown = value.Select(pair => pair.Key)
+            .Where(key => !allowed.Contains(key, StringComparer.Ordinal))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (unknown.Length == 0) return;
+        var qualified = unknown.Select(key => prefix is null ? key : $"{prefix}.{key}");
+        throw new InvalidDataException($"Codex form-descriptor {location}: unknown key(s): {string.Join(", ", qualified)}.");
+    }
+
+    private static string? OptionalString(JsonObject value, string key, string location, string? prefix = null)
+    {
+        if (!value.ContainsKey(key)) return null;
+        if (value[key] is JsonValue node && node.TryGetValue<string>(out var text)) return text;
+        var qualified = prefix is null ? key : $"{prefix}.{key}";
+        throw new InvalidDataException($"Codex form-descriptor {location}: {qualified} must be a string.");
+    }
+
+    private static IReadOnlyList<string> StringArray(JsonObject value, string key, string location, string prefix, bool required)
+    {
+        if (!value.ContainsKey(key))
+        {
+            if (!required) return [];
+            throw new InvalidDataException($"Codex form-descriptor {location}: {prefix}.{key} is required.");
+        }
+        if (value[key] is not JsonArray array)
+            throw new InvalidDataException($"Codex form-descriptor {location}: {prefix}.{key} must be an array of strings.");
+        var strings = new List<string>();
+        foreach (var item in array)
+        {
+            if (item is not JsonValue node || !node.TryGetValue<string>(out var text))
+                throw new InvalidDataException($"Codex form-descriptor {location}: {prefix}.{key} must be an array of strings.");
+            strings.Add(text);
+        }
+        if (strings.Count != strings.Distinct(StringComparer.Ordinal).Count())
+            throw new InvalidDataException($"Codex form-descriptor {location}: {prefix}.{key} values must be unique.");
+        return strings;
     }
 
     private static JsonObject EmptyDescriptorManifest() => new()

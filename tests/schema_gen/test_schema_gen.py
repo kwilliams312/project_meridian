@@ -338,6 +338,83 @@ def test_asset_annotation_requires_an_asset_reference(tmp_path):
         generate.render(tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("reference_type", "message"),
+    [
+        ("content:banana", "must be one of"),
+        ("content:npc", "incompatible with field reference"),
+    ],
+)
+def test_reference_type_vocabulary_and_field_compatibility_fail_closed(
+    tmp_path, reference_type, message
+):
+    schema_dir = tmp_path / "schemas"
+    shutil.copytree(SCHEMA_DIR, schema_dir)
+    npc_file = schema_dir / "npc.schema.yaml"
+    npc = yaml.safe_load(npc_file.read_text(encoding="utf-8"))
+    npc["properties"]["ai"]["properties"]["abilities"]["items"]["properties"][
+        "ability"
+    ]["x-meridian-ui"]["reference_type"] = reference_type
+    npc_file.write_text(yaml.safe_dump(npc, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(
+        SchemaError,
+        match=rf"npc\.schema\.yaml:ai\.abilities\[\]\.ability:.*{message}",
+    ):
+        generate.render(schema_dir)
+
+
+def test_meshy_is_rejected_for_non_3d_asset_classes(tmp_path):
+    schema_dir = tmp_path / "schemas"
+    shutil.copytree(SCHEMA_DIR, schema_dir)
+    item_file = schema_dir / "item.schema.yaml"
+    item = yaml.safe_load(item_file.read_text(encoding="utf-8"))
+    item["properties"]["visual"]["properties"]["icon"]["x-meridian-asset"][
+        "eligible_generators"
+    ] = ["meshy"]
+    item_file.write_text(yaml.safe_dump(item, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(
+        SchemaError,
+        match=r"item\.schema\.yaml:visual\.icon:.*meshy.*allowed_classes.*subset",
+    ):
+        generate.render(schema_dir)
+
+
+def test_allowed_asset_classes_must_match_reference_kind(tmp_path):
+    schema_dir = tmp_path / "schemas"
+    shutil.copytree(SCHEMA_DIR, schema_dir)
+    npc_file = schema_dir / "npc.schema.yaml"
+    npc = yaml.safe_load(npc_file.read_text(encoding="utf-8"))
+    npc["properties"]["visual"]["properties"]["sound_set"]["x-meridian-asset"][
+        "allowed_classes"
+    ] = ["icon"]
+    npc_file.write_text(yaml.safe_dump(npc, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(
+        SchemaError,
+        match=r"npc\.schema\.yaml:visual\.sound_set:.*compatible with sfxRef",
+    ):
+        generate.render(schema_dir)
+
+
+def test_nested_allowed_class_values_raise_actionable_schema_error(tmp_path):
+    schema_dir = tmp_path / "schemas"
+    shutil.copytree(SCHEMA_DIR, schema_dir)
+    item_file = schema_dir / "item.schema.yaml"
+    item = yaml.safe_load(item_file.read_text(encoding="utf-8"))
+    item["properties"]["visual"]["properties"]["icon"]["x-meridian-asset"][
+        "allowed_classes"
+    ] = [{"class": "icon"}]
+    item_file.write_text(yaml.safe_dump(item, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(
+        SchemaError,
+        match=r"item\.schema\.yaml:visual\.icon:.*allowed_classes.*non-empty subset",
+    ):
+        generate.render(schema_dir)
+
+
 @pytest.mark.integration
 def test_ui_annotations_are_non_validating_draft_2020_12_keywords():
     for schema_file in ("pack", "npc", "appearance", "item", "ability"):
