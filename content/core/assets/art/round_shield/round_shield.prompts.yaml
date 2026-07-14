@@ -1,0 +1,10 @@
+task_id: 019f6160-ca46-7cd0-893b-2bb4fadbced5
+model_version: meshy-5
+preview_task_id: 019f615f-7ab7-7974-9ab2-65d0267232a0
+request:
+  mode: preview
+  prompt: a chibi round shield; chibi, colored rounded PILL-shaped body, big cute
+    expressive eyes and a friendly face, smooth clay-like toy-like, bright saturated
+    colors, clean readable silhouette, game-ready
+  ai_model: meshy-5
+  target_polycount: 12000

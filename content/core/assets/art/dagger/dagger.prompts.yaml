@@ -1,0 +1,10 @@
+task_id: 019f6158-54bf-7539-8043-a19bd13e0695
+model_version: meshy-5
+preview_task_id: 019f6157-a963-7a80-955c-2859839a0b3c
+request:
+  mode: preview
+  prompt: a chibi dagger; chibi, colored rounded PILL-shaped body, big cute expressive
+    eyes and a friendly face, smooth clay-like toy-like, bright saturated colors,
+    clean readable silhouette, game-ready
+  ai_model: meshy-5
+  target_polycount: 12000

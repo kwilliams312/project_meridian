@@ -1,0 +1,16 @@
+schema: meridian/asset@1
+id: core:art.chibi_pill_body
+class: character_model
+source: assets/art/chibi_pill_body/sk_chibi_pill_body.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors:
+  - meridian-contributors
+  origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/019f6147-27ac-76be-8a16-6272bfd00827
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: chibi_pill_body.prompts.yaml
+budget:
+  lod0_tris: 48156
+restyle_status: pending

@@ -1,0 +1,10 @@
+task_id: 019f6151-ac5f-7861-a600-30b06177b126
+model_version: meshy-5
+preview_task_id: 019f6150-926d-72ca-bdf6-d1de550f9593
+request:
+  mode: preview
+  prompt: a chibi one-handed sword; chibi, colored rounded PILL-shaped body, big cute
+    expressive eyes and a friendly face, smooth clay-like toy-like, bright saturated
+    colors, clean readable silhouette, game-ready
+  ai_model: meshy-5
+  target_polycount: 12000
