@@ -32,7 +32,10 @@ properties:
       mana: { type: integer, minimum: 0 }
       armor: { type: integer, minimum: 0 }
       damage: { $ref: "#/$defs/intRange" }
-      attack_speed_ms: { type: integer, minimum: 500 }
+      attack_speed_ms:
+        type: integer
+        minimum: 500
+        x-meridian-ui: { group: combat, label: Attack speed, widget: number, unit: ms }
 
   ai:
     description: Server-side behavior parameters (CMB-02). Ignored for faction=friendly.
@@ -43,9 +46,24 @@ properties:
         description: aggressive = attacks on aggro radius; defensive = retaliates only.
         enum: [aggressive, defensive, passive]
         default: defensive
-      aggro_radius_m: { type: number, minimum: 0, maximum: 100, default: 20 }
-      leash_radius_m: { type: number, minimum: 0, maximum: 500, default: 60 }
-      call_for_help_radius_m: { type: number, minimum: 0, maximum: 100, default: 0 }
+      aggro_radius_m:
+        type: number
+        minimum: 0
+        maximum: 100
+        default: 20
+        x-meridian-ui: { group: ai, label: Aggro radius, widget: number, unit: m }
+      leash_radius_m:
+        type: number
+        minimum: 0
+        maximum: 500
+        default: 60
+        x-meridian-ui: { group: ai, label: Leash radius, widget: number, unit: m }
+      call_for_help_radius_m:
+        type: number
+        minimum: 0
+        maximum: 100
+        default: 0
+        x-meridian-ui: { group: ai, label: Call-for-help radius, widget: number, unit: m }
       flee_at_health_pct: { $ref: "#/$defs/pct" }
       abilities:
         type: array
@@ -54,7 +72,13 @@ properties:
           additionalProperties: false
           required: [ability]
           properties:
-            ability: { $ref: "#/$defs/abilityRef" }
+            ability:
+              $ref: "#/$defs/abilityRef"
+              x-meridian-ui:
+                group: ai
+                label: Ability
+                widget: reference_picker
+                reference_type: content:ability
             priority:
               description: Lower = considered first each AI tick.
               type: integer
@@ -122,7 +146,32 @@ properties:
     type: object
     additionalProperties: false
     required: [model]
+    x-meridian-ui: { group: presentation, label: Visual and audio }
     properties:
-      model: { $ref: "#/$defs/artRef" }
-      scale: { type: number, exclusiveMinimum: 0, maximum: 10, default: 1.0 }
-      sound_set: { $ref: "#/$defs/sfxRef" }
+      model:
+        $ref: "#/$defs/artRef"
+        x-meridian-ui:
+          group: presentation
+          label: Creature model
+          widget: asset_picker
+          reference_type: asset:art
+          help: Art-registry model rendered for this NPC or mob.
+        x-meridian-asset:
+          allowed_classes: [creature_model]
+          eligible_generators: [meshy]
+      scale:
+        type: number
+        exclusiveMinimum: 0
+        maximum: 10
+        default: 1.0
+        x-meridian-ui: { group: presentation, label: Model scale, widget: number, unit: scale }
+      sound_set:
+        $ref: "#/$defs/sfxRef"
+        x-meridian-ui:
+          group: presentation
+          label: Sound set
+          widget: asset_picker
+          reference_type: asset:sfx
+        x-meridian-asset:
+          allowed_classes: [sfx]
+          eligible_generators: []

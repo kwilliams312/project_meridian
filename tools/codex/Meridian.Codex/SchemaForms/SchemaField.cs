@@ -9,6 +9,8 @@ public sealed class SchemaField
     public required string Path { get; init; }
     public string Title { get; init; } = string.Empty;
     public string? Description { get; init; }
+    public SchemaUiDescriptor? Ui { get; init; }
+    public SchemaAssetDescriptor? Asset { get; init; }
     public SchemaFieldKind Kind { get; init; }
     public bool IsRequired { get; init; }
     public bool IsReadOnly { get; init; }
@@ -24,6 +26,20 @@ public sealed class SchemaField
     public SchemaField? Item { get; init; }
     public IReadOnlyList<SchemaVariant> Variants { get; init; } = [];
 }
+
+public sealed record SchemaUiDescriptor(
+    string? Group,
+    string? Label,
+    string? Widget,
+    string? Unit,
+    string? ReferenceType,
+    string? Help,
+    JsonNode? Example,
+    string? Constraint);
+
+public sealed record SchemaAssetDescriptor(
+    IReadOnlyList<string> AllowedClasses,
+    IReadOnlyList<string> EligibleGenerators);
 
 public sealed record SchemaVariant(string Key, string Label, SchemaField Schema);
 

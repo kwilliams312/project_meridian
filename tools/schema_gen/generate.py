@@ -14,7 +14,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import emit_cpp, emit_csharp
+from . import emit_cpp, emit_csharp, emit_form_descriptors
 from .ir import build_model
 
 # Repo layout: tools/schema_gen/generate.py -> repo root is parents[2].
@@ -27,13 +27,20 @@ GENERATED_ROOT = _THIS.parent / "generated"
 TARGETS: dict[str, tuple] = {
     "cpp": (emit_cpp.emit, Path("cpp") / "content_types.gen.hpp"),
     "csharp": (emit_csharp.emit, Path("csharp") / "ContentTypes.g.cs"),
+    "descriptors": (None, Path("codex") / "FormDescriptors.g.json"),
 }
 
 
 def render(schema_dir: Path) -> dict[str, str]:
     """Return {target: generated-text} for every target. Pure; no I/O writes."""
     model = build_model(schema_dir)
-    return {name: emit(model) for name, (emit, _out) in TARGETS.items()}
+    rendered = {
+        name: emit(model)
+        for name, (emit, _out) in TARGETS.items()
+        if emit is not None
+    }
+    rendered["descriptors"] = emit_form_descriptors.emit(schema_dir)
+    return rendered
 
 
 def _output_path(target: str) -> Path:

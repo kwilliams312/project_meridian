@@ -23,6 +23,7 @@ properties:
     minimum: 0
     maximum: 60
     default: 5
+    x-meridian-ui: { group: targeting, label: Cast range, widget: number, unit: m }
   cast:
     type: object
     additionalProperties: false
@@ -33,8 +34,17 @@ properties:
         minimum: 0
         maximum: 10000
         default: 0
-      channel_ms: { type: integer, minimum: 0, maximum: 30000 }
-  cooldown_ms: { type: integer, minimum: 0, default: 0 }
+        x-meridian-ui: { group: timing, label: Cast time, widget: number, unit: ms }
+      channel_ms:
+        type: integer
+        minimum: 0
+        maximum: 30000
+        x-meridian-ui: { group: timing, label: Channel duration, widget: number, unit: ms }
+  cooldown_ms:
+    type: integer
+    minimum: 0
+    default: 0
+    x-meridian-ui: { group: timing, label: Cooldown, widget: number, unit: ms }
   triggers_gcd:
     description: Client may start GCD presentation optimistically; server rollback per sync decision D-10.
     type: boolean
@@ -244,9 +254,49 @@ properties:
   audio_visual:
     type: object
     additionalProperties: false
+    x-meridian-ui: { group: presentation, label: Audio and visual }
     properties:
-      cast_anim: { type: string, pattern: "^[a-z][a-z0-9_]*$" }
-      cast_vfx: { $ref: "#/$defs/artRef" }
-      cast_sfx: { $ref: "#/$defs/sfxRef" }
-      impact_vfx: { $ref: "#/$defs/artRef" }
-      impact_sfx: { $ref: "#/$defs/sfxRef" }
+      cast_anim:
+        type: string
+        pattern: "^[a-z][a-z0-9_]*$"
+        x-meridian-ui: { group: presentation, label: Cast animation, widget: animation }
+      cast_vfx:
+        $ref: "#/$defs/artRef"
+        x-meridian-ui:
+          group: presentation
+          label: Cast VFX
+          widget: asset_picker
+          reference_type: asset:art
+        x-meridian-asset:
+          allowed_classes: [vfx]
+          eligible_generators: []
+      cast_sfx:
+        $ref: "#/$defs/sfxRef"
+        x-meridian-ui:
+          group: presentation
+          label: Cast SFX
+          widget: asset_picker
+          reference_type: asset:sfx
+        x-meridian-asset:
+          allowed_classes: [sfx]
+          eligible_generators: []
+      impact_vfx:
+        $ref: "#/$defs/artRef"
+        x-meridian-ui:
+          group: presentation
+          label: Impact VFX
+          widget: asset_picker
+          reference_type: asset:art
+        x-meridian-asset:
+          allowed_classes: [vfx]
+          eligible_generators: []
+      impact_sfx:
+        $ref: "#/$defs/sfxRef"
+        x-meridian-ui:
+          group: presentation
+          label: Impact SFX
+          widget: asset_picker
+          reference_type: asset:sfx
+        x-meridian-asset:
+          allowed_classes: [sfx]
+          eligible_generators: []

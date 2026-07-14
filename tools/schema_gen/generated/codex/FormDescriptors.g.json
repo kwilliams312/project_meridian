@@ -1,0 +1,585 @@
+{
+  "schema": "meridian/codex-form-descriptors@1",
+  "schemas": [
+    {
+      "schema_file": "pack.schema.yaml",
+      "schema_id": "meridian://schema/content/pack.schema.yaml",
+      "content_schema": "meridian/pack@1",
+      "fields": [
+        {
+          "path": "namespace",
+          "ui": {
+            "group": "identity",
+            "label": "Namespace",
+            "widget": "slug",
+            "help": "Stable prefix that owns every content ID in this pack.",
+            "example": "emberfall",
+            "constraint": "2-32 lowercase letters, digits, or underscores; must start with a letter."
+          }
+        },
+        {
+          "path": "name",
+          "ui": {
+            "group": "identity",
+            "label": "Pack name",
+            "widget": "single_line"
+          }
+        },
+        {
+          "path": "description",
+          "ui": {
+            "group": "identity",
+            "label": "Description",
+            "widget": "multiline"
+          }
+        },
+        {
+          "path": "version",
+          "ui": {
+            "group": "compatibility",
+            "label": "Pack version",
+            "widget": "semver",
+            "example": "1.0.0",
+            "constraint": "Semantic version in major.minor.patch form."
+          }
+        },
+        {
+          "path": "content_schema_version",
+          "ui": {
+            "group": "compatibility",
+            "label": "Content schema version",
+            "widget": "number"
+          }
+        },
+        {
+          "path": "compatibility_version",
+          "ui": {
+            "group": "compatibility",
+            "label": "Compatibility version",
+            "widget": "number",
+            "help": "Increase only when the pack makes a breaking content-contract change."
+          }
+        },
+        {
+          "path": "theme",
+          "ui": {
+            "group": "presentation",
+            "label": "Theme presentation"
+          }
+        },
+        {
+          "path": "theme.display_name",
+          "ui": {
+            "group": "presentation",
+            "label": "Theme name",
+            "widget": "single_line"
+          }
+        },
+        {
+          "path": "theme.tagline",
+          "ui": {
+            "group": "presentation",
+            "label": "Tagline",
+            "widget": "single_line"
+          }
+        },
+        {
+          "path": "theme.preview_asset",
+          "ui": {
+            "group": "presentation",
+            "label": "Preview image",
+            "widget": "asset_picker",
+            "reference_type": "asset:art"
+          },
+          "asset": {
+            "allowed_classes": [
+              "icon",
+              "ui_art"
+            ],
+            "eligible_generators": []
+          }
+        },
+        {
+          "path": "engine",
+          "ui": {
+            "group": "compatibility",
+            "label": "Engine compatibility"
+          }
+        },
+        {
+          "path": "dependencies",
+          "ui": {
+            "group": "dependencies",
+            "label": "Pack dependencies"
+          }
+        },
+        {
+          "path": "authors",
+          "ui": {
+            "group": "attribution",
+            "label": "Authors"
+          }
+        },
+        {
+          "path": "license",
+          "ui": {
+            "group": "attribution",
+            "label": "Default license",
+            "widget": "single_line",
+            "example": "Apache-2.0"
+          }
+        }
+      ]
+    },
+    {
+      "schema_file": "npc.schema.yaml",
+      "schema_id": "meridian://schema/content/npc.schema.yaml",
+      "content_schema": "meridian/npc@1",
+      "fields": [
+        {
+          "path": "stats.attack_speed_ms",
+          "ui": {
+            "group": "combat",
+            "label": "Attack speed",
+            "widget": "number",
+            "unit": "ms"
+          }
+        },
+        {
+          "path": "ai.aggro_radius_m",
+          "ui": {
+            "group": "ai",
+            "label": "Aggro radius",
+            "widget": "number",
+            "unit": "m"
+          }
+        },
+        {
+          "path": "ai.leash_radius_m",
+          "ui": {
+            "group": "ai",
+            "label": "Leash radius",
+            "widget": "number",
+            "unit": "m"
+          }
+        },
+        {
+          "path": "ai.call_for_help_radius_m",
+          "ui": {
+            "group": "ai",
+            "label": "Call-for-help radius",
+            "widget": "number",
+            "unit": "m"
+          }
+        },
+        {
+          "path": "ai.abilities[].ability",
+          "ui": {
+            "group": "ai",
+            "label": "Ability",
+            "widget": "reference_picker",
+            "reference_type": "content:ability"
+          }
+        },
+        {
+          "path": "visual",
+          "ui": {
+            "group": "presentation",
+            "label": "Visual and audio"
+          }
+        },
+        {
+          "path": "visual.model",
+          "ui": {
+            "group": "presentation",
+            "label": "Creature model",
+            "widget": "asset_picker",
+            "reference_type": "asset:art",
+            "help": "Art-registry model rendered for this NPC or mob."
+          },
+          "asset": {
+            "allowed_classes": [
+              "creature_model"
+            ],
+            "eligible_generators": [
+              "meshy"
+            ]
+          }
+        },
+        {
+          "path": "visual.scale",
+          "ui": {
+            "group": "presentation",
+            "label": "Model scale",
+            "widget": "number",
+            "unit": "scale"
+          }
+        },
+        {
+          "path": "visual.sound_set",
+          "ui": {
+            "group": "presentation",
+            "label": "Sound set",
+            "widget": "asset_picker",
+            "reference_type": "asset:sfx"
+          },
+          "asset": {
+            "allowed_classes": [
+              "sfx"
+            ],
+            "eligible_generators": []
+          }
+        }
+      ]
+    },
+    {
+      "schema_file": "item.schema.yaml",
+      "schema_id": "meridian://schema/content/item.schema.yaml",
+      "content_schema": "meridian/item@2",
+      "fields": [
+        {
+          "path": "visual",
+          "ui": {
+            "group": "presentation",
+            "label": "Visuals"
+          }
+        },
+        {
+          "path": "visual.icon",
+          "ui": {
+            "group": "presentation",
+            "label": "Inventory icon",
+            "widget": "asset_picker",
+            "reference_type": "asset:art"
+          },
+          "asset": {
+            "allowed_classes": [
+              "icon"
+            ],
+            "eligible_generators": []
+          }
+        },
+        {
+          "path": "visual.model",
+          "ui": {
+            "group": "presentation",
+            "label": "World model",
+            "widget": "asset_picker",
+            "reference_type": "asset:art"
+          },
+          "asset": {
+            "allowed_classes": [
+              "weapon_model",
+              "armor_model",
+              "prop"
+            ],
+            "eligible_generators": [
+              "meshy"
+            ]
+          }
+        },
+        {
+          "path": "visual.worn.models[].model",
+          "ui": {
+            "group": "presentation",
+            "label": "Worn model",
+            "widget": "asset_picker",
+            "reference_type": "asset:art"
+          },
+          "asset": {
+            "allowed_classes": [
+              "weapon_model",
+              "armor_model"
+            ],
+            "eligible_generators": [
+              "meshy"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "schema_file": "ability.schema.yaml",
+      "schema_id": "meridian://schema/content/ability.schema.yaml",
+      "content_schema": "meridian/ability@1",
+      "fields": [
+        {
+          "path": "range_m",
+          "ui": {
+            "group": "targeting",
+            "label": "Cast range",
+            "widget": "number",
+            "unit": "m"
+          }
+        },
+        {
+          "path": "cast.time_ms",
+          "ui": {
+            "group": "timing",
+            "label": "Cast time",
+            "widget": "number",
+            "unit": "ms"
+          }
+        },
+        {
+          "path": "cast.channel_ms",
+          "ui": {
+            "group": "timing",
+            "label": "Channel duration",
+            "widget": "number",
+            "unit": "ms"
+          }
+        },
+        {
+          "path": "cooldown_ms",
+          "ui": {
+            "group": "timing",
+            "label": "Cooldown",
+            "widget": "number",
+            "unit": "ms"
+          }
+        },
+        {
+          "path": "audio_visual",
+          "ui": {
+            "group": "presentation",
+            "label": "Audio and visual"
+          }
+        },
+        {
+          "path": "audio_visual.cast_anim",
+          "ui": {
+            "group": "presentation",
+            "label": "Cast animation",
+            "widget": "animation"
+          }
+        },
+        {
+          "path": "audio_visual.cast_vfx",
+          "ui": {
+            "group": "presentation",
+            "label": "Cast VFX",
+            "widget": "asset_picker",
+            "reference_type": "asset:art"
+          },
+          "asset": {
+            "allowed_classes": [
+              "vfx"
+            ],
+            "eligible_generators": []
+          }
+        },
+        {
+          "path": "audio_visual.cast_sfx",
+          "ui": {
+            "group": "presentation",
+            "label": "Cast SFX",
+            "widget": "asset_picker",
+            "reference_type": "asset:sfx"
+          },
+          "asset": {
+            "allowed_classes": [
+              "sfx"
+            ],
+            "eligible_generators": []
+          }
+        },
+        {
+          "path": "audio_visual.impact_vfx",
+          "ui": {
+            "group": "presentation",
+            "label": "Impact VFX",
+            "widget": "asset_picker",
+            "reference_type": "asset:art"
+          },
+          "asset": {
+            "allowed_classes": [
+              "vfx"
+            ],
+            "eligible_generators": []
+          }
+        },
+        {
+          "path": "audio_visual.impact_sfx",
+          "ui": {
+            "group": "presentation",
+            "label": "Impact SFX",
+            "widget": "asset_picker",
+            "reference_type": "asset:sfx"
+          },
+          "asset": {
+            "allowed_classes": [
+              "sfx"
+            ],
+            "eligible_generators": []
+          }
+        }
+      ]
+    },
+    {
+      "schema_file": "quest.schema.yaml",
+      "schema_id": "meridian://schema/content/quest.schema.yaml",
+      "content_schema": "meridian/quest@1",
+      "fields": []
+    },
+    {
+      "schema_file": "loot.schema.yaml",
+      "schema_id": "meridian://schema/content/loot.schema.yaml",
+      "content_schema": "meridian/loot@1",
+      "fields": []
+    },
+    {
+      "schema_file": "vendor.schema.yaml",
+      "schema_id": "meridian://schema/content/vendor.schema.yaml",
+      "content_schema": "meridian/vendor@1",
+      "fields": []
+    },
+    {
+      "schema_file": "spawn.schema.yaml",
+      "schema_id": "meridian://schema/content/spawn.schema.yaml",
+      "content_schema": "meridian/spawn@1",
+      "fields": []
+    },
+    {
+      "schema_file": "zone.schema.yaml",
+      "schema_id": "meridian://schema/content/zone.schema.yaml",
+      "content_schema": "meridian/zone@1",
+      "fields": []
+    },
+    {
+      "schema_file": "asset.schema.yaml",
+      "schema_id": "meridian://schema/content/asset.schema.yaml",
+      "content_schema": "meridian/asset@1",
+      "fields": []
+    },
+    {
+      "schema_file": "appearance.schema.yaml",
+      "schema_id": "meridian://schema/content/appearance.schema.yaml",
+      "content_schema": "meridian/appearance_catalog@1",
+      "fields": [
+        {
+          "path": "skeleton",
+          "ui": {
+            "group": "body",
+            "label": "Reference skeleton",
+            "widget": "asset_picker",
+            "reference_type": "asset:art",
+            "help": "Canonical rig used by every body and wearable in this appearance catalog."
+          },
+          "asset": {
+            "allowed_classes": [
+              "character_model"
+            ],
+            "eligible_generators": []
+          }
+        },
+        {
+          "path": "body_model",
+          "ui": {
+            "group": "body",
+            "label": "Character body model",
+            "widget": "asset_picker",
+            "reference_type": "asset:art"
+          },
+          "asset": {
+            "allowed_classes": [
+              "character_model"
+            ],
+            "eligible_generators": [
+              "meshy"
+            ]
+          }
+        },
+        {
+          "path": "presets.hair[].model",
+          "ui": {
+            "group": "customization",
+            "label": "Hair model",
+            "widget": "asset_picker",
+            "reference_type": "asset:art"
+          },
+          "asset": {
+            "allowed_classes": [
+              "character_model"
+            ],
+            "eligible_generators": [
+              "meshy"
+            ]
+          }
+        },
+        {
+          "path": "presets.face[].texture",
+          "ui": {
+            "group": "customization",
+            "label": "Face texture",
+            "widget": "asset_picker",
+            "reference_type": "asset:art"
+          },
+          "asset": {
+            "allowed_classes": [
+              "texture_set"
+            ],
+            "eligible_generators": []
+          }
+        },
+        {
+          "path": "presets.skin[].palette",
+          "ui": {
+            "group": "customization",
+            "label": "Skin palette",
+            "widget": "asset_picker",
+            "reference_type": "asset:art"
+          },
+          "asset": {
+            "allowed_classes": [
+              "texture_set"
+            ],
+            "eligible_generators": []
+          }
+        }
+      ]
+    },
+    {
+      "schema_file": "attribute.schema.yaml",
+      "schema_id": "meridian://schema/content/attribute.schema.yaml",
+      "content_schema": "meridian/attribute@1",
+      "fields": []
+    },
+    {
+      "schema_file": "class.schema.yaml",
+      "schema_id": "meridian://schema/content/class.schema.yaml",
+      "content_schema": "meridian/class@1",
+      "fields": []
+    },
+    {
+      "schema_file": "dye.schema.yaml",
+      "schema_id": "meridian://schema/content/dye.schema.yaml",
+      "content_schema": "meridian/dye@1",
+      "fields": []
+    },
+    {
+      "schema_file": "equip_type.schema.yaml",
+      "schema_id": "meridian://schema/content/equip_type.schema.yaml",
+      "content_schema": "meridian/equip_type@1",
+      "fields": []
+    },
+    {
+      "schema_file": "race.schema.yaml",
+      "schema_id": "meridian://schema/content/race.schema.yaml",
+      "content_schema": "meridian/race@1",
+      "fields": []
+    },
+    {
+      "schema_file": "talent.schema.yaml",
+      "schema_id": "meridian://schema/content/talent.schema.yaml",
+      "content_schema": "meridian/talent@1",
+      "fields": []
+    },
+    {
+      "schema_file": "talent_tree.schema.yaml",
+      "schema_id": "meridian://schema/content/talent_tree.schema.yaml",
+      "content_schema": "meridian/talent_tree@1",
+      "fields": []
+    }
+  ]
+}

@@ -93,11 +93,30 @@ properties:
     type: object
     additionalProperties: false
     required: [icon]
+    x-meridian-ui: { group: presentation, label: Visuals }
     properties:
-      icon: { $ref: "#/$defs/artRef" }
+      icon:
+        $ref: "#/$defs/artRef"
+        x-meridian-ui:
+          group: presentation
+          label: Inventory icon
+          widget: asset_picker
+          reference_type: asset:art
+        x-meridian-asset:
+          allowed_classes: [icon]
+          eligible_generators: []
       # Legacy monolithic model ref (pre-worn). Retained for non-modular items
       # (e.g. dropped-in-world mesh); `worn` is the modular-gear render contract.
-      model: { $ref: "#/$defs/artRef" }
+      model:
+        $ref: "#/$defs/artRef"
+        x-meridian-ui:
+          group: presentation
+          label: World model
+          widget: asset_picker
+          reference_type: asset:art
+        x-meridian-asset:
+          allowed_classes: [weapon_model, armor_model, prop]
+          eligible_generators: [meshy]
       # worn — how this item renders on an equipped character (contract ① §4/§9).
       # Presence is gated by lints L080 (weapon/visible-armor require it; invisible
       # slots + non-equippables forbid it) and L081 (weapon→attach, armor→skinned;
@@ -119,7 +138,16 @@ properties:
               additionalProperties: false
               required: [model]
               properties:
-                model: { $ref: "#/$defs/artRef" }
+                model:
+                  $ref: "#/$defs/artRef"
+                  x-meridian-ui:
+                    group: presentation
+                    label: Worn model
+                    widget: asset_picker
+                    reference_type: asset:art
+                  x-meridian-asset:
+                    allowed_classes: [weapon_model, armor_model]
+                    eligible_generators: [meshy]
                 mirror: { enum: [none, x], default: none }
           hides:
             type: array
@@ -155,7 +183,16 @@ properties:
                       additionalProperties: false
                       required: [model]
                       properties:
-                        model: { $ref: "#/$defs/artRef" }
+                        model:
+                          $ref: "#/$defs/artRef"
+                          x-meridian-ui:
+                            group: presentation
+                            label: Race-specific worn model
+                            widget: asset_picker
+                            reference_type: asset:art
+                          x-meridian-asset:
+                            allowed_classes: [weapon_model, armor_model]
+                            eligible_generators: [meshy]
                         mirror: { enum: [none, x], default: none }
                   hides:
                     type: array
