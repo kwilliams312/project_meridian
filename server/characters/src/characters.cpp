@@ -154,16 +154,24 @@ CreateResult create_character(db::Connection& conn, const CreateRequest& req,
         throw InvalidName("exceeds " + std::to_string(kMaxNameLen) + " characters");
     }
     // 2/3. Race + class: must be present in the loaded roster (SP2.5 #695 — pack
-    // data, no longer a compiled enum). Set-membership only here; the deeper
-    // race ∈ class race_limits check is #696.
+    // data, no longer a compiled enum). Set-membership first.
     if (!roster.is_valid_race(req.race)) {
         throw InvalidRace(req.race);
     }
     if (!roster.is_valid_class(req.char_class)) {
         throw InvalidClass(req.char_class);
     }
+    // 4. Combination gate (#696): the chosen race must be permitted for the chosen
+    // class by that class's `race_limits` (loaded from pack data into the Roster).
+    // Runs AFTER the set-membership checks so both ids are known-valid — this
+    // refuses a valid race + valid class whose lore gate excludes the pair. A class
+    // with empty/omitted race_limits permits all races (is_race_allowed_for_class
+    // returns true). Distinct from InvalidRace/InvalidClass: the COMBINATION fails.
+    if (!roster.is_race_allowed_for_class(req.char_class, req.race)) {
+        throw InvalidRaceForClass(req.race, req.char_class);
+    }
 
-    // 4+5. Per-account cap (#329) then INSERT, together in ONE transaction so the
+    // 5+6. Per-account cap (#329) then INSERT, together in ONE transaction so the
     // count and the insert are atomic. Without the surrounding transaction a
     // check-then-insert races: two concurrent creates for the same account both
     // count 0, both pass the cap, both insert -> two characters. START TRANSACTION

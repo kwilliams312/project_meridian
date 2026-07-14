@@ -117,6 +117,11 @@ INSERT INTO class (roster_id, content_id, name, description, talent_tree_id) VAL
   (1, 137, 'Vanguard', 'A front-line melee defender who holds the line.', 143),
   (3, 138, 'Warden', 'A ranged hybrid who mends allies and burns foes at distance.', NULL);
 
+-- class_race_limit (2 rows)
+INSERT INTO class_race_limit (class_roster_id, race_roster_id) VALUES
+  (1, 1),
+  (1, 2);
+
 -- class_usable_equip_type (8 rows)
 INSERT INTO class_usable_equip_type (class_roster_id, equip_type_id, list) VALUES
   (1, 120, 'armor'),

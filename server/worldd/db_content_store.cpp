@@ -1286,6 +1286,18 @@ meridian::characters::Roster load_db_roster(db::Connection& world_db) {
     for (const db::Row& r : classes.rows) {
         roster.add_class(static_cast<std::uint8_t>(as_i64(r[0])), as_str(r[1]));
     }
+    // class `race_limits` gate (SP2.6 #696): one row per (class, permitted race),
+    // both roster ids. A class with NO rows permits all races (the absence of rows
+    // is the "no gate" signal — see schema/sql/world/35_roster.sql), so this only
+    // populates a limit set for classes that actually restrict. Character CREATE
+    // refuses a race not permitted for its class (InvalidRaceForClass).
+    db::Result limits = world_db.execute(
+        "SELECT class_roster_id, race_roster_id FROM class_race_limit "
+        "ORDER BY class_roster_id, race_roster_id");
+    for (const db::Row& r : limits.rows) {
+        roster.add_class_race_limit(static_cast<std::uint8_t>(as_i64(r[0])),
+                                    static_cast<std::uint8_t>(as_i64(r[1])));
+    }
     return roster;
 }
 

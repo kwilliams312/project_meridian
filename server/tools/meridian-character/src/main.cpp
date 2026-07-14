@@ -107,6 +107,11 @@ int cmd_create(int argc, char** argv) {
     } catch (const meridian::characters::InvalidClass& e) {
         std::fprintf(stderr, "error: %s\n", e.what());
         return kInvalidRequest;
+    } catch (const meridian::characters::InvalidRaceForClass& e) {
+        // race + class each valid, but the race is not permitted for the class
+        // (class race_limits gate, #696) — an invalid request, not a DB error.
+        std::fprintf(stderr, "error: %s\n", e.what());
+        return kInvalidRequest;
     } catch (const meridian::db::DbError& e) {
         std::fprintf(stderr, "error: database error (%u): %s\n", e.code(), e.what());
         return kDbError;

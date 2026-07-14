@@ -79,6 +79,7 @@ void create_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS npc_trainer",      "DROP TABLE IF EXISTS npc_template",
         "DROP TABLE IF EXISTS area",             "DROP TABLE IF EXISTS ability",
         "DROP TABLE IF EXISTS spawn_point",
+        "DROP TABLE IF EXISTS class_race_limit",
         "DROP TABLE IF EXISTS class_attribute_mod", "DROP TABLE IF EXISTS race_attribute_mod",
         "DROP TABLE IF EXISTS attribute",
         "DROP TABLE IF EXISTS equip_type", "DROP TABLE IF EXISTS class_usable_equip_type",
@@ -203,6 +204,12 @@ void create_tables(db::Connection& c) {
               "  name VARCHAR(64) NOT NULL, description VARCHAR(500) NULL,"
               "  talent_tree_id INT UNSIGNED NULL, PRIMARY KEY (roster_id))"  // SP2.7 #697
               " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // class_race_limit — load_db_roster also reads this (SP2.6 #696). Empty here
+    // (this test does not assert on the roster gate). Without it load_world_content
+    // throws "Table 'class_race_limit' doesn't exist".
+    c.execute("CREATE TABLE class_race_limit (class_roster_id TINYINT UNSIGNED NOT NULL,"
+              "  race_roster_id TINYINT UNSIGNED NOT NULL, PRIMARY KEY (class_roster_id, race_roster_id))"
+              " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
     // attribute framework — load_world_content also loads it (SP2.4 #694,
     // load_db_attributes). Created EMPTY (this test does not assert on stats); without
     // the tables load_world_content throws "Table 'attribute' doesn't exist".
@@ -258,6 +265,7 @@ void drop_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS npc_trainer",      "DROP TABLE IF EXISTS npc_template",
         "DROP TABLE IF EXISTS area",             "DROP TABLE IF EXISTS ability",
         "DROP TABLE IF EXISTS spawn_point",
+        "DROP TABLE IF EXISTS class_race_limit",
         "DROP TABLE IF EXISTS class_attribute_mod", "DROP TABLE IF EXISTS race_attribute_mod",
         "DROP TABLE IF EXISTS attribute",
         "DROP TABLE IF EXISTS equip_type", "DROP TABLE IF EXISTS class_usable_equip_type",

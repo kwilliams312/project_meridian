@@ -141,6 +141,19 @@ public:
         : std::invalid_argument("invalid class id: " + std::to_string(cls)) {}
 };
 
+// race + class are each individually valid, but the race is NOT permitted for the
+// chosen class by that class's `race_limits` content gate (#696 — race ∈ class
+// race_limits, loaded from pack data into the runtime Roster). DISTINCT from
+// InvalidRace (an unknown race id) and InvalidClass (an unknown class id): both
+// ids exist, the COMBINATION is refused.
+class InvalidRaceForClass : public std::invalid_argument {
+public:
+    InvalidRaceForClass(std::uint8_t race, std::uint8_t cls)
+        : std::invalid_argument("race id " + std::to_string(race) +
+                                " is not permitted for class id " +
+                                std::to_string(cls)) {}
+};
+
 // Name already taken (characters DB uq_character_name; case-insensitive).
 class DuplicateName : public std::runtime_error {
 public:
@@ -184,9 +197,10 @@ std::vector<CharacterSummary> list_characters(db::Connection& conn,
 //   1. name non-empty and <= kMaxNameLen               -> InvalidName
 //   2. race present in the loaded roster                 -> InvalidRace
 //   3. class present in the loaded roster                -> InvalidClass
-//   4. account below kMaxCharactersPerAccount (#329)     -> CharacterLimitReached
-//   5. name unique (DB uq_character_name, case-insens.) -> DuplicateName
-// Steps 4+5 run together in ONE DB transaction (a locking count then the INSERT)
+//   4. race permitted for class (class race_limits, #696) -> InvalidRaceForClass
+//   5. account below kMaxCharactersPerAccount (#329)     -> CharacterLimitReached
+//   6. name unique (DB uq_character_name, case-insens.) -> DuplicateName
+// Steps 5+6 run together in ONE DB transaction (a locking count then the INSERT)
 // so the per-account cap cannot be beaten by a check-then-insert race between two
 // concurrent creates. On success INSERTs the row (stamping account_id + the M0
 // start location) and returns the server-minted character id. Throws
@@ -196,8 +210,10 @@ std::vector<CharacterSummary> list_characters(db::Connection& conn,
 // against (SP2.5 #695 — loaded from pack data, no longer a compiled enum). It
 // defaults to Roster::offline_full() so DB-less callers (the CLI, unit tests) keep
 // working against the full M0 set without a world DB; worldd passes the roster it
-// loaded from the world DB at boot. The deeper create-time membership check (race
-// ∈ class race_limits) is a follow-up (#696); this validates set membership only.
+// loaded from the world DB at boot. Validation covers BOTH set membership (race +
+// class exist, #695) AND the class `race_limits` combination gate (race permitted
+// for the chosen class, #696) — a class whose race_limits excludes the chosen race
+// is refused with InvalidRaceForClass (empty/omitted race_limits = all races).
 //
 // The §5.2 appearance record is NOT a validation step — it is opaque-but-bounded
 // (spec §9), so it is never rejected: req.appearance (or the default when it is
