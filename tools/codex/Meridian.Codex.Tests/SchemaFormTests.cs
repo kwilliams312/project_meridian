@@ -565,7 +565,8 @@ public sealed class SchemaFormHeadlessTests
         window.Show();
 
         Assert.Contains(window.GetVisualDescendants().OfType<TextBlock>(), block => block.Text?.Contains(Path.GetFileName(copy)) == true);
-        var save = Assert.Single(window.GetVisualDescendants().OfType<Button>(), button => button.Content?.ToString() == "Save");
+        var save = Assert.Single(window.GetVisualDescendants().OfType<Button>(),
+            button => button.Content?.ToString() == "Save content file");
         Assert.False(save.Command!.CanExecute(save.CommandParameter));
     }
 }

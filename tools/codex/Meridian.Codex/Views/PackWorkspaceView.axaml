@@ -11,16 +11,16 @@
              x:DataType="vm:PackWorkspaceViewModel">
   <Grid RowDefinitions="*,Auto">
     <ScrollViewer Grid.Row="0">
-      <StackPanel Margin="24" Spacing="16" MaxWidth="980">
+      <StackPanel Classes="editor-canvas">
       <StackPanel Spacing="4">
-        <TextBlock Text="Content Pack Workspace" FontSize="26" FontWeight="SemiBold" />
+        <TextBlock Classes="page-title" Text="Content Pack Workspace" />
         <TextBlock Text="Open a namespace folder or create one under a content root. Codex owns pack.yaml; raw YAML editing is not required."
-                   TextWrapping="Wrap" Opacity="0.75" />
+                   Classes="muted" TextWrapping="Wrap" MaxWidth="720" HorizontalAlignment="Left" />
       </StackPanel>
 
-      <Border Padding="14" CornerRadius="6" Background="{DynamicResource SystemControlBackgroundListLowBrush}">
-        <StackPanel Spacing="8">
-          <TextBlock Text="Workspace location" FontWeight="SemiBold" />
+      <Border Classes="card">
+        <StackPanel Spacing="10">
+          <TextBlock Classes="section" Text="Workspace location" Margin="0,0,0,6" />
           <Grid ColumnDefinitions="*,Auto">
             <TextBlock Text="{Binding DisplayPath}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="0,0,8,0"
                        ToolTip.Tip="{Binding WorkspacePath}"
@@ -41,7 +41,7 @@
                     AutomationProperties.Name="Open pack folder"
                     AutomationProperties.HelpText="Choose a folder containing pack.yaml using the system folder picker." />
           </StackPanel>
-          <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" />
+          <TextBlock Classes="muted" Text="{Binding StatusMessage}" TextWrapping="Wrap" />
           <ItemsControl ItemsSource="{Binding RecentWorkspaces}">
             <ItemsControl.ItemTemplate>
               <DataTemplate>
@@ -54,37 +54,38 @@
         </StackPanel>
       </Border>
 
-      <Border Padding="14" BorderThickness="1" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}" CornerRadius="6">
-        <StackPanel Spacing="10">
-          <TextBlock Text="Manifest" FontSize="20" FontWeight="SemiBold" />
-          <Grid ColumnDefinitions="180,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
-            <TextBlock Grid.Row="0" Text="Namespace" VerticalAlignment="Center" />
-            <StackPanel Grid.Row="0" Grid.Column="1" Margin="6,3"><TextBox Text="{Binding Manifest.Namespace}"/><TextBlock Text="{Binding NamespaceError}" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}" TextWrapping="Wrap"/></StackPanel>
-            <TextBlock Grid.Row="1" Text="Name" VerticalAlignment="Center" />
-            <StackPanel Grid.Row="1" Grid.Column="1" Margin="6,3"><TextBox Text="{Binding Manifest.Name}"/><TextBlock Text="{Binding NameError}" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}" TextWrapping="Wrap"/></StackPanel>
-            <TextBlock Grid.Row="2" Text="Description" VerticalAlignment="Center" />
-            <TextBox Grid.Row="2" Grid.Column="1" Margin="6,3" Text="{Binding Manifest.Description}" AcceptsReturn="True" MinHeight="64" TextWrapping="Wrap" />
-            <TextBlock Grid.Row="3" Text="Pack version" VerticalAlignment="Center" />
-            <StackPanel Grid.Row="3" Grid.Column="1" Margin="6,3"><TextBox Text="{Binding Manifest.Version}"/><TextBlock Text="{Binding VersionError}" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}"/></StackPanel>
-            <TextBlock Grid.Row="4" Text="Content schema" VerticalAlignment="Center" />
-            <StackPanel Grid.Row="4" Grid.Column="1" Margin="6,3"><TextBox Text="{Binding Manifest.ContentSchemaVersion}"/><TextBlock Text="{Binding ContentSchemaVersionError}" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}"/></StackPanel>
-            <TextBlock Grid.Row="5" Text="Compatibility" VerticalAlignment="Center" />
-            <StackPanel Grid.Row="5" Grid.Column="1" Margin="6,3"><TextBox Text="{Binding Manifest.CompatibilityVersion}"/><TextBlock Text="{Binding CompatibilityVersionError}" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}"/></StackPanel>
-            <TextBlock Grid.Row="6" Text="Godot engine pin" VerticalAlignment="Center" />
-            <StackPanel Grid.Row="6" Grid.Column="1" Margin="6,3"><TextBox Text="{Binding Manifest.GodotVersion}"/><TextBlock Text="{Binding GodotVersionError}" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}"/></StackPanel>
-            <TextBlock Grid.Row="7" Text="License" VerticalAlignment="Center" />
-            <StackPanel Grid.Row="7" Grid.Column="1" Margin="6,3"><TextBox Text="{Binding Manifest.License}"/><TextBlock Text="{Binding LicenseError}" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}"/></StackPanel>
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <TextBlock Classes="section" Text="Manifest" Margin="0,0,0,6" />
+          <Grid Classes="form-grid" ColumnDefinitions="176,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+            <TextBlock Grid.Row="0" Classes="field" Text="Namespace" />
+            <StackPanel Grid.Row="0" Grid.Column="1"><TextBox Text="{Binding Manifest.Namespace}"/><TextBlock Classes="validation-error" Text="{Binding NamespaceError}"/></StackPanel>
+            <TextBlock Grid.Row="1" Classes="field" Text="Name" />
+            <StackPanel Grid.Row="1" Grid.Column="1"><TextBox Text="{Binding Manifest.Name}"/><TextBlock Classes="validation-error" Text="{Binding NameError}"/></StackPanel>
+            <TextBlock Grid.Row="2" Classes="field" Text="Description" />
+            <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Manifest.Description}" AcceptsReturn="True" MinHeight="76" TextWrapping="Wrap" />
+            <TextBlock Grid.Row="3" Classes="field" Text="Pack version" />
+            <StackPanel Grid.Row="3" Grid.Column="1"><TextBox Text="{Binding Manifest.Version}"/><TextBlock Classes="validation-error" Text="{Binding VersionError}"/></StackPanel>
+            <TextBlock Grid.Row="4" Classes="field" Text="Content schema" />
+            <StackPanel Grid.Row="4" Grid.Column="1"><TextBox Text="{Binding Manifest.ContentSchemaVersion}"/><TextBlock Classes="validation-error" Text="{Binding ContentSchemaVersionError}"/></StackPanel>
+            <TextBlock Grid.Row="5" Classes="field" Text="Compatibility" />
+            <StackPanel Grid.Row="5" Grid.Column="1"><TextBox Text="{Binding Manifest.CompatibilityVersion}"/><TextBlock Classes="validation-error" Text="{Binding CompatibilityVersionError}"/></StackPanel>
+            <TextBlock Grid.Row="6" Classes="field" Text="Godot engine pin" />
+            <StackPanel Grid.Row="6" Grid.Column="1"><TextBox Text="{Binding Manifest.GodotVersion}"/><TextBlock Classes="validation-error" Text="{Binding GodotVersionError}"/></StackPanel>
+            <TextBlock Grid.Row="7" Classes="field" Text="License" />
+            <StackPanel Grid.Row="7" Grid.Column="1"><TextBox Text="{Binding Manifest.License}"/><TextBlock Classes="validation-error" Text="{Binding LicenseError}"/></StackPanel>
           </Grid>
         </StackPanel>
       </Border>
 
-      <Border Padding="14" BorderThickness="1" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}" CornerRadius="6">
-        <StackPanel Spacing="8">
-          <TextBlock Text="Dependencies (exact version pins)" FontSize="18" FontWeight="SemiBold" />
+      <Border Classes="card">
+        <StackPanel Spacing="10">
+          <TextBlock Classes="section" Text="Dependencies" Margin="0,0,0,0" />
+          <TextBlock Classes="muted" Text="Exact version pins loaded with this content pack." />
           <Grid ColumnDefinitions="*,160,Auto">
             <TextBox Margin="0,0,8,0" Text="{Binding NewDependencyNamespace}" Watermark="namespace" />
             <TextBox Grid.Column="1" Margin="0,0,8,0" Text="{Binding NewDependencyVersion}" Watermark="x.y.z" />
-            <Button Grid.Column="2" Content="Add" Command="{Binding AddDependencyCommand}" />
+            <Button Grid.Column="2" Content="Add dependency" Command="{Binding AddDependencyCommand}" />
           </Grid>
           <ListBox ItemsSource="{Binding Manifest.Dependencies}" SelectedItem="{Binding SelectedDependency}" MinHeight="48">
             <ListBox.ItemTemplate>
@@ -93,18 +94,18 @@
               </DataTemplate>
             </ListBox.ItemTemplate>
           </ListBox>
-          <Button Content="Remove selected dependency" Command="{Binding RemoveDependencyCommand}" HorizontalAlignment="Left" />
+          <Button Classes="danger" Content="Remove selected dependency" Command="{Binding RemoveDependencyCommand}" HorizontalAlignment="Left" />
         </StackPanel>
       </Border>
 
-      <Border Padding="14" CornerRadius="6" Background="{DynamicResource SystemControlBackgroundListLowBrush}">
+      <Border Classes="card">
         <StackPanel Spacing="6">
-          <TextBlock Text="Workspace status" FontWeight="SemiBold" />
+          <TextBlock Classes="section" Text="Workspace status" Margin="0,0,0,0" />
           <TextBlock Text="{Binding AggregateStatus}" TextWrapping="Wrap" />
           <ItemsControl ItemsSource="{Binding Diagnostics}">
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="svc:WorkspaceDiagnostic">
-                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}">
+                <TextBlock Classes="validation-error">
                   <Run Text="{Binding Field}"/><Run Text=": "/><Run Text="{Binding Message}"/>
                 </TextBlock>
               </DataTemplate>

@@ -4,16 +4,17 @@
              x:Class="Meridian.Codex.Controls.EditorActionBar"
              x:Name="ActionBar"
              x:DataType="controls:EditorActionBar">
-  <Border Padding="16,12"
+  <Border Padding="20,12"
           BorderThickness="0,1,0,0"
-          BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
-          Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}">
+          BorderBrush="{DynamicResource CodexBorderBrush}"
+          Background="{DynamicResource CodexRaisedSurfaceBrush}">
     <Grid ColumnDefinitions="*,Auto">
       <TextBlock Text="{Binding StateDescription, ElementName=ActionBar}"
                  VerticalAlignment="Center"
                  TextWrapping="Wrap"
                  AutomationProperties.Name="Save availability" />
       <Button Grid.Column="1"
+              Classes="primary"
               Margin="16,0,0,0"
               MinWidth="120"
               HorizontalAlignment="Right"

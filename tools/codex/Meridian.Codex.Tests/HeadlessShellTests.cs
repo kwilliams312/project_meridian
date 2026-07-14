@@ -5,6 +5,8 @@ using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Styling;
 using Avalonia.VisualTree;
 using Meridian.Codex;
 using Meridian.Codex.Controls;
@@ -34,6 +36,22 @@ public sealed class TestAppBuilder
 /// </summary>
 public class HeadlessShellTests
 {
+    [AvaloniaFact]
+    public void Codex_theme_exposes_semantic_AA_palette_and_shared_control_metrics()
+    {
+        Assert.True(Application.Current!.TryGetResource("CodexCanvasBrush", ThemeVariant.Dark, out var canvas));
+        Assert.True(Application.Current.TryGetResource("CodexTextBrush", ThemeVariant.Dark, out var text));
+        Assert.True(Application.Current.TryGetResource("CodexAccentBrush", ThemeVariant.Dark, out var accent));
+        Assert.True(Application.Current.TryGetResource("CodexErrorBrush", ThemeVariant.Dark, out var error));
+        Assert.True(Application.Current.TryGetResource("CodexControlHeight", ThemeVariant.Dark, out var height));
+
+        Assert.Equal(Color.Parse("#101418"), Assert.IsType<SolidColorBrush>(canvas).Color);
+        Assert.Equal(Color.Parse("#F3F6F8"), Assert.IsType<SolidColorBrush>(text).Color);
+        Assert.Equal(Color.Parse("#1476A8"), Assert.IsType<SolidColorBrush>(accent).Color);
+        Assert.Equal(Color.Parse("#FF9B9B"), Assert.IsType<SolidColorBrush>(error).Color);
+        Assert.Equal(36d, height);
+    }
+
     [AvaloniaFact]
     public void MainWindow_loads_xaml_and_binds_the_viewmodel_title()
     {
@@ -141,6 +159,84 @@ public class HeadlessShellTests
 
         var boxes = view.GetVisualDescendants().OfType<TextBox>().ToList();
         Assert.Contains(boxes, b => b.Text == "ability.pickaxe_slam");
+    }
+
+    [AvaloniaFact]
+    public void Desktop_editor_layout_keeps_readable_form_and_resizable_preview_at_1440_by_900()
+    {
+        var view = new NpcEditorView { DataContext = new NpcEditorViewModel() };
+        var window = new Window { Width = 1440, Height = 900, Content = view };
+        window.Show();
+
+        var split = Assert.Single(view.GetVisualDescendants().OfType<EditorSplitView>());
+        // Avalonia.Headless fixes top-levels at 1024px. Arrange the editor at
+        // the 1440px shell's post-navigation content width explicitly.
+        split.InvalidateMeasure();
+        split.Measure(new Size(1200, 760));
+        split.Arrange(new Rect(0, 0, 1200, 760));
+        var splitter = Assert.Single(split.GetVisualDescendants().OfType<GridSplitter>());
+        Assert.True(split.IsPreviewOpen);
+        Assert.True(split.Bounds.Width >= 1000);
+        Assert.InRange(split.PreviewWidth, 300, 560);
+        Assert.True(splitter.IsVisible);
+
+        var fieldLabels = view.GetVisualDescendants().OfType<TextBlock>()
+            .Where(label => label.Classes.Contains("field"))
+            .ToList();
+        Assert.NotEmpty(fieldLabels);
+        Assert.All(fieldLabels, label => Assert.True(label.Bounds.Width >= 150,
+            $"Field label '{label.Text}' was allocated only {label.Bounds.Width}px."));
+    }
+
+    [AvaloniaFact]
+    public void Laptop_width_collapses_preview_and_keeps_primary_action_sticky()
+    {
+        var view = new ItemEditorView { DataContext = new ItemEditorViewModel() };
+        var window = new Window { Width = 760, Height = 700, Content = view };
+        window.Show();
+
+        var split = Assert.Single(view.GetVisualDescendants().OfType<EditorSplitView>());
+        // Model the available editor canvas after the navigation rail at a
+        // representative laptop width; headless top-levels themselves are fixed.
+        split.InvalidateMeasure();
+        split.Measure(new Size(620, 560));
+        split.Arrange(new Rect(0, 0, 620, 560));
+        Assert.False(split.IsPreviewOpen);
+        Assert.InRange(split.PreviewWidth, 0, 44);
+        var showPreview = Assert.Single(split.GetVisualDescendants().OfType<Button>(),
+            button => button.Content?.ToString() == "YAML");
+        Assert.True(showPreview.IsVisible);
+
+        var actionBar = Assert.Single(view.GetVisualDescendants().OfType<EditorActionBar>());
+        Assert.Equal("Save item", actionBar.ActionText);
+        Assert.Same(((ItemEditorViewModel)view.DataContext!).SaveCommand, actionBar.ActionCommand);
+        Assert.True(actionBar.Bounds.Height > 0);
+        Assert.True(actionBar.Bounds.Bottom <= view.Bounds.Bottom);
+    }
+
+    [AvaloniaFact]
+    public void Preview_can_be_collapsed_and_reopened_without_recreating_the_editor()
+    {
+        var split = new EditorSplitView
+        {
+            Width = 1100,
+            Height = 700,
+            PreviewText = "schema: meridian/npc@1",
+            FormContent = new TextBox { Text = "Form content" },
+        };
+        var window = new Window { Width = 1100, Height = 700, Content = split };
+        window.Show();
+        Assert.True(split.IsPreviewOpen);
+
+        split.SetPreviewOpen(false);
+        Assert.False(split.IsPreviewOpen);
+        Assert.InRange(split.PreviewWidth, 0, 44);
+
+        split.SetPreviewOpen(true);
+        Assert.True(split.IsPreviewOpen);
+        Assert.InRange(split.PreviewWidth, 300, 560);
+        Assert.Contains(split.GetVisualDescendants().OfType<TextBox>(), box =>
+            box.IsReadOnly && box.Text == "schema: meridian/npc@1");
     }
 
     [AvaloniaFact]

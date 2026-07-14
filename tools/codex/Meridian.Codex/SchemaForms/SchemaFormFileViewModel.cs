@@ -24,6 +24,8 @@ public sealed partial class SchemaFormFileViewModel : ObservableObject
             IsDirty = document.ToYaml() != _baseline;
             Revalidate();
             Status = IsValid ? "Valid changes are ready to save." : "Fix the validation errors before saving.";
+            OnPropertyChanged(nameof(CanSave));
+            OnPropertyChanged(nameof(SaveStateDescription));
             SaveCommand.NotifyCanExecuteChanged();
         };
     }
@@ -34,6 +36,10 @@ public sealed partial class SchemaFormFileViewModel : ObservableObject
     public SchemaFormViewModel Form { get; }
     public IReadOnlyList<SchemaDiagnostic> Diagnostics { get; private set; } = [];
     public bool IsValid => Diagnostics.Count == 0;
+    public bool CanSave => IsDirty && IsValid;
+    public string SaveStateDescription => !IsValid
+        ? "Fix the validation errors before saving."
+        : IsDirty ? "Valid changes are ready to save." : "No unsaved changes.";
     public string? ValidationSummary => IsValid
         ? null
         : $"{Diagnostics.Count} validation error{(Diagnostics.Count == 1 ? string.Empty : "s")}. {Diagnostics[0].Message}";
@@ -73,9 +79,9 @@ public sealed partial class SchemaFormFileViewModel : ObservableObject
         }
     }
 
-    private bool CanSave() => IsDirty && IsValid;
+    private bool CanExecuteSave() => CanSave;
 
-    [RelayCommand(CanExecute = nameof(CanSave))]
+    [RelayCommand(CanExecute = nameof(CanExecuteSave))]
     private void Save() => TrySave();
 
     public bool TrySave()
@@ -91,6 +97,8 @@ public sealed partial class SchemaFormFileViewModel : ObservableObject
         _baseline = Document.ToYaml();
         IsDirty = false;
         Status = $"Saved {Path.GetFileName(FilePath)}.";
+        OnPropertyChanged(nameof(CanSave));
+        OnPropertyChanged(nameof(SaveStateDescription));
         SaveCommand.NotifyCanExecuteChanged();
         return true;
     }
@@ -102,6 +110,8 @@ public sealed partial class SchemaFormFileViewModel : ObservableObject
         OnPropertyChanged(nameof(Diagnostics));
         OnPropertyChanged(nameof(IsValid));
         OnPropertyChanged(nameof(ValidationSummary));
+        OnPropertyChanged(nameof(CanSave));
+        OnPropertyChanged(nameof(SaveStateDescription));
         SaveCommand.NotifyCanExecuteChanged();
     }
 }

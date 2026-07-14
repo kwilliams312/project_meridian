@@ -2,7 +2,41 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Meridian.Codex.App"
              xmlns:local="using:Meridian.Codex"
-             RequestedThemeVariant="Default">
+             RequestedThemeVariant="Dark">
+
+  <Application.Resources>
+    <ResourceDictionary>
+      <!-- Codex visual-system tokens. Keep semantic roles here so every current
+           and schema-generated editor inherits the same accessible contract. -->
+      <x:Double x:Key="CodexControlHeight">36</x:Double>
+      <x:Double x:Key="CodexLabelWidth">176</x:Double>
+      <Thickness x:Key="CodexSpaceXs">4</Thickness>
+      <Thickness x:Key="CodexSpaceSm">8</Thickness>
+      <Thickness x:Key="CodexSpaceMd">16</Thickness>
+      <Thickness x:Key="CodexSpaceLg">24</Thickness>
+      <CornerRadius x:Key="CodexRadiusSm">4</CornerRadius>
+      <CornerRadius x:Key="CodexRadiusMd">8</CornerRadius>
+
+      <SolidColorBrush x:Key="CodexCanvasBrush" Color="#101418" />
+      <SolidColorBrush x:Key="CodexNavigationBrush" Color="#13191E" />
+      <SolidColorBrush x:Key="CodexSurfaceBrush" Color="#182027" />
+      <SolidColorBrush x:Key="CodexRaisedSurfaceBrush" Color="#202A32" />
+      <SolidColorBrush x:Key="CodexInputBrush" Color="#11171C" />
+      <SolidColorBrush x:Key="CodexBorderBrush" Color="#465560" />
+      <SolidColorBrush x:Key="CodexBorderSubtleBrush" Color="#303D46" />
+      <SolidColorBrush x:Key="CodexTextBrush" Color="#F3F6F8" />
+      <SolidColorBrush x:Key="CodexMutedTextBrush" Color="#BBC6CD" />
+      <SolidColorBrush x:Key="CodexDisabledTextBrush" Color="#AAB4BA" />
+      <SolidColorBrush x:Key="CodexAccentBrush" Color="#1476A8" />
+      <SolidColorBrush x:Key="CodexAccentHoverBrush" Color="#1A709A" />
+      <SolidColorBrush x:Key="CodexAccentPressedBrush" Color="#0E5B82" />
+      <SolidColorBrush x:Key="CodexFocusBrush" Color="#7DC4F2" />
+      <SolidColorBrush x:Key="CodexErrorBrush" Color="#FF9B9B" />
+      <SolidColorBrush x:Key="CodexErrorSurfaceBrush" Color="#3A2023" />
+      <SolidColorBrush x:Key="CodexSuccessBrush" Color="#75D49B" />
+      <SolidColorBrush x:Key="CodexSelectionBrush" Color="#174F73" />
+    </ResourceDictionary>
+  </Application.Resources>
 
   <!-- ViewLocator maps a ViewModel instance to its View by naming convention. -->
   <Application.DataTemplates>
@@ -11,6 +45,7 @@
 
   <Application.Styles>
     <FluentTheme />
+    <StyleInclude Source="/Styles/CodexTheme.axaml" />
   </Application.Styles>
 
 </Application>
