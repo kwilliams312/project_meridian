@@ -609,6 +609,60 @@ def test_interrupt_during_completed_emission_is_recoverable_and_idempotent(
     assert (tmp_path / "content/core/assets/art/protocol_marker").is_dir()
 
 
+@pytest.mark.parametrize("interruption", ["before-store", "after-store"])
+def test_interrupt_at_completed_stream_flush_reuses_the_accepted_line(
+    interruption, tmp_path, monkeypatch
+):
+    class InterruptingFlushStream:
+        def __init__(self):
+            self.pending = ""
+            self.durable = ""
+            self.interrupted = False
+
+        def write(self, value):
+            self.pending += value
+            return len(value)
+
+        def flush(self):
+            is_completion = '"event":"completed"' in self.pending
+            if is_completion and not self.interrupted:
+                self.interrupted = True
+                if interruption == "before-store":
+                    raise KeyboardInterrupt
+                self.durable += self.pending
+                self.pending = ""
+                raise KeyboardInterrupt
+            self.durable += self.pending
+            self.pending = ""
+
+    glb = _make_glb(tmp_path / "source.glb", triangle_count=2)
+    handler, _calls = _text_to_3d_handler(glb_bytes=glb.read_bytes())
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        meshy_main,
+        "_new_client",
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+            client_mod.MeshyClient(
+                api_key, model_version=model_version, transport=transport
+            )
+        ),
+    )
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    stream = InterruptingFlushStream()
+    monkeypatch.setattr(meshy_main.sys, "stdout", stream)
+
+    assert meshy_main.main(_base_args(tmp_path)) == 0
+    assert stream.pending == ""
+    events = _events(stream.durable)
+    terminals = [
+        event
+        for event in events
+        if event["event"] in {"completed", "cancelled", "error"}
+    ]
+    assert [event["event"] for event in terminals] == ["completed"]
+    assert (tmp_path / "content/core/assets/art/protocol_marker").is_dir()
+
+
 def test_client_close_failure_emits_one_redacted_error_and_rolls_back(
     tmp_path, monkeypatch, capsys
 ):

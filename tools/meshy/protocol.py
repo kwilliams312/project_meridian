@@ -53,6 +53,7 @@ class EventEmitter:
         self._enabled = enabled
         self._sequence = 0
         self._emitted_events: set[str] = set()
+        self._pending_flush_events: set[str] = set()
 
     def build(self, event: str, **fields: Any) -> dict[str, Any]:
         if event not in EVENT_NAMES:
@@ -70,18 +71,33 @@ class EventEmitter:
     def emit(self, event: str, **fields: Any) -> dict[str, Any]:
         document = self.build(event, **fields)
         if self._enabled:
-            print(
-                json.dumps(document, separators=(",", ":"), sort_keys=True),
-                file=self._stream,
-                flush=True,
-            )
+            line = json.dumps(document, separators=(",", ":"), sort_keys=True) + "\n"
+            written = self._stream.write(line)
+            if written is not None and written != len(line):
+                raise OSError(
+                    f"short Meshy protocol write: {written} of {len(line)} characters"
+                )
+            # The complete line is now accepted by the stream.  Record that
+            # fact before flushing so recovery retries this same buffered flush
+            # rather than serializing a duplicate line when flush() stores the
+            # bytes and then raises (for example from a delivered SIGINT).
             self._emitted_events.add(event)
+            self._pending_flush_events.add(event)
+            self.ensure_flushed(event)
         return document
 
     def was_emitted(self, event: str) -> bool:
-        """Whether this emitter successfully wrote at least one such event."""
+        """Whether this emitter accepted one complete line for the event."""
 
         return event in self._emitted_events
+
+    def ensure_flushed(self, event: str) -> None:
+        """Idempotently flush an already accepted event line."""
+
+        if event not in self._pending_flush_events:
+            return
+        self._stream.flush()
+        self._pending_flush_events.discard(event)
 
     def redact(self, value: Any) -> Any:
         if isinstance(value, dict):
