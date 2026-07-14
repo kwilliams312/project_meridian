@@ -1,6 +1,8 @@
 # IF-8 sidecar (meridian/asset@1). Chibi pill-body base — the keystone SP5 chibi
 # character base (epic #722): a real stylized low-poly mesh generated with Meshy
-# (text-to-3D, model meshy-5) and restyled to the canonical Meridian rig per the
+# (image-to-3D from an operator-supplied chibi reference, model meshy-5; the
+# prompts sibling pins the submitted image's SHA-256) and restyled to the
+# canonical Meridian rig per the
 # tools/blender/README.md restyle procedure (spec ⑤/S4) under the new `chibi`
 # proportion profile (story #745): fitted to rig scale + T-pose stance,
 # budget-cleaned to the Art PRD §2.1 player-body band with an authored LOD0-3
@@ -19,7 +21,7 @@ license: CC-BY-4.0
 provenance:
   source_tier: ai
   authors: [meridian-contributors]
-  origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/019f61e8-2dde-7250-a9cc-a6c720ec47f9
+  origin_url: https://api.meshy.ai/openapi/v1/image-to-3d/019f6262-fc61-7c3c-839e-ec6d2a9a1220
   ai:
     tool: meshy@meshy-5
     prompts_file: chibi_pill_body.prompts.yaml
