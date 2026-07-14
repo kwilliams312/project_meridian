@@ -226,6 +226,71 @@ public sealed class SchemaFormTests
         Assert.Equal("Recovered Pack", reopened!.Document.Get("name")!.ToString());
     }
 
+    [Fact]
+    public void Integer_edit_stays_numeric_through_invalid_recovery_save_and_reopen()
+    {
+        var copy = ContentFixtures.CopyToTemp("abilities/cleave_strike.ability.yaml");
+        var original = File.ReadAllText(copy);
+        var vm = SchemaFormFileViewModel.TryCreate(["--schema-form", "ability", copy], out var error)!;
+        Assert.Null(error);
+        var cooldown = vm.Form.Root.Children.Single(field => field.Path == "cooldown_ms");
+
+        cooldown.NumericValue = -1;
+
+        Assert.False(vm.IsValid);
+        Assert.Contains(vm.Diagnostics, diagnostic => diagnostic.Path == "cooldown_ms");
+        Assert.True(cooldown.HasDiagnostic);
+        Assert.False(vm.SaveCommand.CanExecute(null));
+        Assert.False(vm.TrySave());
+        Assert.Equal(original, File.ReadAllText(copy));
+
+        cooldown.NumericValue = 7000;
+
+        Assert.True(vm.IsValid);
+        Assert.False(cooldown.HasDiagnostic);
+        Assert.True(vm.SaveCommand.CanExecute(null));
+        Assert.Contains("cooldown_ms: 7000", vm.Document.ToYaml(), StringComparison.Ordinal);
+        Assert.DoesNotContain("cooldown_ms: '7000'", vm.Document.ToYaml(), StringComparison.Ordinal);
+        Assert.DoesNotContain("cooldown_ms: \"7000\"", vm.Document.ToYaml(), StringComparison.Ordinal);
+        var emitted = Assert.IsAssignableFrom<JsonValue>(SchemaCatalog.ParseYaml(vm.Document.ToYaml())["cooldown_ms"]);
+        Assert.True(emitted.TryGetValue<decimal>(out var value));
+        Assert.Equal(7000, value);
+        Assert.True(vm.TrySave());
+
+        var reopened = SchemaFormFileViewModel.TryCreate(["--schema-form", "ability", copy], out error);
+        Assert.Null(error);
+        Assert.Equal("7000", reopened!.Document.Get("cooldown_ms")!.ToString());
+        Assert.True(reopened.IsValid);
+    }
+
+    [Fact]
+    public void Scalar_edits_render_all_integral_clr_types_as_unquoted_yaml_numbers()
+    {
+        var values = new (JsonValue Value, string Text)[]
+        {
+            (JsonValue.Create((sbyte)-2)!, "-2"),
+            (JsonValue.Create((byte)2)!, "2"),
+            (JsonValue.Create((short)-3)!, "-3"),
+            (JsonValue.Create((ushort)3)!, "3"),
+            (JsonValue.Create(-4)!, "-4"),
+            (JsonValue.Create(4U)!, "4"),
+            (JsonValue.Create(-5L)!, "-5"),
+            (JsonValue.Create(5UL)!, "5"),
+        };
+
+        foreach (var (value, text) in values)
+        {
+            var yaml = File.ReadAllText(ContentFixtures.ContentCorePath("pack.yaml"));
+            var document = new SchemaFormDocument(_catalog.GetRoot("pack.schema.yaml"), yaml);
+
+            document.Set("content_schema_version", value);
+
+            Assert.Contains($"content_schema_version: {text}", document.ToYaml(), StringComparison.Ordinal);
+            Assert.DoesNotContain($"content_schema_version: '{text}'", document.ToYaml(), StringComparison.Ordinal);
+            Assert.DoesNotContain($"content_schema_version: \"{text}\"", document.ToYaml(), StringComparison.Ordinal);
+        }
+    }
+
     [Theory]
     [InlineData("name", "", "name")]
     [InlineData("name", "This pack name is deliberately longer than eighty characters so maxLength remains enforced by schema", "name")]

@@ -53,8 +53,14 @@ public sealed class SchemaFormDocument
         }
 
         var cst = YamlDocument.Parse(_yaml);
-        if (cst.Resolve(path) is { Kind: CstKind.Scalar } && value is JsonValue)
-            cst.SetValue(path, ScalarText(value));
+        if (cst.Resolve(path) is { Kind: CstKind.Scalar } && value is JsonValue scalar)
+        {
+            // String edits retain the original YAML scalar style where possible.
+            // Typed JSON primitives must replace the raw node so recovery from an
+            // invalid quoted edit cannot preserve quotes and change their type.
+            if (scalar.TryGetValue<string>(out var text)) cst.SetValue(path, text);
+            else cst.ReplaceNode(path, ScalarText(scalar));
+        }
         else if (cst.Resolve(path) is not null)
             cst.ReplaceNode(path, Render(value));
         else
@@ -159,9 +165,10 @@ public sealed class SchemaFormDocument
     {
         if (value is JsonValue scalar)
         {
-            if (scalar.TryGetValue<bool>(out var boolean)) return boolean ? "true" : "false";
-            if (scalar.TryGetValue<decimal>(out var number)) return number.ToString(CultureInfo.InvariantCulture);
             if (scalar.TryGetValue<string>(out var text)) return text;
+            // JSON primitive syntax is valid YAML and covers every signed and
+            // unsigned integral CLR type as well as decimal/floating/bool values.
+            return scalar.ToJsonString();
         }
         return value.ToString();
     }
@@ -236,12 +243,8 @@ public sealed class SchemaFormDocument
         if (node is null) return "null";
         if (node is JsonValue value)
         {
-            if (value.TryGetValue<bool>(out var boolean)) return boolean ? "true" : "false";
-            if (value.TryGetValue<int>(out var integer)) return integer.ToString(CultureInfo.InvariantCulture);
-            if (value.TryGetValue<long>(out var longInteger)) return longInteger.ToString(CultureInfo.InvariantCulture);
-            if (value.TryGetValue<decimal>(out var number)) return number.ToString(CultureInfo.InvariantCulture);
-            if (value.TryGetValue<double>(out var floating)) return floating.ToString("R", CultureInfo.InvariantCulture);
             if (value.TryGetValue<string>(out var text)) return YamlDocument.RenderString(text);
+            return value.ToJsonString();
         }
         return YamlDocument.RenderString(node.ToString());
     }
