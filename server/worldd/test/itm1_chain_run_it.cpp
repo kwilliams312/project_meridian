@@ -737,8 +737,8 @@ int main() {
         chr::CreateRequest cr;
         cr.account_id = account_id;
         cr.name = "Itm1Hero" + std::to_string(salt % 100000);
-        cr.race = static_cast<std::uint8_t>(chr::Race::kSylvane);
-        cr.char_class = static_cast<std::uint8_t>(chr::Class::kRuncaller);
+        cr.race = static_cast<std::uint8_t>(chr::kRaceSylvane);
+        cr.char_class = static_cast<std::uint8_t>(chr::kClassRuncaller);
         char_id = chr::create_character(conn, cr).character_id;
         check("session character created", char_id > 0);
         // Level 60 clears every chain quest's required_level gate (so only PREREQ

@@ -1092,6 +1092,8 @@ public sealed record AttributeMod
 public sealed record Class
 {
     public required ContentId Id { get; init; }
+    /// <summary>Canonical APPEND-ONLY roster id (1-based; 0 is reserved as unset/invalid). This is the STABLE numeric id the server persists in `character.class` and the client roster mirror (character_roster.gd) sends on create — it is NOT the IF-9 content id (that stays the pack-internal numeric id). The kernel loads race/class from pack data into a runtime Roster keyed by this id (SP2.5 #695). Append-only: a shipped id NEVER changes meaning and is never renumbered (later milestones extend the set). Fits `character.class` TINYINT UNSIGNED, so the range is [1, 255].</summary>
+    public required long RosterId { get; init; }
     public required string Name { get; init; }
     public string? Description { get; init; }
     /// <summary>The class spellbook — meridian/ability@1 ids (L011-resolved).</summary>
@@ -1134,6 +1136,8 @@ public sealed record EquipType
 public sealed record Race
 {
     public required ContentId Id { get; init; }
+    /// <summary>Canonical APPEND-ONLY roster id (1-based; 0 is reserved as unset/invalid). This is the STABLE numeric id the server persists in `character.race` and the client roster mirror (character_roster.gd) sends on create — it is NOT the IF-9 content id (that stays the pack-internal numeric id). The kernel loads race/class from pack data into a runtime Roster keyed by this id (SP2.5 #695). Append-only: a shipped id NEVER changes meaning and is never renumbered (later milestones extend the set). Fits `character.race` TINYINT UNSIGNED, so the range is [1, 255].</summary>
+    public required long RosterId { get; init; }
     public required string Name { get; init; }
     public string? Description { get; init; }
     /// <summary>The appearance_catalog entity this race renders as — the cosmetic body/ material variant. Referenced by id; L011 resolves it (spec §3).</summary>

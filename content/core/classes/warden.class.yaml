@@ -10,6 +10,7 @@
 #   - talent_tree          → omitted (no tree in the seed)
 schema: meridian/class@1
 id: core:class.warden
+roster_id: 3   # canonical roster id (character.class); mirrors roster.h kWarden
 name: Warden
 description: A ranged hybrid who mends allies and burns foes at distance.
 abilities:

@@ -10,6 +10,7 @@
 # Original clean-room archetype (roster.h placeholder roster; CONTRIBUTING.md).
 schema: meridian/class@1
 id: core:class.vanguard
+roster_id: 1   # canonical roster id (character.class); mirrors roster.h kVanguard
 name: Vanguard
 description: A front-line melee defender who holds the line.
 abilities:

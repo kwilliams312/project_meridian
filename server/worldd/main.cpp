@@ -507,6 +507,13 @@ int main(int argc, char** argv) {
     // null) — the cast path keeps the M1 placeholder store for DB-free dispatch tests.
     if (content.abilities) world.set_abilities(std::move(*content.abilities));
 
+    // Install the pack-loaded playable roster on the CHAR_CREATE validation path
+    // (SP2.5 #695), replacing the server's default offline roster so a create
+    // validates against pack data (`race`/`class` rows merged with the compiled
+    // fallback). No-op when no world DB is wired (content.roster is nullopt) — the
+    // create path keeps Roster::offline_full() for DB-free dispatch/tooling.
+    if (content.roster) world.set_roster(std::move(*content.roster));
+
     // Spawn the authored content placements into the live world (NPC-01 spawn seam,
     // #486): read from spawn_point at boot, each becomes a live creature in the map
     // tick AND an AoI-visible entity (ENTITY_ENTER with #430 vitals + name), so the

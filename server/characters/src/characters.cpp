@@ -144,7 +144,8 @@ std::vector<CharacterSummary> list_characters(db::Connection& conn,
     return out;
 }
 
-CreateResult create_character(db::Connection& conn, const CreateRequest& req) {
+CreateResult create_character(db::Connection& conn, const CreateRequest& req,
+                              const Roster& roster) {
     // 1. Name: non-empty, within the schema's VARCHAR(32).
     if (req.name.empty()) {
         throw InvalidName("must not be empty");
@@ -152,11 +153,13 @@ CreateResult create_character(db::Connection& conn, const CreateRequest& req) {
     if (req.name.size() > kMaxNameLen) {
         throw InvalidName("exceeds " + std::to_string(kMaxNameLen) + " characters");
     }
-    // 2/3. Race + class: must be in the M0-frozen roster (roster.h).
-    if (!is_valid_race(req.race)) {
+    // 2/3. Race + class: must be present in the loaded roster (SP2.5 #695 — pack
+    // data, no longer a compiled enum). Set-membership only here; the deeper
+    // race ∈ class race_limits check is #696.
+    if (!roster.is_valid_race(req.race)) {
         throw InvalidRace(req.race);
     }
-    if (!is_valid_class(req.char_class)) {
+    if (!roster.is_valid_class(req.char_class)) {
         throw InvalidClass(req.char_class);
     }
 

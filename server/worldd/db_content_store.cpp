@@ -1267,6 +1267,27 @@ std::vector<SpawnPlacement> load_spawn_points(db::Connection& world_db) {
 // =============================================================================
 // load_world_content
 // =============================================================================
+meridian::characters::Roster load_db_roster(db::Connection& world_db) {
+    // Start from the compiled fallback (the M0 entries not yet authorable in the
+    // pack — Sylvane/Emberkin races, Runcaller/Mender classes) and MERGE the pack
+    // race/class rows on top. Both tables are keyed by roster_id (the canonical
+    // character.race/class id), so add_race/add_class supersede a same-id fallback
+    // entry with the pack row — the pack is the source of truth for what it ships.
+    meridian::characters::Roster roster =
+        meridian::characters::Roster::compiled_fallback();
+    db::Result races =
+        world_db.execute("SELECT roster_id, name FROM race ORDER BY roster_id");
+    for (const db::Row& r : races.rows) {
+        roster.add_race(static_cast<std::uint8_t>(as_i64(r[0])), as_str(r[1]));
+    }
+    db::Result classes =
+        world_db.execute("SELECT roster_id, name FROM class ORDER BY roster_id");
+    for (const db::Row& r : classes.rows) {
+        roster.add_class(static_cast<std::uint8_t>(as_i64(r[0])), as_str(r[1]));
+    }
+    return roster;
+}
+
 WorldContent load_world_content(db::Connection& world_db) {
     WorldContent content;
     content.items = std::make_unique<DbTemplateStore>(world_db);
@@ -1276,6 +1297,7 @@ WorldContent load_world_content(db::Connection& world_db) {
     content.loot = std::make_unique<DbLootTableStore>(world_db);
     content.area_triggers = load_area_trigger_volumes(world_db);
     content.abilities = std::make_unique<AbilityStore>(load_db_ability_store(world_db));
+    content.roster = load_db_roster(world_db);
     content.spawns = load_spawn_points(world_db);
     return content;
 }

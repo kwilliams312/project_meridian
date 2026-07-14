@@ -70,6 +70,12 @@
 #include "world_session.h"
 #include "world_state.h"
 
+// The runtime playable roster (server/characters/src/roster.h). Forward-declared so
+// this widely-included header need not pull the characters lib in; ConnCtx holds a
+// pointer and WorldServer::set_roster takes it by value (both only need the
+// declaration). world_dispatch.cpp includes the full definition (SP2.5 #695).
+namespace meridian::characters { class Roster; }
+
 namespace meridian::worldd {
 
 using net::Bytes;
@@ -295,6 +301,13 @@ struct ConnCtx {
     // `movement`); the resolver reads/mutates it on each ability use.
     const AbilityStore* abilities = nullptr;
     CombatSession combat;
+
+    // The runtime playable roster (SP2.5 #695). CHAR_CREATE validates the requested
+    // race/class against it. Set by serve_connection from the WorldServer's boot-
+    // loaded roster (pack `race`/`class` rows merged with the compiled fallback);
+    // when null (a directly-built ConnCtx in a dispatch smoke test) the create path
+    // falls back to Roster::offline_full().
+    const meridian::characters::Roster* roster = nullptr;
 
     // AoI relay (#87). `world` is the shared world-thread-owned session registry
     // + grid (set by serve_connection; may be null in the DB-less dispatch smoke
@@ -591,6 +604,14 @@ public:
     // MapTick already borrows by reference (its address is stable), so the tick keeps
     // its valid reference. Call at boot BEFORE start(); not thread-safe.
     void set_abilities(AbilityStore store);
+
+    // Replace the runtime playable roster CHAR_CREATE validates against (SP2.5 #695)
+    // with the one loaded from pack data (the `race`/`class` world-DB rows merged
+    // with the compiled fallback). Move-assigned into the roster every ConnCtx
+    // borrows by address (impl_->roster), so its address stays valid. Call at boot
+    // BEFORE start(); not thread-safe. When never called, the server keeps its
+    // default Roster::offline_full() (the full M0 set) so a DB-less run still creates.
+    void set_roster(meridian::characters::Roster roster);
 
 private:
     void world_thread_main();

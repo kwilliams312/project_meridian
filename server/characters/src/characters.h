@@ -182,8 +182,8 @@ std::vector<CharacterSummary> list_characters(db::Connection& conn,
 
 // Create a character for `req.account_id`. Validation order:
 //   1. name non-empty and <= kMaxNameLen               -> InvalidName
-//   2. race in the M0-frozen roster (roster.h)          -> InvalidRace
-//   3. class in the M0-frozen roster (roster.h)         -> InvalidClass
+//   2. race present in the loaded roster                 -> InvalidRace
+//   3. class present in the loaded roster                -> InvalidClass
 //   4. account below kMaxCharactersPerAccount (#329)     -> CharacterLimitReached
 //   5. name unique (DB uq_character_name, case-insens.) -> DuplicateName
 // Steps 4+5 run together in ONE DB transaction (a locking count then the INSERT)
@@ -192,10 +192,18 @@ std::vector<CharacterSummary> list_characters(db::Connection& conn,
 // start location) and returns the server-minted character id. Throws
 // meridian::db::DbError on any other DB failure.
 //
+// `roster` is the runtime playable roster the requested race/class validate
+// against (SP2.5 #695 — loaded from pack data, no longer a compiled enum). It
+// defaults to Roster::offline_full() so DB-less callers (the CLI, unit tests) keep
+// working against the full M0 set without a world DB; worldd passes the roster it
+// loaded from the world DB at boot. The deeper create-time membership check (race
+// ∈ class race_limits) is a follow-up (#696); this validates set membership only.
+//
 // The §5.2 appearance record is NOT a validation step — it is opaque-but-bounded
 // (spec §9), so it is never rejected: req.appearance (or the default when it is
 // absent) is normalise()d and stored as the `character.appearance` JSON column.
-CreateResult create_character(db::Connection& conn, const CreateRequest& req);
+CreateResult create_character(db::Connection& conn, const CreateRequest& req,
+                              const Roster& roster = Roster::offline_full());
 
 // Delete character `character_id`, but ONLY if it is owned by `account_id`.
 // The ownership check is the query itself — `WHERE id = ? AND account_id = ?` —

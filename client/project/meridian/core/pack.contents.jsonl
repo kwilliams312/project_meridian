@@ -134,10 +134,10 @@
 {"id":"core:ability.iron_resolve","numeric_id":134,"resource":"res://meridian/core/tables/ability.bin","hash":"271cc7e12ddc15b0988ea0909e88366e2760ee9166fa630602b6c8f8332609b8"}
 {"id":"core:ability.mending_word","numeric_id":135,"resource":"res://meridian/core/tables/ability.bin","hash":"bfc8f5c3254ef0c9abf20f5364bfc24e3ea9b95c35baad665e24db2ca63e816d"}
 {"id":"core:ability.searing_brand","numeric_id":136,"resource":"res://meridian/core/tables/ability.bin","hash":"54874e64507f6f1992ba6617b5e175065d574a50c85ddd5797e7b8552244c5b5"}
-{"id":"core:class.vanguard","numeric_id":137,"resource":"res://meridian/core/tables/class.bin","hash":"acb3d37904bad3696aa097ef88ae479bfd09adb5b2a6ecc52b1a3c621781822f"}
-{"id":"core:class.warden","numeric_id":138,"resource":"res://meridian/core/tables/class.bin","hash":"e5bcbbac6af46177c099fe99c575e2457d98e808311c0c8684b3e81388727c78"}
-{"id":"core:race.ardent","numeric_id":139,"resource":"res://meridian/core/tables/race.bin","hash":"d6aba34758d66dac09dc5510f028d9c59757bc15cae71a0f68598df2e1c5e15d"}
-{"id":"core:race.dolmen","numeric_id":140,"resource":"res://meridian/core/tables/race.bin","hash":"19e8c397216f13d6b3d8194349682a59e95511881f1f4094f8028e7cecf4d157"}
+{"id":"core:class.vanguard","numeric_id":137,"resource":"res://meridian/core/tables/class.bin","hash":"2e79db7a4ceb2752f4bc399d86b4f7f23c371d1fb7de7e5bd2cfe7e5eed5bdfc"}
+{"id":"core:class.warden","numeric_id":138,"resource":"res://meridian/core/tables/class.bin","hash":"6adbad7fdce8573edf3c4476f80b03add34ad34657ad21d38a553716a4973105"}
+{"id":"core:race.ardent","numeric_id":139,"resource":"res://meridian/core/tables/race.bin","hash":"a9d2b0f11eead1722717038ea2157fe2d668bd60e41e8aa544eb4b12fe52ba4d"}
+{"id":"core:race.dolmen","numeric_id":140,"resource":"res://meridian/core/tables/race.bin","hash":"ace7a460b4d299c05fe3f7691f67137c443edc40b7c661596e0d6f21112dd873"}
 {"id":"core:talent.battle_fury","numeric_id":141,"resource":"res://meridian/core/tables/talent.bin","hash":"ccac0c73249d2dd6fd99e5f6aeba073cd7566f752665c60d8062f9c7934caf98"}
 {"id":"core:talent.warding_grace","numeric_id":142,"resource":"res://meridian/core/tables/talent.bin","hash":"3e7e8d0a60df1c5e422f6c9943517fd58799251cf489a717a35d3109e68b334b"}
 {"id":"core:talent_tree.vanguard_path","numeric_id":143,"resource":"res://meridian/core/tables/talent_tree.bin","hash":"a8d36737fdb3dce18b2609a57175bdbb4b819cc1449eb44d325fd9d1b872b2d8"}

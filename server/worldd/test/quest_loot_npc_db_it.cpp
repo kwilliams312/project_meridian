@@ -470,8 +470,8 @@ int main() {
         chr::CreateRequest cr;
         cr.account_id = account_id;
         cr.name = name;
-        cr.race = static_cast<std::uint8_t>(chr::Race::kSylvane);
-        cr.char_class = static_cast<std::uint8_t>(chr::Class::kRuncaller);
+        cr.race = static_cast<std::uint8_t>(chr::kRaceSylvane);
+        cr.char_class = static_cast<std::uint8_t>(chr::kClassRuncaller);
         char_id = chr::create_character(db, cr).character_id;
         check("character created", char_id > 0);
         db.execute("UPDATE `character` SET level = 5, money = ? WHERE id = ?",

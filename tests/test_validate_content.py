@@ -1538,6 +1538,7 @@ class TestRace:
     RACE_OK = """\
     schema: meridian/race@1
     id: tp:race.chibi_human
+    roster_id: 1
     name: Chibi Human
     description: A small round humanfolk.
     appearance: appearance.ardent.male
@@ -1569,6 +1570,7 @@ class TestRace:
         race = (
             "schema: meridian/race@1\n"
             "id: tp:race.chibi_human\n"
+            "roster_id: 1\n"
             "name: Chibi Human\n"
             "appearance: appearance.ardent.male\n"
         )
@@ -1603,6 +1605,18 @@ class TestRace:
 
     def test_missing_name_fails_schema(self, tmp_path):
         race = self.RACE_OK.replace("    name: Chibi Human\n", "")
+        res = run(tmp_path, self._tree(race))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_missing_roster_id_fails_schema(self, tmp_path):
+        # roster_id is required (SP2.5 #695 — the canonical character.race id).
+        race = self.RACE_OK.replace("    roster_id: 1\n", "")
+        res = run(tmp_path, self._tree(race))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_roster_id_zero_fails_schema(self, tmp_path):
+        # roster_id minimum is 1 (0 is reserved as unset/invalid).
+        race = self.RACE_OK.replace("    roster_id: 1\n", "    roster_id: 0\n")
         res = run(tmp_path, self._tree(race))
         assert "SCHEMA" in codes(res.errors)
 
@@ -2212,6 +2226,7 @@ class TestClass:
     RACE = """\
     schema: meridian/race@1
     id: tp:race.human
+    roster_id: 1
     name: Human
     appearance: appearance.ardent.male
     """
@@ -2240,6 +2255,7 @@ class TestClass:
     CLASS_OK = """\
     schema: meridian/class@1
     id: tp:class.warrior
+    roster_id: 1
     name: Warrior
     description: A stalwart melee fighter.
     abilities:
@@ -2301,6 +2317,7 @@ class TestClass:
         klass = """\
         schema: meridian/class@1
         id: tp:class.warrior
+        roster_id: 1
         name: Warrior
         abilities:
           - ability.power_strike
@@ -2373,6 +2390,12 @@ class TestClass:
 
     def test_missing_name_fails_schema(self, tmp_path):
         klass = self.CLASS_OK.replace("    name: Warrior\n", "")
+        res = run(tmp_path, self._tree(klass))
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_missing_roster_id_fails_schema(self, tmp_path):
+        # roster_id is required (SP2.5 #695 — the canonical character.class id).
+        klass = self.CLASS_OK.replace("    roster_id: 1\n", "")
         res = run(tmp_path, self._tree(klass))
         assert "SCHEMA" in codes(res.errors)
 
@@ -2582,12 +2605,14 @@ class TestSeedPackIntegration:
     RACE_ARDENT = """\
     schema: meridian/race@1
     id: sp:race.ardent
+    roster_id: 1
     name: Ardent
     appearance: appearance.hero.male
     """
     RACE_DOLMEN = """\
     schema: meridian/race@1
     id: sp:race.dolmen
+    roster_id: 2
     name: Dolmen
     appearance: appearance.hero.male
     """
@@ -2632,6 +2657,7 @@ class TestSeedPackIntegration:
     CLASS_VANGUARD = """\
     schema: meridian/class@1
     id: sp:class.vanguard
+    roster_id: 1
     name: Vanguard
     abilities:
       - ability.cleave
@@ -2656,6 +2682,7 @@ class TestSeedPackIntegration:
     CLASS_WARDEN = """\
     schema: meridian/class@1
     id: sp:class.warden
+    roster_id: 3
     name: Warden
     abilities:
       - ability.mend

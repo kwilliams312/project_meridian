@@ -306,8 +306,8 @@ int main() {
         characters::CreateRequest req;
         req.account_id = account_a;
         req.name = name_a;
-        req.race = static_cast<std::uint8_t>(characters::Race::kArdent);
-        req.char_class = static_cast<std::uint8_t>(characters::Class::kVanguard);
+        req.race = static_cast<std::uint8_t>(characters::kRaceArdent);
+        req.char_class = static_cast<std::uint8_t>(characters::kClassVanguard);
         // Explicit, in-bounds appearance record (contract ① §5.2): a non-default
         // preset per channel so "list returns what create stored" is meaningful.
         req.appearance = characters::AppearanceRecord{/*version=*/1, /*hair=*/2,
@@ -324,9 +324,9 @@ int main() {
             check("listed account_id matches", c.account_id == account_a);
             check("listed name matches", c.name == name_a);
             check("listed race matches",
-                  c.race == static_cast<std::uint8_t>(characters::Race::kArdent));
+                  c.race == static_cast<std::uint8_t>(characters::kRaceArdent));
             check("listed class matches",
-                  c.char_class == static_cast<std::uint8_t>(characters::Class::kVanguard));
+                  c.char_class == static_cast<std::uint8_t>(characters::kClassVanguard));
             check("new character starts at level 1", c.level == 1);
             // Explicit appearance round-trips exactly (stored as JSON, parsed back).
             check("listed appearance version round-trips", c.appearance.version == 1);
@@ -340,8 +340,8 @@ int main() {
             characters::CreateRequest dup;
             dup.account_id = account_b;  // different account, same name
             dup.name = name_dup;
-            dup.race = static_cast<std::uint8_t>(characters::Race::kArdent);
-            dup.char_class = static_cast<std::uint8_t>(characters::Class::kRuncaller);
+            dup.race = static_cast<std::uint8_t>(characters::kRaceArdent);
+            dup.char_class = static_cast<std::uint8_t>(characters::kClassRuncaller);
             bool threw = false;
             try {
                 characters::create_character(db, dup);
@@ -357,7 +357,7 @@ int main() {
             bad.account_id = account_b;
             bad.name = name_b;
             bad.race = 0;  // 0 is reserved-invalid in the M0-frozen roster
-            bad.char_class = static_cast<std::uint8_t>(characters::Class::kVanguard);
+            bad.char_class = static_cast<std::uint8_t>(characters::kClassVanguard);
             bool threw = false;
             try {
                 characters::create_character(db, bad);
@@ -372,7 +372,7 @@ int main() {
             characters::CreateRequest bad;
             bad.account_id = account_b;
             bad.name = name_b;
-            bad.race = static_cast<std::uint8_t>(characters::Race::kArdent);
+            bad.race = static_cast<std::uint8_t>(characters::kRaceArdent);
             bad.char_class = static_cast<std::uint8_t>(characters::kClassCount + 1);  // out of range
             bool threw = false;
             try {
@@ -408,8 +408,8 @@ int main() {
             characters::CreateRequest big;
             big.account_id = account_big;  // > 9.22e18, i.e. > INT64_MAX
             big.name = name_big;
-            big.race = static_cast<std::uint8_t>(characters::Race::kSylvane);
-            big.char_class = static_cast<std::uint8_t>(characters::Class::kMender);
+            big.race = static_cast<std::uint8_t>(characters::kRaceSylvane);
+            big.char_class = static_cast<std::uint8_t>(characters::kClassMender);
             characters::CreateResult r = characters::create_character(db, big);
             check("create with > INT64_MAX account_id succeeds", r.character_id > 0);
             std::vector<characters::CharacterSummary> listed_big =
@@ -433,9 +433,9 @@ int main() {
                 characters::CreateRequest fill;
                 fill.account_id = account_c;
                 fill.name = name_c1 + "_" + std::to_string(i);  // unique per create
-                fill.race = static_cast<std::uint8_t>(characters::Race::kArdent);
+                fill.race = static_cast<std::uint8_t>(characters::kRaceArdent);
                 fill.char_class =
-                    static_cast<std::uint8_t>(characters::Class::kVanguard);
+                    static_cast<std::uint8_t>(characters::kClassVanguard);
                 characters::CreateResult rf = characters::create_character(db, fill);
                 all_filled = all_filled && rf.character_id > 0;
             }
@@ -445,8 +445,8 @@ int main() {
             characters::CreateRequest over;
             over.account_id = account_c;     // same account -> one past the cap
             over.name = name_c2;             // unique name: the refusal is the cap
-            over.race = static_cast<std::uint8_t>(characters::Race::kSylvane);
-            over.char_class = static_cast<std::uint8_t>(characters::Class::kMender);
+            over.race = static_cast<std::uint8_t>(characters::kRaceSylvane);
+            over.char_class = static_cast<std::uint8_t>(characters::kClassMender);
             bool capped = false;
             try {
                 characters::create_character(db, over);
@@ -463,8 +463,8 @@ int main() {
             characters::CreateRequest other;
             other.account_id = account_d;    // different account -> allowed
             other.name = name_d;
-            other.race = static_cast<std::uint8_t>(characters::Race::kArdent);
-            other.char_class = static_cast<std::uint8_t>(characters::Class::kRuncaller);
+            other.race = static_cast<std::uint8_t>(characters::kRaceArdent);
+            other.char_class = static_cast<std::uint8_t>(characters::kClassRuncaller);
             characters::CreateResult rd = characters::create_character(db, other);
             check("cap: a different account can still create its 1st character",
                   rd.character_id > 0);
@@ -514,8 +514,8 @@ int main() {
                 characters::CreateRequest req1;
                 req1.account_id = a1;
                 req1.name = conc_name + "f" + std::to_string(r) + "x";
-                req1.race = static_cast<std::uint8_t>(characters::Race::kArdent);
-                req1.char_class = static_cast<std::uint8_t>(characters::Class::kVanguard);
+                req1.race = static_cast<std::uint8_t>(characters::kRaceArdent);
+                req1.char_class = static_cast<std::uint8_t>(characters::kClassVanguard);
                 characters::CreateRequest req2 = req1;
                 req2.account_id = a2;
                 req2.name = conc_name + "f" + std::to_string(r) + "y";
@@ -549,8 +549,8 @@ int main() {
             characters::CreateRequest noapp;
             noapp.account_id = account_e;
             noapp.name = name_e;
-            noapp.race = static_cast<std::uint8_t>(characters::Race::kDolmen);
-            noapp.char_class = static_cast<std::uint8_t>(characters::Class::kWarden);
+            noapp.race = static_cast<std::uint8_t>(characters::kRaceDolmen);
+            noapp.char_class = static_cast<std::uint8_t>(characters::kClassWarden);
             // noapp.appearance intentionally left unset (std::nullopt).
             characters::create_character(db, noapp);
             std::vector<characters::CharacterSummary> got =
@@ -574,8 +574,8 @@ int main() {
             characters::CreateRequest oob;
             oob.account_id = account_f;
             oob.name = name_f;
-            oob.race = static_cast<std::uint8_t>(characters::Race::kEmberkin);
-            oob.char_class = static_cast<std::uint8_t>(characters::Class::kMender);
+            oob.race = static_cast<std::uint8_t>(characters::kRaceEmberkin);
+            oob.char_class = static_cast<std::uint8_t>(characters::kClassMender);
             oob.appearance = characters::AppearanceRecord{/*version=*/7, /*hair=*/0,
                                                           /*face=*/5, /*skin=*/0};
             characters::create_character(db, oob);

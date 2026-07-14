@@ -426,8 +426,8 @@ int main() {
         chr::CreateRequest ocr;
         ocr.account_id = account_other;
         ocr.name = name_other;
-        ocr.race = static_cast<std::uint8_t>(chr::Race::kArdent);
-        ocr.char_class = static_cast<std::uint8_t>(chr::Class::kVanguard);
+        ocr.race = static_cast<std::uint8_t>(chr::kRaceArdent);
+        ocr.char_class = static_cast<std::uint8_t>(chr::kClassVanguard);
         other_char_id = chr::create_character(db, ocr).character_id;
         check("other account's character seeded", other_char_id > 0);
 
@@ -533,8 +533,8 @@ int main() {
         if (std::optional<Bytes> pl = round_trip(
                 c, mn::Opcode::CHAR_CREATE_REQUEST,
                 enc_char_create_request(name_other,
-                                        static_cast<std::uint8_t>(chr::Race::kArdent),
-                                        static_cast<std::uint8_t>(chr::Class::kVanguard)),
+                                        static_cast<std::uint8_t>(chr::kRaceArdent),
+                                        static_cast<std::uint8_t>(chr::kClassVanguard)),
                 mn::Opcode::CHAR_CREATE_RESPONSE, seq++)) {
             const auto* m = decode<mn::CharCreateResponse>(*pl);
             check("1b: duplicate name rejected (DUPLICATE_NAME)",
@@ -548,8 +548,8 @@ int main() {
         if (std::optional<Bytes> pl = round_trip(
                 c, mn::Opcode::CHAR_CREATE_REQUEST,
                 enc_char_create_request(name_a,
-                                        static_cast<std::uint8_t>(chr::Race::kSylvane),
-                                        static_cast<std::uint8_t>(chr::Class::kRuncaller)),
+                                        static_cast<std::uint8_t>(chr::kRaceSylvane),
+                                        static_cast<std::uint8_t>(chr::kClassRuncaller)),
                 mn::Opcode::CHAR_CREATE_RESPONSE, seq++)) {
             const auto* m = decode<mn::CharCreateResponse>(*pl);
             check("2: create returns OK",
@@ -573,9 +573,9 @@ int main() {
                 check("2: listed name matches",
                       e->name() != nullptr && e->name()->str() == name_a);
                 check("2: listed race matches",
-                      e->race() == static_cast<std::uint8_t>(chr::Race::kSylvane));
+                      e->race() == static_cast<std::uint8_t>(chr::kRaceSylvane));
                 check("2: listed class matches",
-                      e->char_class() == static_cast<std::uint8_t>(chr::Class::kRuncaller));
+                      e->char_class() == static_cast<std::uint8_t>(chr::kClassRuncaller));
                 check("2: new character starts at level 1", e->level() == 1);
             }
         } else {
@@ -635,8 +635,8 @@ int main() {
                 c, mn::Opcode::CHAR_CREATE_REQUEST,
                 enc_char_create_request(
                     "Cm_" + std::to_string(salt) + "_f" + std::to_string(i),
-                    static_cast<std::uint8_t>(chr::Race::kArdent),
-                    static_cast<std::uint8_t>(chr::Class::kVanguard)),
+                    static_cast<std::uint8_t>(chr::kRaceArdent),
+                    static_cast<std::uint8_t>(chr::kClassVanguard)),
                 mn::Opcode::CHAR_CREATE_RESPONSE, seq++);
             const auto* m = pl ? decode<mn::CharCreateResponse>(*pl) : nullptr;
             if (m && m->status() == mn::CharCreateStatus::OK) {
@@ -652,8 +652,8 @@ int main() {
         if (std::optional<Bytes> pl = round_trip(
                 c, mn::Opcode::CHAR_CREATE_REQUEST,
                 enc_char_create_request("Cm_" + std::to_string(salt) + "_over",
-                                        static_cast<std::uint8_t>(chr::Race::kArdent),
-                                        static_cast<std::uint8_t>(chr::Class::kVanguard)),
+                                        static_cast<std::uint8_t>(chr::kRaceArdent),
+                                        static_cast<std::uint8_t>(chr::kClassVanguard)),
                 mn::Opcode::CHAR_CREATE_RESPONSE, seq++)) {
             const auto* m = decode<mn::CharCreateResponse>(*pl);
             check("3: create past the cap rejected (LIMIT_REACHED)",
@@ -666,7 +666,7 @@ int main() {
         if (std::optional<Bytes> pl = round_trip(
                 c, mn::Opcode::CHAR_CREATE_REQUEST,
                 enc_char_create_request("Cm_" + std::to_string(salt) + "_r", /*race=*/0,
-                                        static_cast<std::uint8_t>(chr::Class::kVanguard)),
+                                        static_cast<std::uint8_t>(chr::kClassVanguard)),
                 mn::Opcode::CHAR_CREATE_RESPONSE, seq++)) {
             const auto* m = decode<mn::CharCreateResponse>(*pl);
             check("4: invalid race rejected (INVALID_RACE)",
@@ -679,7 +679,7 @@ int main() {
         if (std::optional<Bytes> pl = round_trip(
                 c, mn::Opcode::CHAR_CREATE_REQUEST,
                 enc_char_create_request("Cm_" + std::to_string(salt) + "_c",
-                                        static_cast<std::uint8_t>(chr::Race::kArdent),
+                                        static_cast<std::uint8_t>(chr::kRaceArdent),
                                         static_cast<std::uint8_t>(chr::kClassCount + 1)),
                 mn::Opcode::CHAR_CREATE_RESPONSE, seq++)) {
             const auto* m = decode<mn::CharCreateResponse>(*pl);
@@ -741,8 +741,8 @@ int main() {
             if (std::optional<Bytes> pl = round_trip(
                     c, mn::Opcode::CHAR_CREATE_REQUEST,
                     enc_char_create_request("Cm_" + std::to_string(salt) + "_479",
-                                            static_cast<std::uint8_t>(chr::Race::kArdent),
-                                            static_cast<std::uint8_t>(chr::Class::kVanguard)),
+                                            static_cast<std::uint8_t>(chr::kRaceArdent),
+                                            static_cast<std::uint8_t>(chr::kClassVanguard)),
                     mn::Opcode::CHAR_CREATE_RESPONSE, seq++)) {
                 const auto* m = decode<mn::CharCreateResponse>(*pl);
                 check("6b: create is still refused with LIMIT_REACHED under the fault",
