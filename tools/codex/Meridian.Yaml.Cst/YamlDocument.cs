@@ -21,7 +21,8 @@ public sealed class YamlDocument
     private readonly string _source;
     private readonly CstNode _root;
     private readonly List<Splice> _splices = new();
-    private readonly HashSet<string> _addedPaths = new(StringComparer.Ordinal);
+    private readonly HashSet<(CstNode Mapping, string Key)> _addedKeys = new();
+    private int _nextSpliceOrder;
 
     private YamlDocument(string source, CstNode root)
     {
@@ -80,7 +81,17 @@ public sealed class YamlDocument
             return _source; // guarantee (2): untouched document is byte-identical.
         }
 
-        var ordered = _splices.OrderBy(s => s.Span.Start).ToList();
+        var ordered = _splices
+            .OrderBy(s => s.Span.Start)
+            .ThenBy(s => s.Span.Length == 0 ? 0 : 1)
+            // A final descendant mapping can share its insertion offset with
+            // every ancestor up to the root. Emit deepest mappings first so
+            // their indentation remains inside the owning mapping.
+            .ThenByDescending(s => s.MappingDepth)
+            .ThenByDescending(s => s.MappingSpan?.Start ?? -1)
+            // Multiple additions to one mapping preserve API call order.
+            .ThenBy(s => s.Order)
+            .ToList();
         var sb = new StringBuilder(_source.Length + 16);
         int cursor = 0;
         foreach (var splice in ordered)
@@ -176,8 +187,7 @@ public sealed class YamlDocument
             throw new YamlCstException($"AddKey: parent '{parentPath}' is not a block mapping.");
         }
 
-        var path = JoinPath(parentPath, key);
-        if (parentNode.FindEntry(key) is not null || !_addedPaths.Add(path))
+        if (parentNode.FindEntry(key) is not null)
         {
             throw new YamlCstException($"AddKey: key '{key}' already exists under '{parentPath}'.");
         }
@@ -187,6 +197,10 @@ public sealed class YamlDocument
             throw new YamlCstException(
                 "AddKey: adding to an empty block mapping is not supported by surgical edit; " +
                 "reformat with mcc fmt to edit.");
+        }
+        if (!_addedKeys.Add((parentNode, key)))
+        {
+            throw new YamlCstException($"AddKey: key '{key}' already exists under '{parentPath}'.");
         }
 
         var lastEntry = parentNode.Entries[^1];
@@ -202,7 +216,7 @@ public sealed class YamlDocument
             ? $"\n{pad}{key}: {rendered}"
             : $"{pad}{key}: {rendered}\n";
 
-        AddSplice(new Splice(new Span(insertAt, insertAt), insertion));
+        AddSplice(MappingInsertion(parentPath, parentNode, insertAt, insertion));
     }
 
     /// <summary>Replace one complete value node with caller-rendered YAML.</summary>
@@ -227,8 +241,7 @@ public sealed class YamlDocument
         {
             throw new YamlCstException($"AddRawKey: parent '{parentPath}' is not a non-empty block mapping.");
         }
-        var path = JoinPath(parentPath, key);
-        if (parentNode.FindEntry(key) is not null || !_addedPaths.Add(path))
+        if (parentNode.FindEntry(key) is not null || !_addedKeys.Add((parentNode, key)))
         {
             throw new YamlCstException($"AddRawKey: key '{key}' already exists under '{parentPath}'.");
         }
@@ -242,7 +255,7 @@ public sealed class YamlDocument
             ? $"{pad}{key}:\n{new string(' ', indent + 2)}{value}"
             : $"{pad}{key}: {value}";
         string insertion = InsertionNeedsLeadingNewline(insertAt) ? $"\n{rendered}" : $"{rendered}\n";
-        AddSplice(new Splice(new Span(insertAt, insertAt), insertion));
+        AddSplice(MappingInsertion(parentPath, parentNode, insertAt, insertion));
     }
 
     private static string IndentContinuationLines(string text, int indent) =>
@@ -252,19 +265,20 @@ public sealed class YamlDocument
 
     private void AddSplice(Splice splice)
     {
+        splice = splice with { Order = _nextSpliceOrder++ };
         // Guard against two edits touching the same region within one save.
-        for (var i = 0; i < _splices.Count; i++)
+        foreach (var existing in _splices)
         {
-            var existing = _splices[i];
             bool disjoint = splice.Span.End <= existing.Span.Start || splice.Span.Start >= existing.Span.End;
             bool bothInsertAtSamePoint = splice.Span.Length == 0 && existing.Span.Length == 0
                 && splice.Span.Start == existing.Span.Start;
             if (bothInsertAtSamePoint)
             {
-                // Sequential additions to the same mapping append at its original
-                // end offset. Keep one splice and concatenate in API call order.
-                _splices[i] = existing with { Replacement = existing.Replacement + splice.Replacement };
-                return;
+                if (splice.MappingPath is not null && existing.MappingPath is not null)
+                {
+                    continue;
+                }
+                throw new YamlCstException("Conflicting edit: two edits target the same insertion point.");
             }
             if (!disjoint)
             {
@@ -275,8 +289,12 @@ public sealed class YamlDocument
         _splices.Add(splice);
     }
 
-    private static string JoinPath(string? parentPath, string key) =>
-        string.IsNullOrEmpty(parentPath) ? key : $"{parentPath}.{key}";
+    private static Splice MappingInsertion(string? parentPath, CstNode mapping, int insertAt, string insertion)
+    {
+        List<PathSegment> segments = string.IsNullOrEmpty(parentPath) ? [] : PathParser.Parse(parentPath);
+        var canonicalPath = segments.Count == 0 ? "$" : PathParser.Render(segments);
+        return new(new Span(insertAt, insertAt), insertion, canonicalPath, mapping.Span, segments.Count);
+    }
 
     private CstNode? ResolveInternal(string path, out CstNode? parent, out string? lastSegment)
     {
@@ -358,5 +376,11 @@ public sealed class YamlDocument
         return insertAt > 0 && _source[insertAt - 1] != '\n';
     }
 
-    private readonly record struct Splice(Span Span, string Replacement);
+    private readonly record struct Splice(
+        Span Span,
+        string Replacement,
+        string? MappingPath = null,
+        Span? MappingSpan = null,
+        int MappingDepth = -1,
+        int Order = 0);
 }

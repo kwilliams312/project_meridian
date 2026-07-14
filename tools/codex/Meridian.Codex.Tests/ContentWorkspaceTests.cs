@@ -1,6 +1,5 @@
 using System.Text;
 using Meridian.Codex.Services;
-using Meridian.Yaml.Cst;
 using Xunit;
 
 namespace Meridian.Codex.Tests;
@@ -216,11 +215,37 @@ public class ContentWorkspaceTests
     {
         string[] scalars =
         [
-            "Moonfall", "2026-01-01", "2026-01-01T12:34:56Z",
-            "true", "TRUE", "false", "False", "yes", "NO", "on", "Off",
-            "null", "NULL", "~", "0", "-42", "+42", "01", "0x10", "0b10", "1_000",
-            "1.5", ".5", "-.Inf", ".nan", "1.2e3", "1e3", "12:34:56", "",
-            "'2026-01-01'", "\"true\"", "'123'",
+            // Strings, quoting, and non-specific/explicit string tags.
+            "Moonfall", "moon-fall", "", "=", "<<", "'2026-01-01'", "\"true\"", "'123'",
+            "!!str true", "!!str 2026-01-01", "!!value =", "!!merge <<",
+            "!!binary TW9vbmZhbGw=", "!custom Moonfall",
+
+            // PyYAML's exact case-sensitive boolean spelling table plus boundaries.
+            "yes", "Yes", "YES", "no", "No", "NO",
+            "true", "True", "TRUE", "false", "False", "FALSE",
+            "on", "On", "ON", "off", "Off", "OFF",
+            "tRuE", "yEs", "oN", "fAlSe", "!!bool tRuE", "!!bool maybe",
+
+            // Null spellings are also an explicit list, not case-insensitive.
+            "null", "Null", "NULL", "~", "nUlL", "NuLl", "!!null anything",
+
+            // Integer prefixes, separators, signs, sexagesimal, and case boundaries.
+            "0", "-0", "+0", "42", "-42", "+42", "01", "077", "08", "0_7",
+            "0x10", "0xCA_FE", "0X10", "0b10", "0b1_0", "0B10", "1_000",
+            "12:34:56", "1:60", "-12:34", "!!int 0x10", "!!int 0X10",
+
+            // Float/exponent and non-finite boundaries from SafeLoader's resolver.
+            "1.5", ".5", "-.5", "+.5", "1.", "1_000.25", "1.2e+3", "1.2e-3",
+            "1.2e3", "1e+3", "1e-3", "1e3", ".inf", ".Inf", ".INF", ".iNf",
+            "-.Inf", "+.INF", ".nan", ".NaN", ".NAN", "-.nan", "-.NaN",
+            "!!float 1e3", "!!float -.nan", "!!float nope",
+
+            // Date-only resolution requires two-digit month/day; timestamp forms
+            // retain PyYAML's separate one-or-two-digit date component grammar.
+            "2026-01-01", "2026-1-01", "2026-01-1", "2026-1-1",
+            "2026-1-1T1:02:03Z", "2026-01-01 12:34:56", "2026-01-01t12:34:56.5-05:00",
+            "2026-01-01T12:34:56+5", "2026-01-01T12:34:56Z", "2026-01-01T12:34:5Z",
+            "!!timestamp 2026-01-01", "!!timestamp 2026-1-1",
         ];
 
         var mismatches = new List<string>();
@@ -237,13 +262,11 @@ public class ContentWorkspaceTests
             var localValid = false;
             try
             {
-                using var workspace = ContentWorkspace.Open(Path.Combine(contentRoot, "moonfall"));
-                localValid = workspace.Validation.State == WorkspaceValidationState.Valid;
+                localValid = PackSchemaValidator.Validate(yaml).Count == 0;
             }
-            catch (YamlCstException)
+            catch (Exception)
             {
-                // A document the CST cannot represent is rejected/read-only,
-                // which is an invalid verdict for this parity assertion.
+                // A parser/construction failure is an invalid verdict.
             }
             var authoritative = ContentFixtures.RunAuthoritativeValidator(validatorRoot);
             var authoritativeValid = authoritative.ExitCode == 0;

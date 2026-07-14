@@ -50,6 +50,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Meridian.Codex.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Meridian.Codex.Models\Meridian.Codex.Models.csproj" />
     <!-- CST-preserving YAML layer (#126): the NPC editor's byte-stable save path. -->
     <ProjectReference Include="..\Meridian.Yaml.Cst\Meridian.Yaml.Cst.csproj" />

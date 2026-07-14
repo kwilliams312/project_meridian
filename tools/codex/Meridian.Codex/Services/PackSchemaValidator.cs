@@ -113,7 +113,7 @@ internal static class PackSchemaValidator
         .Select(part => char.ToUpperInvariant(part[0]) + part[1..]));
 
     /// <summary>
-    /// YAML 1.1 core scalar resolution used by PyYAML's SafeLoader. YamlDotNet's
+    /// YAML 1.1 scalar resolution used by PyYAML's SafeLoader. YamlDotNet's
     /// object deserializer follows a different vocabulary (notably timestamps,
     /// yes/no/on/off, binary/sexagesimal integers, and exponent forms), so the
     /// editor resolves tags from the YAML 1.1 grammar before JSON Schema sees
@@ -121,29 +121,54 @@ internal static class PackSchemaValidator
     /// </summary>
     private static class Yaml11ScalarResolver
     {
+        private const string StringTag = "tag:yaml.org,2002:str";
+        private const string BooleanTag = "tag:yaml.org,2002:bool";
+        private const string NullTag = "tag:yaml.org,2002:null";
+        private const string IntegerTag = "tag:yaml.org,2002:int";
+        private const string FloatTag = "tag:yaml.org,2002:float";
+        private const string TimestampTag = "tag:yaml.org,2002:timestamp";
+
+        // These patterns intentionally mirror the resolver table shipped by the
+        // repository-pinned PyYAML 6.0.3, including its case-sensitive spelling
+        // lists and historical YAML 1.1 boundaries. Do not use IgnoreCase.
         private static readonly Regex Boolean = new(
-            "^(?:yes|no|true|false|on|off)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        private static readonly Regex Null = new(
-            "^(?:~|null)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        private static readonly Regex Integer = new(
-            "^[-+]?(?:0b[0-1_]+|0[0-7_]+|(?:0|[1-9][0-9_]*)|0x[0-9a-f_]+|[1-9][0-9_]*(?::[0-5]?[0-9])+)$",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        private static readonly Regex Float = new(
-            "^[-+]?(?:(?:[0-9][0-9_]*)\\.[0-9_]*(?:[eE][-+][0-9]+)?|(?:[0-9][0-9_]*)(?:[eE][-+][0-9]+)|\\.[0-9_]+(?:[eE][-+][0-9]+)?|(?:[0-9][0-9_]*)(?::[0-5]?[0-9])+\\.[0-9_]*|\\.(?:inf|nan))$",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        private static readonly Regex Timestamp = new(
-            "^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}(?:(?:[Tt]|[ \\t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]*)?(?:[ \\t]*(?:Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?)?$",
+            "^(?:yes|Yes|YES|no|No|NO|true|True|TRUE|false|False|FALSE|on|On|ON|off|Off|OFF)$",
             RegexOptions.CultureInvariant);
+        private static readonly Regex Null = new(
+            "^(?:~|null|Null|NULL)?$", RegexOptions.CultureInvariant);
+        private static readonly Regex Integer = new(
+            "^[-+]?(?:0b[0-1_]+|0[0-7_]+|(?:0|[1-9][0-9_]*)|0x[0-9a-fA-F_]+|[1-9][0-9_]*(?::[0-5]?[0-9])+)$",
+            RegexOptions.CultureInvariant);
+        private static readonly Regex Float = new(
+            "^(?:[-+]?(?:[0-9][0-9_]*)\\.[0-9_]*(?:[eE][-+][0-9]+)?|\\.[0-9][0-9_]*(?:[eE][-+][0-9]+)?|[-+]?(?:[0-9][0-9_]*)(?::[0-5]?[0-9])+\\.[0-9_]*|[-+]?\\.(?:inf|Inf|INF)|\\.(?:nan|NaN|NAN))$",
+            RegexOptions.CultureInvariant);
+        private static readonly Regex Timestamp = new(
+            "^(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}(?:[Tt]|[ \\t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]*)?(?:[ \\t]*(?:Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?)$",
+            RegexOptions.CultureInvariant);
+
+        private static readonly HashSet<string> TrueValues = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "yes", "true", "on",
+        };
+        private static readonly HashSet<string> BooleanValues = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "yes", "no", "true", "false", "on", "off",
+        };
 
         public static JsonNode? Resolve(YamlScalarNode scalar)
         {
             var value = scalar.Value ?? string.Empty;
+            // YamlDotNet represents implicit/non-specific tags without a readable
+            // Value; only expanded explicit tags may be inspected safely.
+            var tag = scalar.Tag.IsEmpty || scalar.Tag.IsNonSpecific ? null : scalar.Tag.Value;
+            if (!string.IsNullOrEmpty(tag))
+                return ResolveExplicit(tag, value);
             if (scalar.Style is not ScalarStyle.Plain) return JsonValue.Create(value);
+            // SafeLoader resolves these through special-purpose tags which are
+            // not constructible as ordinary scalar values in this position.
+            if (value is "=" or "<<" or "!" or "&" or "*") return TaggedScalarMarker();
             if (Null.IsMatch(value)) return null;
-            if (Boolean.IsMatch(value))
-                return JsonValue.Create(value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
-                    value.Equals("on", StringComparison.OrdinalIgnoreCase));
+            if (Boolean.IsMatch(value)) return JsonValue.Create(TrueValues.Contains(value));
             if (Integer.IsMatch(value)) return JsonValue.Create(ParseInteger(value));
             if (Float.IsMatch(value))
             {
@@ -156,6 +181,38 @@ internal static class PackSchemaValidator
             return JsonValue.Create(value);
         }
 
+        private static JsonNode? ResolveExplicit(string tag, string value) => tag switch
+        {
+            StringTag => JsonValue.Create(value),
+            NullTag => null,
+            BooleanTag when BooleanValues.Contains(value) => JsonValue.Create(TrueValues.Contains(value)),
+            BooleanTag => throw new InvalidDataException($"Invalid !!bool scalar '{value}'."),
+            IntegerTag => JsonValue.Create(ParseInteger(value)),
+            FloatTag => ExplicitFloat(value),
+            TimestampTag when Timestamp.IsMatch(value) => TimestampMarker(),
+            TimestampTag => throw new InvalidDataException($"Invalid !!timestamp scalar '{value}'."),
+            _ => throw new InvalidDataException($"Unsupported YAML tag '{tag}'."),
+        };
+
+        private static JsonNode ExplicitFloat(string value)
+        {
+            var normalized = value.Replace("_", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
+            var unsigned = normalized.TrimStart('+', '-');
+            bool valid = unsigned is ".inf" or ".nan";
+            if (!valid && normalized.Contains(':'))
+            {
+                valid = normalized.TrimStart('+', '-').Split(':')
+                    .All(part => double.TryParse(part, NumberStyles.Float, CultureInfo.InvariantCulture, out _));
+            }
+            if (!valid)
+                valid = double.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out _);
+            if (!valid) throw new InvalidDataException($"Invalid !!float scalar '{value}'.");
+            return JsonValue.Create(0.0)!;
+        }
+
+        private static JsonObject TimestampMarker() => new() { ["$yamlType"] = "timestamp" };
+        private static JsonObject TaggedScalarMarker() => new() { ["$yamlType"] = "tagged-scalar" };
+
         private static decimal ParseInteger(string value)
         {
             var normalized = value.Replace("_", string.Empty, StringComparison.Ordinal);
@@ -167,9 +224,9 @@ internal static class PackSchemaValidator
             }
             try
             {
-                if (normalized.StartsWith("0b", StringComparison.OrdinalIgnoreCase))
+                if (normalized.StartsWith("0b", StringComparison.Ordinal))
                     return sign * Convert.ToInt64(normalized[2..], 2);
-                if (normalized.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                if (normalized.StartsWith("0x", StringComparison.Ordinal))
                     return sign * Convert.ToInt64(normalized[2..], 16);
                 if (normalized.Length > 1 && normalized[0] == '0')
                     return sign * Convert.ToInt64(normalized[1..], 8);
@@ -184,6 +241,10 @@ internal static class PackSchemaValidator
             catch (OverflowException)
             {
                 return sign < 0 ? decimal.MinValue : decimal.MaxValue;
+            }
+            catch (Exception ex) when (ex is FormatException or ArgumentException)
+            {
+                throw new InvalidDataException($"Invalid !!int scalar '{value}'.", ex);
             }
         }
     }
