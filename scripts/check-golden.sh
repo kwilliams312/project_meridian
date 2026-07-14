@@ -163,6 +163,13 @@ STAGED_FILES=(pack.manifest.json pack.contents.jsonl pack.data.json)
 # below independently fails if a committed model has bytes but no staged copy, so
 # a future forgotten entry can't silently ship an unrenderable piece again.
 STAGED_ART=(
+  # The SP5 chibi_pill_body base (epic #722, landed on #745/#746). It ships as a
+  # standalone asset — no appearance catalog references it yet (the "races=colors"
+  # model is undesigned), so the staged-model coverage gate does not REQUIRE it —
+  # but the dev-only chibi body preview (scenes/dev/chibi_body_preview.tscn, story
+  # #747) loads it through the real ContentDB.model_path → .glb fallback, so its
+  # bytes must be staged next to the declared res://meridian/core/art/chibi_pill_body.scn.
+  "content/core/assets/art/chibi_pill_body/sk_chibi_pill_body.glb:art/chibi_pill_body.glb"
   "content/core/assets/art/char/sk_ardent_male_base.glb:art/char/ardent/male/base.glb"
   "content/core/assets/art/char/sk_ardent_male_skeleton.glb:art/char/ardent/male/skeleton.glb"
   "content/core/assets/art/char/sk_dolmen_male_base.glb:art/char/dolmen/male/base.glb"

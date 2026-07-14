@@ -1,0 +1,16 @@
+; SPDX-License-Identifier: Apache-2.0
+;
+; Project Meridian — DEV-ONLY chibi_pill_body preview scene (story #747, epic #722).
+; The root Node3D's script (chibi_body_preview.gd) builds the whole preview
+; (environment, light, camera, and the AssembledCharacter chibi body on a slow
+; turntable) in _ready, so this scene file stays trivial. Launch:
+;   scripts/dev/run-client.sh --scene=res://scenes/dev/chibi_body_preview.tscn
+; See chibi_body_preview_verify.gd for the automatable, no-render counterpart.
+; NOT wired into the shipped menu — a dev tool, launched explicitly.
+
+[gd_scene load_steps=2 format=3 uid="uid://dchibi747preview"]
+
+[ext_resource type="Script" path="res://scenes/dev/chibi_body_preview.gd" id="1_chibi"]
+
+[node name="ChibiBodyPreview" type="Node3D"]
+script = ExtResource("1_chibi")
