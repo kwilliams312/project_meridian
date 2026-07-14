@@ -83,14 +83,19 @@ as `task_ids` on terminal `completed`, `cancelled`, and runtime `error` events.
 ### Cancellation and exit codes
 
 Send SIGINT (normally Ctrl-C) to cancel. The CLI removes only that job's staged
-download, sidecar, and prompts before emitting `cancelled`; it never removes a
-final asset path during failure cleanup. A provider task may continue remotely;
+or owner-marked unpublished output before emitting `cancelled`; it never removes
+a completed or unowned final asset. A provider task may continue remotely;
 `task_ids` lets the caller audit or manage it through provider tooling without
-hiding that fact. The final asset directory is created atomically as a
-per-target reservation before client setup, so concurrent jobs for the same
-namespace/name cannot both proceed. Output is staged under job-unique names
-containing `.partial` and is moved into its final names only after budget and
-provenance checks pass. Existing assets are never overwritten.
+hiding that fact. A per-target advisory lock is acquired before client setup,
+so concurrent jobs for the same namespace/name cannot both proceed; locks are
+released automatically by the OS after abnormal process death. Output is built
+inside a job-unique staging directory containing `.partial`, then all three
+files become visible together through one atomic directory rename after budget
+and provenance checks pass. An owner marker permits safe rollback or stale-job
+recovery until client teardown succeeds. Existing assets are never overwritten.
+Client teardown is part of the transaction: if `close()` fails, the owned atomic
+publication is rolled back and the job emits one `internal_error` with exit `1`,
+never a `completed` event followed by an error.
 
 | Exit | Meaning | Terminal JSON event |
 |---:|---|---|

@@ -358,12 +358,151 @@ def test_same_target_concurrent_jobs_reserve_atomically_and_preserve_winner(
     assert landed == glb.read_bytes()
     assert (asset_dir / "protocol_marker.asset.yaml").exists()
     assert (asset_dir / "protocol_marker.prompts.yaml").exists()
-    assert not list(asset_dir.glob("*.partial*"))
+    assert not list(asset_dir.parent.glob(".protocol_marker.*.partial"))
+    assert not list(asset_dir.parent.glob(".protocol_marker.*.owner"))
 
-    # A later failed/cancelled same-target attempt is refused before client
-    # construction and cannot delete or replace the completed asset.
+    # A later same-target attempt is refused before client construction and
+    # cannot delete or replace the completed asset.
     assert meshy_main.main(args) == 2
     assert final_glb.read_bytes() == landed
+
+
+@pytest.mark.parametrize(
+    ("injected", "expected_rc", "terminal"),
+    [
+        (RuntimeError("publish boundary failed"), 1, "error"),
+        (KeyboardInterrupt(), 130, "cancelled"),
+    ],
+)
+def test_atomic_publish_boundary_failure_rolls_back_and_allows_retry(
+    injected, expected_rc, terminal, tmp_path, monkeypatch, capsys
+):
+    """The one directory-rename boundary is rollback-safe for errors and SIGINT."""
+
+    glb = _make_glb(tmp_path / "source.glb", triangle_count=2)
+    handler, _calls = _text_to_3d_handler(glb_bytes=glb.read_bytes())
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        meshy_main,
+        "_new_client",
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+            client_mod.MeshyClient(
+                api_key, model_version=model_version, transport=transport
+            )
+        ),
+    )
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    original_publish = meshy_main._TargetReservation.publish
+
+    def publish_then_fail(reservation):
+        original_publish(reservation)
+        raise injected
+
+    monkeypatch.setattr(meshy_main._TargetReservation, "publish", publish_then_fail)
+
+    assert meshy_main.main(_base_args(tmp_path)) == expected_rc
+    first_events = _events(capsys.readouterr().out)
+    assert first_events[-1]["event"] == terminal
+    assert (
+        sum(
+            event["event"] in {"completed", "cancelled", "error"}
+            for event in first_events
+        )
+        == 1
+    )
+
+    parent = tmp_path / "content/core/assets/art"
+    assert not (parent / "protocol_marker").exists()
+    assert not list(parent.glob(".protocol_marker.*.partial"))
+    assert not list(parent.glob(".protocol_marker.*.owner"))
+
+    # The failed publication leaves no poisoned reservation or raw final file.
+    monkeypatch.setattr(meshy_main._TargetReservation, "publish", original_publish)
+    assert meshy_main.main(_base_args(tmp_path)) == 0
+    assert (parent / "protocol_marker/sm_protocol_marker.glb").read_bytes() == (
+        glb.read_bytes()
+    )
+
+
+def test_client_close_failure_emits_one_redacted_error_and_rolls_back(
+    tmp_path, monkeypatch, capsys
+):
+    secret = "close-secret"
+    glb = _make_glb(tmp_path / "source.glb", triangle_count=2)
+    handler, _calls = _text_to_3d_handler(glb_bytes=glb.read_bytes())
+    transport = httpx.MockTransport(handler)
+
+    class CloseFailClient:
+        def __init__(self):
+            self.inner = client_mod.MeshyClient(
+                secret, model_version="meshy-5", transport=transport
+            )
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+        def close(self):
+            raise RuntimeError(f"teardown echoed {secret} and Bearer teardown-token")
+
+    monkeypatch.setattr(meshy_main, "_new_client", lambda *_args: CloseFailClient())
+    monkeypatch.setenv("MESHY_API_KEY", secret)
+
+    assert meshy_main.main(_base_args(tmp_path)) == 1
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert secret not in captured.out
+    assert "teardown-token" not in captured.out
+    events = _events(captured.out)
+    terminals = [
+        event
+        for event in events
+        if event["event"] in {"completed", "cancelled", "error"}
+    ]
+    assert len(terminals) == 1
+    assert terminals[0]["event"] == "error"
+    assert terminals[0]["error_code"] == "internal_error"
+    assert terminals[0]["message"] == ("teardown echoed [REDACTED] and [REDACTED]")
+    assert not (tmp_path / "content/core/assets/art/protocol_marker").exists()
+
+
+@pytest.mark.parametrize("phase", ["staging", "published"])
+def test_dead_owner_artifacts_are_recovered_but_live_lock_is_not_stolen(
+    phase, tmp_path, monkeypatch
+):
+    """An OS-released stale lock is recoverable in either side of publication."""
+
+    parent = tmp_path / "content/core/assets/art"
+    parent.mkdir(parents=True)
+    token = "deadbeef"
+    owner = parent / f".protocol_marker.{token}.owner"
+    staging = parent / f".protocol_marker.{token}.partial"
+    final = parent / "protocol_marker"
+    owner.write_text(token, encoding="ascii")
+    stale_dir = staging if phase == "staging" else final
+    stale_dir.mkdir()
+    (stale_dir / "raw-unpublished.glb").write_bytes(b"must not survive")
+    (parent / ".protocol_marker.meshy.lock").touch()
+
+    glb = _make_glb(tmp_path / "source.glb", triangle_count=2)
+    handler, _calls = _text_to_3d_handler(glb_bytes=glb.read_bytes())
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        meshy_main,
+        "_new_client",
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+            client_mod.MeshyClient(
+                api_key, model_version=model_version, transport=transport
+            )
+        ),
+    )
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+
+    assert meshy_main.main(_base_args(tmp_path)) == 0
+    assert not owner.exists()
+    assert not staging.exists()
+    assert not (final / "raw-unpublished.glb").exists()
+    assert (final / "sm_protocol_marker.glb").read_bytes() == glb.read_bytes()
 
 
 def test_keyboard_interrupt_emits_cancel_and_removes_partial_output(
@@ -396,3 +535,5 @@ def test_keyboard_interrupt_emits_cancel_and_removes_partial_output(
     assert events[-1]["task_ids"] == ["task_preview_1", "task_refine_1"]
     asset_dir = tmp_path / "content/core/assets/art/protocol_marker"
     assert not asset_dir.exists()
+    assert not list(asset_dir.parent.glob(".protocol_marker.*.partial"))
+    assert not list(asset_dir.parent.glob(".protocol_marker.*.owner"))

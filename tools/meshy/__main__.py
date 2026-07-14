@@ -33,13 +33,16 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fcntl
 import io
 import os
+import shutil
 import subprocess
 import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import IO
 
 import yaml
 
@@ -181,17 +184,21 @@ def _new_client(
 
 @dataclass
 class _TargetReservation:
-    """Exclusive ownership of one landing directory and its private staging files.
+    """Crash-recoverable ownership of one target and its private staging tree.
 
-    Creating the final asset directory is the reservation operation.  ``mkdir`` is
-    atomic across both processes and threads, so two same-target jobs can never
-    both pass a check-then-create window.  Staging names carry a random job token;
-    cleanup consequently never guesses at, overwrites, or removes another job's
-    files (especially final shippable paths).
+    A persistent lock file plus ``flock`` provides live-owner exclusion; the OS
+    releases it after abnormal process death.  A tokenized owner marker makes an
+    interrupted atomic publish distinguishable from a completed asset.  All three
+    artifacts live in one staging directory and become visible together through a
+    single same-filesystem directory rename.
     """
 
     paths: intake.LandingPaths
     token: str
+    lock_path: Path
+    lock_handle: IO[bytes]
+    owner_path: Path
+    staging_dir: Path
     partial_glb: Path
     partial_prompts: Path
     partial_sidecar: Path
@@ -200,53 +207,92 @@ class _TargetReservation:
     @classmethod
     def acquire(cls, paths: intake.LandingPaths) -> _TargetReservation:
         paths.asset_dir.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = paths.asset_dir.parent / f".{paths.asset_dir.name}.meshy.lock"
+        lock_handle = lock_path.open("a+b")
         try:
-            paths.asset_dir.mkdir()
-        except FileExistsError as exc:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            lock_handle.close()
             raise intake.IntakeError(
                 f"output already exists or is reserved under {paths.asset_dir}; "
                 "refusing to overwrite an existing asset"
             ) from exc
 
-        token = uuid.uuid4().hex
-        return cls(
-            paths=paths,
-            token=token,
-            partial_glb=paths.glb_path.with_name(
-                f".{paths.glb_path.stem}.{token}.partial{paths.glb_path.suffix}"
-            ),
-            partial_prompts=paths.prompts_path.with_name(
-                f".{paths.prompts_path.name}.{token}.partial"
-            ),
-            partial_sidecar=paths.sidecar_path.with_name(
-                f".{paths.sidecar_path.name}.{token}.partial"
-            ),
-        )
+        try:
+            cls._recover_stale(paths)
+            if paths.asset_dir.exists():
+                raise intake.IntakeError(
+                    f"output already exists under {paths.asset_dir}; refusing to "
+                    "overwrite an existing asset"
+                )
+
+            token = uuid.uuid4().hex
+            owner_path = paths.asset_dir.parent / (
+                f".{paths.asset_dir.name}.{token}.owner"
+            )
+            staging_dir = paths.asset_dir.parent / (
+                f".{paths.asset_dir.name}.{token}.partial"
+            )
+            owner_path.write_text(token, encoding="ascii")
+            staging_dir.mkdir()
+            return cls(
+                paths=paths,
+                token=token,
+                lock_path=lock_path,
+                lock_handle=lock_handle,
+                owner_path=owner_path,
+                staging_dir=staging_dir,
+                partial_glb=staging_dir / paths.glb_path.name,
+                partial_prompts=staging_dir / paths.prompts_path.name,
+                partial_sidecar=staging_dir / paths.sidecar_path.name,
+            )
+        except BaseException:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            lock_handle.close()
+            raise
+
+    @classmethod
+    def _recover_stale(cls, paths: intake.LandingPaths) -> None:
+        """Remove only artifacts carrying a dead job's explicit owner token."""
+
+        parent = paths.asset_dir.parent
+        prefix = f".{paths.asset_dir.name}."
+        for owner_path in parent.glob(f"{prefix}*.owner"):
+            token = owner_path.name[len(prefix) : -len(".owner")]
+            staging_dir = parent / f"{prefix}{token}.partial"
+            if staging_dir.is_dir():
+                shutil.rmtree(staging_dir)
+            # The rename moves (rather than copies) the staging directory.  A
+            # missing stage plus surviving owner marker therefore proves this
+            # token published the final directory but never completed.
+            elif paths.asset_dir.is_dir():
+                shutil.rmtree(paths.asset_dir)
+            owner_path.unlink(missing_ok=True)
 
     def publish(self) -> None:
-        """Atomically publish each staged file while retaining target ownership."""
+        """Publish the complete asset as one atomic directory operation."""
 
-        self.partial_glb.replace(self.paths.glb_path)
-        self.partial_prompts.replace(self.paths.prompts_path)
-        self.partial_sidecar.replace(self.paths.sidecar_path)
+        self.staging_dir.replace(self.paths.asset_dir)
+
+    def commit(self) -> None:
+        """Mark a published asset complete only after client teardown succeeds."""
+
+        self.owner_path.unlink()
         self.committed = True
 
     def cleanup(self) -> None:
-        """Remove only token-owned staging and an empty failed reservation."""
+        """Rollback this token's unpublished staging/final output and unlock."""
 
-        for candidate in (
-            self.partial_glb,
-            self.partial_prompts,
-            self.partial_sidecar,
-        ):
-            candidate.unlink(missing_ok=True)
-        if not self.committed:
-            try:
-                self.paths.asset_dir.rmdir()
-            except OSError:
-                # A partially published or externally-added file is preserved.
-                # It is safer to require manual recovery than delete unknown data.
-                pass
+        try:
+            if not self.committed and self.owner_path.exists():
+                if self.staging_dir.is_dir():
+                    shutil.rmtree(self.staging_dir)
+                elif self.paths.asset_dir.is_dir():
+                    shutil.rmtree(self.paths.asset_dir)
+                self.owner_path.unlink(missing_ok=True)
+        finally:
+            fcntl.flock(self.lock_handle.fileno(), fcntl.LOCK_UN)
+            self.lock_handle.close()
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
@@ -442,6 +488,12 @@ def cmd_generate(args: argparse.Namespace) -> int:
             asset_id=intake.asset_id(args.ns, args.name),
             path=str(paths.sidecar_path),
         )
+        # Teardown is part of a successful job.  If it fails, the generic
+        # handler emits one redacted terminal error and reservation cleanup
+        # rolls the still-owner-marked atomic publication back for a clean retry.
+        client.close()
+        client = None
+        reservation.commit()
     except intake.IntakeError as exc:
         return refuse(str(exc))
     except KeyboardInterrupt:
@@ -481,7 +533,10 @@ def cmd_generate(args: argparse.Namespace) -> int:
         return 1
     finally:
         if client is not None:
-            client.close()
+            # A primary terminal error/cancellation already describes the job.
+            # Teardown must never replace it or create a second terminal event.
+            with contextlib.suppress(Exception):
+                client.close()
         if reservation is not None:
             reservation.cleanup()
 
