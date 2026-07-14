@@ -125,19 +125,23 @@ license: Apache-2.0
     }
 
     [Fact]
-    public void Opening_a_recent_workspace_replaces_dirty_state_with_the_opened_clean_baseline()
+    public async Task Opening_a_recent_workspace_after_discard_replaces_dirty_state_with_the_opened_clean_baseline()
     {
         var contentRoot = TempDirectory();
         var recentPath = Path.Combine(TempDirectory(), "recent.json");
         var first = CreatePack(contentRoot, "first", "First");
         var second = CreatePack(contentRoot, "second", "Second");
-        using var vm = new PackWorkspaceViewModel(new RecentWorkspaceStore(recentPath)) { WorkspacePath = first };
+        using var vm = new PackWorkspaceViewModel(
+            new RecentWorkspaceStore(recentPath), new AlwaysDiscardDialogService())
+        {
+            WorkspacePath = first,
+        };
 
-        vm.OpenCommand.Execute(null);
+        await vm.OpenCommand.ExecuteAsync(null);
         vm.Manifest.Name = "Dirty first";
         Assert.True(vm.CanSave);
 
-        vm.OpenRecentCommand.Execute(second);
+        await vm.OpenRecentCommand.ExecuteAsync(second);
 
         Assert.Equal(second, vm.WorkspacePath);
         Assert.Equal("second", vm.Manifest.Namespace);
@@ -195,5 +199,19 @@ license: Apache-2.0
         var path = Path.Combine(Path.GetTempPath(), "codex-workspace-vm-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private sealed class AlwaysDiscardDialogService : IContentDialogService
+    {
+        public bool CanOpenFiles => false;
+        public bool CanSaveFiles => false;
+        public bool CanPickFolders => false;
+        public Task<string?> PickEntityFileAsync(
+            EntityFileKind kind, string? currentPath, string? workspacePath = null) => Task.FromResult<string?>(null);
+        public Task<string?> PickEntitySaveFileAsync(
+            EntityFileKind kind, string? currentPath, string? workspacePath = null) => Task.FromResult<string?>(null);
+        public Task<string?> PickFolderAsync(FolderPickerPurpose purpose, string? currentPath) => Task.FromResult<string?>(null);
+        public Task<bool> ConfirmDiscardChangesAsync(string documentName) => Task.FromResult(true);
+        public Task CopyPathAsync(string path) => Task.CompletedTask;
     }
 }

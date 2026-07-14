@@ -21,17 +21,33 @@
       <Border Padding="14" CornerRadius="6" Background="{DynamicResource SystemControlBackgroundListLowBrush}">
         <StackPanel Spacing="8">
           <TextBlock Text="Workspace location" FontWeight="SemiBold" />
-          <TextBox Text="{Binding WorkspacePath}" Watermark="/path/to/content (Create) or /path/to/content/my_pack (Open)" />
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Text="{Binding DisplayPath}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="0,0,8,0"
+                       ToolTip.Tip="{Binding WorkspacePath}"
+                       AutomationProperties.Name="Selected pack workspace"
+                       AutomationProperties.HelpText="The compact selected workspace path. Use Copy full path for the complete location." />
+            <Button Grid.Column="1" Content="Copy full path" Command="{Binding CopyFullPathCommand}"
+                    AutomationProperties.Name="Copy full workspace path" />
+          </Grid>
+          <TextBox IsVisible="{Binding ShowManualWorkspacePath}" Text="{Binding WorkspacePath}"
+                   Watermark="Manual content-root or pack-folder path (native folder picker unavailable)"
+                   AutomationProperties.Name="Manual pack workspace path"
+                   AutomationProperties.HelpText="Fallback path entry used only when this platform has no native folder picker." />
           <StackPanel Orientation="Horizontal" Spacing="8">
-            <Button Content="Create pack" Command="{Binding CreateCommand}" />
-            <Button Content="Open pack" Command="{Binding OpenCommand}" />
+            <Button Content="_Create pack…" Command="{Binding CreateCommand}"
+                    AutomationProperties.Name="Create pack in folder"
+                    AutomationProperties.HelpText="Choose a content root using the system folder picker, then create the pack." />
+            <Button Content="_Open pack…" Command="{Binding OpenCommand}"
+                    AutomationProperties.Name="Open pack folder"
+                    AutomationProperties.HelpText="Choose a folder containing pack.yaml using the system folder picker." />
           </StackPanel>
           <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" />
           <ItemsControl ItemsSource="{Binding RecentWorkspaces}">
             <ItemsControl.ItemTemplate>
               <DataTemplate>
                 <Button Content="{Binding}" Command="{Binding $parent[UserControl].((vm:PackWorkspaceViewModel)DataContext).OpenRecentCommand}"
-                        CommandParameter="{Binding}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" />
+                        CommandParameter="{Binding}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                        MaxWidth="900" AutomationProperties.HelpText="Open this recent pack workspace." />
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>

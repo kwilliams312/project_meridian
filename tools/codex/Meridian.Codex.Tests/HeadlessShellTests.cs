@@ -45,6 +45,21 @@ public class HeadlessShellTests
     }
 
     [AvaloniaFact]
+    public void Desktop_startup_preserves_default_picker_shell_and_schema_form_mode()
+    {
+        var shell = App.CreateDesktopWindow(null, out var shellError);
+        Assert.Null(shellError);
+        Assert.IsType<MainWindow>(shell);
+        Assert.IsType<MainWindowViewModel>(shell.DataContext);
+
+        var copy = ContentFixtures.CopyToTemp("abilities/cleave_strike.ability.yaml");
+        var schemaForm = App.CreateDesktopWindow(["--schema-form", "ability", copy], out var previewError);
+        Assert.Null(previewError);
+        Assert.IsType<SchemaFormWindow>(schemaForm);
+        Assert.IsType<Meridian.Codex.SchemaForms.SchemaFormFileViewModel>(schemaForm.DataContext);
+    }
+
+    [AvaloniaFact]
     public void MainWindow_hosts_the_npc_editor_view_for_the_npcs_selection()
     {
         var vm = new MainWindowViewModel();
@@ -87,6 +102,8 @@ public class HeadlessShellTests
         Assert.False(save.Command!.CanExecute(null));
         Assert.False(save.IsEnabled);
         Assert.Equal(HorizontalAlignment.Right, save.HorizontalAlignment);
+        Assert.DoesNotContain(window.GetVisualDescendants().OfType<Button>(), button =>
+            button != save && button.Content?.ToString() == "Save manifest");
     }
 
     [AvaloniaFact]

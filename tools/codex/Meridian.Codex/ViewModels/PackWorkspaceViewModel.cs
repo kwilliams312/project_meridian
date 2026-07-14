@@ -12,8 +12,10 @@ namespace Meridian.Codex.ViewModels;
 public partial class PackWorkspaceViewModel : ViewModelBase, IDisposable
 {
     private readonly RecentWorkspaceStore _recentStore;
+    private readonly IContentDialogService _dialogs;
     private readonly PackManifestData _draft = new();
     private ContentWorkspace? _workspace;
+    private bool _isDraftDirty;
 
     [ObservableProperty] private string _workspacePath = string.Empty;
     [ObservableProperty] private string _statusMessage = "Choose a content root to create a pack, or a pack folder to open.";
@@ -26,10 +28,13 @@ public partial class PackWorkspaceViewModel : ViewModelBase, IDisposable
 
     public PackManifestData Manifest => _workspace?.Manifest.Data ?? _draft;
     public bool IsWorkspaceOpen => _workspace is not null;
-    public bool IsDirty => _workspace?.IsDirty ?? false;
+    public bool IsDirty => _workspace?.IsDirty ?? _isDraftDirty;
     public bool HasExternalConflict => _workspace?.HasExternalConflict ?? false;
     public bool CanSave => _workspace is not null && IsDirty && !HasExternalConflict
         && Diagnostics.All(d => d.Severity != DiagnosticSeverity.Error);
+    public string DisplayPath => PathPresentation.Compact(WorkspacePath);
+    public bool HasWorkspacePath => !string.IsNullOrWhiteSpace(WorkspacePath);
+    public bool ShowManualWorkspacePath => !_dialogs.CanPickFolders;
     public string SaveStateDescription
     {
         get
@@ -53,23 +58,45 @@ public partial class PackWorkspaceViewModel : ViewModelBase, IDisposable
     public string GodotVersionError => ErrorFor("GodotVersion");
     public string LicenseError => ErrorFor("License");
 
-    public PackWorkspaceViewModel() : this(new RecentWorkspaceStore()) { }
+    public PackWorkspaceViewModel() : this(new RecentWorkspaceStore(), HeadlessContentDialogService.Instance) { }
 
-    public PackWorkspaceViewModel(RecentWorkspaceStore recentStore)
+    public PackWorkspaceViewModel(RecentWorkspaceStore recentStore) : this(recentStore, HeadlessContentDialogService.Instance) { }
+
+    public PackWorkspaceViewModel(RecentWorkspaceStore recentStore, IContentDialogService dialogs)
     {
         _recentStore = recentStore;
+        _dialogs = dialogs;
         foreach (var path in recentStore.Load()) RecentWorkspaces.Add(path);
         SubscribeManifest(_draft);
     }
 
+    partial void OnWorkspacePathChanged(string value)
+    {
+        OnPropertyChanged(nameof(DisplayPath));
+        OnPropertyChanged(nameof(HasWorkspacePath));
+        CopyFullPathCommand.NotifyCanExecuteChanged();
+    }
+
     [RelayCommand]
-    private void Create()
+    private async Task CreateAsync()
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(WorkspacePath))
-                throw new InvalidOperationException("Enter the content root where the namespace folder should be created.");
-            ApplyWorkspace(ContentWorkspace.Create(WorkspacePath, Manifest));
+            var selected = _dialogs.CanPickFolders
+                ? await _dialogs.PickFolderAsync(FolderPickerPurpose.CreatePack, WorkspacePath)
+                : null;
+            if (selected is null)
+            {
+                if (_dialogs.CanPickFolders) return;
+                if (string.IsNullOrWhiteSpace(WorkspacePath))
+                {
+                    StatusMessage = "Enter a content-root path below before creating on this platform.";
+                    return;
+                }
+                selected = WorkspacePath;
+            }
+            if (_workspace is not null && IsDirty && !await _dialogs.ConfirmDiscardChangesAsync(WorkspaceHeader)) return;
+            ApplyWorkspace(ContentWorkspace.Create(selected, Manifest));
             StatusMessage = $"Created {WorkspacePath}.";
         }
         catch (Exception ex)
@@ -79,25 +106,59 @@ public partial class PackWorkspaceViewModel : ViewModelBase, IDisposable
     }
 
     [RelayCommand]
-    private void Open()
+    private async Task OpenAsync()
     {
         try
         {
-            ApplyWorkspace(ContentWorkspace.Open(WorkspacePath));
+            var selected = _dialogs.CanPickFolders
+                ? await _dialogs.PickFolderAsync(FolderPickerPurpose.OpenPack, WorkspacePath)
+                : null;
+            if (selected is null)
+            {
+                if (_dialogs.CanPickFolders) return;
+                if (string.IsNullOrWhiteSpace(WorkspacePath))
+                {
+                    StatusMessage = "Enter a pack-folder path below before opening on this platform.";
+                    return;
+                }
+                selected = WorkspacePath;
+            }
+            await OpenPathAsync(selected);
+        }
+        catch (Exception ex) { StatusMessage = $"Open failed: {ex.Message}"; }
+    }
+
+    private async Task OpenPathAsync(string path)
+    {
+        ContentWorkspace? candidate = null;
+        try
+        {
+            candidate = ContentWorkspace.Open(path); // Validate before replacing any current state.
+            if (IsDirty && !await _dialogs.ConfirmDiscardChangesAsync(WorkspaceHeader)) return;
+            ApplyWorkspace(candidate);
+            candidate = null;
             StatusMessage = "Pack opened.";
         }
-        catch (Exception ex)
-        {
-            StatusMessage = $"Open failed: {ex.Message}";
-        }
+        catch (Exception ex) { StatusMessage = $"Open failed: {ex.Message}"; }
+        finally { candidate?.Dispose(); }
     }
 
     [RelayCommand]
-    private void OpenRecent(string? path)
+    private async Task OpenRecentAsync(string? path)
     {
         if (string.IsNullOrWhiteSpace(path)) return;
-        WorkspacePath = path;
-        Open();
+        await OpenPathAsync(path);
+    }
+
+    [RelayCommand(CanExecute = nameof(HasWorkspacePath))]
+    private async Task CopyFullPathAsync()
+    {
+        try
+        {
+            await _dialogs.CopyPathAsync(WorkspacePath);
+            StatusMessage = "Full path copied to the clipboard.";
+        }
+        catch (Exception ex) { StatusMessage = $"Copy path failed: {ex.Message}"; }
     }
 
     [RelayCommand(CanExecute = nameof(CanSave))]
@@ -151,6 +212,7 @@ public partial class PackWorkspaceViewModel : ViewModelBase, IDisposable
             _workspace.Dispose();
         }
         _workspace = workspace;
+        _isDraftDirty = false;
         WorkspacePath = workspace.RootPath;
         SubscribeManifest(workspace.Manifest.Data);
         workspace.ExternalChange += OnExternalChange;
@@ -175,8 +237,17 @@ public partial class PackWorkspaceViewModel : ViewModelBase, IDisposable
         data.Dependencies.CollectionChanged -= OnDependenciesChanged;
     }
 
-    private void OnManifestPropertyChanged(object? sender, PropertyChangedEventArgs e) => RefreshState();
-    private void OnDependenciesChanged(object? sender, NotifyCollectionChangedEventArgs e) => RefreshState();
+    private void OnManifestPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (ReferenceEquals(sender, _draft)) _isDraftDirty = true;
+        RefreshState();
+    }
+
+    private void OnDependenciesChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (ReferenceEquals(sender, _draft.Dependencies)) _isDraftDirty = true;
+        RefreshState();
+    }
 
     private void OnExternalChange(object? sender, ExternalChangeResult result)
     {

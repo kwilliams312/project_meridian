@@ -23,13 +23,26 @@
 
     <!-- Command + file bar. -->
     <Border DockPanel.Dock="Top" Padding="8" Background="{DynamicResource SystemControlBackgroundListLowBrush}">
-      <StackPanel Orientation="Horizontal" Spacing="8">
-        <Button Content="New" Command="{Binding NewCommand}" />
-        <Button Content="Open" Command="{Binding OpenCommand}" />
-        <Button Content="Save" Command="{Binding SaveCommand}" />
-        <TextBox Width="360" Watermark="content/core/items/…​.item.yaml"
-                 Text="{Binding FilePath}" VerticalAlignment="Center" />
-      </StackPanel>
+      <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto" RowDefinitions="Auto,Auto">
+        <Button Content="_New" Command="{Binding NewCommand}" Margin="0,0,8,0"
+                AutomationProperties.Name="New item" />
+        <Button Grid.Column="1" Content="_Open…" Command="{Binding OpenCommand}" Margin="0,0,8,0"
+                AutomationProperties.Name="Open item file"
+                AutomationProperties.HelpText="Choose a Meridian item YAML file using the system file picker." />
+        <Button Grid.Column="2" Content="_Save" Command="{Binding SaveCommand}" Margin="0,0,8,0"
+                AutomationProperties.Name="Save item" />
+        <TextBlock Grid.Column="3" Text="{Binding DisplayPath}" TextTrimming="CharacterEllipsis" Margin="0,0,8,0"
+                   VerticalAlignment="Center" ToolTip.Tip="{Binding FilePath}"
+                   AutomationProperties.Name="Selected item file"
+                   AutomationProperties.HelpText="The compact selected path. Use Copy full path to access the complete location." />
+        <Button Grid.Column="4" Content="Copy full path" Command="{Binding CopyFullPathCommand}"
+                AutomationProperties.Name="Copy full item path" />
+        <TextBox Grid.Row="1" Grid.ColumnSpan="5" Margin="0,8,0,0"
+                 IsVisible="{Binding ShowManualFilePath}" Text="{Binding FilePath}"
+                 Watermark="Manual item YAML path (native picker unavailable)"
+                 AutomationProperties.Name="Manual item file path"
+                 AutomationProperties.HelpText="Fallback path entry used only when this platform has no native open or save picker." />
+      </Grid>
     </Border>
 
     <!-- Validation + status bar. -->
