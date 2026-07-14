@@ -12,8 +12,12 @@
 #
 # With --db: additionally spins up a THROWAWAY local MariaDB (port 3307, socket
 # /tmp/mmdb.sock, temp datadir), loads all schemas, re-runs ctest with
-# MERIDIAN_DB_* set so the DB-backed tests (authd-login, worldd-session,
-# worldd-relay, meridian-db, account) run for real, then tears the DB down.
+# MERIDIAN_DB_* set so the DB-backed tests run for real, then tears the DB down:
+#   * server ctest  (authd-login, worldd-session, worldd-relay, meridian-db, account)
+#   * mcc ctest      (mcc-emit-sql-db — loads mcc-emitted world.sql into the live DB)
+# The DB-free mcc ctest phase above still runs mcc-emit-sql-db too, where it
+# correctly self-SKIPs (no MERIDIAN_DB_* env); the --db phase is what exercises it
+# for real against MariaDB.
 #
 # Requires a prior build (scripts/dev/build.sh). Fails if build/ is absent.
 #
@@ -98,6 +102,15 @@ if [ "$WITH_DB" -eq 1 ]; then
   log "ctest — server (DB-backed: authd-login, worldd-session, worldd-relay, meridian-db, account)"
   ctest --test-dir "${BUILD_ROOT}/server" --output-on-failure \
     || { warn "server ctest (DB-backed) had failures"; fail=1; }
+
+  # mcc's DB-backed emit-sql test (mcc-emit-sql-db) reads MERIDIAN_DB_* (exported
+  # above), creates its OWN throwaway database, and loads the world DDL + the
+  # mcc-emitted world.sql into the live MariaDB. Without this it self-SKIPs in the
+  # DB-free mcc ctest phase, so the standard gate never exercises SQL emit against
+  # a real DB (the SP1.8-class gap, #703). Run it here for real.
+  log "ctest — mcc (DB-backed: mcc-emit-sql-db against throwaway MariaDB)"
+  ctest --test-dir "${BUILD_ROOT}/mcc" --output-on-failure -R '^mcc-emit-sql-db$' \
+    || { warn "mcc ctest (DB-backed) had failures"; fail=1; }
 
   # db_stop runs via trap on EXIT.
 fi
