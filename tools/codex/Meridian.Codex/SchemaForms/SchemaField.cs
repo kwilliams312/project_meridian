@@ -17,6 +17,8 @@ public sealed class SchemaField
     public JsonNode? Constant { get; init; }
     public decimal? Minimum { get; init; }
     public decimal? Maximum { get; init; }
+    public bool HasExclusiveMinimum { get; init; }
+    public bool HasExclusiveMaximum { get; init; }
     public IReadOnlyList<string> Choices { get; init; } = [];
     public IReadOnlyList<SchemaField> Children { get; init; } = [];
     public SchemaField? Item { get; init; }

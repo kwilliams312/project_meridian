@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Avalonia.Controls;
+using Avalonia.Automation;
 using Avalonia.Headless.XUnit;
 using Avalonia.VisualTree;
 using Meridian.Codex.SchemaForms;
@@ -192,6 +193,68 @@ public sealed class SchemaFormTests
         Assert.Null(vm);
         Assert.Contains("does not satisfy ability.schema.yaml", error);
     }
+
+    [Fact]
+    public void Invalid_edit_blocks_command_and_direct_save_then_recovers_and_reopens()
+    {
+        var copy = ContentFixtures.CopyToTemp("pack.yaml");
+        var original = File.ReadAllText(copy);
+        var vm = SchemaFormFileViewModel.TryCreate(["--schema-form", "pack", copy], out var error)!;
+        Assert.Null(error);
+
+        vm.Document.Set("name", JsonValue.Create(string.Empty));
+
+        Assert.True(vm.IsDirty);
+        Assert.False(vm.IsValid);
+        Assert.False(vm.SaveCommand.CanExecute(null));
+        Assert.Contains(vm.Diagnostics, diagnostic => diagnostic.Path == "name");
+        Assert.Contains("validation error", vm.ValidationSummary, StringComparison.OrdinalIgnoreCase);
+        var nameField = vm.Form.Root.Children.Single(field => field.Path == "name");
+        Assert.True(nameField.HasDiagnostic);
+        Assert.False(vm.TrySave());
+        vm.SaveCommand.Execute(null);
+        Assert.Equal(original, File.ReadAllText(copy));
+
+        vm.Document.Set("name", JsonValue.Create("Recovered Pack"));
+
+        Assert.True(vm.IsValid);
+        Assert.False(nameField.HasDiagnostic);
+        Assert.True(vm.SaveCommand.CanExecute(null));
+        Assert.True(vm.TrySave());
+        var reopened = SchemaFormFileViewModel.TryCreate(["--schema-form", "pack", copy], out error);
+        Assert.Null(error);
+        Assert.Equal("Recovered Pack", reopened!.Document.Get("name")!.ToString());
+    }
+
+    [Theory]
+    [InlineData("name", "", "name")]
+    [InlineData("name", "This pack name is deliberately longer than eighty characters so maxLength remains enforced by schema", "name")]
+    [InlineData("namespace", "Bad-Namespace", "namespace")]
+    public void String_constraints_are_authoritatively_validated_and_field_adjacent(string path, string value, string diagnosticPath)
+    {
+        var copy = ContentFixtures.CopyToTemp("pack.yaml");
+        var vm = SchemaFormFileViewModel.TryCreate(["--schema-form", "pack", copy], out _)!;
+
+        vm.Document.Set(path, JsonValue.Create(value));
+
+        Assert.Contains(vm.Diagnostics, diagnostic => diagnostic.Path == diagnosticPath);
+        Assert.True(vm.Form.Root.Children.Single(field => field.Path == diagnosticPath).HasDiagnostic);
+        Assert.False(vm.SaveCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void Exclusive_numeric_boundary_is_preserved_in_widget_metadata()
+    {
+        var schema = new SchemaCatalog().GetRoot("npc.schema.yaml");
+        var scale = schema.Children.Single(field => field.Name == "visual").Children.Single(field => field.Name == "scale");
+        Assert.True(scale.HasExclusiveMinimum);
+        Assert.Equal(0, scale.Minimum);
+        var yaml = File.ReadAllText(ContentFixtures.ContentCorePath("npcs/kobold_miner.npc.yaml"));
+        var form = new SchemaFormViewModel(new SchemaFormDocument(schema, yaml));
+        var scaleVm = form.Root.Children.Single(field => field.Field.Name == "visual").Children.Single(field => field.Field.Name == "scale");
+
+        Assert.Equal(0.1m, scaleVm.NumericMinimum);
+    }
 }
 
 public sealed class SchemaFormHeadlessTests
@@ -211,6 +274,45 @@ public sealed class SchemaFormHeadlessTests
         Assert.NotEmpty(view.GetVisualDescendants().OfType<TextBox>());
         Assert.NotEmpty(view.GetVisualDescendants().OfType<ComboBox>());
         Assert.NotEmpty(view.GetVisualDescendants().OfType<NumericUpDown>());
+    }
+
+    [AvaloniaFact]
+    public void Recursive_inputs_groups_and_actions_have_accessible_names_and_help()
+    {
+        var catalog = new SchemaCatalog();
+        var yaml = File.ReadAllText(ContentFixtures.ContentCorePath("abilities/cleave_strike.ability.yaml"));
+        var vm = new SchemaFormViewModel(new SchemaFormDocument(catalog.GetRoot("ability.schema.yaml"), yaml));
+        var view = new SchemaFormView { DataContext = vm };
+        var window = new Window { Content = view };
+        window.Show();
+
+        Assert.All(view.GetVisualDescendants().OfType<SchemaFieldView>(), AssertAccessible);
+
+        var name = view.GetVisualDescendants().OfType<TextBox>()
+            .First(control => control.DataContext is SchemaFieldViewModel field && field.Path == "name");
+        var range = view.GetVisualDescendants().OfType<NumericUpDown>()
+            .First(control => control.DataContext is SchemaFieldViewModel field && field.Path == "range_m");
+        var target = view.GetVisualDescendants().OfType<ComboBox>()
+            .First(control => control.DataContext is SchemaFieldViewModel field && field.Path == "target");
+        var gcd = view.GetVisualDescendants().OfType<CheckBox>()
+            .First(control => control.DataContext is SchemaFieldViewModel field && field.Path == "triggers_gcd");
+        AssertAccessible(name);
+        AssertAccessible(range);
+        AssertAccessible(target);
+        AssertAccessible(gcd);
+
+        var actionLabels = new HashSet<string> { "Add optional field", "Add item", "Move up", "Move down", "Remove" };
+        var actions = view.GetVisualDescendants().OfType<Button>()
+            .Where(button => actionLabels.Contains(button.Content?.ToString() ?? string.Empty))
+            .ToArray();
+        Assert.NotEmpty(actions);
+        Assert.All(actions, AssertAccessible);
+    }
+
+    private static void AssertAccessible(Control control)
+    {
+        Assert.False(string.IsNullOrWhiteSpace(control.GetValue(AutomationProperties.NameProperty)));
+        Assert.False(string.IsNullOrWhiteSpace(control.GetValue(AutomationProperties.HelpTextProperty)));
     }
 
     [AvaloniaFact]

@@ -8,6 +8,8 @@ namespace Meridian.Codex.SchemaForms;
 
 public sealed partial class SchemaFormViewModel : ObservableObject
 {
+    private IReadOnlyList<SchemaDiagnostic> _diagnostics = [];
+
     public SchemaFormViewModel(SchemaFormDocument document)
     {
         Document = document;
@@ -17,9 +19,16 @@ public sealed partial class SchemaFormViewModel : ObservableObject
     public SchemaFormDocument Document { get; }
     public SchemaFieldViewModel Root { get; private set; }
 
+    public void SetDiagnostics(IReadOnlyList<SchemaDiagnostic> diagnostics)
+    {
+        _diagnostics = diagnostics;
+        Root.SetDiagnostics(diagnostics);
+    }
+
     private void Refresh()
     {
         Root = new SchemaFieldViewModel(Document.Schema, Document, Refresh);
+        Root.SetDiagnostics(_diagnostics);
         OnPropertyChanged(nameof(Root));
     }
 }
@@ -47,6 +56,15 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
     public string Path { get; }
     public string Label => Field.Title + (Field.IsRequired ? " *" : " (optional)");
     public string? Help => Field.Description;
+    public string AutomationName => Label;
+    public string AutomationHelp => Help ?? $"Edit {Field.Title}.";
+    public string AddOptionalAutomationName => $"Add optional {Field.Title}";
+    public string RemoveOptionalAutomationName => $"Remove optional {Field.Title}";
+    public string AddItemAutomationName => $"Add item to {Field.Title}";
+    public string MoveUpAutomationName => $"Move {Field.Title} up";
+    public string MoveDownAutomationName => $"Move {Field.Title} down";
+    public string RemoveItemAutomationName => $"Remove {Field.Title}";
+    public string ConfirmBranchAutomationName => $"Confirm {Field.Title} branch change";
     public bool IsPresent => Path.Length == 0 || _document.Get(Path) is not null;
     public bool CanEdit => !Field.IsReadOnly && Field.Kind != SchemaFieldKind.Unsupported;
     public bool IsScalar => Field.Kind == SchemaFieldKind.String;
@@ -122,6 +140,15 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
     }
 
     public decimal NumericIncrement => Field.Kind == SchemaFieldKind.Integer ? 1 : 0.1m;
+    public decimal? NumericMinimum => Field.Minimum is { } minimum
+        ? minimum + (Field.HasExclusiveMinimum ? NumericIncrement : 0)
+        : null;
+    public decimal? NumericMaximum => Field.Maximum is { } maximum
+        ? maximum - (Field.HasExclusiveMaximum ? NumericIncrement : 0)
+        : null;
+
+    public string? DiagnosticText { get; private set; }
+    public bool HasDiagnostic => !string.IsNullOrEmpty(DiagnosticText);
 
     public bool BoolValue
     {
@@ -213,5 +240,14 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
     }
 
     private string ChildPath(SchemaField child) => Path.Length == 0 ? child.Name : $"{Path}.{child.Name}";
+
+    internal void SetDiagnostics(IReadOnlyList<SchemaDiagnostic> diagnostics)
+    {
+        var messages = diagnostics.Where(diagnostic => diagnostic.Path == Path).Select(diagnostic => diagnostic.Message).Distinct().ToArray();
+        DiagnosticText = messages.Length == 0 ? null : string.Join(Environment.NewLine, messages);
+        OnPropertyChanged(nameof(DiagnosticText));
+        OnPropertyChanged(nameof(HasDiagnostic));
+        foreach (var child in Children) child.SetDiagnostics(diagnostics);
+    }
 
 }

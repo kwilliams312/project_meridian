@@ -43,16 +43,24 @@ public sealed class SchemaCatalog
         return Project(schemaFile[..^".schema.yaml".Length], string.Empty, merged, merged, true);
     }
 
-    public IReadOnlyList<string> Validate(string schemaFile, string yaml)
+    public IReadOnlyList<SchemaDiagnostic> Validate(string schemaFile, string yaml)
     {
-        var schema = JsonSchema.FromText(GetMergedSchema(schemaFile).ToJsonString());
-        var result = schema.Evaluate(ParseYaml(yaml), new EvaluationOptions { OutputFormat = OutputFormat.List });
-        if (result.IsValid) return [];
-        return result.Details
-            .Where(detail => !detail.IsValid && detail.Errors is not null)
-            .SelectMany(detail => detail.Errors!.Values.Select(error => $"{detail.InstanceLocation}: {error}"))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
+        try
+        {
+            var schema = JsonSchema.FromText(GetMergedSchema(schemaFile).ToJsonString());
+            var result = schema.Evaluate(ParseYaml(yaml), new EvaluationOptions { OutputFormat = OutputFormat.List });
+            if (result.IsValid) return [];
+            return result.Details
+                .Where(detail => !detail.IsValid && detail.Errors is not null)
+                .SelectMany(detail => detail.Errors!.Values.Select(error =>
+                    new SchemaDiagnostic(ToFormPath(detail.InstanceLocation.ToString()), error)))
+                .Distinct()
+                .ToArray();
+        }
+        catch (Exception ex)
+        {
+            return [new SchemaDiagnostic(string.Empty, $"Validation could not complete: {ex.Message}")];
+        }
     }
 
     private JsonObject GetMergedSchema(string schemaFile)
@@ -120,6 +128,8 @@ public sealed class SchemaCatalog
             Default = schema["default"]?.DeepClone(),
             Minimum = Decimal(schema, "minimum") ?? Decimal(schema, "exclusiveMinimum"),
             Maximum = Decimal(schema, "maximum") ?? Decimal(schema, "exclusiveMaximum"),
+            HasExclusiveMinimum = schema["exclusiveMinimum"] is not null,
+            HasExclusiveMaximum = schema["exclusiveMaximum"] is not null,
             Choices = enumChoices ?? [],
         };
 
@@ -223,6 +233,19 @@ public sealed class SchemaCatalog
     private static IReadOnlyList<string> Strings(JsonArray? values) => values?.Select(v => v?.ToString() ?? string.Empty).ToArray() ?? [];
     private static string Humanize(string value) => string.Join(' ', value.Split('_', StringSplitOptions.RemoveEmptyEntries).Select(word => char.ToUpperInvariant(word[0]) + word[1..]));
 
+    private static string ToFormPath(string pointer)
+    {
+        var parts = pointer.TrimStart('/').Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Select(part => part.Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal));
+        var path = string.Empty;
+        foreach (var part in parts)
+        {
+            if (int.TryParse(part, out _)) path += $"[{part}]";
+            else path += path.Length == 0 ? part : $".{part}";
+        }
+        return path;
+    }
+
     private static IReadOnlyDictionary<string, JsonObject> LoadEmbeddedSchemas()
     {
         var assembly = typeof(SchemaCatalog).Assembly;
@@ -255,3 +278,5 @@ public sealed class SchemaCatalog
         _ => throw new InvalidDataException($"Unsupported YAML node {node.NodeType}.")
     };
 }
+
+public sealed record SchemaDiagnostic(string Path, string Message);
