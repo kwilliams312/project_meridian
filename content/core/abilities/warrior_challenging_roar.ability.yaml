@@ -1,0 +1,18 @@
+# SP5 chibi roster (#723) — Warrior taunt: forces threat (the tank role hook).
+# Tier-1 `threat` primitive. Original clean-room archetype (CONTRIBUTING.md).
+schema: meridian/ability@1
+id: core:ability.warrior_challenging_roar
+name: Challenging Roar
+description: A defiant bellow that seizes the target's attention.
+school: physical
+target: enemy
+range_m: 5
+cast:
+  time_ms: 0
+cooldown_ms: 8000
+resource:
+  type: rage
+  amount: 10
+effects:
+  - kind: threat
+    amount: 500

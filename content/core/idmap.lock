@@ -5,10 +5,26 @@ released_watermark: 0      # highest local index frozen by a tagged release
 map:                         # append-only; local index (SAD §2.4)
   core:ability.cleave_strike: 133
   core:ability.iron_resolve: 134
+  core:ability.mage_arcane_bolt: 144
+  core:ability.mage_arcane_storm: 145
+  core:ability.mage_frost_lock: 146
+  core:ability.mage_immolation: 147
   core:ability.mending_word: 135
   core:ability.minor_healing: 1
   core:ability.pickaxe_slam: 2
+  core:ability.priest_aegis: 148
+  core:ability.priest_mend: 149
+  core:ability.priest_purge: 150
+  core:ability.priest_renewal: 151
+  core:ability.rogue_backstab: 152
+  core:ability.rogue_expose_armor: 153
+  core:ability.rogue_rend: 154
+  core:ability.rogue_shadowstep: 155
   core:ability.searing_brand: 136
+  core:ability.warrior_bulwark: 156
+  core:ability.warrior_challenging_roar: 157
+  core:ability.warrior_crushing_blow: 158
+  core:ability.warrior_skullcrack: 159
   core:amb.zone01.forest_day: 3
   core:appearance.ardent.male: 82
   core:appearance.dolmen.male: 117
@@ -72,8 +88,12 @@ map:                         # append-only; local index (SAD §2.4)
   core:attribute.intellect: 130
   core:attribute.stamina: 131
   core:attribute.strength: 132
+  core:class.mage: 160
+  core:class.priest: 161
+  core:class.rogue: 162
   core:class.vanguard: 137
   core:class.warden: 138
+  core:class.warrior: 163
   core:dye.bone: 77
   core:dye.russet: 78
   core:dye.slate: 79
@@ -94,8 +114,14 @@ map:                         # append-only; local index (SAD §2.4)
   core:item.hollow_charm: 54
   core:item.iron_sword: 114
   core:item.kobold_ear: 17
+  core:item.mage_apprentice_robe: 164
+  core:item.mage_apprentice_staff: 165
   core:item.miners_lamp_charm: 18
   core:item.minor_healing_potion: 19
+  core:item.priest_prayer_wand: 166
+  core:item.priest_vestments: 167
+  core:item.rogue_leathers: 168
+  core:item.rogue_shiv: 169
   core:item.rusty_pickaxe: 20
   core:item.spare_lamp: 55
   core:item.warden_chest: 102
@@ -105,6 +131,8 @@ map:                         # append-only; local index (SAD §2.4)
   core:item.warden_head: 105
   core:item.warden_legs: 106
   core:item.warden_shoulders: 107
+  core:item.warrior_battleblade: 170
+  core:item.warrior_platemail: 171
   core:loot.cindermaw: 57
   core:loot.ember_wisp: 58
   core:loot.kobold_firecaller: 59
@@ -142,7 +170,19 @@ map:                         # append-only; local index (SAD §2.4)
   core:spawn.zone01_emberfall_village: 34
   core:spawn.zone01_kobold_camp: 35
   core:talent.battle_fury: 141
+  core:talent.mage_frostwork: 172
+  core:talent.mage_kindling: 173
+  core:talent.priest_devotion: 174
+  core:talent.priest_sanctuary: 175
+  core:talent.rogue_cutthroat: 176
+  core:talent.rogue_finesse: 177
   core:talent.warding_grace: 142
+  core:talent.warrior_frontline: 178
+  core:talent.warrior_guardian: 179
+  core:talent_tree.arcane_mastery: 180
+  core:talent_tree.light_and_shadow: 181
+  core:talent_tree.shadow_arts: 182
   core:talent_tree.vanguard_path: 143
+  core:talent_tree.warriors_resolve: 183
   core:vendor.bren_general_goods: 36
   core:zone.zone01: 37

@@ -1,0 +1,22 @@
+# SP5 chibi roster (#723) — Rogue debuff: strips the target's armor.
+# Tier-1 `debuff` primitive over the core:attribute.armor id (L011-resolved).
+# Original clean-room archetype (CONTRIBUTING.md).
+schema: meridian/ability@1
+id: core:ability.rogue_expose_armor
+name: Expose Armor
+description: Finds the gaps in the target's guard, weakening its armor.
+school: physical
+target: enemy
+range_m: 5
+cast:
+  time_ms: 0
+cooldown_ms: 10000
+resource:
+  type: energy
+  amount: 25
+effects:
+  - kind: debuff
+    attribute: core:attribute.armor
+    amount: -40
+    modifier: flat
+    duration_ms: 15000

@@ -1,0 +1,13 @@
+# SP5 chibi roster (#723) — Rogue opening talent: grants Backstab + an agility passive.
+schema: meridian/talent@1
+id: core:talent.rogue_finesse
+name: Finesse
+description: Unlocks Backstab and quickens your agility.
+rank_max: 3
+grants:
+  - kind: ability
+    ability: core:ability.rogue_backstab
+  - kind: buff
+    attribute: core:attribute.agility
+    amount: 5
+    modifier: flat

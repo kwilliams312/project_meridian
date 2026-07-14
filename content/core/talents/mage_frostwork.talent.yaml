@@ -1,0 +1,12 @@
+# SP5 chibi roster (#723) — Mage tier-2 talent: grants Frost Lock + a crit passive.
+schema: meridian/talent@1
+id: core:talent.mage_frostwork
+name: Frostwork
+description: Unlocks Frost Lock and hones your critical strike.
+grants:
+  - kind: ability
+    ability: core:ability.mage_frost_lock
+  - kind: buff
+    attribute: core:attribute.crit
+    amount: 2
+    modifier: flat

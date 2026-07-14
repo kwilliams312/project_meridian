@@ -1,0 +1,24 @@
+# SP5 chibi roster (#723) — Mage starter armor (cloth chest). Reuses placeholder art.
+schema: meridian/item@2
+id: core:item.mage_apprentice_robe
+name: Apprentice's Robe
+flavor_text: Coarse-woven wool, singed at the cuffs from too-eager practice.
+item_class: armor
+subclass: cloth
+equip_type: core:equip_type.cloth
+slot: chest
+rarity: common
+required_level: 1
+item_level: 1
+armor: 8
+stats:
+  - stat: intellect
+    amount: 2
+price:
+  sell: 50
+visual:
+  icon: core:art.icon.item.warden_crest
+  worn:
+    models: [{ model: core:art.item.armor.warden_chest, mirror: none }]
+    hides: [torso]
+    dye_channels: [primary, secondary]

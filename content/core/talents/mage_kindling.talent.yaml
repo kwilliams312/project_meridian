@@ -1,0 +1,13 @@
+# SP5 chibi roster (#723) — Mage opening talent: grants Immolation + an intellect passive.
+schema: meridian/talent@1
+id: core:talent.mage_kindling
+name: Kindling
+description: Unlocks Immolation and sharpens your intellect.
+rank_max: 3
+grants:
+  - kind: ability
+    ability: core:ability.mage_immolation
+  - kind: buff
+    attribute: core:attribute.intellect
+    amount: 5
+    modifier: flat

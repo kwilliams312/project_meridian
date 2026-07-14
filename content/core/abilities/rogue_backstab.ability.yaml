@@ -1,0 +1,19 @@
+# SP5 chibi roster (#723) — Rogue opener: a precise melee strike.
+# Tier-1 `damage` primitive. Original clean-room archetype (CONTRIBUTING.md).
+schema: meridian/ability@1
+id: core:ability.rogue_backstab
+name: Backstab
+description: A precise thrust to a vital point for {amount} physical damage.
+school: physical
+target: enemy
+range_m: 5
+cast:
+  time_ms: 0
+cooldown_ms: 6000
+resource:
+  type: energy
+  amount: 35
+effects:
+  - kind: damage
+    amount: { min: 20, max: 28 }
+    coefficient: 0.5

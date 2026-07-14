@@ -1,0 +1,12 @@
+# SP5 chibi roster (#723) — Rogue tier-2 talent: grants Rend + a crit passive.
+schema: meridian/talent@1
+id: core:talent.rogue_cutthroat
+name: Cutthroat
+description: Unlocks Rend and sharpens your critical strike.
+grants:
+  - kind: ability
+    ability: core:ability.rogue_rend
+  - kind: buff
+    attribute: core:attribute.crit
+    amount: 2
+    modifier: flat
