@@ -52,6 +52,7 @@ class EventEmitter:
         self._stream = stream if stream is not None else sys.stdout
         self._enabled = enabled
         self._sequence = 0
+        self._emitted_events: set[str] = set()
 
     def build(self, event: str, **fields: Any) -> dict[str, Any]:
         if event not in EVENT_NAMES:
@@ -74,7 +75,13 @@ class EventEmitter:
                 file=self._stream,
                 flush=True,
             )
+            self._emitted_events.add(event)
         return document
+
+    def was_emitted(self, event: str) -> bool:
+        """Whether this emitter successfully wrote at least one such event."""
+
+        return event in self._emitted_events
 
     def redact(self, value: Any) -> Any:
         if isinstance(value, dict):

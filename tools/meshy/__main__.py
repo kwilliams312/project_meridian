@@ -509,8 +509,9 @@ def cmd_generate(args: argparse.Namespace) -> int:
 
     def completed() -> int:
         nonlocal terminal_emitted
-        if not terminal_emitted:
+        if args.json_events and events.was_emitted("completed"):
             terminal_emitted = True
+        if not terminal_emitted:
             asset_id = intake.asset_id(args.ns, args.name)
             if args.json_events:
                 events.emit(
@@ -521,6 +522,11 @@ def cmd_generate(args: argparse.Namespace) -> int:
                 )
             else:
                 print(f"OK — landed {asset_id} at {paths.asset_dir}")
+            # Record completion only after the terminal output operation
+            # succeeds.  If it raises before writing, the committed-state
+            # handler retries; if a wrapper raises after writing,
+            # EventEmitter.was_emitted prevents a duplicate.
+            terminal_emitted = True
         return 0
 
     def on_client_event(event: str, **fields) -> None:

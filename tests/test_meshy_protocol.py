@@ -566,6 +566,49 @@ def test_interrupt_after_commit_point_resolves_to_one_completed_event(
     }
 
 
+@pytest.mark.parametrize("interruption", ["before-write", "after-write"])
+def test_interrupt_during_completed_emission_is_recoverable_and_idempotent(
+    interruption, tmp_path, monkeypatch, capsys
+):
+    glb = _make_glb(tmp_path / "source.glb", triangle_count=2)
+    handler, _calls = _text_to_3d_handler(glb_bytes=glb.read_bytes())
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        meshy_main,
+        "_new_client",
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+            client_mod.MeshyClient(
+                api_key, model_version=model_version, transport=transport
+            )
+        ),
+    )
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    original_emit = protocol.EventEmitter.emit
+    interrupted = False
+
+    def interrupt_once(emitter, event, **fields):
+        nonlocal interrupted
+        if event == "completed" and not interrupted:
+            interrupted = True
+            if interruption == "before-write":
+                raise KeyboardInterrupt
+            original_emit(emitter, event, **fields)
+            raise KeyboardInterrupt
+        return original_emit(emitter, event, **fields)
+
+    monkeypatch.setattr(protocol.EventEmitter, "emit", interrupt_once)
+
+    assert meshy_main.main(_base_args(tmp_path)) == 0
+    events = _events(capsys.readouterr().out)
+    terminals = [
+        event
+        for event in events
+        if event["event"] in {"completed", "cancelled", "error"}
+    ]
+    assert [event["event"] for event in terminals] == ["completed"]
+    assert (tmp_path / "content/core/assets/art/protocol_marker").is_dir()
+
+
 def test_client_close_failure_emits_one_redacted_error_and_rolls_back(
     tmp_path, monkeypatch, capsys
 ):
