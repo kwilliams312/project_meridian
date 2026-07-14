@@ -1,0 +1,16 @@
+schema: meridian/asset@1
+id: core:art.mushroom_redcap
+class: foliage
+source: assets/art/mushroom_redcap/sm_mushroom_redcap.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors:
+  - meridian-contributors
+  origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/019f618e-8c20-71d6-8b5c-5a8bfdddb1c9
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: mushroom_redcap.prompts.yaml
+budget:
+  lod0_tris: 16672
+restyle_status: pending

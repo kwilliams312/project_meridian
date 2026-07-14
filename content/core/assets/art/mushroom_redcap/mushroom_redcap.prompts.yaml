@@ -1,0 +1,10 @@
+task_id: 019f618e-8c20-71d6-8b5c-5a8bfdddb1c9
+model_version: meshy-5
+preview_task_id: 019f618d-7b62-7018-acf0-83ac8c6a82e9
+request:
+  mode: preview
+  prompt: a chibi red-cap toadstool mushroom with white spots, chibi, colored rounded
+    pill and clay toy aesthetic, bright saturated colors, big cute and friendly, clean
+    readable silhouette, game-ready, matching a whimsical fairytale pill-mascot village
+  ai_model: meshy-5
+  target_polycount: 16000

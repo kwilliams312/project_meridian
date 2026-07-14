@@ -1,0 +1,10 @@
+task_id: 019f6184-93d7-723f-b4c1-6bee93ff6f60
+model_version: meshy-5
+preview_task_id: 019f6183-beee-71f6-ae95-6de013e83c77
+request:
+  mode: preview
+  prompt: chibi brown leather armor jerkin for a pill body; chibi, colored rounded
+    PILL-shaped body, big cute expressive eyes and a friendly face, smooth clay-like
+    toy-like, bright saturated colors, clean readable silhouette, game-ready
+  ai_model: meshy-5
+  target_polycount: 6400
