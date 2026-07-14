@@ -6,10 +6,10 @@
   "content_schema_version": 1,
   "godot_version": "4.6",
   "id_band": 0,
-  "content_hash": "350ad36c418a6629d3cf7b355bc6e69f9c381223da58cc24a8e55a2c5caeab7a",
+  "content_hash": "dd101d94d62b70cd15304f1d632db8e02734eadfe562371a134ea72f83e1d358",
   "mcc_version": "0.0.0",
   "built_at": "1970-01-01 00:00:00",
-  "entry_count": 183,
+  "entry_count": 184,
   "entries": [
     { "id": "core:ability.minor_healing", "numeric_id": 1, "type": "ability", "resource": "res://meridian/core/tables/ability.bin", "hash": "35ae382345900ffc2bbeb694eecdaa478af6deafa843bbfc6fae1ead291643f6" },
     { "id": "core:ability.pickaxe_slam", "numeric_id": 2, "type": "ability", "resource": "res://meridian/core/tables/ability.bin", "hash": "2ed79132ca10a17e2dfde60f98becb70c420b4c5df387fea531ff2bcb28b0813" },
@@ -193,6 +193,7 @@
     { "id": "core:talent_tree.arcane_mastery", "numeric_id": 180, "type": "talent_tree", "resource": "res://meridian/core/tables/talent_tree.bin", "hash": "20ed6c04ca5133616a09c473d44e0d57eee36339e3b8f0057c2cce0c052a00bf" },
     { "id": "core:talent_tree.light_and_shadow", "numeric_id": 181, "type": "talent_tree", "resource": "res://meridian/core/tables/talent_tree.bin", "hash": "fc6b77d0b2ee4e8220b6a41b57ca514220c6b96bcde81cc746f543f5aa1fca9a" },
     { "id": "core:talent_tree.shadow_arts", "numeric_id": 182, "type": "talent_tree", "resource": "res://meridian/core/tables/talent_tree.bin", "hash": "45881e96cecdae8a5498bd78ae0b5af8f373f426a2f8d1ab49d675a1a6989ac6" },
-    { "id": "core:talent_tree.warriors_resolve", "numeric_id": 183, "type": "talent_tree", "resource": "res://meridian/core/tables/talent_tree.bin", "hash": "fa38ca623803d869606c22e677d631a33bd9899931dc8d451c06e8a0cfc0baa8" }
+    { "id": "core:talent_tree.warriors_resolve", "numeric_id": 183, "type": "talent_tree", "resource": "res://meridian/core/tables/talent_tree.bin", "hash": "fa38ca623803d869606c22e677d631a33bd9899931dc8d451c06e8a0cfc0baa8" },
+    { "id": "core:art.chibi_pill_body", "numeric_id": 184, "type": "asset", "resource": "res://meridian/core/art/chibi_pill_body.scn", "hash": "a39b98657e580c23d384a85b6a32e91086a081c2c6d3c9dad90cfbd6fc41bfb2" }
   ]
 }

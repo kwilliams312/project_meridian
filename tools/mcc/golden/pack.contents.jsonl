@@ -181,3 +181,4 @@
 {"id":"core:talent_tree.light_and_shadow","numeric_id":181,"resource":"res://meridian/core/tables/talent_tree.bin","hash":"fc6b77d0b2ee4e8220b6a41b57ca514220c6b96bcde81cc746f543f5aa1fca9a"}
 {"id":"core:talent_tree.shadow_arts","numeric_id":182,"resource":"res://meridian/core/tables/talent_tree.bin","hash":"45881e96cecdae8a5498bd78ae0b5af8f373f426a2f8d1ab49d675a1a6989ac6"}
 {"id":"core:talent_tree.warriors_resolve","numeric_id":183,"resource":"res://meridian/core/tables/talent_tree.bin","hash":"fa38ca623803d869606c22e677d631a33bd9899931dc8d451c06e8a0cfc0baa8"}
+{"id":"core:art.chibi_pill_body","numeric_id":184,"resource":"res://meridian/core/art/chibi_pill_body.scn","hash":"a39b98657e580c23d384a85b6a32e91086a081c2c6d3c9dad90cfbd6fc41bfb2"}

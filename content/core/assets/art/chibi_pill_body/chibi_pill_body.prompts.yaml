@@ -1,0 +1,13 @@
+task_id: 019f61e8-2dde-7250-a9cc-a6c720ec47f9
+model_version: meshy-5
+preview_task_id: 019f61e7-44e6-720f-899c-f4f749a97572
+request:
+  mode: preview
+  prompt: a plain neutral off-white PILL-body mascot character, T-pose with arms out,
+    the base body for gear; chibi, smooth rounded PILL/egg-shaped body, big cute expressive
+    eyes, exactly ONE simple small friendly smile (a single small mouth only), smooth
+    clean minimal face, NO second mouth, NO extra mouth, NO cheek dimples, NO cheek
+    bumps, NO nose, no armor; smooth clay-like toy-like matte, clean readable silhouette,
+    game-ready
+  ai_model: meshy-5
+  target_polycount: 48000
