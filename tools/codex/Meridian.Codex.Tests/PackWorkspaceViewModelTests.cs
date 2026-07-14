@@ -43,6 +43,40 @@ public class PackWorkspaceViewModelTests
         Assert.False(vm.CanSave);
     }
 
+    [Fact]
+    public void Missing_description_and_compatibility_can_be_set_and_saved_together()
+    {
+        const string original = """
+schema: meridian/pack@1
+namespace: moonfall
+name: Moonfall
+version: 1.0.0
+content_schema_version: 1
+engine:
+  godot: "4.6"
+license: Apache-2.0
+""";
+        var contentRoot = TempDirectory();
+        var packRoot = Path.Combine(contentRoot, "moonfall");
+        Directory.CreateDirectory(packRoot);
+        var manifestPath = Path.Combine(packRoot, "pack.yaml");
+        File.WriteAllText(manifestPath, original);
+        using var vm = new PackWorkspaceViewModel(new RecentWorkspaceStore(Path.Combine(TempDirectory(), "recent.json")))
+        {
+            WorkspacePath = packRoot,
+        };
+        vm.OpenCommand.Execute(null);
+
+        vm.Manifest.Description = "Moonfall pack";
+        vm.Manifest.CompatibilityVersion = "2";
+        Assert.True(vm.CanSave);
+        vm.SaveCommand.Execute(null);
+
+        Assert.Equal("pack.yaml saved without reformatting untouched YAML.", vm.StatusMessage);
+        Assert.Equal(original + "\ndescription: Moonfall pack\ncompatibility_version: 2",
+            File.ReadAllText(manifestPath));
+    }
+
     private static string TempDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), "codex-workspace-vm-tests", Guid.NewGuid().ToString("N"));

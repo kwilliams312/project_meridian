@@ -1,5 +1,6 @@
 using System.Text;
 using Meridian.Codex.Services;
+using Meridian.Yaml.Cst;
 using Xunit;
 
 namespace Meridian.Codex.Tests;
@@ -182,6 +183,74 @@ public class ContentWorkspaceTests
         Assert.Equal(ExternalChangeResult.Conflict, observed);
         Assert.Same(originalManifest, workspace.Manifest);
         Assert.True(workspace.HasExternalConflict);
+    }
+
+    [Theory]
+    [InlineData("schema: [unterminated\n")]
+    [InlineData("schema: meridian/pack@9\n")]
+    public void Restoring_exact_baseline_bytes_clears_external_conflict_and_allows_save(string invalidPrefix)
+    {
+        var contentRoot = TempDirectory();
+        using var workspace = ContentWorkspace.Create(contentRoot, "moonfall", "Moonfall");
+        var original = File.ReadAllText(workspace.ManifestPath, Utf8);
+        var invalid = invalidPrefix.StartsWith("schema: meridian/pack@9", StringComparison.Ordinal)
+            ? original.Replace("schema: meridian/pack@1\n", invalidPrefix)
+            : invalidPrefix;
+        File.WriteAllText(workspace.ManifestPath, invalid, Utf8);
+        Assert.Equal(ExternalChangeResult.Conflict, workspace.RefreshFromDisk());
+        Assert.True(workspace.HasExternalConflict);
+
+        File.WriteAllText(workspace.ManifestPath, original, Utf8);
+        var recovered = workspace.RefreshFromDisk();
+
+        Assert.Contains(recovered, new[] { ExternalChangeResult.Recovered, ExternalChangeResult.None });
+        Assert.False(workspace.HasExternalConflict);
+        Assert.Equal(WorkspaceValidationState.Valid, workspace.Validation.State);
+        workspace.Manifest.Data.Name = "Recovered Moonfall";
+        workspace.Save();
+        Assert.Contains("name: \"Recovered Moonfall\"", File.ReadAllText(workspace.ManifestPath, Utf8));
+    }
+
+    [Fact]
+    public void Local_and_tls07_validators_agree_on_yaml_scalar_vocabulary()
+    {
+        string[] scalars =
+        [
+            "Moonfall", "2026-01-01", "2026-01-01T12:34:56Z",
+            "true", "TRUE", "false", "False", "yes", "NO", "on", "Off",
+            "null", "NULL", "~", "0", "-42", "+42", "01", "0x10", "0b10", "1_000",
+            "1.5", ".5", "-.Inf", ".nan", "1.2e3", "1e3", "12:34:56", "",
+            "'2026-01-01'", "\"true\"", "'123'",
+        ];
+
+        var mismatches = new List<string>();
+        foreach (var scalar in scalars)
+        {
+            var validatorRoot = ContentFixtures.NewValidatorRoot();
+            var contentRoot = Path.Combine(validatorRoot, "content");
+            using (var created = ContentWorkspace.Create(contentRoot, "moonfall", "Moonfall")) { }
+            var manifestPath = Path.Combine(contentRoot, "moonfall", "pack.yaml");
+            var yaml = File.ReadAllText(manifestPath, Utf8)
+                .Replace("name: \"Moonfall\"", $"name: {scalar}");
+            File.WriteAllText(manifestPath, yaml, Utf8);
+
+            var localValid = false;
+            try
+            {
+                using var workspace = ContentWorkspace.Open(Path.Combine(contentRoot, "moonfall"));
+                localValid = workspace.Validation.State == WorkspaceValidationState.Valid;
+            }
+            catch (YamlCstException)
+            {
+                // A document the CST cannot represent is rejected/read-only,
+                // which is an invalid verdict for this parity assertion.
+            }
+            var authoritative = ContentFixtures.RunAuthoritativeValidator(validatorRoot);
+            var authoritativeValid = authoritative.ExitCode == 0;
+            if (localValid != authoritativeValid)
+                mismatches.Add($"'{scalar}': local={localValid}, TLS-07={authoritativeValid}");
+        }
+        Assert.True(mismatches.Count == 0, "Scalar parity mismatches:\n" + string.Join("\n", mismatches));
     }
 
     private static string TempDirectory()

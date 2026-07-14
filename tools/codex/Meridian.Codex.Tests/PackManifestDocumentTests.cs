@@ -65,6 +65,31 @@ public class PackManifestDocumentTests
         Assert.Equal("4.6", reopened.Data.GodotVersion);
     }
 
+    [Fact]
+    public void Two_optional_fields_missing_can_be_added_in_one_byte_preserving_save()
+    {
+        const string original = """
+schema: meridian/pack@1
+namespace: moonfall
+name: Moonfall
+version: 1.0.0
+content_schema_version: 1
+engine:
+  godot: "4.6"
+license: Apache-2.0
+""";
+        var doc = PackManifestDocument.Parse(original);
+        doc.Data.Description = "Moonfall pack";
+        doc.Data.CompatibilityVersion = "2";
+
+        var saved = doc.ToYaml();
+
+        Assert.Equal(original + "\ndescription: Moonfall pack\ncompatibility_version: 2", saved);
+        var reopened = PackManifestDocument.Parse(saved);
+        Assert.Equal("Moonfall pack", reopened.Data.Description);
+        Assert.Equal("2", reopened.Data.CompatibilityVersion);
+    }
+
     [Theory]
     [InlineData("true")]
     [InlineData("null")]

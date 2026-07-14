@@ -93,6 +93,31 @@ public class AddRemoveKeyTests
         Assert.Equal("tuning pass 2", ((YamlScalarNode)map.Children[new YamlScalarNode("notes")]).Value);
     }
 
+    [Fact]
+    public void AddKey_SequentialSameMapping_AppendsInCallOrder_AndPreservesOriginalBytes()
+    {
+        const string original = "schema: meridian/pack@1\nlicense: Apache-2.0\n";
+        var doc = YamlDocument.Parse(original);
+
+        doc.AddKey(null, "description", "Moonfall pack");
+        doc.AddKey(null, "compatibility_version", "2");
+
+        var edited = doc.ToText();
+        Assert.Equal(original + "description: Moonfall pack\ncompatibility_version: 2\n", edited);
+        var map = LoadMapping(edited);
+        Assert.Equal("Moonfall pack", ((YamlScalarNode)map.Children[new YamlScalarNode("description")]).Value);
+        Assert.Equal("2", ((YamlScalarNode)map.Children[new YamlScalarNode("compatibility_version")]).Value);
+    }
+
+    [Fact]
+    public void AddKey_SequentialDuplicate_IsRejected()
+    {
+        var doc = YamlDocument.Parse("name: Moonfall\n");
+        doc.AddKey(null, "description", "first");
+
+        Assert.Throws<YamlCstException>(() => doc.AddKey(null, "description", "second"));
+    }
+
     private static YamlMappingNode LoadMapping(string text)
     {
         var yaml = new YamlStream();

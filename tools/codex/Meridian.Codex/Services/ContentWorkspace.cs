@@ -4,7 +4,7 @@ using Meridian.Yaml.Cst;
 
 namespace Meridian.Codex.Services;
 
-public enum ExternalChangeResult { None, Reloaded, Conflict }
+public enum ExternalChangeResult { None, Reloaded, Recovered, Conflict }
 public enum WorkspaceBuildState { NotRun, Succeeded, Failed }
 
 public sealed record WorkspaceAggregateStatus(
@@ -136,7 +136,14 @@ public sealed class ContentWorkspace : IDisposable
                 return ExternalChangeResult.Conflict;
             }
             var disk = File.ReadAllText(ManifestPath, Utf8);
-            if (disk == _lastDiskText) return ExternalChangeResult.None;
+            if (disk == _lastDiskText)
+            {
+                if (!HasExternalConflict) return ExternalChangeResult.None;
+                HasExternalConflict = false;
+                _externalDiagnostics = [];
+                Validation = Validate();
+                return ExternalChangeResult.Recovered;
+            }
             if (IsDirty)
             {
                 SetExternalConflict("pack.yaml changed outside Codex while local edits are unsaved.");

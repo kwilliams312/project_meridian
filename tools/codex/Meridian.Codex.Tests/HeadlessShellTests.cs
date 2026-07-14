@@ -106,4 +106,38 @@ public class HeadlessShellTests
         Assert.Contains(view.GetVisualDescendants().OfType<TextBlock>(),
             text => text.Text?.Contains("External conflict", StringComparison.Ordinal) == true);
     }
+
+    [AvaloniaFact]
+    public async Task Pack_workspace_reenables_save_when_exact_baseline_is_restored()
+    {
+        var contentRoot = Path.Combine(Path.GetTempPath(), "codex-headless-recovery", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(contentRoot);
+        using var vm = new PackWorkspaceViewModel(new Meridian.Codex.Services.RecentWorkspaceStore(
+            Path.Combine(contentRoot, "recent.json")));
+        vm.WorkspacePath = contentRoot;
+        vm.Manifest.Namespace = "moonfall";
+        vm.Manifest.Name = "Moonfall";
+        vm.CreateCommand.Execute(null);
+        Assert.True(vm.IsWorkspaceOpen);
+        var manifestPath = Path.Combine(vm.WorkspacePath, "pack.yaml");
+        var original = File.ReadAllText(manifestPath);
+        string[] invalidDocuments =
+        [
+            "schema: [unterminated\n",
+            original.Replace("schema: meridian/pack@1", "schema: meridian/pack@9"),
+        ];
+
+        foreach (var invalid in invalidDocuments)
+        {
+            File.WriteAllText(manifestPath, invalid);
+            for (var i = 0; i < 100 && !vm.HasExternalConflict; i++) await Task.Delay(25);
+            Assert.True(vm.HasExternalConflict);
+            Assert.False(vm.CanSave);
+
+            File.WriteAllText(manifestPath, original);
+            for (var i = 0; i < 100 && vm.HasExternalConflict; i++) await Task.Delay(25);
+            Assert.False(vm.HasExternalConflict);
+            Assert.True(vm.CanSave);
+        }
+    }
 }

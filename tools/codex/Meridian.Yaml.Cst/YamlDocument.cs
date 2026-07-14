@@ -21,6 +21,7 @@ public sealed class YamlDocument
     private readonly string _source;
     private readonly CstNode _root;
     private readonly List<Splice> _splices = new();
+    private readonly HashSet<string> _addedPaths = new(StringComparer.Ordinal);
 
     private YamlDocument(string source, CstNode root)
     {
@@ -175,7 +176,8 @@ public sealed class YamlDocument
             throw new YamlCstException($"AddKey: parent '{parentPath}' is not a block mapping.");
         }
 
-        if (parentNode.FindEntry(key) is not null)
+        var path = JoinPath(parentPath, key);
+        if (parentNode.FindEntry(key) is not null || !_addedPaths.Add(path))
         {
             throw new YamlCstException($"AddKey: key '{key}' already exists under '{parentPath}'.");
         }
@@ -225,7 +227,8 @@ public sealed class YamlDocument
         {
             throw new YamlCstException($"AddRawKey: parent '{parentPath}' is not a non-empty block mapping.");
         }
-        if (parentNode.FindEntry(key) is not null)
+        var path = JoinPath(parentPath, key);
+        if (parentNode.FindEntry(key) is not null || !_addedPaths.Add(path))
         {
             throw new YamlCstException($"AddRawKey: key '{key}' already exists under '{parentPath}'.");
         }
@@ -250,12 +253,20 @@ public sealed class YamlDocument
     private void AddSplice(Splice splice)
     {
         // Guard against two edits touching the same region within one save.
-        foreach (var existing in _splices)
+        for (var i = 0; i < _splices.Count; i++)
         {
+            var existing = _splices[i];
             bool disjoint = splice.Span.End <= existing.Span.Start || splice.Span.Start >= existing.Span.End;
             bool bothInsertAtSamePoint = splice.Span.Length == 0 && existing.Span.Length == 0
                 && splice.Span.Start == existing.Span.Start;
-            if (!disjoint || bothInsertAtSamePoint)
+            if (bothInsertAtSamePoint)
+            {
+                // Sequential additions to the same mapping append at its original
+                // end offset. Keep one splice and concatenate in API call order.
+                _splices[i] = existing with { Replacement = existing.Replacement + splice.Replacement };
+                return;
+            }
+            if (!disjoint)
             {
                 throw new YamlCstException("Conflicting edit: two edits target overlapping spans.");
             }
@@ -263,6 +274,9 @@ public sealed class YamlDocument
 
         _splices.Add(splice);
     }
+
+    private static string JoinPath(string? parentPath, string key) =>
+        string.IsNullOrEmpty(parentPath) ? key : $"{parentPath}.{key}";
 
     private CstNode? ResolveInternal(string path, out CstNode? parent, out string? lastSegment)
     {

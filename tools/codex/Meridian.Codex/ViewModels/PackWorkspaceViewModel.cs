@@ -173,6 +173,10 @@ public partial class PackWorkspaceViewModel : ViewModelBase, IDisposable
                 OnPropertyChanged(nameof(Manifest));
                 StatusMessage = "pack.yaml was reloaded after an external edit.";
             }
+            else if (result == ExternalChangeResult.Recovered)
+            {
+                StatusMessage = "External edit conflict cleared after pack.yaml was restored.";
+            }
             else
             {
                 StatusMessage = "External edit conflict: local changes were kept and saving is blocked.";

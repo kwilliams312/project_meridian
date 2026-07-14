@@ -91,7 +91,9 @@ the same merged `common.defs.yaml` and `skeleton.defs.yaml` contract used by
 `validate_content.py`. Those files are embedded at build time, so validation is
 fully offline at runtime and cannot fetch or silently substitute a remote schema.
 Parity tests run both Codex and the TLS-07 reference validator over valid and
-invalid manifests. This uses [JsonSchema.Net 7.2.3](https://www.nuget.org/packages/JsonSchema.Net/7.2.3)
+invalid manifests, including YAML 1.1 dates/timestamps, boolean/null spellings,
+binary/octal/hex/sexagesimal integers, floating/exponent forms, and quoted
+controls. This uses [JsonSchema.Net 7.2.3](https://www.nuget.org/packages/JsonSchema.Net/7.2.3)
 (MIT license, pinned NuGet package); MIT is compatible with Meridian's
 Apache-2.0 distribution. `libmccore` remains the intended shared validation
 boundary once its currently deferred JSON Schema layer is implemented.
