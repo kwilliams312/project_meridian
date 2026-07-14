@@ -43,9 +43,9 @@ void AuraContainer::fold_modifiers(const ActiveAura& aura, std::uint16_t stack_c
         stat_totals_[stat_index(m.stat)] += sign * m.amount * stacks;
     }
 
-    // (b) kBuff/kDebuff attribute modifier → the interim attribute ledger (#694
-    //     seam). A PRIMARY flat modifier ALSO mirrors into stat_totals_, so the
-    //     StatKey view (combat formulas today) stays coherent with the aura layer.
+    // (b) kBuff/kDebuff attribute modifier → the attribute ledger the SP2.4 #694
+    //     EffectiveStats framework reads. A PRIMARY flat modifier ALSO mirrors into
+    //     stat_totals_, so the StatKey view stays coherent with the aura layer.
     if ((aura.kind == EffectKind::kBuff || aura.kind == EffectKind::kDebuff) &&
         !aura.attr_ref.empty()) {
         const std::int32_t delta = sign * aura.attr_amount * stacks;

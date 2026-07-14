@@ -19,6 +19,7 @@ SOURCE /schemas/world/10_npc.sql;
 SOURCE /schemas/world/20_item.sql;
 SOURCE /schemas/world/30_ability.sql;
 SOURCE /schemas/world/35_roster.sql;
+SOURCE /schemas/world/36_attribute.sql;
 SOURCE /schemas/world/40_quest.sql;
 SOURCE /schemas/world/50_loot.sql;
 SOURCE /schemas/world/60_vendor.sql;

@@ -222,6 +222,30 @@ int main() {
           std::stoi("0" + query_scalar(client, flags, db,
                     "SELECT COUNT(*) FROM spawn_point;", scratch)) >= 5);
 
+    // Attribute framework (SP2.4 #694): the base vocabulary + the class attribute_mods
+    // emit + load. The seed pack ships 7 attributes (5 primary + derived crit/haste/
+    // armor) and the Vanguard's strength +2 / stamina +1 tuning.
+    check("attribute vocabulary populated",
+          std::stoi("0" + query_scalar(client, flags, db,
+                    "SELECT COUNT(*) FROM attribute;", scratch)) >= 5);
+    check("attribute has both primary and derived kinds",
+          query_scalar(client, flags, db,
+                       "SELECT COUNT(DISTINCT kind) FROM attribute;", scratch) == "2");
+    check("class_attribute_mod populated (Vanguard/Warden tuning)",
+          std::stoi("0" + query_scalar(client, flags, db,
+                    "SELECT COUNT(*) FROM class_attribute_mod;", scratch)) >= 3);
+    check("Vanguard(1) strength attribute_mod = +2",
+          query_scalar(client, flags, db,
+                       "SELECT value FROM class_attribute_mod WHERE class_roster_id=1 "
+                       "AND attr_ref='core:attribute.strength';", scratch) == "2");
+    // Every attribute_mod's attr_ref resolves to a real attribute row (the ref-keyed
+    // join the effective-stat framework relies on — no dangling mod).
+    check("class attribute_mod refs resolve to real attribute rows",
+          query_scalar(client, flags, db,
+                       "SELECT COUNT(*) FROM class_attribute_mod m "
+                       "LEFT JOIN attribute a ON m.attr_ref=a.attr_ref "
+                       "WHERE a.attr_ref IS NULL;", scratch) == "0");
+
     // 6. Referential integrity: every quest_template.giver_npc_id points at a real
     //    npc_template row (the *Ref -> numeric id resolution loaded cleanly with
     //    FK checks restored). A dangling join count of 0 means all refs resolved.

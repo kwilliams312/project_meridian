@@ -18,8 +18,9 @@ namespace {
 // are the CLIENT-only visual types added by contract ① — they classify + flow
 // into the client pck but emit NO world.sql (the server never reads visuals,
 // spec §8). `attribute` (pack-contract spec §2.2) is the kernel-blessed base
-// stat vocabulary — a rules-data catalog that classifies + flows into the pck
-// but emits no world.sql this round (kernel formulas are sub-project 2).
+// stat vocabulary — a rules-data catalog that flows into the pck AND (SP2.4 #694)
+// emits the world.sql `attribute` table + the per-class/per-race `attribute_mods`
+// the kernel effective-stat framework loads.
 // `equip_type` (pack-contract spec §2.1) is the armor/weapon-type CATALOG
 // (rules-data referenced by items and, in sub-project 2, class proficiencies).
 // `talent` + `talent_tree` (pack-contract spec §2.5) are the talent catalog and

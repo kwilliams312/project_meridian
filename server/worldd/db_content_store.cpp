@@ -1288,6 +1288,41 @@ meridian::characters::Roster load_db_roster(db::Connection& world_db) {
     return roster;
 }
 
+AttributeCatalog load_db_attributes(db::Connection& world_db) {
+    // The base attribute vocabulary (kernel-blessed primary/derived set) + the
+    // per-class/per-race attribute_mods operators tune (SP2.4 #694). Keyed by the
+    // attribute's contentId ref string — the SAME key the buff/debuff aura ledger
+    // uses — so the EffectiveStats framework joins the pack mods, the live auras, and
+    // the base on one string with no id round-trip.
+    AttributeCatalog catalog;
+    db::Result attrs = world_db.execute(
+        "SELECT attr_ref, name, kind, content_id FROM attribute ORDER BY content_id");
+    for (const db::Row& r : attrs.rows) {
+        AttributeDef def;
+        def.ref = as_str(r[0]);
+        def.name = as_str(r[1]);
+        def.kind = as_str(r[2]) == "derived" ? AttributeKind::kDerived
+                                             : AttributeKind::kPrimary;
+        def.content_id = as_u32(r[3]);
+        catalog.add_attribute(std::move(def));
+    }
+    db::Result class_mods = world_db.execute(
+        "SELECT class_roster_id, attr_ref, value FROM class_attribute_mod "
+        "ORDER BY class_roster_id, attr_ref");
+    for (const db::Row& r : class_mods.rows) {
+        catalog.add_class_mod(static_cast<std::uint8_t>(as_i64(r[0])), as_str(r[1]),
+                              static_cast<std::int32_t>(as_i64(r[2])));
+    }
+    db::Result race_mods = world_db.execute(
+        "SELECT race_roster_id, attr_ref, value FROM race_attribute_mod "
+        "ORDER BY race_roster_id, attr_ref");
+    for (const db::Row& r : race_mods.rows) {
+        catalog.add_race_mod(static_cast<std::uint8_t>(as_i64(r[0])), as_str(r[1]),
+                             static_cast<std::int32_t>(as_i64(r[2])));
+    }
+    return catalog;
+}
+
 WorldContent load_world_content(db::Connection& world_db) {
     WorldContent content;
     content.items = std::make_unique<DbTemplateStore>(world_db);
@@ -1298,6 +1333,7 @@ WorldContent load_world_content(db::Connection& world_db) {
     content.area_triggers = load_area_trigger_volumes(world_db);
     content.abilities = std::make_unique<AbilityStore>(load_db_ability_store(world_db));
     content.roster = load_db_roster(world_db);
+    content.attributes = load_db_attributes(world_db);
     content.spawns = load_spawn_points(world_db);
     return content;
 }

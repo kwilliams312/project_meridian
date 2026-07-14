@@ -79,6 +79,8 @@ void create_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS npc_trainer",      "DROP TABLE IF EXISTS npc_template",
         "DROP TABLE IF EXISTS area",             "DROP TABLE IF EXISTS ability",
         "DROP TABLE IF EXISTS spawn_point",
+        "DROP TABLE IF EXISTS class_attribute_mod", "DROP TABLE IF EXISTS race_attribute_mod",
+        "DROP TABLE IF EXISTS attribute",
         "DROP TABLE IF EXISTS race",             "DROP TABLE IF EXISTS class",
     };
     for (const char* d : drops) c.execute(d);
@@ -195,6 +197,18 @@ void create_tables(db::Connection& c) {
     c.execute("CREATE TABLE class (roster_id TINYINT UNSIGNED NOT NULL, content_id INT UNSIGNED NOT NULL,"
               "  name VARCHAR(64) NOT NULL, description VARCHAR(500) NULL, PRIMARY KEY (roster_id))"
               " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // attribute framework — load_world_content also loads it (SP2.4 #694,
+    // load_db_attributes). Created EMPTY (this test does not assert on stats); without
+    // the tables load_world_content throws "Table 'attribute' doesn't exist".
+    c.execute("CREATE TABLE attribute (attr_ref VARCHAR(64) NOT NULL, content_id INT UNSIGNED NOT NULL,"
+              "  name VARCHAR(64) NOT NULL, kind ENUM('primary','derived') NOT NULL, PRIMARY KEY (attr_ref))"
+              " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    c.execute("CREATE TABLE class_attribute_mod (class_roster_id TINYINT UNSIGNED NOT NULL,"
+              "  attr_ref VARCHAR(64) NOT NULL, value INT NOT NULL, PRIMARY KEY (class_roster_id, attr_ref))"
+              " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    c.execute("CREATE TABLE race_attribute_mod (race_roster_id TINYINT UNSIGNED NOT NULL,"
+              "  attr_ref VARCHAR(64) NOT NULL, value INT NOT NULL, PRIMARY KEY (race_roster_id, attr_ref))"
+              " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 }
 
 void drop_tables(db::Connection& c) {
@@ -208,6 +222,8 @@ void drop_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS npc_trainer",      "DROP TABLE IF EXISTS npc_template",
         "DROP TABLE IF EXISTS area",             "DROP TABLE IF EXISTS ability",
         "DROP TABLE IF EXISTS spawn_point",
+        "DROP TABLE IF EXISTS class_attribute_mod", "DROP TABLE IF EXISTS race_attribute_mod",
+        "DROP TABLE IF EXISTS attribute",
         "DROP TABLE IF EXISTS race",             "DROP TABLE IF EXISTS class",
     };
     for (const char* d : drops) c.execute(d);
