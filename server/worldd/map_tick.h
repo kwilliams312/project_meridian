@@ -52,9 +52,11 @@
 #define MERIDIAN_WORLDD_MAP_TICK_H
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "ability_store.h"    // AbilityStore / Ability / AbilityId
@@ -180,6 +182,19 @@ public:
 
     // Spawn a server creature from `def` via the AI. Returns its assigned guid.
     ObjectGuid add_creature(const CreatureSpawnDef& def);
+
+    // Resolve a `summon` effect's npc contentId ref (SP2.3 #693) to a CreatureSpawnDef
+    // the tick spawns. The ref is carried VERBATIM on the runtime effect
+    // (AbilityEffect::summon_npc, "<ns>:npc.<name>"); this seam turns it into the
+    // creature to spawn (level/faction/template — normally the DbNpcStore-resolved
+    // stats). Return true + fill `out` to spawn, false to leave the summon
+    // UNRESOLVED (the tick emits summon_unresolved rather than crashing). When no
+    // resolver is set, EVERY summon is unresolved — the contentId→spawn wiring is the
+    // documented content-pipeline seam; execution here is proven with an injected
+    // resolver. `out.home` is overwritten with the caster's position at spawn time.
+    using SummonResolver = std::function<bool(const std::string& npc_ref,
+                                              CreatureSpawnDef& out)>;
+    void set_summon_resolver(SummonResolver resolver) { summon_resolver_ = std::move(resolver); }
 
     // Move a player (the "movement/commands" phase input — the harness sets the
     // authoritative position the AI phase reads as an aggro target this tick, and
@@ -353,12 +368,27 @@ private:
     void phase_movement_damage(std::vector<TickEvent>& out);
 
     // Resolve one ability against a target: spend the resource, roll the attack
-    // table + apply direct damage/heal (resolve_ability), apply any aura effects to
-    // the target's container, and feed resolver threat back into the AI. Shared by
-    // the instant path (drain-inbound) and the cast-completion path (combat).
+    // table + apply direct damage/heal + the instantaneous resource/movement
+    // primitives (resolve_ability), apply every timed effect (aura/dot/hot/buff/
+    // debuff/shield/cc) to the target's container, execute any `summon`, and feed
+    // resolver threat back into the AI. Shared by the instant path (drain-inbound)
+    // and the cast-completion path (combat). SP2.3 #693 executes the full palette.
     void resolve_and_log(const Ability& ability, Unit& caster, ObjectGuid caster_guid,
                          Unit& target, ObjectGuid target_guid, TickPhase phase,
                          std::vector<TickEvent>& out);
+
+    // Execute the ability's `summon` effects (SP2.3 #693): resolve each npc ref via
+    // summon_resolver_ and spawn `count` creatures at the caster, tracking their
+    // lifetime for despawn. Emits summon / summon_unresolved events.
+    void execute_summons(const Ability& ability, Unit& caster, ObjectGuid caster_guid,
+                         TickPhase phase, std::vector<TickEvent>& out);
+    // Despawn timed summons whose lifetime has elapsed (now_ms >= expiry). Emits a
+    // summon_expire event per removed creature. Called in the combat/auras phase.
+    void phase_summon_expiry(std::vector<TickEvent>& out);
+
+    // The caster's current crowd-control state (SP2.3 #693), read from its aura
+    // container — passed into begin_ability_use so a stun/silence blocks the cast.
+    void caster_control(ObjectGuid caster_guid, bool& stunned, bool& silenced);
 
     // Emit one event (stamped with the current tick + clock).
     void emit(std::vector<TickEvent>& out, TickPhase phase, std::string text);
@@ -406,6 +436,12 @@ private:
     std::uint64_t             loot_seed_;        // base seed for per-corpse loot rolls
     loot::LootRng             loot_rng_;         // reseeded per corpse (determinism)
     std::unordered_map<ObjectGuid, loot::LootSession> loot_sessions_;
+
+    // Summon (SP2.3 #693): the npc-ref → spawn resolver seam + live summoned
+    // creatures with a finite lifetime (guid → absolute expiry ms; a permanent
+    // summon, duration 0, is never tracked here). Despawned when now_ms >= expiry.
+    SummonResolver summon_resolver_;
+    std::vector<std::pair<ObjectGuid, std::uint64_t>> summon_expiry_;
 };
 
 }  // namespace meridian::worldd

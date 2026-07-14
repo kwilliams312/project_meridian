@@ -42,9 +42,14 @@
 // no GPL/AGPL/CMaNGOS/TrinityCore/leaked source consulted).
 
 #include "ability_store.h"
+#include "combat_unit.h"
+#include "creature_ai.h"
 #include "db_content_store.h"
+#include "map_tick.h"
+#include "movement_validation.h"
 #include "meridian/db/connection.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -440,6 +445,119 @@ int main() {
                       a->effects.size() == 1 &&
                           a->effects[0].kind == worldd::EffectKind::kDamage &&
                           a->effects[0].amount_min == 8 && a->effects[0].amount_max == 13);
+            }
+        }
+
+        // ======================================================================
+        // SP2.3 RUNTIME EXECUTION (#693) — the DB-backed effects RESOLVE end-to-end.
+        // ======================================================================
+        // The MANDATORY DB-backed runtime proof: cast the DB-LOADED abilities through
+        // the ability engine (MapTick) and observe each new primitive's server-
+        // authoritative effect EXECUTE — not mocked. This proves the whole pipeline:
+        // effects_json (MariaDB) → runtime AbilityEffect (SP2.2) → engine execution
+        // (SP2.3). A fixed CombatRng seed makes every roll deterministic.
+        {
+            namespace w = meridian::worldd;
+            namespace mc = meridian::worldd::movement;
+            auto at = [](float x, float y) {
+                w::Position p; p.x = x; p.y = y; p.z = mc::kFlatGroundZ; return p;
+            };
+            auto pstats = [](std::uint32_t hp, std::uint32_t mana) {
+                w::UnitStats s; s.level = 5; s.max_health = hp;
+                s.resource_type = w::ResourceType::kMana; s.max_resource = mana;
+                s.faction = w::Faction::kPlayer; return s;
+            };
+            auto cmob = [&](w::Position home) {
+                w::CreatureSpawnDef d; d.template_id = 1; d.level = 5;
+                d.faction = w::Faction::kHostile; d.home = home; d.aggro_base_radius = 0;
+                d.leash_radius = 100000; d.respawn_ms = 999999; d.move_speed = 0;
+                d.patrol_mode = w::PatrolMode::kStationary; return d;
+            };
+
+            // id 200 dot (per-tick 4-6 @ 3 s over 9 s) on a creature → periodic damage.
+            {
+                w::MapTick mt(store, 0xDB2003ULL, /*dt=*/3000);
+                const w::ObjectGuid p = mt.add_player(1, at(0, 0), pstats(1000, 1000));
+                const w::ObjectGuid c = mt.add_creature(cmob(at(2, 0)));
+                mt.ai().creature(c)->set_max_health(500);
+                const std::uint32_t hp0 = mt.ai().creature(c)->health();
+                mt.enqueue_cast(w::AbilityUseCmd{p, 200, c});
+                mt.advance(4);  // 3 ticks over 9 s @ dt 3 s
+                check("RUNTIME id 200 dot dealt periodic damage from the DB effect",
+                      mt.ai().creature(c)->health() < hp0);
+            }
+            // id 201 hot (per-tick 5-8 @ 3 s over 12 s) on a wounded self → periodic heal.
+            {
+                w::MapTick mt(store, 0xDB2011ULL, /*dt=*/3000);
+                const w::ObjectGuid p = mt.add_player(1, at(0, 0), pstats(1000, 1000));
+                mt.unit_for_guid(p)->apply_damage(500);  // 500/1000
+                const std::uint32_t hp0 = mt.unit_for_guid(p)->health();
+                mt.enqueue_cast(w::AbilityUseCmd{p, 201, p});
+                mt.advance(3);
+                check("RUNTIME id 201 hot healed periodic HP from the DB effect",
+                      mt.unit_for_guid(p)->health() > hp0);
+            }
+            // id 204 shield (absorb 100-150) on self → absorb pool granted; soaks a hit.
+            {
+                w::MapTick mt(store, 0xDB2044ULL, /*dt=*/1000);
+                const w::ObjectGuid p = mt.add_player(1, at(0, 0), pstats(1000, 1000));
+                mt.enqueue_cast(w::AbilityUseCmd{p, 204, p});
+                mt.advance();
+                const std::uint32_t shield = mt.unit_for_guid(p)->absorb();
+                check("RUNTIME id 204 shield granted an absorb pool (>=100)", shield >= 100);
+                const w::DamageResult dr = mt.unit_for_guid(p)->apply_damage(50);
+                check("RUNTIME id 204 shield absorbed a 50 hit (0 HP lost)",
+                      dr.absorbed == 50 && dr.applied == 0);
+            }
+            // id 206 resource (grant 200 mana) on self → the pool refills.
+            {
+                w::MapTick mt(store, 0xDB2066ULL, /*dt=*/1000);
+                const w::ObjectGuid p = mt.add_player(1, at(0, 0), pstats(1000, 1000));
+                mt.unit_for_guid(p)->spend_resource(900);  // 1000 -> 100
+                mt.enqueue_cast(w::AbilityUseCmd{p, 206, p});
+                mt.advance();
+                check("RUNTIME id 206 resource grant refilled 200 mana (100 -> 300)",
+                      mt.unit_for_guid(p)->resource() == 300);
+            }
+            // id 207 movement (knockback 8 m) on a creature → server-side displacement.
+            {
+                w::MapTick mt(store, 0xDB2077ULL, /*dt=*/1000);
+                const w::ObjectGuid p = mt.add_player(1, at(0, 0), pstats(1000, 1000));
+                const w::ObjectGuid c = mt.add_creature(cmob(at(10, 0)));
+                mt.enqueue_cast(w::AbilityUseCmd{p, 207, c});
+                mt.advance();
+                check("RUNTIME id 207 knockback displaced the target to ~x=18",
+                      std::lround(mt.ai().creature(c)->position().x) == 18);
+            }
+            // id 208 summon (2x core:npc.spirit_wolf for 30 s) → resolver spawns them.
+            {
+                w::MapTick mt(store, 0xDB2088ULL, /*dt=*/1000);
+                mt.set_summon_resolver([](const std::string& ref, w::CreatureSpawnDef& out) {
+                    if (ref != "core:npc.spirit_wolf") return false;
+                    out.template_id = 9001; out.level = 3; out.faction = w::Faction::kFriendly;
+                    return true;
+                });
+                const w::ObjectGuid p = mt.add_player(1, at(0, 0), pstats(1000, 1000));
+                const std::size_t before = mt.ai().size();
+                mt.enqueue_cast(w::AbilityUseCmd{p, 208, p});
+                mt.advance();
+                check("RUNTIME id 208 summon spawned 2 creatures from the DB npc ref",
+                      mt.ai().size() == before + 2);
+            }
+            // id 209 boss slam — the ORDERED multi-primitive chain (damage → dot →
+            // debuff → cc → knockback) executes in one cast: observable damage + move.
+            {
+                w::MapTick mt(store, 0xDB2099ULL, /*dt=*/2000);
+                const w::ObjectGuid p = mt.add_player(1, at(0, 0), pstats(1000, 1000));
+                const w::ObjectGuid c = mt.add_creature(cmob(at(10, 0)));
+                mt.ai().creature(c)->set_max_health(500);
+                const std::uint32_t hp0 = mt.ai().creature(c)->health();
+                mt.enqueue_cast(w::AbilityUseCmd{p, 209, c});
+                mt.advance(4);  // apply + dot ticks (2-3 @ 2 s over 6 s)
+                check("RUNTIME id 209 boss slam knockback displaced the target (x=15)",
+                      std::lround(mt.ai().creature(c)->position().x) == 15);
+                check("RUNTIME id 209 boss slam dealt damage (direct + dot)",
+                      mt.ai().creature(c)->health() < hp0);
             }
         }
 

@@ -182,6 +182,13 @@ public:
     // added (in spawn order).
     std::vector<ObjectGuid> load_placeholder_spawns(const Position& origin);
 
+    // Remove a creature outright (no death, no respawn) — the despawn a timed
+    // `summon` (SP2.3 #693) uses when its lifetime elapses. Returns true if a
+    // creature with `guid` existed and was removed. Unlike a kill (which enters the
+    // kDead respawn countdown), this erases the instance entirely so it never comes
+    // back. No-op (false) for an unknown guid.
+    bool despawn(ObjectGuid guid);
+
     // Resolver threat input (#344): `attacker_guid` dealt `amount` threat to the
     // creature `creature_guid`. Adds to the threat table and, if the creature is
     // patrolling, pulls it into combat targeting the attacker. No-op if the guid is
