@@ -263,11 +263,53 @@ def _dolmen_pt(p: Vec3) -> Vec3:
     return (x * _DOLMEN_WIDTH_SCALE, y2, z)
 
 
+# Chibi "pill folk": the compact toy-proportioned base (spec 5 chibi theme, epic
+# #722 / story #745). The keystone body is a rounded PILL sculpt -- a smooth blob
+# a little taller than it is wide, with no protruding limbs -- so the reference
+# ardent_male arm span (hands out near a full human reach) lands far OUTSIDE that
+# little pill volume. The restyle's geoset cut then finds no sculpt geometry for
+# the arm/hand regions and falls back to proxy boxes that render as white bars
+# floating at shoulder height. The chibi map pulls every joint INSIDE the pill:
+# height compresses hard piecewise at the hip line (stubby legs, short torso that
+# drops the shoulder line down into the pill's wide belly), and both lateral axes
+# (X arm span + hip width, Z finger/foot depth) pull toward the axis, so all
+# eight geoset region anchors sit within the fitted pill and capture real
+# geometry. Depth is scaled too (unlike Dolmen) because the pill is shallow front
+# to back -- untouched finger/toe reach would poke out through its surface.
+_CHIBI_HIP_Y = 0.95  # pelvis line: legs below, torso/arms/head above (as reference)
+_CHIBI_LEG_SCALE = 0.42  # legs very short + lifted so foot/lower-leg anchors sit in the pill
+_CHIBI_TORSO_SCALE = 0.46  # short torso: drops the shoulder line into the wide belly band
+_CHIBI_WIDTH_SCALE = 0.24  # pull arms/hands/hips hard inward (hand |X| 0.82 -> ~0.20)
+_CHIBI_DEPTH_SCALE = 0.55  # tuck fingers/feet fore-aft inside the shallow pill depth
+
+
+def _chibi_pt(p: Vec3) -> Vec3:
+    """Chibi point map: piecewise-Y height compression + hard X/Z inward pull.
+
+    Same shape as :func:`_dolmen_pt` (piecewise-linear height about the hip line,
+    continuous at Y=0.95, linear per branch so straight bones stay straight, a
+    pure function of position so shared heads/tails and the +/-X mirror are
+    preserved automatically) -- only far more compact, and with the depth axis
+    (Z) scaled too. X (arm span, hip width) and Z (finger/foot depth) pull hard
+    toward the axis so every limb joint -- hence every one of the eight geoset
+    region anchors -- lands INSIDE the compact pill instead of out at human
+    reach, where the arm/hand geosets would otherwise fall back to floating
+    proxy boxes.
+    """
+    x, y, z = p
+    if y <= _CHIBI_HIP_Y:
+        y2 = y * _CHIBI_LEG_SCALE
+    else:
+        y2 = _CHIBI_HIP_Y * _CHIBI_LEG_SCALE + (y - _CHIBI_HIP_Y) * _CHIBI_TORSO_SCALE
+    return (x * _CHIBI_WIDTH_SCALE, y2, z * _CHIBI_DEPTH_SCALE)
+
+
 # Registry: profile name -> its point transform. VALID_PROFILES and the built
 # per-profile bone tables below both derive from this single dict.
 _PROFILE_POINT_XFORMS: dict[str, Callable[[Vec3], Vec3]] = {
     "ardent_male": _ardent_pt,
     "dolmen_male": _dolmen_pt,
+    "chibi": _chibi_pt,
 }
 
 VALID_PROFILES: tuple[str, ...] = tuple(_PROFILE_POINT_XFORMS)
