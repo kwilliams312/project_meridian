@@ -60,6 +60,7 @@
 #include <vector>
 
 #include "ability_store.h"    // AbilityStore / Ability / AbilityId
+#include "class_kernel.h"      // ClassCatalog / threat_multiplier — SP2.7 role hook (#697)
 #include "aura_container.h"    // AuraContainer
 #include "combat_resolver.h"   // CombatRng / CombatSession / resolve_ability
 #include "combat_unit.h"       // Unit / Player / ObjectGuid / UnitStats
@@ -228,6 +229,14 @@ public:
     // per-map point for M1; the "nearest graveyard from world data" lookup is the
     // documented seam (content epic #28). Defaults to the origin.
     void set_graveyard(const Position& pos) { graveyard_ = pos; }
+
+    // The per-class equip-gating + role catalog (SP2.7 #697), borrowed for the ROLE
+    // hook: when set, the resolver->AI threat seam multiplies a player caster's raw
+    // threat by their class's threat_multiplier (a Tank-role class amplifies threat
+    // so it can hold aggro). The catalog must outlive this MapTick (WorldServer owns
+    // it). Left NULL (the default), threat is unscaled (1.0), so the DB-free combat/
+    // death golden scenarios are byte-identical.
+    void set_class_catalog(const ClassCatalog* catalog) { class_catalog_ = catalog; }
 
     // --- loot (ITM-02 #369) --------------------------------------------------
     // The loot-table source a dying creature rolls on. Defaults to the M1
@@ -408,6 +417,10 @@ private:
     std::uint32_t       dt_ms_;
     std::uint64_t       now_ms_ = 0;
     std::uint64_t       tick_no_ = 0;
+
+    // The per-class equip/role catalog for the SP2.7 #697 role threat hook (borrowed;
+    // owned by WorldServer). NULL until installed — threat is then unscaled (1.0).
+    const ClassCatalog* class_catalog_ = nullptr;
 
     bool report_kills_ = false;  // QST-01 event-bus: emit kCreatureKill on a creature death
     bool report_vitals_ = false; // UI-01 event-bus (#437): tag a level-up as kVitalsChanged

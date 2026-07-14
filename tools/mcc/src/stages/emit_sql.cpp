@@ -470,6 +470,9 @@ void emit_item(std::uint32_t id, const YAML::Node& n, const std::string& ns,
         Val::str(as_str(n["item_class"])),
         has(n, "subclass") ? Val::str(as_str(n["subclass"])) : Val::null(),
         has(n, "slot") ? Val::str(as_str(n["slot"])) : Val::null(),
+        // equip_type (SP2.7 #697) — optional ref to a meridian/equip_type@1 entity;
+        // resolves to that catalog entry's IF-9 numeric id (NULL when absent).
+        cx.ref_cell(n, "equip_type", ns, file),
         Val::str(as_str(n["rarity"])),
         Val::num(has(n, "required_level") ? as_int(n["required_level"]) : 1),
         Val::num(has(n, "item_level") ? as_int(n["item_level"]) : 1),
@@ -607,8 +610,26 @@ void emit_race(std::uint32_t id, const YAML::Node& n, const std::string& /*ns*/,
     emit_attribute_mods(n, roster_id, "race_attribute_mod", cx);
 }
 
-void emit_class(std::uint32_t id, const YAML::Node& n, const std::string& /*ns*/,
-                const std::string& /*file*/, Ctx& cx) {
+// Emit a class's usable_armor_types / usable_weapon_types (SP2.7 #697) into
+// class_usable_equip_type, one row per referenced equip_type resolved to its IF-9
+// numeric id. `list` records the authoring list ('armor'|'weapon') so the kernel can
+// close the SP1-deferred category-match at load. Rows sort by (roster_id,
+// equip_type_id) for a deterministic dump.
+void emit_class_usable(const YAML::Node& n, const char* key, const char* list,
+                       std::uint64_t roster_id, const std::string& ns,
+                       const std::string& file, Ctx& cx) {
+    if (!has(n, key) || !n[key].IsSequence()) return;
+    for (const auto& e : n[key]) {
+        const std::uint32_t et_id = cx.ref(e, ns, file, std::string("$.") + key + "[]");
+        Row& r = new_row(cx.tbl("class_usable_equip_type"), roster_id);
+        r.sort_key2 = std::to_string(et_id);  // stable secondary order within a class
+        r.cells = {Val::u(static_cast<std::uint32_t>(roster_id)), Val::u(et_id),
+                   Val::str(list)};
+    }
+}
+
+void emit_class(std::uint32_t id, const YAML::Node& n, const std::string& ns,
+                const std::string& file, Ctx& cx) {
     const auto roster_id = static_cast<std::uint64_t>(as_int(n["roster_id"]));
     Row& r = new_row(cx.tbl("class"), roster_id);
     r.cells = {
@@ -616,8 +637,122 @@ void emit_class(std::uint32_t id, const YAML::Node& n, const std::string& /*ns*/
         Val::u(id),  // content_id (IF-9)
         Val::str(as_str(n["name"])),
         has(n, "description") ? Val::str(as_str(n["description"])) : Val::null(),
+        // talent_tree (SP2.7 #697) — optional ref -> the tree's IF-9 numeric id.
+        cx.ref_cell(n, "talent_tree", ns, file),
     };
     emit_attribute_mods(n, roster_id, "class_attribute_mod", cx);
+
+    // usable_armor_types / usable_weapon_types -> class_usable_equip_type (SP2.7).
+    emit_class_usable(n, "usable_armor_types", "armor", roster_id, ns, file, cx);
+    emit_class_usable(n, "usable_weapon_types", "weapon", roster_id, ns, file, cx);
+
+    // role XOR hybrid -> class_role (one row for a single role, 2-4 for a hybrid).
+    if (has(n, "role")) {
+        Row& rr = new_row(cx.tbl("class_role"), roster_id);
+        rr.sort_key2 = as_str(n["role"]);
+        rr.cells = {Val::u(static_cast<std::uint32_t>(roster_id)),
+                    Val::str(as_str(n["role"]))};
+    } else if (has(n, "hybrid") && n["hybrid"].IsSequence()) {
+        for (const auto& role : n["hybrid"]) {
+            const std::string role_str = as_str(role);
+            Row& rr = new_row(cx.tbl("class_role"), roster_id);
+            rr.sort_key2 = role_str;
+            rr.cells = {Val::u(static_cast<std::uint32_t>(roster_id)),
+                        Val::str(role_str)};
+        }
+    }
+}
+
+// equip_type (SP2.7 #697) -> the armor/weapon type catalog table. Keyed by the IF-9
+// numeric id (like item/ability); the verbatim contentId ref is kept in `equip_ref`
+// for the cross-entity join. Ordered by content_id for a deterministic dump.
+void emit_equip_type(std::uint32_t id, const YAML::Node& n, const std::string& /*ns*/,
+                     const std::string& /*file*/, Ctx& cx) {
+    Row& r = new_row(cx.tbl("equip_type"), id);
+    r.cells = {
+        Val::u(id),
+        Val::str(as_str(n["id"])),  // equip_ref (verbatim contentId)
+        Val::str(as_str(n["name"])),
+        Val::str(as_str(n["category"])),  // ENUM('armor','weapon')
+        has(n, "slot_class") ? Val::str(as_str(n["slot_class"])) : Val::null(),
+    };
+}
+
+// talent (SP2.7 #697) -> the talent table + its grants[] child rows. A grant is a
+// tagged union by `kind`: an `ability` grant names an ability ref; a `buff`/`debuff`
+// grant is a passive stat effect over an attribute id (kept verbatim as a ref, like
+// the ability effect payload's attribute). Grants keep source order via `ordinal`.
+void emit_talent(std::uint32_t id, const YAML::Node& n, const std::string& ns,
+                 const std::string& file, Ctx& cx) {
+    Row& r = new_row(cx.tbl("talent"), id);
+    r.cells = {
+        Val::u(id),
+        Val::str(as_str(n["id"])),  // talent_ref (verbatim contentId)
+        Val::str(as_str(n["name"])),
+        Val::num(has(n, "rank_max") ? as_int(n["rank_max"]) : 1),
+    };
+    if (has(n, "grants") && n["grants"].IsSequence()) {
+        std::uint16_t ord = 0;
+        for (const auto& g : n["grants"]) {
+            const std::string kind = as_str(g["kind"]);
+            Row& gr = new_row(cx.tbl("talent_grant"), id);
+            gr.sort_key2 = std::to_string(ord);
+            if (kind == "ability") {
+                gr.cells = {
+                    Val::u(id), Val::num(ord), Val::str("ability"),
+                    Val::u(cx.ref(g["ability"], ns, file, "$.grants[].ability")),
+                    Val::null(), Val::null(), Val::null(), Val::null(), Val::null(),
+                };
+            } else {  // buff | debuff — a passive stat effect over an attribute ref
+                gr.cells = {
+                    Val::u(id), Val::num(ord), Val::str(kind),
+                    Val::null(),  // ability_id
+                    Val::str(as_str(g["attribute"])),
+                    Val::num(as_int(g["amount"])),
+                    Val::str(has(g, "modifier") ? as_str(g["modifier"]) : "flat"),
+                    has(g, "duration_ms") ? Val::num(as_int(g["duration_ms"])) : Val::null(),
+                    Val::num(has(g, "max_stacks") ? as_int(g["max_stacks"]) : 1),
+                };
+            }
+            ++ord;
+        }
+    }
+}
+
+// talent_tree (SP2.7 #697) -> the tree table + its tiers[] child rows. Each tier
+// carries required_points and offers a set of talents (resolved to numeric ids).
+void emit_talent_tree(std::uint32_t id, const YAML::Node& n, const std::string& ns,
+                      const std::string& file, Ctx& cx) {
+    Row& r = new_row(cx.tbl("talent_tree"), id);
+    r.cells = {
+        Val::u(id),
+        Val::str(as_str(n["id"])),  // tree_ref (verbatim contentId)
+        Val::str(as_str(n["name"])),
+        has(n, "description") ? Val::str(as_str(n["description"])) : Val::null(),
+    };
+    if (has(n, "tiers") && n["tiers"].IsSequence()) {
+        std::uint16_t tier_ord = 0;
+        for (const auto& tier : n["tiers"]) {
+            Row& tr = new_row(cx.tbl("talent_tree_tier"), id);
+            tr.sort_key2 = std::to_string(tier_ord);
+            tr.cells = {Val::u(id), Val::num(tier_ord),
+                        Val::num(as_int(tier["required_points"]))};
+            if (has(tier, "talents") && tier["talents"].IsSequence()) {
+                std::uint16_t ord = 0;
+                for (const auto& t : tier["talents"]) {
+                    const std::uint32_t tid = cx.ref(t, ns, file, "$.tiers[].talents[]");
+                    Row& ttr = new_row(cx.tbl("talent_tree_tier_talent"), id);
+                    // Sort by (tier, ordinal) within the tree via a composite key.
+                    ttr.sort_key2 = std::to_string(tier_ord) + ":" +
+                                    (ord < 10 ? "0" : "") + std::to_string(ord);
+                    ttr.cells = {Val::u(id), Val::num(tier_ord), Val::num(ord),
+                                 Val::u(tid)};
+                    ++ord;
+                }
+            }
+            ++tier_ord;
+        }
+    }
 }
 
 void emit_quest(std::uint32_t id, const YAML::Node& n, const std::string& ns,
@@ -903,7 +1038,7 @@ std::map<std::string, Table> make_tables() {
     add("npc_ability", {"npc_id","ability_id","priority","cooldown_override_ms","use_at_health_below_pct"});
     add("npc_trainer", {"npc_id"});
     add("npc_trainer_ability", {"npc_id","ability_id","cost_copper","required_class","required_level"});
-    add("item_template", {"id","name","flavor_text","item_class","subclass","slot","rarity","required_level",
+    add("item_template", {"id","name","flavor_text","item_class","subclass","slot","equip_type_id","rarity","required_level",
         "item_level","is_unique","binding","stack_size","weapon_damage_min","weapon_damage_max","weapon_speed_ms",
         "weapon_school","armor","effect_on_use_id","price_sell","price_buy","visual_icon_id","visual_model_id"});
     add("item_stat", {"item_id","stat","amount"});
@@ -911,9 +1046,20 @@ std::map<std::string, Table> make_tables() {
     add("ability", {"id","name","description","school","target","range_m","cast_time_ms","cast_channel_ms",
         "cooldown_ms","triggers_gcd","resource_type","resource_amount","av_cast_anim","av_cast_vfx_id",
         "av_cast_sfx_id","av_impact_vfx_id","av_impact_sfx_id","effects_json"});
+    // equip-type catalog (SP2.7 #697) — armor/weapon type vocabulary, keyed by IF-9 id.
+    add("equip_type", {"content_id","equip_ref","name","category","slot_class"});
     // roster (SP2.5 #695) — keyed by roster_id, not the IF-9 id (see emit_race).
     add("race", {"roster_id","content_id","name","description"});
-    add("class", {"roster_id","content_id","name","description"});
+    add("class", {"roster_id","content_id","name","description","talent_tree_id"});
+    // class equip-gating + role rules (SP2.7 #697) — child tables keyed by roster_id.
+    add("class_usable_equip_type", {"class_roster_id","equip_type_id","list"});
+    add("class_role", {"class_roster_id","role"});
+    // talents + talent trees (SP2.7 #697) — keyed by IF-9 id; children in source order.
+    add("talent", {"content_id","talent_ref","name","rank_max"});
+    add("talent_grant", {"talent_id","ordinal","kind","ability_id","attribute_ref","amount","modifier","duration_ms","max_stacks"});
+    add("talent_tree", {"content_id","tree_ref","name","description"});
+    add("talent_tree_tier", {"talent_tree_id","tier_ordinal","required_points"});
+    add("talent_tree_tier_talent", {"talent_tree_id","tier_ordinal","ordinal","talent_id"});
     // attribute framework (SP2.4 #694) — the base attribute vocabulary keyed by its
     // contentId ref, + the per-class/per-race attribute_mods keyed by roster_id (see
     // emit_attribute / emit_race / emit_class).
@@ -947,11 +1093,14 @@ std::map<std::string, Table> make_tables() {
 // `mysql < world.sql` loads without FK ordering surprises (also FK-checks off).
 const std::vector<std::string> kEmitOrder = {
     "npc_template", "npc_ability", "npc_trainer", "npc_trainer_ability",
+    "equip_type",
     "item_template", "item_stat", "item_effect_on_equip",
     "ability",
     "attribute",
     "race", "class",
+    "class_usable_equip_type", "class_role",
     "class_attribute_mod", "race_attribute_mod",
+    "talent", "talent_grant", "talent_tree", "talent_tree_tier", "talent_tree_tier_talent",
     "quest_template", "quest_objective", "quest_prereq", "quest_reward",
     "loot_table", "loot_group", "loot_entry",
     "vendor_inventory", "vendor_inventory_item", "vendor_inventory_buys",
@@ -1048,6 +1197,9 @@ EmitSqlResult emit_sql(const model::ContentModel& model, const LinkResult& linke
         else if (type == "ability") emit_ability(id, n, ns, file, cx);
         else if (type == "race") emit_race(id, n, ns, file, cx);
         else if (type == "class") emit_class(id, n, ns, file, cx);
+        else if (type == "equip_type") emit_equip_type(id, n, ns, file, cx);
+        else if (type == "talent") emit_talent(id, n, ns, file, cx);
+        else if (type == "talent_tree") emit_talent_tree(id, n, ns, file, cx);
         else if (type == "attribute") emit_attribute(id, n, ns, file, cx);
         else if (type == "quest") emit_quest(id, n, ns, file, cx);
         else if (type == "loot") emit_loot(id, n, ns, file, cx);

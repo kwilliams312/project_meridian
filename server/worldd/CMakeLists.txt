@@ -35,6 +35,8 @@ add_library(world-dispatch STATIC
   combat_resolver.cpp
   aura_container.cpp
   effective_stats.cpp
+  class_kernel.cpp
+  talent_catalog.cpp
   death_state.cpp
   leveling.cpp
   quest_def.cpp
@@ -782,6 +784,40 @@ target_link_libraries(worldd-effective-stats-db-test
 )
 set_target_properties(worldd-effective-stats-db-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-effective-stats-db COMMAND worldd-effective-stats-db-test)
+
+# --- Class-kernel unit test (SP2.7 #697): equip-gating + category-match + role hook
+# + talent application, over in-memory catalogs (no DB). Locks the pure decision
+# logic the DB-backed test proves against real MariaDB rows. Always runs in the plain
+# server ctest (no MERIDIAN_DB_* needed) — the kernel is pure data + arithmetic.
+add_executable(worldd-class-kernel-test
+  test/class_kernel_test.cpp
+)
+target_link_libraries(worldd-class-kernel-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-class-kernel-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-class-kernel COMMAND worldd-class-kernel-test)
+
+# --- Equip-gating + role/talent DB-backed integration test (SP2.7 #697). ---------
+# The MANDATORY DB-backed proof: seed the `equip_type` / `class` /
+# `class_usable_equip_type` / `class_role` / `talent*` / `attribute` / `item_template`
+# tables (mcc emit-sql's shape) into a real MariaDB, read them back with
+# load_db_equip_types / load_db_class_catalog / load_db_talents / DbTemplateStore, and
+# prove gate_equip ACCEPTS a proficient in-category equip, REJECTS a non-usable type
+# AND a category mismatch, the Tank role amplifies threat, and a talent passive raises
+# effective strength through the SP2.4 framework — all off DB rows. Self-seeds minimal
+# no-FK tables. Reads MERIDIAN_WORLDDB_* (falls back to MERIDIAN_DB_*) and SKIPS
+# (exit 0) when none are set — inert in the plain server ctest, real under test.sh --db.
+add_executable(worldd-equip-gating-db-test
+  test/equip_gating_db_it.cpp
+)
+target_link_libraries(worldd-equip-gating-db-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-equip-gating-db-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-equip-gating-db COMMAND worldd-equip-gating-db-test)
 
 # --- Content SPAWN load + spawn-into-world DB-backed integration test (#486). ----
 # The acceptance bar for the spawn story: seed a world DB with authored spawn_point

@@ -36,28 +36,39 @@ INSERT INTO npc_trainer_ability (npc_id, ability_id, cost_copper, required_class
   (64, 1, 500, NULL, 4),
   (64, 2, 1200, 'vanguard', 8);
 
+-- equip_type (8 rows)
+INSERT INTO equip_type (content_id, equip_ref, name, category, slot_class) VALUES
+  (118, 'core:equip_type.cloth', 'Cloth', 'armor', NULL),
+  (119, 'core:equip_type.leather', 'Leather', 'armor', NULL),
+  (120, 'core:equip_type.mail', 'Mail', 'armor', NULL),
+  (121, 'core:equip_type.one_hand', 'One-Hand', 'weapon', 'main'),
+  (122, 'core:equip_type.plate', 'Plate', 'armor', NULL),
+  (123, 'core:equip_type.staff', 'Staff', 'weapon', 'two_hand'),
+  (124, 'core:equip_type.two_hand', 'Two-Hand', 'weapon', 'two_hand'),
+  (125, 'core:equip_type.wand', 'Wand', 'weapon', 'main');
+
 -- item_template (20 rows)
-INSERT INTO item_template (id, name, flavor_text, item_class, subclass, slot, rarity, required_level, item_level, is_unique, binding, stack_size, weapon_damage_min, weapon_damage_max, weapon_speed_ms, weapon_school, armor, effect_on_use_id, price_sell, price_buy, visual_icon_id, visual_model_id) VALUES
-  (16, 'Bren''s Signet', 'The quartermaster''s seal, good for a discount he''ll deny offering.', 'armor', 'misc', 'finger', 'uncommon', 4, 9, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 380, NULL, 12, NULL),
-  (17, 'Kobold Ear', 'Proof of a culling. Bren doesn''t ask how you got it.', 'quest', NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 20, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 8, NULL),
-  (18, 'Miner''s Lamp Charm', 'Still faintly warm. Kobolds swear by them; kobolds swear at everything.', 'armor', 'misc', 'trinket', 'uncommon', 4, 9, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 380, NULL, 9, NULL),
-  (19, 'Minor Healing Potion', NULL, 'consumable', NULL, NULL, 'common', 1, 1, FALSE, 'none', 5, NULL, NULL, NULL, NULL, NULL, 1, 38, 150, 11, NULL),
-  (20, 'Rusty Pickaxe', 'Generations of kobold thumbs have worn the haft smooth.', 'weapon', 'mace_1h', 'main_hand', 'uncommon', 3, 8, FALSE, 'on_equip', 1, 9, 14, 2600, NULL, NULL, NULL, 425, NULL, 10, 13),
-  (49, 'Charred Totem', 'A firecaller''s fetish, scorched black. It hums when the deep stirs.', 'quest', NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 20, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 42, NULL),
-  (50, 'Cinder Heart', 'It beats once for every breath you hold. Bren will want to see this.', 'quest', NULL, NULL, 'uncommon', 1, 1, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 43, NULL),
-  (51, 'Deep Survey Scrap', 'Foreman Dain''s charcoal map of the sunken galleries, torn but legible.', 'quest', NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 5, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 47, NULL),
-  (52, 'Ember Mote', 'A fleck of the mountain''s slow fire. It never quite goes cold.', 'quest', NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 20, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 44, NULL),
-  (53, 'Emberforged Pick', 'Reforged in the vent-heat of Cinderdeep. It bites where rust only bruised.', 'weapon', 'mace_1h', 'main_hand', 'uncommon', 6, 12, FALSE, 'on_equip', 1, 12, 18, 2600, NULL, NULL, NULL, 720, NULL, 45, NULL),
-  (54, 'Charm of the Hollow', 'Braided ash-reed and river-glass. The wardens give them to those who come back.', 'armor', 'misc', 'neck', 'uncommon', 5, 11, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 560, NULL, 46, NULL),
-  (55, 'Spare Miner''s Lamp', 'Trimmed, filled, and lit. Someone in the dark will bless you for it.', 'quest', NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 5, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 9, NULL),
-  (56, 'Warden''s Crest', 'Sela''s own crest, pressed into your hand. It opens doors in Emberfall.', 'armor', 'misc', 'trinket', 'rare', 7, 14, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 1050, NULL, 48, NULL),
-  (102, 'Warden''s Cuirass', 'The breastplate of the Deep Watch — dented, re-forged, never surrendered.', 'armor', 'plate', 'chest', 'rare', 10, 14, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 80, NULL, 960, NULL, 48, NULL),
-  (103, 'Warden''s Sabatons', 'Iron-shod boots that grip wet stone and hot ash alike.', 'armor', 'plate', 'feet', 'rare', 10, 11, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 40, NULL, 480, NULL, 48, NULL),
-  (104, 'Warden''s Gauntlets', 'Articulated steel. Still closes on a haft without a thought.', 'armor', 'plate', 'hands', 'rare', 10, 11, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 35, NULL, 420, NULL, 48, NULL),
-  (105, 'Warden''s Helm', 'Full steel, cheek to crown. The Wardens see everything and show nothing.', 'armor', 'plate', 'head', 'rare', 10, 12, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 40, NULL, 480, NULL, 48, NULL),
-  (106, 'Warden''s Greaves', 'Leg guards cut for the long descent into the Cinderdeep.', 'armor', 'plate', 'legs', 'rare', 10, 13, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 60, NULL, 720, NULL, 48, NULL),
-  (107, 'Warden''s Pauldrons', 'Twin plates that shrug off a kobold''s overhand as if it were rain.', 'armor', 'plate', 'shoulders', 'rare', 10, 12, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 45, NULL, 540, NULL, 48, NULL),
-  (114, 'Iron Sword', 'A plain arming sword of forge-black iron — honest steel, no frills.', 'weapon', 'sword_1h', 'main_hand', 'common', 1, 5, FALSE, 'none', 1, 6, 11, 2400, NULL, NULL, NULL, 120, NULL, 112, 113);
+INSERT INTO item_template (id, name, flavor_text, item_class, subclass, slot, equip_type_id, rarity, required_level, item_level, is_unique, binding, stack_size, weapon_damage_min, weapon_damage_max, weapon_speed_ms, weapon_school, armor, effect_on_use_id, price_sell, price_buy, visual_icon_id, visual_model_id) VALUES
+  (16, 'Bren''s Signet', 'The quartermaster''s seal, good for a discount he''ll deny offering.', 'armor', 'misc', 'finger', NULL, 'uncommon', 4, 9, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 380, NULL, 12, NULL),
+  (17, 'Kobold Ear', 'Proof of a culling. Bren doesn''t ask how you got it.', 'quest', NULL, NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 20, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 8, NULL),
+  (18, 'Miner''s Lamp Charm', 'Still faintly warm. Kobolds swear by them; kobolds swear at everything.', 'armor', 'misc', 'trinket', NULL, 'uncommon', 4, 9, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 380, NULL, 9, NULL),
+  (19, 'Minor Healing Potion', NULL, 'consumable', NULL, NULL, NULL, 'common', 1, 1, FALSE, 'none', 5, NULL, NULL, NULL, NULL, NULL, 1, 38, 150, 11, NULL),
+  (20, 'Rusty Pickaxe', 'Generations of kobold thumbs have worn the haft smooth.', 'weapon', 'mace_1h', 'main_hand', NULL, 'uncommon', 3, 8, FALSE, 'on_equip', 1, 9, 14, 2600, NULL, NULL, NULL, 425, NULL, 10, 13),
+  (49, 'Charred Totem', 'A firecaller''s fetish, scorched black. It hums when the deep stirs.', 'quest', NULL, NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 20, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 42, NULL),
+  (50, 'Cinder Heart', 'It beats once for every breath you hold. Bren will want to see this.', 'quest', NULL, NULL, NULL, 'uncommon', 1, 1, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 43, NULL),
+  (51, 'Deep Survey Scrap', 'Foreman Dain''s charcoal map of the sunken galleries, torn but legible.', 'quest', NULL, NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 5, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 47, NULL),
+  (52, 'Ember Mote', 'A fleck of the mountain''s slow fire. It never quite goes cold.', 'quest', NULL, NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 20, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 44, NULL),
+  (53, 'Emberforged Pick', 'Reforged in the vent-heat of Cinderdeep. It bites where rust only bruised.', 'weapon', 'mace_1h', 'main_hand', 121, 'uncommon', 6, 12, FALSE, 'on_equip', 1, 12, 18, 2600, NULL, NULL, NULL, 720, NULL, 45, NULL),
+  (54, 'Charm of the Hollow', 'Braided ash-reed and river-glass. The wardens give them to those who come back.', 'armor', 'misc', 'neck', NULL, 'uncommon', 5, 11, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 560, NULL, 46, NULL),
+  (55, 'Spare Miner''s Lamp', 'Trimmed, filled, and lit. Someone in the dark will bless you for it.', 'quest', NULL, NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 5, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 9, NULL),
+  (56, 'Warden''s Crest', 'Sela''s own crest, pressed into your hand. It opens doors in Emberfall.', 'armor', 'misc', 'trinket', NULL, 'rare', 7, 14, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 1050, NULL, 48, NULL),
+  (102, 'Warden''s Cuirass', 'The breastplate of the Deep Watch — dented, re-forged, never surrendered.', 'armor', 'plate', 'chest', 122, 'rare', 10, 14, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 80, NULL, 960, NULL, 48, NULL),
+  (103, 'Warden''s Sabatons', 'Iron-shod boots that grip wet stone and hot ash alike.', 'armor', 'plate', 'feet', 122, 'rare', 10, 11, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 40, NULL, 480, NULL, 48, NULL),
+  (104, 'Warden''s Gauntlets', 'Articulated steel. Still closes on a haft without a thought.', 'armor', 'plate', 'hands', 122, 'rare', 10, 11, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 35, NULL, 420, NULL, 48, NULL),
+  (105, 'Warden''s Helm', 'Full steel, cheek to crown. The Wardens see everything and show nothing.', 'armor', 'plate', 'head', 122, 'rare', 10, 12, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 40, NULL, 480, NULL, 48, NULL),
+  (106, 'Warden''s Greaves', 'Leg guards cut for the long descent into the Cinderdeep.', 'armor', 'plate', 'legs', 122, 'rare', 10, 13, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 60, NULL, 720, NULL, 48, NULL),
+  (107, 'Warden''s Pauldrons', 'Twin plates that shrug off a kobold''s overhand as if it were rain.', 'armor', 'plate', 'shoulders', 122, 'rare', 10, 12, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 45, NULL, 540, NULL, 48, NULL),
+  (114, 'Iron Sword', 'A plain arming sword of forge-black iron — honest steel, no frills.', 'weapon', 'sword_1h', 'main_hand', 121, 'common', 1, 5, FALSE, 'none', 1, 6, 11, 2400, NULL, NULL, NULL, 120, NULL, 112, 113);
 
 -- item_stat (15 rows)
 INSERT INTO item_stat (item_id, stat, amount) VALUES
@@ -102,15 +113,58 @@ INSERT INTO race (roster_id, content_id, name, description) VALUES
   (2, 140, 'Dolmen', 'Stoic mountain folk hewn from the deep stone.');
 
 -- class (2 rows)
-INSERT INTO class (roster_id, content_id, name, description) VALUES
-  (1, 137, 'Vanguard', 'A front-line melee defender who holds the line.'),
-  (3, 138, 'Warden', 'A ranged hybrid who mends allies and burns foes at distance.');
+INSERT INTO class (roster_id, content_id, name, description, talent_tree_id) VALUES
+  (1, 137, 'Vanguard', 'A front-line melee defender who holds the line.', 143),
+  (3, 138, 'Warden', 'A ranged hybrid who mends allies and burns foes at distance.', NULL);
+
+-- class_usable_equip_type (8 rows)
+INSERT INTO class_usable_equip_type (class_roster_id, equip_type_id, list) VALUES
+  (1, 120, 'armor'),
+  (1, 121, 'weapon'),
+  (1, 122, 'armor'),
+  (1, 124, 'weapon'),
+  (3, 119, 'armor'),
+  (3, 120, 'armor'),
+  (3, 121, 'weapon'),
+  (3, 123, 'weapon');
+
+-- class_role (3 rows)
+INSERT INTO class_role (class_roster_id, role) VALUES
+  (1, 'tank'),
+  (3, 'dps_ranged'),
+  (3, 'healer');
 
 -- class_attribute_mod (3 rows)
 INSERT INTO class_attribute_mod (class_roster_id, attr_ref, value) VALUES
   (1, 'core:attribute.stamina', 1),
   (1, 'core:attribute.strength', 2),
   (3, 'core:attribute.agility', 2);
+
+-- talent (2 rows)
+INSERT INTO talent (content_id, talent_ref, name, rank_max) VALUES
+  (141, 'core:talent.battle_fury', 'Battle Fury', 3),
+  (142, 'core:talent.warding_grace', 'Warding Grace', 1);
+
+-- talent_grant (4 rows)
+INSERT INTO talent_grant (talent_id, ordinal, kind, ability_id, attribute_ref, amount, modifier, duration_ms, max_stacks) VALUES
+  (141, 0, 'ability', 133, NULL, NULL, NULL, NULL, NULL),
+  (141, 1, 'buff', NULL, 'core:attribute.strength', 5, 'flat', NULL, 1),
+  (142, 0, 'ability', 135, NULL, NULL, NULL, NULL, NULL),
+  (142, 1, 'buff', NULL, 'core:attribute.intellect', 3, 'flat', NULL, 1);
+
+-- talent_tree (1 rows)
+INSERT INTO talent_tree (content_id, tree_ref, name, description) VALUES
+  (143, 'core:talent_tree.vanguard_path', 'Vanguard Path', 'The Vanguard''s tiered talent progression.');
+
+-- talent_tree_tier (2 rows)
+INSERT INTO talent_tree_tier (talent_tree_id, tier_ordinal, required_points) VALUES
+  (143, 0, 0),
+  (143, 1, 5);
+
+-- talent_tree_tier_talent (2 rows)
+INSERT INTO talent_tree_tier_talent (talent_tree_id, tier_ordinal, ordinal, talent_id) VALUES
+  (143, 0, 0, 141),
+  (143, 1, 0, 142);
 
 -- quest_template (10 rows)
 INSERT INTO quest_template (id, name, summary, offer_text, completion_text, level, required_level, zone_ref_id, giver_npc_id, turn_in_npc_id, reward_xp, reward_money) VALUES

@@ -24,6 +24,8 @@ CREATE TABLE item_template (
   slot              ENUM('head','shoulders','back','chest','wrist','hands',
                          'waist','legs','feet','neck','finger','trinket',
                          'main_hand','off_hand','two_hand','ranged','bag') NULL,
+  equip_type_id     INT UNSIGNED NULL,                      -- equip_type.content_id (SP2.7 #697);
+                                                            -- NULL for accessories/legacy items (no proficiency gate)
   rarity            ENUM('poor','common','uncommon','rare','epic','legendary') NOT NULL,
   required_level    SMALLINT UNSIGNED NOT NULL DEFAULT 1,
   item_level        SMALLINT UNSIGNED NOT NULL DEFAULT 1,

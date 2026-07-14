@@ -95,6 +95,7 @@ void create_tables(db::Connection& c) {
         "CREATE TABLE item_template ("
         "  id INT UNSIGNED NOT NULL, name VARCHAR(80) NOT NULL,"
         "  item_class VARCHAR(16) NOT NULL, slot VARCHAR(16) NULL,"
+        "  equip_type_id INT UNSIGNED NULL,"  // SP2.7 #697 — DbTemplateStore SELECTs it
         "  rarity VARCHAR(16) NOT NULL, required_level SMALLINT UNSIGNED NOT NULL DEFAULT 1,"
         "  item_level SMALLINT UNSIGNED NOT NULL DEFAULT 1, is_unique BOOLEAN NOT NULL DEFAULT FALSE,"
         "  binding VARCHAR(16) NOT NULL DEFAULT 'none', stack_size SMALLINT UNSIGNED NOT NULL DEFAULT 1,"
@@ -222,6 +223,7 @@ void create_tables(db::Connection& c) {
         "CREATE TABLE class ("
         "  roster_id TINYINT UNSIGNED NOT NULL, content_id INT UNSIGNED NOT NULL,"
         "  name VARCHAR(64) NOT NULL, description VARCHAR(500) NULL,"
+        "  talent_tree_id INT UNSIGNED NULL,"  // SP2.7 #697 — load_db_class_catalog SELECTs it
         "  PRIMARY KEY (roster_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
     // attribute framework — the SP2.4 #694 loader load_world_content now also reads
     // (load_db_attributes). Without these tables it throws "Table 'attribute' doesn't
@@ -240,6 +242,57 @@ void create_tables(db::Connection& c) {
         "CREATE TABLE race_attribute_mod ("
         "  race_roster_id TINYINT UNSIGNED NOT NULL, attr_ref VARCHAR(64) NOT NULL, value INT NOT NULL,"
         "  PRIMARY KEY (race_roster_id, attr_ref)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // equip-gating + role/talent catalogs — the SP2.7 #697 loaders load_world_content
+    // now also reads (load_db_equip_types / load_db_class_catalog child passes /
+    // load_db_talents). Left empty here (this test asserts on quests/loot/vendors/etc.,
+    // not the class kernel); without the tables load_world_content throws "Table
+    // 'equip_type' doesn't exist". Columns mirror schema/sql/world/{15_equip_type,
+    // 35_roster,38_talent}.sql. The dedicated proof is equip_gating_db_it.cpp.
+    c.execute(
+        "CREATE TABLE equip_type ("
+        "  content_id INT UNSIGNED NOT NULL, equip_ref VARCHAR(96) NOT NULL,"
+        "  name VARCHAR(64) NOT NULL, category ENUM('armor','weapon') NOT NULL,"
+        "  slot_class VARCHAR(32) NULL, PRIMARY KEY (content_id))"
+        " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    c.execute(
+        "CREATE TABLE class_usable_equip_type ("
+        "  class_roster_id TINYINT UNSIGNED NOT NULL, equip_type_id INT UNSIGNED NOT NULL,"
+        "  list ENUM('armor','weapon') NOT NULL, PRIMARY KEY (class_roster_id, equip_type_id))"
+        " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    c.execute(
+        "CREATE TABLE class_role ("
+        "  class_roster_id TINYINT UNSIGNED NOT NULL,"
+        "  role ENUM('healer','dps_melee','dps_ranged','tank') NOT NULL,"
+        "  PRIMARY KEY (class_roster_id, role))"
+        " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    c.execute(
+        "CREATE TABLE talent ("
+        "  content_id INT UNSIGNED NOT NULL, talent_ref VARCHAR(96) NOT NULL,"
+        "  name VARCHAR(64) NOT NULL, rank_max SMALLINT UNSIGNED NOT NULL DEFAULT 1,"
+        "  PRIMARY KEY (content_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    c.execute(
+        "CREATE TABLE talent_grant ("
+        "  talent_id INT UNSIGNED NOT NULL, ordinal SMALLINT UNSIGNED NOT NULL,"
+        "  kind ENUM('ability','buff','debuff') NOT NULL, ability_id INT UNSIGNED NULL,"
+        "  attribute_ref VARCHAR(64) NULL, amount INT NULL, modifier ENUM('flat','percent') NULL,"
+        "  duration_ms INT UNSIGNED NULL, max_stacks SMALLINT UNSIGNED NULL,"
+        "  PRIMARY KEY (talent_id, ordinal)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    c.execute(
+        "CREATE TABLE talent_tree ("
+        "  content_id INT UNSIGNED NOT NULL, tree_ref VARCHAR(96) NOT NULL,"
+        "  name VARCHAR(64) NOT NULL, description VARCHAR(500) NULL,"
+        "  PRIMARY KEY (content_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    c.execute(
+        "CREATE TABLE talent_tree_tier ("
+        "  talent_tree_id INT UNSIGNED NOT NULL, tier_ordinal SMALLINT UNSIGNED NOT NULL,"
+        "  required_points SMALLINT UNSIGNED NOT NULL, PRIMARY KEY (talent_tree_id, tier_ordinal))"
+        " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    c.execute(
+        "CREATE TABLE talent_tree_tier_talent ("
+        "  talent_tree_id INT UNSIGNED NOT NULL, tier_ordinal SMALLINT UNSIGNED NOT NULL,"
+        "  ordinal SMALLINT UNSIGNED NOT NULL, talent_id INT UNSIGNED NOT NULL,"
+        "  PRIMARY KEY (talent_tree_id, tier_ordinal, ordinal))"
+        " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 }
 
 void drop_tables(db::Connection& c) {
@@ -255,6 +308,10 @@ void drop_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS spawn_point",
         "DROP TABLE IF EXISTS class_attribute_mod", "DROP TABLE IF EXISTS race_attribute_mod",
         "DROP TABLE IF EXISTS attribute",
+        "DROP TABLE IF EXISTS equip_type", "DROP TABLE IF EXISTS class_usable_equip_type",
+        "DROP TABLE IF EXISTS class_role", "DROP TABLE IF EXISTS talent",
+        "DROP TABLE IF EXISTS talent_grant", "DROP TABLE IF EXISTS talent_tree",
+        "DROP TABLE IF EXISTS talent_tree_tier", "DROP TABLE IF EXISTS talent_tree_tier_talent",
         "DROP TABLE IF EXISTS race",             "DROP TABLE IF EXISTS class",
     };
     for (const char* d : drops) c.execute(d);
