@@ -1,0 +1,30 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:sf="using:Meridian.Codex.SchemaForms"
+        xmlns:views="using:Meridian.Codex.Views"
+        xmlns:auto="using:Avalonia.Automation"
+        x:Class="Meridian.Codex.Views.SchemaFormWindow"
+        x:DataType="sf:SchemaFormFileViewModel"
+        Width="960" Height="720" MinWidth="720" MinHeight="480"
+        Title="{Binding Header}">
+  <DockPanel>
+    <Border DockPanel.Dock="Top" Padding="16,10" Background="{DynamicResource SystemControlBackgroundListLowBrush}">
+      <Grid ColumnDefinitions="*,Auto">
+        <StackPanel>
+          <TextBlock Text="{Binding Header}" FontSize="18" FontWeight="SemiBold" />
+          <TextBlock Text="{Binding FilePath}" Opacity="0.7" FontSize="12" />
+        </StackPanel>
+        <Button Grid.Column="1" Content="Save" Command="{Binding SaveCommand}" VerticalAlignment="Center"
+                auto:AutomationProperties.Name="Save content file" auto:AutomationProperties.HelpText="Save valid changes to the selected YAML file." />
+      </Grid>
+    </Border>
+    <Border DockPanel.Dock="Bottom" Padding="12,6" Background="{DynamicResource SystemControlBackgroundListLowBrush}">
+      <StackPanel>
+        <TextBlock Text="{Binding Status}" />
+        <TextBlock Text="{Binding ValidationSummary}" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}"
+                   auto:AutomationProperties.Name="Validation summary" auto:AutomationProperties.HelpText="{Binding ValidationSummary}" />
+      </StackPanel>
+    </Border>
+    <views:SchemaFormView DataContext="{Binding Form}" />
+  </DockPanel>
+</Window>

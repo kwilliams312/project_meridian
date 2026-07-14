@@ -1,0 +1,60 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:sf="using:Meridian.Codex.SchemaForms"
+             xmlns:views="using:Meridian.Codex.Views"
+             xmlns:conv="using:Avalonia.Data.Converters"
+             xmlns:auto="using:Avalonia.Automation"
+             x:Class="Meridian.Codex.Views.SchemaFieldView"
+             x:DataType="sf:SchemaFieldViewModel"
+             auto:AutomationProperties.Name="{Binding AutomationName}"
+             auto:AutomationProperties.HelpText="{Binding AutomationHelp}">
+  <Border Margin="0,0,0,10"
+          auto:AutomationProperties.Name="{Binding AutomationName}"
+          auto:AutomationProperties.HelpText="{Binding AutomationHelp}">
+    <Grid ColumnDefinitions="180,*">
+      <StackPanel Grid.Column="0" Margin="0,4,16,0">
+        <TextBlock Text="{Binding Label}" FontWeight="SemiBold" TextWrapping="Wrap" />
+        <TextBlock Text="{Binding Help}" Opacity="0.72" FontSize="12" TextWrapping="Wrap" />
+      </StackPanel>
+      <StackPanel Grid.Column="1" Spacing="6">
+        <Button Content="Add optional field" Command="{Binding AddOptionalCommand}" IsVisible="{Binding CanAddOptional}" HorizontalAlignment="Left"
+                auto:AutomationProperties.Name="{Binding AddOptionalAutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
+        <Button Content="Remove optional field" Command="{Binding RemoveOptionalCommand}" IsVisible="{Binding CanRemoveOptional}" HorizontalAlignment="Left"
+                auto:AutomationProperties.Name="{Binding RemoveOptionalAutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
+        <TextBox Text="{Binding TextValue}" IsVisible="{Binding ShowScalar}" IsEnabled="{Binding CanEdit}"
+                 auto:AutomationProperties.Name="{Binding AutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
+        <NumericUpDown Value="{Binding NumericValue}" Minimum="{Binding NumericMinimum}" Maximum="{Binding NumericMaximum}"
+                       Increment="{Binding NumericIncrement}" IsVisible="{Binding ShowNumeric}" IsEnabled="{Binding CanEdit}"
+                       auto:AutomationProperties.Name="{Binding AutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
+        <CheckBox IsChecked="{Binding BoolValue}" IsVisible="{Binding ShowBoolean}" IsEnabled="{Binding CanEdit}"
+                  auto:AutomationProperties.Name="{Binding AutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
+        <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding SelectedChoice}" IsVisible="{Binding ShowEnum}" IsEnabled="{Binding CanEdit}"
+                  auto:AutomationProperties.Name="{Binding AutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
+        <ComboBox ItemsSource="{Binding VariantChoices}" SelectedItem="{Binding SelectedVariant}"
+                  IsVisible="{Binding HasVariants}" auto:AutomationProperties.Name="{Binding AutomationName}"
+                  auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
+        <TextBlock Text="{Binding UnsupportedReason}" IsVisible="{Binding IsUnsupported}" Foreground="Orange" TextWrapping="Wrap"
+                   auto:AutomationProperties.Name="{Binding AutomationName}" auto:AutomationProperties.HelpText="{Binding UnsupportedReason}" />
+        <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding IsArrayItem}">
+          <Button Content="Move up" Command="{Binding MoveSelfUpCommand}" auto:AutomationProperties.Name="{Binding MoveUpAutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
+          <Button Content="Move down" Command="{Binding MoveSelfDownCommand}" auto:AutomationProperties.Name="{Binding MoveDownAutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
+          <Button Content="Remove" Command="{Binding RemoveSelfCommand}" auto:AutomationProperties.Name="{Binding RemoveItemAutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
+        </StackPanel>
+        <Button Content="Add item" Command="{Binding AddArrayItemCommand}" IsVisible="{Binding CanAddArrayItem}" HorizontalAlignment="Left"
+                auto:AutomationProperties.Name="{Binding AddItemAutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
+        <ItemsControl ItemsSource="{Binding Children}" Margin="12,4,0,0" IsVisible="{Binding IsPresent}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="sf:SchemaFieldViewModel"><views:SchemaFieldView /></DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <TextBlock Text="{Binding BranchWarning}" Foreground="Orange" TextWrapping="Wrap" />
+        <Button Content="Confirm branch change" Command="{Binding ConfirmBranchChangeCommand}"
+                IsVisible="{Binding BranchWarning, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" HorizontalAlignment="Left"
+                auto:AutomationProperties.Name="{Binding ConfirmBranchAutomationName}" auto:AutomationProperties.HelpText="{Binding BranchWarning}" />
+        <TextBlock Text="{Binding DiagnosticText}" IsVisible="{Binding HasDiagnostic}"
+                   Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}" TextWrapping="Wrap"
+                   auto:AutomationProperties.Name="{Binding AutomationName}" auto:AutomationProperties.HelpText="{Binding DiagnosticText}" />
+      </StackPanel>
+    </Grid>
+  </Border>
+</UserControl>

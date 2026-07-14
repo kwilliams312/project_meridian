@@ -10,6 +10,17 @@ namespace Meridian.Yaml.Cst.Tests;
 /// </summary>
 public class SurgicalEditTests
 {
+    [Fact]
+    public void Replacing_block_sequence_preserves_following_outdented_comment()
+    {
+        const string original = "effects:\n  - one\n  - two\n# keep after sequence\nname: Test\n";
+        var doc = YamlDocument.Parse(original);
+
+        doc.ReplaceNode("effects", "- two\n- one");
+
+        Assert.Equal("effects:\n  - two\n  - one\n# keep after sequence\nname: Test\n", doc.ToText());
+    }
+
     /// <summary>Compute the exact character-level diff regions between two strings.</summary>
     private static (int prefix, int suffix, string oldMid, string newMid) DiffRegions(string a, string b)
     {

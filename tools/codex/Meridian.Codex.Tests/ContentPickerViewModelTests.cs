@@ -242,6 +242,41 @@ public sealed class ContentPickerViewModelTests
     }
 
     [Fact]
+    public async Task Native_pack_picker_preserves_dirty_save_gate_across_cancel_and_discard()
+    {
+        var first = CreatePackDirectory("first", "First");
+        var second = CreatePackDirectory("second", "Second");
+        var dialogs = new FakeDialogs { FolderSelection = first };
+        using var vm = new PackWorkspaceViewModel(
+            new RecentWorkspaceStore(Path.Combine(TempDirectory(), "recent.json")), dialogs);
+
+        await vm.OpenCommand.ExecuteAsync(null);
+        Assert.Equal(first, vm.WorkspacePath);
+        Assert.False(vm.IsDirty);
+        Assert.False(vm.CanSave);
+        Assert.Equal("No unsaved changes.", vm.SaveStateDescription);
+
+        vm.Manifest.Name = "Unsaved first";
+        Assert.True(vm.IsDirty);
+        Assert.True(vm.CanSave);
+        dialogs.FolderSelection = second;
+
+        await vm.OpenCommand.ExecuteAsync(null);
+        Assert.Equal(first, vm.WorkspacePath);
+        Assert.Equal("Unsaved first", vm.Manifest.Name);
+        Assert.True(vm.CanSave);
+
+        dialogs.ConfirmDiscard = true;
+        await vm.OpenCommand.ExecuteAsync(null);
+        Assert.Equal(second, vm.WorkspacePath);
+        Assert.Equal("Second", vm.Manifest.Name);
+        Assert.False(vm.IsDirty);
+        Assert.False(vm.CanSave);
+        Assert.Equal("No unsaved changes.", vm.SaveStateDescription);
+        Assert.Equal(2, dialogs.ConfirmCalls);
+    }
+
+    [Fact]
     public async Task Invalid_pack_selection_is_rejected_before_current_workspace_is_replaced()
     {
         var contentRoot = TempDirectory();
@@ -284,14 +319,14 @@ public sealed class ContentPickerViewModelTests
         return path;
     }
 
-    private static string CreatePackDirectory()
+    private static string CreatePackDirectory(string namespace_ = "existing", string name = "Existing")
     {
-        var packRoot = Path.Combine(TempDirectory(), "existing");
+        var packRoot = Path.Combine(TempDirectory(), namespace_);
         Directory.CreateDirectory(packRoot);
-        File.WriteAllText(Path.Combine(packRoot, "pack.yaml"), """
+        File.WriteAllText(Path.Combine(packRoot, "pack.yaml"), $$"""
             schema: meridian/pack@1
-            namespace: existing
-            name: Existing
+            namespace: {{namespace_}}
+            name: {{name}}
             version: 1.0.0
             content_schema_version: 1
             compatibility_version: 1

@@ -8,10 +8,9 @@
     This project does NOT hand-author models. It CONSUMES the single generated
     artifact produced by the schema-driven generator (tools/schema_gen, whose C#
     emitter is tools/schema_gen/emit_csharp.py) from the /schema/content source of
-    truth. The generated file is linked in below; the GenerateContentModels target
-    refreshes it from the schema before every build when the Python toolchain is
-    available, and otherwise falls back to the checked-in file so a plain
-    `dotnet build` works with no Python present.
+    truth. The generated file is linked in below; VerifyContentModels proves it is
+    current before every compile. A missing or broken Python toolchain fails the
+    build instead of silently compiling a stale checked-in artifact.
   -->
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
@@ -36,19 +35,17 @@
   </ItemGroup>
 
   <!--
-    Regenerate the C# models from /schema/content before compiling. Best-effort:
-    on a box without `uv`/Python the ContinueOnError keeps the build green using
-    the checked-in generated file (which a CI drift guard, tests/schema_gen, keeps
-    honest). Repo root is three levels up from this project directory.
+    Verify the checked-in models against /schema/content before compiling. This is
+    intentionally fail-closed: generation/toolchain/cache failures and output drift
+    must stop the build. Regeneration is an explicit developer action documented in
+    tools/codex/README.md. Repo root is three levels up from this project directory.
   -->
-  <Target Name="GenerateContentModels" BeforeTargets="BeforeCompile;CoreCompile">
+  <Target Name="VerifyContentModels" BeforeTargets="CoreCompile">
     <PropertyGroup>
       <_RepoRoot>$(MSBuildProjectDirectory)/../../..</_RepoRoot>
     </PropertyGroup>
-    <Exec Command="uv run python -m tools.schema_gen.generate"
-          WorkingDirectory="$(_RepoRoot)"
-          ContinueOnError="true"
-          Condition="'$(SkipContentModelGen)' != 'true'" />
+    <Exec Command="uv run python -m tools.schema_gen --check"
+          WorkingDirectory="$(_RepoRoot)" />
   </Target>
 
 </Project>

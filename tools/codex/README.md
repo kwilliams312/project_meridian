@@ -71,12 +71,51 @@ destruction (§6.2, TS-2).
 ## Build & test (macOS / Linux / Windows)
 
 ```bash
-cd tools/codex
-dotnet build
-dotnet test          # 88 tests: round-trip identity, surgical edit, add/remove, semantic integrity
+uv sync --locked
+dotnet restore tools/codex/Meridian.Codex.sln
+dotnet build tools/codex/Meridian.Codex.sln --no-restore -m:1 --disable-build-servers
+tools/codex/check-warning-clean.sh
+dotnet test tools/codex/Meridian.Codex.sln --no-restore # round-trip, surgical-edit, schema-form, and headless UI coverage
 ```
 
 Tests load the real `content/core` YAML files as fixtures.
+
+The normal restore is an **online security-audit path**. `NU1900` (audit data
+unavailable) and `NU1901`-`NU1904` (a vulnerable dependency was found) fail the
+restore instead of being buried among compiler warnings. Fix network/proxy/TLS
+access to `https://api.nuget.org/v3/index.json` for `NU1900`; investigate and
+upgrade the reported package for `NU1901`-`NU1904`.
+
+For a deliberately disconnected build, first populate the NuGet and uv caches on
+a connected machine, then select the offline path explicitly:
+
+```bash
+uv sync --locked --offline
+dotnet restore tools/codex/Meridian.Codex.sln \
+  --ignore-failed-sources -p:NuGetAudit=false
+UV_OFFLINE=1 tools/codex/check-warning-clean.sh
+```
+
+Disabling `NuGetAudit` is confined to that explicit restore; it is not a warning
+suppression and it makes no security claim. Run the online restore before release
+or dependency changes. If `uv` reports a cache permission error, repair ownership
+of its reported cache directory or point `UV_CACHE_DIR` at a writable directory;
+do not skip schema verification.
+
+Every Codex compile runs the schema generator in `--check` mode. Missing Python,
+an unusable `uv` cache, or generated-model drift therefore fails the build before
+C# compilation. After changing `/schema/content` or the generator, refresh and
+verify the checked-in artifacts explicitly:
+
+```bash
+uv run python -m tools.schema_gen
+uv run python -m tools.schema_gen --check
+```
+
+Code/compiler warnings are separate from audit availability and toolchain/cache
+failures: the first are fixed in source, the second by restoring online access (or
+choosing the documented offline restore), and the third by repairing the local
+Python/uv environment. None is allowed to warn and continue.
 
 ## Content Pack Workspace
 
@@ -106,6 +145,27 @@ key order, quoting, and every unrelated byte remain unchanged. A clean external
 edit reloads automatically; if disk and unsaved local edits both change, Codex
 keeps the local form state, marks an external conflict, and blocks Save instead
 of overwriting either side.
+
+## Experimental generic schema form
+
+Story #668 adds a reusable Draft 2020-12 form renderer backed directly by the
+embedded content schemas and `Meridian.Yaml.Cst`. It supports strings, enums,
+booleans, numeric ranges, nested objects, ordered arrays, optional/defaulted
+fields, and object `oneOf` branches with destructive-change confirmation. A
+schema construct the renderer cannot represent remains visible but read-only
+with an instruction to edit that value in YAML.
+
+Until the individual content editors migrate to the renderer, an opt-in internal
+preview opens a schema-valid file without changing normal Codex startup:
+
+```bash
+dotnet run --project Meridian.Codex/Meridian.Codex.csproj -- \
+  --schema-form ability /tmp/example.ability.yaml
+```
+
+Accepted schema names are `pack`, `npc`, `item`, and `ability` (or their full
+`*.schema.yaml` filenames). Preview a disposable copy: Save writes
+CST-preserving edits back to the supplied path.
 
 To exercise the UI from this directory:
 

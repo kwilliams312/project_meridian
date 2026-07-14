@@ -3,8 +3,11 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
+using Avalonia.Input;
+using Avalonia.Layout;
 using Avalonia.VisualTree;
 using Meridian.Codex;
+using Meridian.Codex.Controls;
 using Meridian.Codex.Tests;
 using Meridian.Codex.ViewModels;
 using Meridian.Codex.Views;
@@ -42,6 +45,21 @@ public class HeadlessShellTests
     }
 
     [AvaloniaFact]
+    public void Desktop_startup_preserves_default_picker_shell_and_schema_form_mode()
+    {
+        var shell = App.CreateDesktopWindow(null, out var shellError);
+        Assert.Null(shellError);
+        Assert.IsType<MainWindow>(shell);
+        Assert.IsType<MainWindowViewModel>(shell.DataContext);
+
+        var copy = ContentFixtures.CopyToTemp("abilities/cleave_strike.ability.yaml");
+        var schemaForm = App.CreateDesktopWindow(["--schema-form", "ability", copy], out var previewError);
+        Assert.Null(previewError);
+        Assert.IsType<SchemaFormWindow>(schemaForm);
+        Assert.IsType<Meridian.Codex.SchemaForms.SchemaFormFileViewModel>(schemaForm.DataContext);
+    }
+
+    [AvaloniaFact]
     public void MainWindow_hosts_the_npc_editor_view_for_the_npcs_selection()
     {
         var vm = new MainWindowViewModel();
@@ -63,6 +81,49 @@ public class HeadlessShellTests
         Assert.Same(vm.PackWorkspace, vm.ActiveEditor);
         Assert.NotNull(window.GetVisualDescendants().OfType<PackWorkspaceView>().FirstOrDefault());
         Assert.Contains(window.GetVisualDescendants().OfType<TextBox>(), b => b.Text == "my_pack");
+    }
+
+    [AvaloniaFact]
+    public void Pack_workspace_renders_one_sticky_bottom_action_using_the_save_command()
+    {
+        var vm = new MainWindowViewModel();
+        var window = new MainWindow { DataContext = vm };
+        window.Show();
+
+        var actionBar = Assert.Single(window.GetVisualDescendants().OfType<EditorActionBar>());
+        Assert.Same(vm.PackWorkspace.SaveCommand, actionBar.ActionCommand);
+        Assert.Equal("Open or create a pack to save changes.", actionBar.StateDescription);
+        var layout = Assert.IsType<Grid>(actionBar.Parent);
+        Assert.Equal(1, Grid.GetRow(actionBar));
+        Assert.Contains(layout.Children.OfType<ScrollViewer>(), scroll => Grid.GetRow(scroll) == 0);
+        var save = Assert.Single(actionBar.GetVisualDescendants().OfType<Button>());
+        Assert.Equal("Save manifest", save.Content);
+        Assert.Same(vm.PackWorkspace.SaveCommand, save.Command);
+        Assert.False(save.Command!.CanExecute(null));
+        Assert.False(save.IsEnabled);
+        Assert.Equal(HorizontalAlignment.Right, save.HorizontalAlignment);
+        Assert.DoesNotContain(window.GetVisualDescendants().OfType<Button>(), button =>
+            button != save && button.Content?.ToString() == "Save manifest");
+    }
+
+    [AvaloniaFact]
+    public void MainWindow_save_shortcuts_share_the_save_commands_can_execute_gate()
+    {
+        var vm = new MainWindowViewModel();
+        var window = new MainWindow { DataContext = vm };
+        window.Show();
+
+        var shortcuts = window.KeyBindings
+            .Where(binding => binding.Gesture?.Key == Key.S)
+            .ToList();
+        Assert.Equal(2, shortcuts.Count);
+        Assert.Contains(shortcuts, binding => binding.Gesture!.KeyModifiers == KeyModifiers.Control);
+        Assert.Contains(shortcuts, binding => binding.Gesture!.KeyModifiers == KeyModifiers.Meta);
+        Assert.All(shortcuts, binding =>
+        {
+            Assert.Same(vm.PackWorkspace.SaveCommand, binding.Command);
+            Assert.False(binding.Command!.CanExecute(null));
+        });
     }
 
     [AvaloniaFact]
@@ -100,11 +161,38 @@ public class HeadlessShellTests
             await Task.Delay(25);
 
         Assert.True(vm.HasExternalConflict);
+        Assert.False(vm.CanSave);
+        Assert.Equal("Resolve the external pack.yaml conflict before saving.", vm.SaveStateDescription);
         var view = new PackWorkspaceView { DataContext = vm };
         var window = new Window { Content = view };
         window.Show();
         Assert.Contains(view.GetVisualDescendants().OfType<TextBlock>(),
             text => text.Text?.Contains("External conflict", StringComparison.Ordinal) == true);
+    }
+
+    [AvaloniaFact]
+    public async Task Clean_external_reload_replaces_manifest_and_keeps_save_disabled()
+    {
+        var contentRoot = Path.Combine(Path.GetTempPath(), "codex-headless-reload", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(contentRoot);
+        using var vm = new PackWorkspaceViewModel(new Meridian.Codex.Services.RecentWorkspaceStore(
+            Path.Combine(contentRoot, "recent.json")));
+        vm.WorkspacePath = contentRoot;
+        vm.Manifest.Namespace = "moonfall";
+        vm.Manifest.Name = "Moonfall";
+        vm.CreateCommand.Execute(null);
+        var manifestPath = Path.Combine(vm.WorkspacePath, "pack.yaml");
+        var external = File.ReadAllText(manifestPath).Replace("Moonfall", "Externally Reloaded");
+
+        File.WriteAllText(manifestPath, external);
+        for (var i = 0; i < 100 && vm.Manifest.Name != "Externally Reloaded"; i++)
+            await Task.Delay(25);
+
+        Assert.Equal("Externally Reloaded", vm.Manifest.Name);
+        Assert.False(vm.IsDirty);
+        Assert.False(vm.HasExternalConflict);
+        Assert.False(vm.CanSave);
+        Assert.Equal("No unsaved changes.", vm.SaveStateDescription);
     }
 
     [AvaloniaFact]
@@ -119,6 +207,8 @@ public class HeadlessShellTests
         vm.Manifest.Name = "Moonfall";
         vm.CreateCommand.Execute(null);
         Assert.True(vm.IsWorkspaceOpen);
+        vm.Manifest.Name = "Local Moonfall edit";
+        Assert.True(vm.CanSave);
         var manifestPath = Path.Combine(vm.WorkspacePath, "pack.yaml");
         var original = File.ReadAllText(manifestPath);
         string[] invalidDocuments =
@@ -135,7 +225,13 @@ public class HeadlessShellTests
             Assert.False(vm.CanSave);
 
             File.WriteAllText(manifestPath, original);
-            for (var i = 0; i < 100 && vm.HasExternalConflict; i++) await Task.Delay(25);
+            // FileSystemWatcher refreshes the workspace on its worker thread, then
+            // the VM posts diagnostics/command state to Avalonia's UI dispatcher.
+            // On Linux the workspace conflict can clear one dispatcher turn before
+            // CanSave observes the refreshed diagnostics. Wait for the complete UI
+            // state rather than using the background workspace flag as the barrier.
+            for (var i = 0; i < 100 && (vm.HasExternalConflict || !vm.CanSave); i++)
+                await Task.Delay(25);
             Assert.False(vm.HasExternalConflict);
             Assert.True(vm.CanSave);
         }

@@ -1,10 +1,12 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Data.Core.Plugins;
 using Avalonia.Markup.Xaml;
 using Meridian.Codex.Services;
 using Meridian.Codex.ViewModels;
 using Meridian.Codex.Views;
+using Meridian.Codex.SchemaForms;
 
 namespace Meridian.Codex;
 
@@ -23,13 +25,24 @@ public partial class App : Application
             // DataAnnotation validation; remove it to avoid double reports (docs).
             DisableAvaloniaDataAnnotationValidation();
 
-            MainWindow? window = null;
-            var dialogs = new AvaloniaContentDialogService(() => window);
-            window = new MainWindow { DataContext = new MainWindowViewModel(dialogs) };
-            desktop.MainWindow = window;
+            desktop.MainWindow = CreateDesktopWindow(desktop.Args, out var previewError);
+            if (previewError is not null)
+                System.Diagnostics.Trace.TraceWarning(previewError);
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    internal static Window CreateDesktopWindow(string[]? args, out string? previewError)
+    {
+        var preview = SchemaFormFileViewModel.TryCreate(args, out previewError);
+        if (preview is not null)
+            return new SchemaFormWindow { DataContext = preview };
+
+        MainWindow? window = null;
+        var dialogs = new AvaloniaContentDialogService(() => window);
+        window = new MainWindow { DataContext = new MainWindowViewModel(dialogs) };
+        return window;
     }
 
     private static void DisableAvaloniaDataAnnotationValidation()

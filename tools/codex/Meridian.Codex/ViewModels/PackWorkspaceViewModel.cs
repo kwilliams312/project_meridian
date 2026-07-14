@@ -30,10 +30,23 @@ public partial class PackWorkspaceViewModel : ViewModelBase, IDisposable
     public bool IsWorkspaceOpen => _workspace is not null;
     public bool IsDirty => _workspace?.IsDirty ?? _isDraftDirty;
     public bool HasExternalConflict => _workspace?.HasExternalConflict ?? false;
-    public bool CanSave => _workspace is not null && !HasExternalConflict && Diagnostics.All(d => d.Severity != DiagnosticSeverity.Error);
+    public bool CanSave => _workspace is not null && IsDirty && !HasExternalConflict
+        && Diagnostics.All(d => d.Severity != DiagnosticSeverity.Error);
     public string DisplayPath => PathPresentation.Compact(WorkspacePath);
     public bool HasWorkspacePath => !string.IsNullOrWhiteSpace(WorkspacePath);
     public bool ShowManualWorkspacePath => !_dialogs.CanPickFolders;
+    public string SaveStateDescription
+    {
+        get
+        {
+            if (_workspace is null) return "Open or create a pack to save changes.";
+            if (HasExternalConflict) return "Resolve the external pack.yaml conflict before saving.";
+            var errorCount = Diagnostics.Count(d => d.Severity == DiagnosticSeverity.Error);
+            if (errorCount > 0)
+                return $"Fix {errorCount} validation error{(errorCount == 1 ? "" : "s")} before saving.";
+            return IsDirty ? "Unsaved changes are ready to save." : "No unsaved changes.";
+        }
+    }
     public string WorkspaceHeader => _workspace is null ? "No pack open" : $"{Manifest.Namespace} · {Manifest.Version}";
     public string AggregateStatus => _workspace?.GetAggregateStatus().Summary ?? "Validation: not run · Build: not run";
 
@@ -151,7 +164,10 @@ public partial class PackWorkspaceViewModel : ViewModelBase, IDisposable
     [RelayCommand(CanExecute = nameof(CanSave))]
     private void Save()
     {
-        if (_workspace is null) return;
+        // Keep programmatic execution and keyboard accelerators subject to the
+        // same gate as the button. RelayCommand consumers normally consult
+        // CanExecute, but this guard also makes direct Execute calls fail safe.
+        if (_workspace is null || !CanSave) return;
         try
         {
             UnsubscribeManifest(_workspace.Manifest.Data);
@@ -266,6 +282,7 @@ public partial class PackWorkspaceViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(IsDirty));
         OnPropertyChanged(nameof(HasExternalConflict));
         OnPropertyChanged(nameof(CanSave));
+        OnPropertyChanged(nameof(SaveStateDescription));
         OnPropertyChanged(nameof(WorkspaceHeader));
         OnPropertyChanged(nameof(AggregateStatus));
         OnPropertyChanged(nameof(NamespaceError));
