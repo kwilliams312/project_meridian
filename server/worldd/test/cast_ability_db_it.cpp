@@ -10,7 +10,8 @@
 // reason=UNKNOWN_ABILITY. So a client casting an authored id got UNKNOWN_ABILITY for
 // EVERY cast. Abilities were the one content type #390's DB content-load never
 // covered (it loaded npc/quest/loot/vendor), even though the world DB HAS the
-// `ability` / `ability_effect` / `ability_effect_stat_mod` tables and mcc emits them.
+// `ability` table (carrying the effects[] recipe in effects_json, SP2.1) and mcc
+// emits it.
 //
 // THE FIX (#481): load_db_ability_store() reads that authored catalog into an
 // AbilityStore keyed by the real ids, installed on the live cast path at boot
@@ -67,10 +68,11 @@ const char* env(const char* k) { return std::getenv(k); }
 // ENUM sets mirror schema/sql/world/30_ability.sql. DROP-then-CREATE so a rerun is
 // clean.
 void create_tables(db::Connection& c) {
-    c.execute("DROP TABLE IF EXISTS ability_effect_stat_mod");
-    c.execute("DROP TABLE IF EXISTS ability_effect");
     c.execute("DROP TABLE IF EXISTS ability");
 
+    // SP2.1 (#691): the effect palette rides in the generic effects_json column;
+    // the per-kind ability_effect / ability_effect_stat_mod child tables are gone.
+    // Columns mirror schema/sql/world/30_ability.sql.
     c.execute(
         "CREATE TABLE ability ("
         "  id INT UNSIGNED NOT NULL, name VARCHAR(80) NOT NULL,"
@@ -80,81 +82,44 @@ void create_tables(db::Connection& c) {
         "  cast_time_ms INT UNSIGNED NULL DEFAULT 0, cast_channel_ms INT UNSIGNED NULL,"
         "  cooldown_ms INT UNSIGNED NOT NULL DEFAULT 0, triggers_gcd BOOLEAN NOT NULL DEFAULT TRUE,"
         "  resource_type ENUM('mana','rage','energy') NULL, resource_amount INT UNSIGNED NULL,"
+        "  effects_json JSON NOT NULL,"
         "  PRIMARY KEY (id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
-    c.execute(
-        "CREATE TABLE ability_effect ("
-        "  ability_id INT UNSIGNED NOT NULL, ordinal SMALLINT UNSIGNED NOT NULL,"
-        "  kind ENUM('damage','heal','aura','threat') NOT NULL,"
-        "  amount_min INT UNSIGNED NULL, amount_max INT UNSIGNED NULL, coefficient FLOAT NULL,"
-        "  threat_amount INT NULL, duration_ms INT UNSIGNED NULL,"
-        "  max_stacks SMALLINT UNSIGNED NULL DEFAULT 1,"
-        "  periodic_kind ENUM('damage','heal') NULL,"
-        "  periodic_amount_min INT UNSIGNED NULL, periodic_amount_max INT UNSIGNED NULL,"
-        "  periodic_tick_ms INT UNSIGNED NULL,"
-        "  PRIMARY KEY (ability_id, ordinal)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
-    c.execute(
-        "CREATE TABLE ability_effect_stat_mod ("
-        "  ability_id INT UNSIGNED NOT NULL, ordinal SMALLINT UNSIGNED NOT NULL,"
-        "  stat ENUM('strength','agility','stamina','intellect','spirit') NOT NULL,"
-        "  amount INT NOT NULL,"
-        "  PRIMARY KEY (ability_id, ordinal, stat)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 }
 
 void drop_tables(db::Connection& c) {
-    c.execute("DROP TABLE IF EXISTS ability_effect_stat_mod");
-    c.execute("DROP TABLE IF EXISTS ability_effect");
     c.execute("DROP TABLE IF EXISTS ability");
 }
 
 // Seed the authored ids 1 (minor_healing) + 2 (pickaxe_slam) EXACTLY as mcc emit-sql
 // produces them for content/core (tools/mcc/golden/world.sql), plus a synthetic buff
-// (id 100) whose aura carries a stat_mod to exercise the stat_mod loader.
+// (id 100) whose aura carries a stat_mod to exercise the stat_mod loader. Effects are
+// the canonical effects_json payload mcc emits (keys sorted; intRange as {min,max}).
 void seed_fixture(db::Connection& c) {
     // ability 1 — Minor Healing: holy, self, instant (cast 0), NO GCD, no resource,
-    // 60 s cooldown. ability 2 — Pickaxe Slam: physical, enemy, 5 m, instant, GCD,
-    // 20 energy, 10 s cooldown.
+    // 60 s cooldown; effects: heal 40-60.
     c.execute(
         "INSERT INTO ability (id, name, school, target, range_m, cast_time_ms, "
-        "cast_channel_ms, cooldown_ms, triggers_gcd, resource_type, resource_amount) "
-        "VALUES (1, 'Minor Healing', 'holy', 'self', 0, 0, NULL, 60000, FALSE, NULL, NULL)");
+        "cast_channel_ms, cooldown_ms, triggers_gcd, resource_type, resource_amount, effects_json) "
+        "VALUES (1, 'Minor Healing', 'holy', 'self', 0, 0, NULL, 60000, FALSE, NULL, NULL,"
+        "        '[{\"amount\":{\"max\":60,\"min\":40},\"kind\":\"heal\"}]')");
+    // ability 2 — Pickaxe Slam: physical, enemy, 5 m, instant, GCD, 20 energy, 10 s
+    // cooldown; effects: damage 8-13 then a bleed aura (9 s, periodic damage 2-3 @ 3 s).
     c.execute(
         "INSERT INTO ability (id, name, school, target, range_m, cast_time_ms, "
-        "cast_channel_ms, cooldown_ms, triggers_gcd, resource_type, resource_amount) "
-        "VALUES (2, 'Pickaxe Slam', 'physical', 'enemy', 5, 0, NULL, 10000, TRUE, 'energy', 20)");
-    // Synthetic buff (clearly not authored content — high id) with an aura stat_mod,
-    // to cover the stat_mod loader branch the authored abilities don't exercise.
+        "cast_channel_ms, cooldown_ms, triggers_gcd, resource_type, resource_amount, effects_json) "
+        "VALUES (2, 'Pickaxe Slam', 'physical', 'enemy', 5, 0, NULL, 10000, TRUE, 'energy', 20,"
+        "        '[{\"amount\":{\"max\":13,\"min\":8},\"kind\":\"damage\"},"
+        "{\"duration_ms\":9000,\"kind\":\"aura\",\"periodic\":{\"amount\":{\"max\":3,\"min\":2},"
+        "\"kind\":\"damage\",\"tick_ms\":3000}}]')");
+    // Synthetic buff (clearly not authored content — high id) with a pure stat-mod
+    // aura (30 s, 2 stacks, no periodic) carrying +7 stamina — covers the stat_mod
+    // loader branch the authored abilities don't exercise.
     c.execute(
         "INSERT INTO ability (id, name, school, target, range_m, cast_time_ms, "
-        "cast_channel_ms, cooldown_ms, triggers_gcd, resource_type, resource_amount) "
-        "VALUES (100, 'Test Vigor', 'nature', 'friendly', 30, 1500, NULL, 0, TRUE, 'mana', 15)");
-
-    // effects: 1 -> heal 40-60; 2 -> damage 8-13 then a bleed aura (9 s, periodic
-    // damage 2-3 every 3 s); 100 -> a pure stat-mod aura (30 s, no periodic tick).
-    c.execute(
-        "INSERT INTO ability_effect (ability_id, ordinal, kind, amount_min, amount_max, "
-        "coefficient, threat_amount, duration_ms, max_stacks, periodic_kind, "
-        "periodic_amount_min, periodic_amount_max, periodic_tick_ms) "
-        "VALUES (1, 0, 'heal', 40, 60, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)");
-    c.execute(
-        "INSERT INTO ability_effect (ability_id, ordinal, kind, amount_min, amount_max, "
-        "coefficient, threat_amount, duration_ms, max_stacks, periodic_kind, "
-        "periodic_amount_min, periodic_amount_max, periodic_tick_ms) "
-        "VALUES (2, 0, 'damage', 8, 13, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)");
-    c.execute(
-        "INSERT INTO ability_effect (ability_id, ordinal, kind, amount_min, amount_max, "
-        "coefficient, threat_amount, duration_ms, max_stacks, periodic_kind, "
-        "periodic_amount_min, periodic_amount_max, periodic_tick_ms) "
-        "VALUES (2, 1, 'aura', NULL, NULL, NULL, NULL, 9000, NULL, 'damage', 2, 3, 3000)");
-    c.execute(
-        "INSERT INTO ability_effect (ability_id, ordinal, kind, amount_min, amount_max, "
-        "coefficient, threat_amount, duration_ms, max_stacks, periodic_kind, "
-        "periodic_amount_min, periodic_amount_max, periodic_tick_ms) "
-        "VALUES (100, 0, 'aura', NULL, NULL, NULL, NULL, 30000, 2, NULL, NULL, NULL, NULL)");
-
-    // stat_mod for the synthetic buff's aura: +7 stamina.
-    c.execute(
-        "INSERT INTO ability_effect_stat_mod (ability_id, ordinal, stat, amount) "
-        "VALUES (100, 0, 'stamina', 7)");
+        "cast_channel_ms, cooldown_ms, triggers_gcd, resource_type, resource_amount, effects_json) "
+        "VALUES (100, 'Test Vigor', 'nature', 'friendly', 30, 1500, NULL, 0, TRUE, 'mana', 15,"
+        "        '[{\"duration_ms\":30000,\"kind\":\"aura\",\"max_stacks\":2,"
+        "\"stat_mods\":[{\"amount\":7,\"stat\":\"stamina\"}]}]')");
 }
 
 }  // namespace

@@ -219,8 +219,15 @@ void test_emit_wellformed() {
            "ability content INSERT present");
     report(sql.find("INSERT INTO item_template") != std::string::npos,
            "item_template content INSERT present");
-    report(sql.find("ability_effect") != std::string::npos,
-           "child table (ability_effect) INSERT present");
+    // SP2.1: effects[] rides as a generic canonical-JSON payload on the ability
+    // row (the per-kind ability_effect child tables are retired). The zap fixture
+    // has one damage effect (amount 10-20); its effects_json must be the canonical
+    // (keys sorted) JSON array, embedded as a single-quoted SQL string literal.
+    report(sql.find("ability_effect") == std::string::npos,
+           "retired child tables (ability_effect*) no longer emitted");
+    report(sql.find(R"('[{"amount":{"max":20,"min":10},"kind":"damage"}]')") !=
+               std::string::npos,
+           "ability effects_json is canonical (keys sorted) JSON on the ability row");
 
     // The manifest tuple: (pack_namespace, pack_version, id_band, content_hash,
     // schema_version, mcc_version, built_at).

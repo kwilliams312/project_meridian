@@ -89,6 +89,121 @@ std::string fmt_double(double v) {
     return ss.str();
 }
 
+// ---- Canonical JSON emission (ability effects_json, SP2.1) ------------------
+//
+// The `ability.effects_json` column carries the ordered `effects[]` recipe as a
+// generic canonical-JSON payload (SP2 design §2.1) instead of exploding it into
+// per-kind relational rows. This is the ONE place the effect palette is
+// transported to the world DB, so a NEW effect kind (dot/hot/buff/…) needs no
+// emit-sql change — the transcoder below copies whatever fields the validated
+// YAML carries, verbatim, into JSON.
+//
+// CANONICAL FORM (deterministic so content_hash/golden stay byte-stable):
+//   * object keys are emitted in ascending lexicographic order (recursively),
+//   * arrays keep source order (the `effects[]` recipe IS ordered),
+//   * numbers use the same shortest-round-trippable formatting as the SQL
+//     scalars (integers verbatim; reals via fmt_double), and
+//   * strings are RFC-8259 escaped.
+// Object-key ordering is a pure function of the (validated) content, matching
+// mcc's existing determinism discipline (the pack-hash canonicalizer), so two
+// builds of the same source emit byte-identical JSON.
+
+// Escape a string for a double-quoted JSON literal (RFC 8259). Mirrors
+// chunk_emit.cpp's json_quote so every mcc JSON artifact shares one discipline.
+std::string json_quote(const std::string& s) {
+    std::string out = "\"";
+    for (const char c : s) {
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    static const char* hex = "0123456789abcdef";
+                    out += "\\u00";
+                    out += hex[(c >> 4) & 0xF];
+                    out += hex[c & 0xF];
+                } else {
+                    out += c;
+                }
+        }
+    }
+    out += "\"";
+    return out;
+}
+
+// Classify + render a plain YAML scalar as a JSON value. The effect palette's
+// scalars are unambiguous by schema (enums are words, refs carry `:`/`.`, and
+// every numeric field is a bare number), so the classifier is: JSON `true`/
+// `false`/`null` literals first, then an integer (optional `-`, all digits) as a
+// verbatim decimal, then a real via fmt_double, else a quoted string. Booleans
+// don't appear inside effects[] today but are handled for completeness.
+std::string json_scalar(const std::string& s) {
+    if (s == "true" || s == "false" || s == "null") return s;
+    if (s == "~" || s.empty()) return "null";  // YAML null spellings
+    // Integer: -?[0-9]+ (non-empty digit run). Rendered verbatim (normalised —
+    // no leading '+'/zeros occur in validated content).
+    bool is_int = true;
+    std::size_t i = (s[0] == '-') ? 1 : 0;
+    if (i >= s.size()) is_int = false;
+    for (; i < s.size() && is_int; ++i) {
+        if (s[i] < '0' || s[i] > '9') is_int = false;
+    }
+    if (is_int) return s;
+    // Real (has a '.'/'e'): re-emit via fmt_double for a stable decimal. If it
+    // is not actually a number, treat it as a string.
+    const bool looks_real = s.find_first_of(".eE") != std::string::npos &&
+                            s.find_first_not_of("+-.eE0123456789") == std::string::npos;
+    if (looks_real) {
+        try {
+            return fmt_double(std::stod(s));
+        } catch (...) {
+            // fall through to string
+        }
+    }
+    return json_quote(s);
+}
+
+// Recursively transcode a validated YAML node to canonical JSON (keys sorted).
+void yaml_to_canonical_json(const YAML::Node& n, std::string& out) {
+    if (n.IsMap()) {
+        std::vector<std::string> keys;
+        keys.reserve(n.size());
+        for (const auto& kv : n) keys.push_back(kv.first.Scalar());
+        std::sort(keys.begin(), keys.end());
+        out += '{';
+        for (std::size_t k = 0; k < keys.size(); ++k) {
+            if (k) out += ',';
+            out += json_quote(keys[k]);
+            out += ':';
+            yaml_to_canonical_json(n[keys[k]], out);
+        }
+        out += '}';
+    } else if (n.IsSequence()) {
+        out += '[';
+        for (std::size_t i = 0; i < n.size(); ++i) {
+            if (i) out += ',';
+            yaml_to_canonical_json(n[i], out);
+        }
+        out += ']';
+    } else if (n.IsNull() || !n.IsDefined()) {
+        out += "null";
+    } else {
+        out += json_scalar(n.Scalar());
+    }
+}
+
+// Serialize an `effects[]` sequence node to a canonical JSON array string.
+std::string effects_to_json(const YAML::Node& effects) {
+    std::string out;
+    yaml_to_canonical_json(effects, out);
+    return out;
+}
+
 // ---- Value column: a single INSERT cell (NULL / number / quoted text). ------
 struct Val {
     enum Kind { Null, Raw, Text } kind = Null;
@@ -406,6 +521,14 @@ void emit_ability(std::uint32_t id, const YAML::Node& n, const std::string& ns,
     const YAML::Node res = has(n, "resource") ? n["resource"] : YAML::Node();
     const YAML::Node av = has(n, "audio_visual") ? n["audio_visual"] : YAML::Node();
 
+    // effects[] -> generic canonical-JSON payload (SP2.1). The FULL palette rides
+    // as data; a new effect kind needs no emit-sql change. The schema requires
+    // >=1 effect, so effects_json is always a non-empty JSON array; the defensive
+    // "[]" fallback only guards a malformed-model call (validation is check's job).
+    const std::string effects_json =
+        (has(n, "effects") && n["effects"].IsSequence()) ? effects_to_json(n["effects"])
+                                                         : std::string("[]");
+
     r.cells = {
         Val::u(id),
         Val::str(as_str(n["name"])),
@@ -424,44 +547,8 @@ void emit_ability(std::uint32_t id, const YAML::Node& n, const std::string& ns,
         cx.ref_cell(av, "cast_sfx", ns, file),
         cx.ref_cell(av, "impact_vfx", ns, file),
         cx.ref_cell(av, "impact_sfx", ns, file),
+        Val::str(effects_json),
     };
-
-    // effects[] -> ability_effect (oneOf by kind)
-    if (has(n, "effects") && n["effects"].IsSequence()) {
-        std::uint16_t ord = 0;
-        for (const auto& e : n["effects"]) {
-            const std::string kind = as_str(e["kind"]);
-            const IntRange amount = int_range(e, "amount");
-            const YAML::Node periodic = has(e, "periodic") ? e["periodic"] : YAML::Node();
-            const IntRange pamount = int_range(periodic, "amount");
-            Row& er = new_row(cx.tbl("ability_effect"), id);
-            er.sort_key2 = std::to_string(ord);
-            er.cells = {
-                Val::u(id), Val::num(ord), Val::str(kind),
-                amount.present ? Val::num(amount.min) : Val::null(),
-                amount.present ? Val::num(amount.max) : Val::null(),
-                has(e, "coefficient") ? Val::raw(fmt_double(as_double(e["coefficient"]))) : Val::null(),
-                has(e, "threat_amount") ? Val::num(as_int(e["threat_amount"])) : Val::null(),
-                has(e, "duration_ms") ? Val::num(as_int(e["duration_ms"])) : Val::null(),
-                has(e, "max_stacks") ? Val::num(as_int(e["max_stacks"])) : Val::null(),
-                has(periodic, "kind") ? Val::str(as_str(periodic["kind"])) : Val::null(),
-                pamount.present ? Val::num(pamount.min) : Val::null(),
-                pamount.present ? Val::num(pamount.max) : Val::null(),
-                has(periodic, "tick_ms") ? Val::num(as_int(periodic["tick_ms"])) : Val::null(),
-            };
-
-            // aura.stat_mods[] -> ability_effect_stat_mod
-            if (has(e, "stat_mods") && e["stat_mods"].IsSequence()) {
-                for (const auto& sm : e["stat_mods"]) {
-                    Row& smr = new_row(cx.tbl("ability_effect_stat_mod"), id);
-                    smr.sort_key2 = std::to_string(ord) + "|" + as_str(sm["stat"]);
-                    smr.cells = {Val::u(id), Val::num(ord), Val::str(as_str(sm["stat"])),
-                                 Val::num(as_int(sm["amount"]))};
-                }
-            }
-            ++ord;
-        }
-    }
 }
 
 void emit_quest(std::uint32_t id, const YAML::Node& n, const std::string& ns,
@@ -754,10 +841,7 @@ std::map<std::string, Table> make_tables() {
     add("item_effect_on_equip", {"item_id","ordinal","ability_id"});
     add("ability", {"id","name","description","school","target","range_m","cast_time_ms","cast_channel_ms",
         "cooldown_ms","triggers_gcd","resource_type","resource_amount","av_cast_anim","av_cast_vfx_id",
-        "av_cast_sfx_id","av_impact_vfx_id","av_impact_sfx_id"});
-    add("ability_effect", {"ability_id","ordinal","kind","amount_min","amount_max","coefficient","threat_amount",
-        "duration_ms","max_stacks","periodic_kind","periodic_amount_min","periodic_amount_max","periodic_tick_ms"});
-    add("ability_effect_stat_mod", {"ability_id","ordinal","stat","amount"});
+        "av_cast_sfx_id","av_impact_vfx_id","av_impact_sfx_id","effects_json"});
     add("quest_template", {"id","name","summary","offer_text","completion_text","level","required_level",
         "zone_ref_id","giver_npc_id","turn_in_npc_id","reward_xp","reward_money"});
     add("quest_objective", {"quest_id","ordinal","type","target_npc_id","item_id","to_npc_id","zone_ref_id","poi","count"});
@@ -786,7 +870,7 @@ std::map<std::string, Table> make_tables() {
 const std::vector<std::string> kEmitOrder = {
     "npc_template", "npc_ability", "npc_trainer", "npc_trainer_ability",
     "item_template", "item_stat", "item_effect_on_equip",
-    "ability", "ability_effect", "ability_effect_stat_mod",
+    "ability",
     "quest_template", "quest_objective", "quest_prereq", "quest_reward",
     "loot_table", "loot_group", "loot_entry",
     "vendor_inventory", "vendor_inventory_item", "vendor_inventory_buys",
