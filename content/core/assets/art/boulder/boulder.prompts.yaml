@@ -1,0 +1,10 @@
+task_id: 019f6152-80bb-73cb-95b4-ca99e4b29f2d
+model_version: meshy-5
+preview_task_id: 019f6150-9f99-73e6-9d54-3a95f04307f9
+request:
+  mode: preview
+  prompt: a chibi smooth mossy boulder, chibi, colored rounded pill and clay toy aesthetic,
+    bright saturated colors, big cute and friendly, clean readable silhouette, game-ready,
+    matching a whimsical fairytale pill-mascot village
+  ai_model: meshy-5
+  target_polycount: 2400

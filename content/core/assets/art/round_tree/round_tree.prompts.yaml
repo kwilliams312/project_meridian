@@ -1,0 +1,10 @@
+task_id: 019f614a-3891-77ed-9265-5ba9e5e7eba4
+model_version: meshy-5
+preview_task_id: 019f6149-4dad-74c5-a463-29fb6e8ee3c8
+request:
+  mode: preview
+  prompt: a chibi round bushy storybook tree, chibi, colored rounded pill and clay
+    toy aesthetic, bright saturated colors, big cute and friendly, clean readable
+    silhouette, game-ready, matching a whimsical fairytale pill-mascot village
+  ai_model: meshy-5
+  target_polycount: 16000

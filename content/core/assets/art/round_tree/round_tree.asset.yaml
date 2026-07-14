@@ -1,0 +1,16 @@
+schema: meridian/asset@1
+id: core:art.round_tree
+class: foliage
+source: assets/art/round_tree/sm_round_tree.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors:
+  - meridian-contributors
+  origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/019f614a-3891-77ed-9265-5ba9e5e7eba4
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: round_tree.prompts.yaml
+budget:
+  lod0_tris: 16674
+restyle_status: pending
