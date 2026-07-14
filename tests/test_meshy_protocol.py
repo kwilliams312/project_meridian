@@ -705,36 +705,29 @@ def test_repeated_short_writes_preserve_distinct_same_name_event_deliveries():
 
 
 @pytest.mark.parametrize("failure", ["keyboard", "error"])
-def test_completed_delivery_resumes_after_short_write_prefix_and_failure(
-    failure, tmp_path, monkeypatch
+@pytest.mark.parametrize("target_event", ["preview.submitted", "completed"])
+def test_raised_write_with_accepted_prefix_poisons_stdout_and_exits_one(
+    failure, target_event, tmp_path, monkeypatch, capsys
 ):
-    class ShortWriteThenFailStream:
+    class PrefixThenFailStream:
         def __init__(self):
             self.output = ""
-            self.current_line = ""
-            self.fail_next = False
             self.failed = False
+            self.output_at_failure = None
 
         def write(self, value):
-            if self.fail_next and not self.failed:
+            if not self.failed and f'"event":"{target_event}"' in value:
+                self.output += value[:11]
+                self.output_at_failure = self.output
                 self.failed = True
                 if failure == "keyboard":
                     raise KeyboardInterrupt
                 raise OSError("injected stream write failure")
-            count = min(7, len(value))
-            prefix = value[:count]
-            self.output += prefix
-            self.current_line += prefix
-            if (
-                not self.failed
-                and '"event":"completed"' in self.current_line
-                and count < len(value)
-            ):
-                self.fail_next = True
-            return count
+            self.output += value
+            return len(value)
 
         def flush(self):
-            self.current_line = ""
+            pass
 
     glb = _make_glb(tmp_path / "source.glb", triangle_count=2)
     handler, _calls = _text_to_3d_handler(glb_bytes=glb.read_bytes())
@@ -749,18 +742,98 @@ def test_completed_delivery_resumes_after_short_write_prefix_and_failure(
         ),
     )
     monkeypatch.setenv("MESHY_API_KEY", "fake-key")
-    stream = ShortWriteThenFailStream()
+    stream = PrefixThenFailStream()
     monkeypatch.setattr(meshy_main.sys, "stdout", stream)
 
-    assert meshy_main.main(_base_args(tmp_path)) == 0
+    assert meshy_main.main(_base_args(tmp_path)) == 1
     assert stream.failed
+    assert stream.output == stream.output_at_failure
+    assert not stream.output.endswith("\n")
+    complete_events = _events(stream.output.rsplit("\n", 1)[0] + "\n")
+    assert not any(
+        event["event"] in {"completed", "cancelled", "error"}
+        for event in complete_events
+    )
+    captured = capsys.readouterr()
+    assert captured.err == (
+        "error: Meshy JSON event sink failed; refusing further stdout output\n"
+    )
+    asset_dir = tmp_path / "content/core/assets/art/protocol_marker"
+    assert asset_dir.is_dir() is (target_event == "completed")
+
+
+@pytest.mark.parametrize("invalid_result", [None, True])
+def test_emitter_rejects_invalid_text_sink_write_results_and_stays_poisoned(
+    invalid_result,
+):
+    class InvalidResultStream:
+        def __init__(self):
+            self.write_calls = 0
+
+        def write(self, _value):
+            self.write_calls += 1
+            return invalid_result
+
+        def flush(self):
+            raise AssertionError("an invalid write result must not be flushed")
+
+    stream = InvalidResultStream()
+    emitter = protocol.EventEmitter(stream=stream)
+
+    with pytest.raises(protocol.ProtocolSinkContractError):
+        emitter.emit("validation.started", mode="text", model_version="meshy-5")
+    assert emitter.sink_poisoned
+    with pytest.raises(protocol.ProtocolSinkError):
+        emitter.emit("error", error_code="internal_error", message="must not write")
+    assert stream.write_calls == 1
+
+
+@pytest.mark.parametrize("invalid_result", [None, True])
+def test_invalid_completed_write_result_exits_one_without_more_stdout(
+    invalid_result, tmp_path, monkeypatch, capsys
+):
+    class InvalidCompletedStream:
+        def __init__(self):
+            self.output = ""
+            self.failed = False
+            self.output_at_failure = None
+
+        def write(self, value):
+            if not self.failed and '"event":"completed"' in value:
+                self.failed = True
+                self.output_at_failure = self.output
+                return invalid_result
+            self.output += value
+            return len(value)
+
+        def flush(self):
+            pass
+
+    glb = _make_glb(tmp_path / "source.glb", triangle_count=2)
+    handler, _calls = _text_to_3d_handler(glb_bytes=glb.read_bytes())
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        meshy_main,
+        "_new_client",
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+            client_mod.MeshyClient(
+                api_key, model_version=model_version, transport=transport
+            )
+        ),
+    )
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    stream = InvalidCompletedStream()
+    monkeypatch.setattr(meshy_main.sys, "stdout", stream)
+
+    assert meshy_main.main(_base_args(tmp_path)) == 1
+    assert stream.output == stream.output_at_failure
     events = _events(stream.output)
-    terminals = [
-        event
-        for event in events
-        if event["event"] in {"completed", "cancelled", "error"}
-    ]
-    assert [event["event"] for event in terminals] == ["completed"]
+    assert not any(
+        event["event"] in {"completed", "cancelled", "error"} for event in events
+    )
+    assert capsys.readouterr().err == (
+        "error: Meshy JSON event sink failed; refusing further stdout output\n"
+    )
     assert (tmp_path / "content/core/assets/art/protocol_marker").is_dir()
 
 

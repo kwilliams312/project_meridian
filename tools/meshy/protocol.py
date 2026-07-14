@@ -39,6 +39,18 @@ EVENT_NAMES = (
 _BEARER_RE = re.compile(r"(?i)(authorization\s*:\s*)?bearer\s+[^\s,;\"']+")
 
 
+class ProtocolSinkError(RuntimeError):
+    """Base error for a JSON event sink that can no longer be used safely."""
+
+
+class ProtocolSinkContractError(ProtocolSinkError):
+    """The sink violated the supported ``TextIO.write`` return contract."""
+
+
+class ProtocolSinkAmbiguousWriteError(ProtocolSinkError):
+    """A write raised, leaving its accepted character count unknowable."""
+
+
 @dataclass
 class _Delivery:
     """Resumable delivery state for one exact serialized event document."""
@@ -65,6 +77,13 @@ class EventEmitter:
         self._enabled = enabled
         self._sequence = 0
         self._deliveries: list[_Delivery] = []
+        self._sink_poisoned = False
+
+    @property
+    def sink_poisoned(self) -> bool:
+        """Whether stdout delivery failed with an unknowable safe continuation."""
+
+        return self._sink_poisoned
 
     def build(self, event: str, **fields: Any) -> dict[str, Any]:
         if event not in EVENT_NAMES:
@@ -80,6 +99,10 @@ class EventEmitter:
         return self.redact(document)
 
     def emit(self, event: str, **fields: Any) -> dict[str, Any]:
+        if self._enabled and self._sink_poisoned:
+            raise ProtocolSinkError(
+                "Meshy JSON event sink is poisoned; refusing further output"
+            )
         document = self.build(event, **fields)
         if self._enabled:
             line = json.dumps(document, separators=(",", ":"), sort_keys=True) + "\n"
@@ -107,6 +130,11 @@ class EventEmitter:
     def resume(self, event: str) -> dict[str, Any]:
         """Resume the latest unflushed delivery for ``event`` idempotently."""
 
+        if self._enabled and self._sink_poisoned:
+            raise ProtocolSinkError(
+                "Meshy JSON event sink is poisoned; refusing further output"
+            )
+
         for delivery in reversed(self._deliveries):
             if delivery.event == event:
                 self._advance(delivery)
@@ -123,12 +151,26 @@ class EventEmitter:
 
         while delivery.offset < len(delivery.line):
             remaining = delivery.line[delivery.offset :]
-            written = self._stream.write(remaining)
-            count = len(remaining) if written is None else written
-            if not isinstance(count, int) or count <= 0 or count > len(remaining):
-                raise OSError(
-                    "invalid Meshy protocol write count "
-                    f"{count!r} for {len(remaining)} remaining characters"
+            try:
+                count = self._stream.write(remaining)
+            except BaseException as exc:
+                # A custom sink may accept a prefix and raise in the same call.
+                # Its side effects are unobservable, so no continuation offset
+                # can be chosen without risking duplicate or malformed JSON.
+                self._sink_poisoned = True
+                raise ProtocolSinkAmbiguousWriteError(
+                    "Meshy JSON event sink write failed with an indeterminate "
+                    "accepted offset"
+                ) from exc
+            if (
+                isinstance(count, bool)
+                or not isinstance(count, int)
+                or count <= 0
+                or count > len(remaining)
+            ):
+                self._sink_poisoned = True
+                raise ProtocolSinkContractError(
+                    "Meshy JSON event sink returned an invalid write count"
                 )
             delivery.offset += count
         if not delivery.flushed:

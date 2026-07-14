@@ -107,6 +107,17 @@ Client teardown occurs before commit: if `close()` fails, publication is rolled
 back and the job emits one `internal_error` with exit `1`, never a `completed`
 event followed by an error.
 
+JSON event delivery supports blocking text sinks whose `write(str)` method
+returns the exact positive number of characters accepted, including valid short
+writes. Returning `None`, a boolean, zero, a non-integer, or an oversized count
+violates that contract. If `write()` raises, a custom sink may already have
+accepted an unreported prefix, so its safe continuation offset is unknowable.
+The emitter then fails closed: it poisons the sink, writes nothing further to
+stdout, prints only a deterministic redacted diagnostic to stderr, and exits
+`1`. Consequently, an exact terminal JSON document cannot be guaranteed when a
+sink violates or obscures this contract. A failure from `flush()` remains
+resumable because the full line's accepted character count is already known.
+
 | Exit | Meaning | Terminal JSON event |
 |---:|---|---|
 | `0` | Asset landed successfully | `completed` |

@@ -54,6 +54,16 @@ from . import mapping
 from . import protocol
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_JSON_SINK_FAILURE_MESSAGE = (
+    "error: Meshy JSON event sink failed; refusing further stdout output"
+)
+
+
+def _report_json_sink_failure() -> int:
+    """Report a poisoned stdout sink without reflecting dynamic data."""
+
+    print(_JSON_SINK_FAILURE_MESSAGE, file=sys.stderr)
+    return 1
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -656,6 +666,8 @@ def cmd_generate(args: argparse.Namespace) -> int:
     except intake.IntakeError as exc:
         return refuse(str(exc))
     except KeyboardInterrupt:
+        if events.sink_poisoned:
+            return _report_json_sink_failure()
         if reservation is not None and reservation.is_committed():
             reservation.finish_committed()
             return completed()
@@ -683,6 +695,8 @@ def cmd_generate(args: argparse.Namespace) -> int:
             print(f"error: {events.redact(str(exc))}", file=sys.stderr)
         return 1
     except Exception as exc:  # noqa: BLE001 — machine protocol must terminate cleanly
+        if events.sink_poisoned:
+            return _report_json_sink_failure()
         if reservation is not None and reservation.is_committed():
             reservation.finish_committed()
             return completed()
@@ -886,18 +900,25 @@ def main(argv: list[str] | None = None) -> int:
             if exc.code == 0:
                 return 0
             emitter = protocol.EventEmitter(secret=os.environ.get("MESHY_API_KEY"))
-            emitter.emit(
-                "error",
-                error_code="invalid_request",
-                message=parse_stderr.getvalue().strip() or "invalid command arguments",
-            )
+            try:
+                emitter.emit(
+                    "error",
+                    error_code="invalid_request",
+                    message=parse_stderr.getvalue().strip()
+                    or "invalid command arguments",
+                )
+            except protocol.ProtocolSinkError:
+                return _report_json_sink_failure()
             return 2
     else:
         args = parser.parse_args(effective_argv)
-    if args.command == "generate":
-        return cmd_generate(args)
-    if args.command == "convert-rig":
-        return cmd_convert_rig(args)
+    try:
+        if args.command == "generate":
+            return cmd_generate(args)
+        if args.command == "convert-rig":
+            return cmd_convert_rig(args)
+    except protocol.ProtocolSinkError:
+        return _report_json_sink_failure()
     parser.error(f"unknown command: {args.command}")
     return 2
 
