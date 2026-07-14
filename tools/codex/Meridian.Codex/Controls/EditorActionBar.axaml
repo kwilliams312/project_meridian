@@ -1,0 +1,27 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:Meridian.Codex.Controls"
+             x:Class="Meridian.Codex.Controls.EditorActionBar"
+             x:Name="ActionBar"
+             x:DataType="controls:EditorActionBar">
+  <Border Padding="16,12"
+          BorderThickness="0,1,0,0"
+          BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+          Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}">
+    <Grid ColumnDefinitions="*,Auto">
+      <TextBlock Text="{Binding StateDescription, ElementName=ActionBar}"
+                 VerticalAlignment="Center"
+                 TextWrapping="Wrap"
+                 AutomationProperties.Name="Save availability" />
+      <Button Grid.Column="1"
+              Margin="16,0,0,0"
+              MinWidth="120"
+              HorizontalAlignment="Right"
+              Content="{Binding ActionText, ElementName=ActionBar}"
+              Command="{Binding ActionCommand, ElementName=ActionBar}"
+              IsEnabled="{Binding IsActionEnabled, ElementName=ActionBar}"
+              AutomationProperties.HelpText="{Binding StateDescription, ElementName=ActionBar}"
+              AutomationProperties.AutomationId="EditorPrimaryAction" />
+    </Grid>
+  </Border>
+</UserControl>
