@@ -29,7 +29,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import httpx
 
@@ -62,11 +62,17 @@ class MeshyAPIError(RuntimeError):
     """A Meshy API call returned an error (non-2xx, or a terminal-but-failed task)."""
 
     def __init__(
-        self, message: str, *, task_id: str | None = None, status: str | None = None
+        self,
+        message: str,
+        *,
+        task_id: str | None = None,
+        status: str | None = None,
+        status_code: int | None = None,
     ):
         super().__init__(message)
         self.task_id = task_id
         self.status = status
+        self.status_code = status_code
 
 
 class MeshyPollTimeoutError(RuntimeError):
@@ -124,6 +130,14 @@ class MeshyClient:
     ):
         if not api_key:
             raise ValueError("MeshyClient requires a non-empty api_key")
+        if (
+            not model_version
+            or model_version != model_version.strip()
+            or model_version.casefold() == "latest"
+        ):
+            raise ValueError(
+                "MeshyClient requires a pinned model version; 'latest' is refused"
+            )
         self.model_version = model_version
         self._client = httpx.Client(
             base_url=base_url.rstrip("/"),
@@ -153,6 +167,7 @@ class MeshyClient:
         poll_timeout_s: float = DEFAULT_POLL_TIMEOUT_S,
         sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], float] = time.monotonic,
+        on_event: Callable[..., Any] | None = None,
     ) -> TaskHandle:
         """Run the preview stage to completion, then submit the refine stage.
 
@@ -166,6 +181,8 @@ class MeshyClient:
             "target_polycount": target_polycount,
         }
         preview_task_id = self._create_task(TEXT_TO_3D_PATH, preview_payload)
+        if on_event:
+            on_event("preview.submitted", task_id=preview_task_id, stage="preview")
         preview_status = self.poll(
             preview_task_id,
             endpoint=TEXT_TO_3D_PATH,
@@ -173,6 +190,17 @@ class MeshyClient:
             timeout_s=poll_timeout_s,
             sleep=sleep,
             now=now,
+            on_status=(
+                lambda status: on_event(
+                    "poll.progress",
+                    task_id=status.task_id,
+                    stage="preview",
+                    status=status.status,
+                    progress=status.progress,
+                )
+                if on_event
+                else None
+            ),
         )
         if not preview_status.succeeded:
             raise MeshyAPIError(
@@ -188,6 +216,8 @@ class MeshyClient:
             "enable_pbr": enable_pbr,
         }
         refine_task_id = self._create_task(TEXT_TO_3D_PATH, refine_payload)
+        if on_event:
+            on_event("refine.submitted", task_id=refine_task_id, stage="refine")
         return TaskHandle(
             task_id=refine_task_id,
             mode="text_refine",
@@ -195,9 +225,13 @@ class MeshyClient:
             preview_task_id=preview_task_id,
         )
 
-    def image_to_3d(self, image_url: str) -> TaskHandle:
+    def image_to_3d(
+        self, image_url: str, *, on_event: Callable[..., Any] | None = None
+    ) -> TaskHandle:
         payload = {"image_url": image_url, "ai_model": self.model_version}
         task_id = self._create_task(IMAGE_TO_3D_PATH, payload)
+        if on_event:
+            on_event("generation.submitted", task_id=task_id, stage="image")
         return TaskHandle(task_id=task_id, mode="image", request_payload=payload)
 
     def _create_task(self, path: str, payload: dict) -> str:
@@ -220,6 +254,7 @@ class MeshyClient:
         timeout_s: float = DEFAULT_POLL_TIMEOUT_S,
         sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], float] = time.monotonic,
+        on_status: Callable[[TaskStatus], Any] | None = None,
     ) -> TaskStatus:
         """Poll a task until it reaches a terminal status, or time out.
 
@@ -252,6 +287,8 @@ class MeshyClient:
                 model_urls=data.get("model_urls") or {},
                 raw=data,
             )
+            if on_status:
+                on_status(status)
             if status.terminal:
                 return status
             if now() >= deadline:
@@ -295,5 +332,6 @@ class MeshyClient:
     def _raise_for_http_error(resp: httpx.Response) -> None:
         if resp.status_code >= 400:
             raise MeshyAPIError(
-                f"Meshy API returned {resp.status_code} for {resp.request.url}: {resp.text[:500]}"
+                f"Meshy API returned {resp.status_code} for {resp.request.url}: {resp.text[:500]}",
+                status_code=resp.status_code,
             )

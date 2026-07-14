@@ -32,6 +32,8 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import os
 import subprocess
 import sys
@@ -42,6 +44,7 @@ import yaml
 from . import client as client_mod
 from . import intake
 from . import mapping
+from . import protocol
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -109,6 +112,19 @@ def _build_parser() -> argparse.ArgumentParser:
     gen.add_argument(
         "--poll-timeout", type=float, default=client_mod.DEFAULT_POLL_TIMEOUT_S
     )
+    gen.add_argument(
+        "--model-version",
+        default=client_mod.DEFAULT_MODEL_VERSION,
+        help=(
+            "explicit Meshy model release recorded in provenance "
+            f"(default: {client_mod.DEFAULT_MODEL_VERSION}; 'latest' is refused)"
+        ),
+    )
+    gen.add_argument(
+        "--json-events",
+        action="store_true",
+        help="emit only versioned JSON-lines job events on stdout",
+    )
 
     conv = sub.add_parser(
         "convert-rig",
@@ -154,33 +170,77 @@ def _origin_url(task_id: str, endpoint: str) -> str:
     return f"{client_mod.BASE_URL}{endpoint}/{task_id}"
 
 
-def _new_client(api_key: str) -> client_mod.MeshyClient:
+def _new_client(
+    api_key: str, model_version: str = client_mod.DEFAULT_MODEL_VERSION
+) -> client_mod.MeshyClient:
     """Client construction seam — tests monkeypatch this to inject a mock transport."""
-    return client_mod.MeshyClient(api_key)
+    return client_mod.MeshyClient(api_key, model_version=model_version)
+
+
+def _remove_job_outputs(paths: intake.LandingPaths) -> None:
+    """Remove only files owned by the current job, including staged output."""
+
+    candidates = (
+        paths.glb_path,
+        paths.prompts_path,
+        paths.sidecar_path,
+        paths.glb_path.with_name(
+            f"{paths.glb_path.stem}.partial{paths.glb_path.suffix}"
+        ),
+        Path(f"{paths.prompts_path}.partial"),
+        Path(f"{paths.sidecar_path}.partial"),
+    )
+    for candidate in candidates:
+        candidate.unlink(missing_ok=True)
+    try:
+        paths.asset_dir.rmdir()
+    except OSError:
+        pass
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
-    # --- Refusal gates: BEFORE any network call (TD-09 precondition). ---
-    if not args.terms_verified:
-        print(
-            "refused: --terms-verified is required — Meshy's commercial-terms "
-            "check must be operator-confirmed before generating (TD-09)",
-            file=sys.stderr,
-        )
+    api_key = os.environ.get("MESHY_API_KEY")
+    events = protocol.EventEmitter(
+        secret=api_key, enabled=args.json_events, stream=sys.stdout
+    )
+
+    def refuse(message: str) -> int:
+        if args.json_events:
+            events.emit("error", error_code="invalid_request", message=message)
+        else:
+            print(f"refused: {message}", file=sys.stderr)
         return 2
 
-    api_key = os.environ.get("MESHY_API_KEY")
+    # --- Refusal gates: BEFORE any network call (TD-09 precondition). ---
+    if (
+        not args.model_version
+        or args.model_version != args.model_version.strip()
+        or args.model_version.casefold() == "latest"
+    ):
+        return refuse(
+            "--model-version must name an explicit pinned Meshy release; "
+            "'latest' is refused"
+        )
+    events.emit(
+        "validation.started",
+        mode="text" if args.text else "image",
+        model_version=args.model_version,
+    )
+    if not args.terms_verified:
+        return refuse(
+            "--terms-verified is required — Meshy's commercial-terms check "
+            "must be operator-confirmed before generating (TD-09)"
+        )
+
     if not api_key:
-        print("refused: MESHY_API_KEY is not set", file=sys.stderr)
-        return 2
+        return refuse("MESHY_API_KEY is not set")
 
     try:
         intake.validate_namespace(args.ns)
         intake.validate_name(args.name)
         image_url = intake.image_ref_to_url(args.image) if args.image else None
     except intake.IntakeError as exc:
-        print(f"refused: {exc}", file=sys.stderr)
-        return 2
+        return refuse(str(exc))
 
     budgets = intake.load_budgets()
     paths = intake.landing_paths(
@@ -190,6 +250,14 @@ def cmd_generate(args: argparse.Namespace) -> int:
         asset_class=args.asset_class,
         budgets=budgets,
     )
+    if any(
+        path.exists()
+        for path in (paths.glb_path, paths.prompts_path, paths.sidecar_path)
+    ):
+        return refuse(
+            f"output already exists under {paths.asset_dir}; refusing to overwrite "
+            "an existing asset"
+        )
 
     # --- Derive the Meshy target_polycount from the class budget (issue #627),
     # still before any network call. Only text-to-3D takes a polycount, so an
@@ -201,73 +269,106 @@ def cmd_generate(args: argparse.Namespace) -> int:
                 args.asset_class, budgets, override=args.target_polycount
             )
         except intake.IntakeError as exc:
-            print(f"refused: {exc}", file=sys.stderr)
-            return 2
+            return refuse(str(exc))
     elif args.target_polycount is not None:
-        print(
-            "refused: --target-polycount applies to --text generation only "
-            "(image-to-3D does not take a polycount)",
-            file=sys.stderr,
+        return refuse(
+            "--target-polycount applies to --text generation only "
+            "(image-to-3D does not take a polycount)"
         )
-        return 2
 
-    client = _new_client(api_key)
+    events.emit(
+        "validation.passed",
+        mode="text" if args.text else "image",
+        model_version=args.model_version,
+    )
+
+    task_ids: list[str] = []
+
+    def on_client_event(event: str, **fields) -> None:
+        task_id = fields.get("task_id")
+        if task_id and task_id not in task_ids:
+            task_ids.append(task_id)
+        events.emit(event, model_version=args.model_version, **fields)
+
+    # Keep the final .glb suffix so pygltflib selects its binary loader while
+    # the name still marks the file as non-shippable staging output.
+    partial_glb = paths.glb_path.with_name(
+        f"{paths.glb_path.stem}.partial{paths.glb_path.suffix}"
+    )
+    partial_prompts = Path(f"{paths.prompts_path}.partial")
+    partial_sidecar = Path(f"{paths.sidecar_path}.partial")
+
+    client = _new_client(api_key, args.model_version)
     try:
-        try:
-            if args.text:
-                handle = client.text_to_3d(
-                    args.text,
-                    target_polycount=target_polycount,
-                    poll_interval_s=args.poll_interval,
-                    poll_timeout_s=args.poll_timeout,
-                )
-                endpoint = client_mod.TEXT_TO_3D_PATH
-            else:
-                handle = client.image_to_3d(image_url)
-                endpoint = client_mod.IMAGE_TO_3D_PATH
-        except (client_mod.MeshyAPIError, client_mod.MeshyPollTimeoutError) as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
-
-        try:
-            status = client.poll(
-                handle.task_id,
-                endpoint=endpoint,
-                interval_s=args.poll_interval,
-                timeout_s=args.poll_timeout,
+        if args.text:
+            handle = client.text_to_3d(
+                args.text,
+                target_polycount=target_polycount,
+                poll_interval_s=args.poll_interval,
+                poll_timeout_s=args.poll_timeout,
+                on_event=on_client_event,
             )
-        except (client_mod.MeshyAPIError, client_mod.MeshyPollTimeoutError) as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
+            endpoint = client_mod.TEXT_TO_3D_PATH
+            final_stage = "refine"
+        else:
+            handle = client.image_to_3d(image_url, on_event=on_client_event)
+            endpoint = client_mod.IMAGE_TO_3D_PATH
+            final_stage = "image"
+
+        status = client.poll(
+            handle.task_id,
+            endpoint=endpoint,
+            interval_s=args.poll_interval,
+            timeout_s=args.poll_timeout,
+            on_status=lambda state: on_client_event(
+                "poll.progress",
+                task_id=state.task_id,
+                stage=final_stage,
+                status=state.status,
+                progress=state.progress,
+            ),
+        )
 
         if not status.succeeded:
-            print(
-                f"error: Meshy task {handle.task_id} ended in status "
-                f"{status.status} (expected SUCCEEDED)",
-                file=sys.stderr,
+            raise client_mod.MeshyAPIError(
+                f"Meshy task {handle.task_id} ended in status {status.status} "
+                "(expected SUCCEEDED)",
+                task_id=handle.task_id,
+                status=status.status,
             )
-            return 1
 
-        try:
-            client.download(
-                handle.task_id, paths.glb_path, status=status, endpoint=endpoint
-            )
-        except client_mod.MeshyAPIError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
+        events.emit(
+            "download.started", task_id=handle.task_id, path=str(paths.glb_path)
+        )
+        client.download(handle.task_id, partial_glb, status=status, endpoint=endpoint)
+        events.emit(
+            "download.completed", task_id=handle.task_id, path=str(paths.glb_path)
+        )
 
         # --- Budget pre-check: fail before any sidecar is written. ---
-        lod0_tris = intake.count_glb_triangles(paths.glb_path)
+        events.emit("budget.started", path=str(paths.glb_path))
+        lod0_tris = intake.count_glb_triangles(partial_glb)
         precheck_doc = intake.build_budget_precheck_doc(args.asset_class, lod0_tris)
         budget_errors = _check_budget(precheck_doc, paths.sidecar_path)
         if budget_errors:
-            paths.glb_path.unlink(missing_ok=True)
-            print("refused: budget pre-check failed —", file=sys.stderr)
-            for err in budget_errors:
-                print(f"  {err}", file=sys.stderr)
+            _remove_job_outputs(paths)
+            message = "budget pre-check failed — " + "; ".join(budget_errors)
+            if args.json_events:
+                events.emit(
+                    "error",
+                    error_code="budget_failed",
+                    message=message,
+                    task_ids=task_ids,
+                )
+            else:
+                print("refused: budget pre-check failed —", file=sys.stderr)
+                for err in budget_errors:
+                    print(f"  {err}", file=sys.stderr)
             return 1
+        events.emit("budget.passed", lod0_tris=lod0_tris)
 
         # --- Land the prompts file + sidecar (only now that budget passed). ---
+        events.emit("provenance.started", asset_id=intake.asset_id(args.ns, args.name))
         prompts_doc = intake.build_prompts_doc(
             task_id=handle.task_id,
             preview_task_id=handle.preview_task_id,
@@ -285,16 +386,71 @@ def cmd_generate(args: argparse.Namespace) -> int:
             lod0_tris=lod0_tris,
         )
 
-        paths.prompts_path.write_text(
+        partial_prompts.write_text(
             yaml.safe_dump(prompts_doc, sort_keys=False), encoding="utf-8"
         )
-        paths.sidecar_path.write_text(
+        partial_sidecar.write_text(
             yaml.safe_dump(sidecar_doc, sort_keys=False), encoding="utf-8"
         )
+        partial_glb.replace(paths.glb_path)
+        partial_prompts.replace(paths.prompts_path)
+        partial_sidecar.replace(paths.sidecar_path)
+        events.emit(
+            "provenance.written",
+            asset_id=intake.asset_id(args.ns, args.name),
+            path=str(paths.sidecar_path),
+        )
+    except KeyboardInterrupt:
+        _remove_job_outputs(paths)
+        if args.json_events:
+            events.emit(
+                "cancelled",
+                message="generation cancelled by operator",
+                task_ids=task_ids,
+            )
+        else:
+            print("cancelled: generation interrupted by operator", file=sys.stderr)
+        return 130
+    except (client_mod.MeshyAPIError, client_mod.MeshyPollTimeoutError) as exc:
+        _remove_job_outputs(paths)
+        error_code, http_status = protocol.classify_error(exc)
+        if args.json_events:
+            fields = {
+                "error_code": error_code,
+                "message": str(exc),
+                "task_ids": task_ids,
+            }
+            if http_status is not None:
+                fields["http_status"] = http_status
+            events.emit("error", **fields)
+        else:
+            print(f"error: {events.redact(str(exc))}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # noqa: BLE001 — machine protocol must terminate cleanly
+        _remove_job_outputs(paths)
+        if args.json_events:
+            events.emit(
+                "error",
+                error_code="internal_error",
+                message=str(exc),
+                task_ids=task_ids,
+            )
+        else:
+            print(f"error: {events.redact(str(exc))}", file=sys.stderr)
+        return 1
     finally:
         client.close()
 
-    print(f"OK — landed {intake.asset_id(args.ns, args.name)} at {paths.asset_dir}")
+    asset_id = intake.asset_id(args.ns, args.name)
+    if args.json_events:
+        events.emit(
+            "completed",
+            asset_id=asset_id,
+            path=str(paths.asset_dir),
+            task_ids=task_ids,
+        )
+    else:
+        print(f"OK — landed {asset_id} at {paths.asset_dir}")
     return 0
 
 
@@ -467,8 +623,25 @@ def _check_budget(doc: dict, rel_path: Path) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    effective_argv = list(argv) if argv is not None else sys.argv[1:]
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    if "--json-events" in effective_argv:
+        parse_stderr = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(parse_stderr):
+                args = parser.parse_args(effective_argv)
+        except SystemExit as exc:
+            if exc.code == 0:
+                return 0
+            emitter = protocol.EventEmitter(secret=os.environ.get("MESHY_API_KEY"))
+            emitter.emit(
+                "error",
+                error_code="invalid_request",
+                message=parse_stderr.getvalue().strip() or "invalid command arguments",
+            )
+            return 2
+    else:
+        args = parser.parse_args(effective_argv)
     if args.command == "generate":
         return cmd_generate(args)
     if args.command == "convert-rig":
