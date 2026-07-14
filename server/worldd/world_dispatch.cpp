@@ -885,6 +885,10 @@ mn::CastFailReason to_wire_reason(CastReject r) {
         case CastReject::kOutOfRange:           return mn::CastFailReason::OUT_OF_RANGE;
         case CastReject::kNoLineOfSight:        return mn::CastFailReason::NO_LINE_OF_SIGHT;
         case CastReject::kInterrupted:          return mn::CastFailReason::INTERRUPTED;
+        // The current wire contract has one generic interruption reason for
+        // crowd-control gates; retain the more specific reason in server logs.
+        case CastReject::kCasterStunned:        return mn::CastFailReason::INTERRUPTED;
+        case CastReject::kCasterSilenced:       return mn::CastFailReason::INTERRUPTED;
     }
     return mn::CastFailReason::UNKNOWN_ABILITY;
 }

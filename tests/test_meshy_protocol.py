@@ -180,7 +180,7 @@ def test_json_protocol_happy_path_emits_complete_ordered_job(
     monkeypatch.setattr(
         meshy_main,
         "_new_client",
-        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None: (
             client_mod.MeshyClient(
                 api_key, model_version=model_version, transport=transport
             )
@@ -235,7 +235,7 @@ def test_json_protocol_classifies_provider_http_errors_and_redacts_key(
     monkeypatch.setattr(
         meshy_main,
         "_new_client",
-        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None: (
             client_mod.MeshyClient(
                 api_key, model_version=model_version, transport=transport
             )
@@ -571,7 +571,7 @@ def test_json_protocol_reports_status_drift(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(
         meshy_main,
         "_new_client",
-        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None: (
             client_mod.MeshyClient(
                 api_key, model_version=model_version, transport=transport
             )
@@ -599,7 +599,7 @@ def test_json_protocol_reports_timeout_with_task_id(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(
         meshy_main,
         "_new_client",
-        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None: (
             client_mod.MeshyClient(
                 api_key, model_version=model_version, transport=transport
             )
@@ -622,9 +622,11 @@ def test_json_protocol_reports_client_tls_setup_failure_and_redacts_secret(
     monkeypatch.setenv("MESHY_API_KEY", secret)
     monkeypatch.setenv("SSL_CERT_FILE", str(missing_bundle))
 
-    def construct_with_diagnostic(api_key, model_version):
+    def construct_with_diagnostic(api_key, model_version, *, timeout=None):
         try:
-            return client_mod.MeshyClient(api_key, model_version=model_version)
+            return client_mod.MeshyClient(
+                api_key, model_version=model_version, timeout=timeout
+            )
         except OSError as exc:
             # Model a setup layer adding environment diagnostics.  The protocol
             # must redact both the key and the key-bearing certificate path.
@@ -659,14 +661,16 @@ def test_same_target_concurrent_jobs_reserve_atomically_and_preserve_winner(
     client_constructions = 0
     construction_lock = threading.Lock()
 
-    def blocking_client(api_key, model_version=client_mod.DEFAULT_MODEL_VERSION):
+    def blocking_client(
+        api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None
+    ):
         nonlocal client_constructions
         with construction_lock:
             client_constructions += 1
         owner_reserved.set()
         assert release_owner.wait(timeout=5)
         return client_mod.MeshyClient(
-            api_key, model_version=model_version, transport=transport
+            api_key, model_version=model_version, transport=transport, timeout=timeout
         )
 
     monkeypatch.setattr(meshy_main, "_new_client", blocking_client)
@@ -730,7 +734,7 @@ def test_atomic_publish_boundary_failure_rolls_back_and_allows_retry(
     monkeypatch.setattr(
         meshy_main,
         "_new_client",
-        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None: (
             client_mod.MeshyClient(
                 api_key, model_version=model_version, transport=transport
             )
@@ -780,7 +784,7 @@ def test_interrupt_after_commit_point_resolves_to_one_completed_event(
     monkeypatch.setattr(
         meshy_main,
         "_new_client",
-        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None: (
             client_mod.MeshyClient(
                 api_key, model_version=model_version, transport=transport
             )
@@ -845,7 +849,7 @@ def test_interrupt_during_completed_emission_is_recoverable_and_idempotent(
     monkeypatch.setattr(
         meshy_main,
         "_new_client",
-        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None: (
             client_mod.MeshyClient(
                 api_key, model_version=model_version, transport=transport
             )
@@ -910,7 +914,7 @@ def test_interrupt_at_completed_stream_flush_reuses_the_accepted_line(
     monkeypatch.setattr(
         meshy_main,
         "_new_client",
-        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None: (
             client_mod.MeshyClient(
                 api_key, model_version=model_version, transport=transport
             )
@@ -995,7 +999,7 @@ def test_process_control_flush_exits_one_without_duplicate_stdout(
     monkeypatch.setattr(
         meshy_main,
         "_new_client",
-        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None: (
             client_mod.MeshyClient(
                 api_key, model_version=model_version, transport=transport
             )
@@ -1054,7 +1058,7 @@ def test_uncommitted_recoverable_flush_failure_preserves_runtime_semantics(
     monkeypatch.setattr(
         meshy_main,
         "_new_client",
-        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None: (
             client_mod.MeshyClient(
                 api_key, model_version=model_version, transport=transport
             )
@@ -1150,7 +1154,7 @@ def test_raised_write_with_accepted_prefix_poisons_stdout_and_exits_one(
     monkeypatch.setattr(
         meshy_main,
         "_new_client",
-        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None: (
             client_mod.MeshyClient(
                 api_key, model_version=model_version, transport=transport
             )
@@ -1230,7 +1234,7 @@ def test_invalid_completed_write_result_exits_one_without_more_stdout(
     monkeypatch.setattr(
         meshy_main,
         "_new_client",
-        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None: (
             client_mod.MeshyClient(
                 api_key, model_version=model_version, transport=transport
             )
@@ -1272,7 +1276,9 @@ def test_client_close_failure_emits_one_redacted_error_and_rolls_back(
         def close(self):
             raise RuntimeError(f"teardown echoed {secret} and Bearer teardown-token")
 
-    monkeypatch.setattr(meshy_main, "_new_client", lambda *_args: CloseFailClient())
+    monkeypatch.setattr(
+        meshy_main, "_new_client", lambda *_args, **_kwargs: CloseFailClient()
+    )
     monkeypatch.setenv("MESHY_API_KEY", secret)
 
     assert meshy_main.main(_base_args(tmp_path)) == 1
@@ -1331,7 +1337,7 @@ def test_dead_owner_artifacts_are_recovered_but_live_lock_is_not_stolen(
     monkeypatch.setattr(
         meshy_main,
         "_new_client",
-        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None: (
             client_mod.MeshyClient(
                 api_key, model_version=model_version, transport=transport
             )
@@ -1403,7 +1409,7 @@ def test_keyboard_interrupt_emits_cancel_and_removes_partial_output(
     monkeypatch.setattr(
         meshy_main,
         "_new_client",
-        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None: (
             client_mod.MeshyClient(
                 api_key, model_version=model_version, transport=transport
             )

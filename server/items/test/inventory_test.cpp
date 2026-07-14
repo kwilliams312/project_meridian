@@ -50,7 +50,6 @@ constexpr std::uint32_t kSword = kPlaceholderIdBase + 1;    // main_hand weapon,
 constexpr std::uint32_t kBuckler = kPlaceholderIdBase + 2;  // off_hand armor
 constexpr std::uint32_t kStaff = kPlaceholderIdBase + 3;    // two_hand weapon
 constexpr std::uint32_t kVest = kPlaceholderIdBase + 4;     // chest armor
-constexpr std::uint32_t kCap = kPlaceholderIdBase + 5;      // head armor
 constexpr std::uint32_t kRing = kPlaceholderIdBase + 6;     // finger armor, req 5
 constexpr std::uint32_t kPotion = kPlaceholderIdBase + 7;   // consumable, max_stack 20
 constexpr std::uint32_t kOre = kPlaceholderIdBase + 8;      // trade good, max_stack 100

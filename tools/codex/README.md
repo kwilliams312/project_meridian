@@ -71,12 +71,51 @@ destruction (§6.2, TS-2).
 ## Build & test (macOS / Linux / Windows)
 
 ```bash
-cd tools/codex
-dotnet build
-dotnet test          # round-trip, surgical-edit, schema-form, and headless UI coverage
+uv sync --locked
+dotnet restore tools/codex/Meridian.Codex.sln
+dotnet build tools/codex/Meridian.Codex.sln --no-restore -m:1 --disable-build-servers
+tools/codex/check-warning-clean.sh
+dotnet test tools/codex/Meridian.Codex.sln --no-restore # round-trip, surgical-edit, schema-form, and headless UI coverage
 ```
 
 Tests load the real `content/core` YAML files as fixtures.
+
+The normal restore is an **online security-audit path**. `NU1900` (audit data
+unavailable) and `NU1901`-`NU1904` (a vulnerable dependency was found) fail the
+restore instead of being buried among compiler warnings. Fix network/proxy/TLS
+access to `https://api.nuget.org/v3/index.json` for `NU1900`; investigate and
+upgrade the reported package for `NU1901`-`NU1904`.
+
+For a deliberately disconnected build, first populate the NuGet and uv caches on
+a connected machine, then select the offline path explicitly:
+
+```bash
+uv sync --locked --offline
+dotnet restore tools/codex/Meridian.Codex.sln \
+  --ignore-failed-sources -p:NuGetAudit=false
+UV_OFFLINE=1 tools/codex/check-warning-clean.sh
+```
+
+Disabling `NuGetAudit` is confined to that explicit restore; it is not a warning
+suppression and it makes no security claim. Run the online restore before release
+or dependency changes. If `uv` reports a cache permission error, repair ownership
+of its reported cache directory or point `UV_CACHE_DIR` at a writable directory;
+do not skip schema verification.
+
+Every Codex compile runs the schema generator in `--check` mode. Missing Python,
+an unusable `uv` cache, or generated-model drift therefore fails the build before
+C# compilation. After changing `/schema/content` or the generator, refresh and
+verify the checked-in artifacts explicitly:
+
+```bash
+uv run python -m tools.schema_gen
+uv run python -m tools.schema_gen --check
+```
+
+Code/compiler warnings are separate from audit availability and toolchain/cache
+failures: the first are fixed in source, the second by restoring online access (or
+choosing the documented offline restore), and the third by repairing the local
+Python/uv environment. None is allowed to warn and continue.
 
 ## Content Pack Workspace
 

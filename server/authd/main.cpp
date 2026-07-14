@@ -184,12 +184,14 @@ void emit_login_audit(const std::string& peer,
         case LoginOutcome::kRejectedHello:
         case LoginOutcome::kRejectedAuth:
         case LoginOutcome::kRejectedRealm:
+        case LoginOutcome::kRejectedBanned:
         case LoginOutcome::kProtocolError: {
             const char* reason = "protocol_error";
             switch (r.outcome) {
                 case LoginOutcome::kRejectedHello: reason = "build_gate"; break;
                 case LoginOutcome::kRejectedAuth:  reason = "bad_credentials"; break;
                 case LoginOutcome::kRejectedRealm: reason = "realm_unavailable"; break;
+                case LoginOutcome::kRejectedBanned: reason = "banned"; break;
                 case LoginOutcome::kProtocolError: reason = "protocol_error"; break;
                 default: break;
             }

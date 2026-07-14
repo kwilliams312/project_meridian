@@ -40,7 +40,6 @@ add_executable(authd
 )
 target_link_libraries(authd
   PRIVATE
-    meridian::core
     meridian::authd-login
     Threads::Threads
 )

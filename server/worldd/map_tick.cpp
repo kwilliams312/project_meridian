@@ -50,15 +50,6 @@ const char* reject_name(CastReject r) {
     return "?";
 }
 
-const char* motion_name(MovementMotion m) {
-    switch (m) {
-        case MovementMotion::kKnockback: return "knockback";
-        case MovementMotion::kPull:      return "pull";
-        case MovementMotion::kDash:      return "dash";
-    }
-    return "?";
-}
-
 const char* outcome_name(AttackOutcome o) {
     switch (o) {
         case AttackOutcome::kMiss:  return "MISS";
