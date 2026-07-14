@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Data.Core.Plugins;
 using Avalonia.Markup.Xaml;
+using Meridian.Codex.Services;
 using Meridian.Codex.ViewModels;
 using Meridian.Codex.Views;
 
@@ -22,10 +23,10 @@ public partial class App : Application
             // DataAnnotation validation; remove it to avoid double reports (docs).
             DisableAvaloniaDataAnnotationValidation();
 
-            desktop.MainWindow = new MainWindow
-            {
-                DataContext = new MainWindowViewModel(),
-            };
+            MainWindow? window = null;
+            var dialogs = new AvaloniaContentDialogService(() => window);
+            window = new MainWindow { DataContext = new MainWindowViewModel(dialogs) };
+            desktop.MainWindow = window;
         }
 
         base.OnFrameworkInitializationCompleted();

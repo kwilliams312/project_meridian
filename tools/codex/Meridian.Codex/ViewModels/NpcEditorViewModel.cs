@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Meridian.Codex.Editing;
+using Meridian.Codex.Services;
 
 namespace Meridian.Codex.ViewModels;
 
@@ -18,6 +19,8 @@ namespace Meridian.Codex.ViewModels;
 public sealed partial class NpcEditorViewModel : ViewModelBase
 {
     private NpcDocument _document;
+    private readonly IContentDialogService _dialogs;
+    private readonly Func<string?> _workspacePath;
 
     /// <summary>Selectable enum tokens for the identity/AI pickers (schema enums).</summary>
     public static string[] CreatureTypes =>
@@ -36,6 +39,9 @@ public sealed partial class NpcEditorViewModel : ViewModelBase
     private string _filePath = string.Empty;
 
     [ObservableProperty]
+    private bool _isDirty;
+
+    [ObservableProperty]
     private string _statusText = "New NPC.";
 
     [ObservableProperty]
@@ -47,10 +53,24 @@ public sealed partial class NpcEditorViewModel : ViewModelBase
     [ObservableProperty]
     private string _previewYaml = string.Empty;
 
-    public NpcEditorViewModel()
+    public string DisplayPath => PathPresentation.Compact(FilePath);
+    public bool HasFilePath => !string.IsNullOrWhiteSpace(FilePath);
+
+    public NpcEditorViewModel() : this(HeadlessContentDialogService.Instance) { }
+
+    public NpcEditorViewModel(IContentDialogService dialogs, Func<string?>? workspacePath = null)
     {
+        _dialogs = dialogs;
+        _workspacePath = workspacePath ?? (() => null);
         _document = NpcDocument.NewNpc();
         RebuildFromDocument();
+    }
+
+    partial void OnFilePathChanged(string value)
+    {
+        OnPropertyChanged(nameof(DisplayPath));
+        OnPropertyChanged(nameof(HasFilePath));
+        CopyFullPathCommand.NotifyCanExecuteChanged();
     }
 
     private NpcData Data => _document.Data;
@@ -103,22 +123,35 @@ public sealed partial class NpcEditorViewModel : ViewModelBase
 
     /// <summary>Start a fresh NPC with the schema's required fields pre-filled.</summary>
     [RelayCommand]
-    private void New()
+    private async Task NewAsync()
     {
+        if (IsDirty && !await _dialogs.ConfirmDiscardChangesAsync(DisplayPath)) return;
         _document = NpcDocument.NewNpc();
         FilePath = string.Empty;
         RebuildFromDocument();
+        IsDirty = false;
         StatusText = "New NPC.";
     }
 
     /// <summary>Load the NPC at <see cref="FilePath"/> into the form.</summary>
     [RelayCommand]
-    private void Open()
+    private async Task OpenAsync()
     {
+        var selected = await _dialogs.PickEntityFileAsync(EntityFileKind.Npc, FilePath, _workspacePath());
+        if (selected is null)
+        {
+            if (_dialogs.IsNativePickerAvailable || string.IsNullOrWhiteSpace(FilePath)) return;
+            selected = FilePath;
+        }
+
         try
         {
-            _document = NpcDocument.Load(FilePath);
+            var candidate = NpcDocument.Load(selected);
+            if (IsDirty && !await _dialogs.ConfirmDiscardChangesAsync(DisplayPath)) return;
+            _document = candidate;
+            FilePath = Path.GetFullPath(selected);
             RebuildFromDocument();
+            IsDirty = false;
             StatusText = $"Loaded {System.IO.Path.GetFileName(FilePath)}.";
         }
         catch (Exception ex)
@@ -147,12 +180,20 @@ public sealed partial class NpcEditorViewModel : ViewModelBase
         try
         {
             _document.Save(FilePath);
+            IsDirty = false;
             StatusText = $"Saved {System.IO.Path.GetFileName(FilePath)}.";
         }
         catch (Exception ex)
         {
             StatusText = $"Save failed: {ex.Message}";
         }
+    }
+
+    [RelayCommand(CanExecute = nameof(HasFilePath))]
+    private async Task CopyFullPathAsync()
+    {
+        await _dialogs.CopyPathAsync(FilePath);
+        StatusText = "Full path copied to the clipboard.";
     }
 
     /// <summary>Append a blank ability row to the rotation.</summary>
@@ -186,6 +227,7 @@ public sealed partial class NpcEditorViewModel : ViewModelBase
 
         Data.Set(path, value);
         OnPropertyChanged(propertyName);
+        IsDirty = true;
         Revalidate();
     }
 
@@ -224,6 +266,7 @@ public sealed partial class NpcEditorViewModel : ViewModelBase
 
     private void SyncAbilities()
     {
+        IsDirty = true;
         Data.RemoveAbilities();
         for (int i = 0; i < Abilities.Count; i++)
         {

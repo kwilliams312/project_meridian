@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Meridian.Codex.Services;
 
 namespace Meridian.Codex.ViewModels;
 
@@ -39,13 +40,13 @@ public partial class MainWindowViewModel : ViewModelBase
     private string _statusText = "Ready.";
 
     /// <summary>The NPC editor (#128), created once and shown when the NPCs rail entry is active.</summary>
-    public NpcEditorViewModel NpcEditor { get; } = new();
+    public NpcEditorViewModel NpcEditor { get; }
 
     /// <summary>The item editor (#129), created once and shown when the Items rail entry is active.</summary>
-    public ItemEditorViewModel ItemEditor { get; } = new();
+    public ItemEditorViewModel ItemEditor { get; }
 
     /// <summary>The pack-oriented workspace shell and manifest editor (#667).</summary>
-    public PackWorkspaceViewModel PackWorkspace { get; } = new();
+    public PackWorkspaceViewModel PackWorkspace { get; }
 
     /// <summary>
     /// The editor VM to host in the main content area for the current selection, or
@@ -60,8 +61,13 @@ public partial class MainWindowViewModel : ViewModelBase
         _ => null,
     };
 
-    public MainWindowViewModel()
+    public MainWindowViewModel() : this(HeadlessContentDialogService.Instance) { }
+
+    public MainWindowViewModel(IContentDialogService dialogs)
     {
+        PackWorkspace = new PackWorkspaceViewModel(new RecentWorkspaceStore(), dialogs);
+        NpcEditor = new NpcEditorViewModel(dialogs, () => PackWorkspace.WorkspacePath);
+        ItemEditor = new ItemEditorViewModel(dialogs, () => PackWorkspace.WorkspacePath);
         SelectedEditor = Editors.FirstOrDefault();
     }
 
