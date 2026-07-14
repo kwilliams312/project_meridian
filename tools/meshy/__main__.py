@@ -37,6 +37,8 @@ import io
 import os
 import subprocess
 import sys
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -177,25 +179,74 @@ def _new_client(
     return client_mod.MeshyClient(api_key, model_version=model_version)
 
 
-def _remove_job_outputs(paths: intake.LandingPaths) -> None:
-    """Remove only files owned by the current job, including staged output."""
+@dataclass
+class _TargetReservation:
+    """Exclusive ownership of one landing directory and its private staging files.
 
-    candidates = (
-        paths.glb_path,
-        paths.prompts_path,
-        paths.sidecar_path,
-        paths.glb_path.with_name(
-            f"{paths.glb_path.stem}.partial{paths.glb_path.suffix}"
-        ),
-        Path(f"{paths.prompts_path}.partial"),
-        Path(f"{paths.sidecar_path}.partial"),
-    )
-    for candidate in candidates:
-        candidate.unlink(missing_ok=True)
-    try:
-        paths.asset_dir.rmdir()
-    except OSError:
-        pass
+    Creating the final asset directory is the reservation operation.  ``mkdir`` is
+    atomic across both processes and threads, so two same-target jobs can never
+    both pass a check-then-create window.  Staging names carry a random job token;
+    cleanup consequently never guesses at, overwrites, or removes another job's
+    files (especially final shippable paths).
+    """
+
+    paths: intake.LandingPaths
+    token: str
+    partial_glb: Path
+    partial_prompts: Path
+    partial_sidecar: Path
+    committed: bool = False
+
+    @classmethod
+    def acquire(cls, paths: intake.LandingPaths) -> _TargetReservation:
+        paths.asset_dir.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            paths.asset_dir.mkdir()
+        except FileExistsError as exc:
+            raise intake.IntakeError(
+                f"output already exists or is reserved under {paths.asset_dir}; "
+                "refusing to overwrite an existing asset"
+            ) from exc
+
+        token = uuid.uuid4().hex
+        return cls(
+            paths=paths,
+            token=token,
+            partial_glb=paths.glb_path.with_name(
+                f".{paths.glb_path.stem}.{token}.partial{paths.glb_path.suffix}"
+            ),
+            partial_prompts=paths.prompts_path.with_name(
+                f".{paths.prompts_path.name}.{token}.partial"
+            ),
+            partial_sidecar=paths.sidecar_path.with_name(
+                f".{paths.sidecar_path.name}.{token}.partial"
+            ),
+        )
+
+    def publish(self) -> None:
+        """Atomically publish each staged file while retaining target ownership."""
+
+        self.partial_glb.replace(self.paths.glb_path)
+        self.partial_prompts.replace(self.paths.prompts_path)
+        self.partial_sidecar.replace(self.paths.sidecar_path)
+        self.committed = True
+
+    def cleanup(self) -> None:
+        """Remove only token-owned staging and an empty failed reservation."""
+
+        for candidate in (
+            self.partial_glb,
+            self.partial_prompts,
+            self.partial_sidecar,
+        ):
+            candidate.unlink(missing_ok=True)
+        if not self.committed:
+            try:
+                self.paths.asset_dir.rmdir()
+            except OSError:
+                # A partially published or externally-added file is preserved.
+                # It is safer to require manual recovery than delete unknown data.
+                pass
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
@@ -242,39 +293,30 @@ def cmd_generate(args: argparse.Namespace) -> int:
     except intake.IntakeError as exc:
         return refuse(str(exc))
 
-    budgets = intake.load_budgets()
-    paths = intake.landing_paths(
-        content_root=args.content_root,
-        ns=args.ns,
-        name=args.name,
-        asset_class=args.asset_class,
-        budgets=budgets,
-    )
-    if any(
-        path.exists()
-        for path in (paths.glb_path, paths.prompts_path, paths.sidecar_path)
-    ):
-        return refuse(
-            f"output already exists under {paths.asset_dir}; refusing to overwrite "
-            "an existing asset"
-        )
-
     # --- Derive the Meshy target_polycount from the class budget (issue #627),
     # still before any network call. Only text-to-3D takes a polycount, so an
     # override paired with --image is refused rather than silently dropped.
-    target_polycount: int | None = None
-    if args.text:
-        try:
+    try:
+        budgets = intake.load_budgets()
+        paths = intake.landing_paths(
+            content_root=args.content_root,
+            ns=args.ns,
+            name=args.name,
+            asset_class=args.asset_class,
+            budgets=budgets,
+        )
+        target_polycount: int | None = None
+        if args.text:
             target_polycount = intake.derive_target_polycount(
                 args.asset_class, budgets, override=args.target_polycount
             )
-        except intake.IntakeError as exc:
-            return refuse(str(exc))
-    elif args.target_polycount is not None:
-        return refuse(
-            "--target-polycount applies to --text generation only "
-            "(image-to-3D does not take a polycount)"
-        )
+        elif args.target_polycount is not None:
+            return refuse(
+                "--target-polycount applies to --text generation only "
+                "(image-to-3D does not take a polycount)"
+            )
+    except (intake.IntakeError, OSError, ValueError) as exc:
+        return refuse(str(exc))
 
     events.emit(
         "validation.passed",
@@ -290,16 +332,14 @@ def cmd_generate(args: argparse.Namespace) -> int:
             task_ids.append(task_id)
         events.emit(event, model_version=args.model_version, **fields)
 
-    # Keep the final .glb suffix so pygltflib selects its binary loader while
-    # the name still marks the file as non-shippable staging output.
-    partial_glb = paths.glb_path.with_name(
-        f"{paths.glb_path.stem}.partial{paths.glb_path.suffix}"
-    )
-    partial_prompts = Path(f"{paths.prompts_path}.partial")
-    partial_sidecar = Path(f"{paths.sidecar_path}.partial")
-
-    client = _new_client(api_key, args.model_version)
+    client: client_mod.MeshyClient | None = None
+    reservation: _TargetReservation | None = None
     try:
+        # Reservation and client construction are deliberately inside this
+        # guarded region.  JSON mode must end in a structured terminal event
+        # even when local TLS/environment setup fails before the first request.
+        reservation = _TargetReservation.acquire(paths)
+        client = _new_client(api_key, args.model_version)
         if args.text:
             handle = client.text_to_3d(
                 args.text,
@@ -340,18 +380,22 @@ def cmd_generate(args: argparse.Namespace) -> int:
         events.emit(
             "download.started", task_id=handle.task_id, path=str(paths.glb_path)
         )
-        client.download(handle.task_id, partial_glb, status=status, endpoint=endpoint)
+        client.download(
+            handle.task_id,
+            reservation.partial_glb,
+            status=status,
+            endpoint=endpoint,
+        )
         events.emit(
             "download.completed", task_id=handle.task_id, path=str(paths.glb_path)
         )
 
         # --- Budget pre-check: fail before any sidecar is written. ---
         events.emit("budget.started", path=str(paths.glb_path))
-        lod0_tris = intake.count_glb_triangles(partial_glb)
+        lod0_tris = intake.count_glb_triangles(reservation.partial_glb)
         precheck_doc = intake.build_budget_precheck_doc(args.asset_class, lod0_tris)
         budget_errors = _check_budget(precheck_doc, paths.sidecar_path)
         if budget_errors:
-            _remove_job_outputs(paths)
             message = "budget pre-check failed — " + "; ".join(budget_errors)
             if args.json_events:
                 events.emit(
@@ -386,22 +430,21 @@ def cmd_generate(args: argparse.Namespace) -> int:
             lod0_tris=lod0_tris,
         )
 
-        partial_prompts.write_text(
+        reservation.partial_prompts.write_text(
             yaml.safe_dump(prompts_doc, sort_keys=False), encoding="utf-8"
         )
-        partial_sidecar.write_text(
+        reservation.partial_sidecar.write_text(
             yaml.safe_dump(sidecar_doc, sort_keys=False), encoding="utf-8"
         )
-        partial_glb.replace(paths.glb_path)
-        partial_prompts.replace(paths.prompts_path)
-        partial_sidecar.replace(paths.sidecar_path)
+        reservation.publish()
         events.emit(
             "provenance.written",
             asset_id=intake.asset_id(args.ns, args.name),
             path=str(paths.sidecar_path),
         )
+    except intake.IntakeError as exc:
+        return refuse(str(exc))
     except KeyboardInterrupt:
-        _remove_job_outputs(paths)
         if args.json_events:
             events.emit(
                 "cancelled",
@@ -412,7 +455,6 @@ def cmd_generate(args: argparse.Namespace) -> int:
             print("cancelled: generation interrupted by operator", file=sys.stderr)
         return 130
     except (client_mod.MeshyAPIError, client_mod.MeshyPollTimeoutError) as exc:
-        _remove_job_outputs(paths)
         error_code, http_status = protocol.classify_error(exc)
         if args.json_events:
             fields = {
@@ -427,7 +469,6 @@ def cmd_generate(args: argparse.Namespace) -> int:
             print(f"error: {events.redact(str(exc))}", file=sys.stderr)
         return 1
     except Exception as exc:  # noqa: BLE001 — machine protocol must terminate cleanly
-        _remove_job_outputs(paths)
         if args.json_events:
             events.emit(
                 "error",
@@ -439,7 +480,10 @@ def cmd_generate(args: argparse.Namespace) -> int:
             print(f"error: {events.redact(str(exc))}", file=sys.stderr)
         return 1
     finally:
-        client.close()
+        if client is not None:
+            client.close()
+        if reservation is not None:
+            reservation.cleanup()
 
     asset_id = intake.asset_id(args.ns, args.name)
     if args.json_events:

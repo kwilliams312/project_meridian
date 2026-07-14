@@ -82,13 +82,15 @@ as `task_ids` on terminal `completed`, `cancelled`, and runtime `error` events.
 
 ### Cancellation and exit codes
 
-Send SIGINT (normally Ctrl-C) to cancel. The CLI removes staged downloads,
-sidecars, prompts, and any just-landed job-owned files before emitting
-`cancelled`. A provider task may continue remotely; `task_ids` lets the caller
-audit or manage it through provider tooling without hiding that fact. Output is
-staged under names containing `.partial` and is moved into its final names
-only after budget and provenance checks pass. Existing assets are never
-overwritten.
+Send SIGINT (normally Ctrl-C) to cancel. The CLI removes only that job's staged
+download, sidecar, and prompts before emitting `cancelled`; it never removes a
+final asset path during failure cleanup. A provider task may continue remotely;
+`task_ids` lets the caller audit or manage it through provider tooling without
+hiding that fact. The final asset directory is created atomically as a
+per-target reservation before client setup, so concurrent jobs for the same
+namespace/name cannot both proceed. Output is staged under job-unique names
+containing `.partial` and is moved into its final names only after budget and
+provenance checks pass. Existing assets are never overwritten.
 
 | Exit | Meaning | Terminal JSON event |
 |---:|---|---|
