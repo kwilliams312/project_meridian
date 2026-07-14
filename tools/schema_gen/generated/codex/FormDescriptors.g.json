@@ -14,7 +14,8 @@
             "widget": "slug",
             "help": "Stable prefix that owns every content ID in this pack.",
             "example": "emberfall",
-            "constraint": "2-32 lowercase letters, digits, or underscores; must start with a letter."
+            "constraint": "2-32 lowercase letters, digits, or underscores; must start with a letter.",
+            "documentation": "schema/content/README.md"
           }
         },
         {
@@ -22,7 +23,9 @@
           "ui": {
             "group": "identity",
             "label": "Pack name",
-            "widget": "single_line"
+            "widget": "single_line",
+            "help": "Human-facing name shown when operators choose this content pack.",
+            "example": "Emberfall Adventures"
           }
         },
         {
@@ -30,7 +33,9 @@
           "ui": {
             "group": "identity",
             "label": "Description",
-            "widget": "multiline"
+            "widget": "multiline",
+            "help": "Optional summary of this pack's theme and intended use.",
+            "constraint": "At most 2,000 characters."
           }
         },
         {
@@ -40,7 +45,8 @@
             "label": "Pack version",
             "widget": "semver",
             "example": "1.0.0",
-            "constraint": "Semantic version in major.minor.patch form."
+            "constraint": "Semantic version in major.minor.patch form.",
+            "documentation": "docs/superpowers/specs/2026-07-13-pack-contract-content-schema-design.md"
           }
         },
         {
@@ -107,6 +113,17 @@
           }
         },
         {
+          "path": "engine.godot",
+          "ui": {
+            "group": "compatibility",
+            "label": "Godot version",
+            "widget": "single_line",
+            "help": "Engine major and minor version required to load this pack.",
+            "example": "4.6",
+            "constraint": "Use major.minor form, beginning with 4."
+          }
+        },
+        {
           "path": "dependencies",
           "ui": {
             "group": "dependencies",
@@ -137,12 +154,56 @@
       "content_schema": "meridian/npc@1",
       "fields": [
         {
+          "path": "id",
+          "ui": {
+            "group": "identity",
+            "label": "NPC ID",
+            "widget": "single_line",
+            "help": "Permanent fully qualified ID owned by this pack; references use this value.",
+            "example": "emberfall:npc.ash_guard",
+            "constraint": "Use namespace:npc.name with lowercase dot-separated segments.",
+            "documentation": "schema/content/README.md"
+          }
+        },
+        {
+          "path": "name",
+          "ui": {
+            "group": "identity",
+            "label": "Display name",
+            "widget": "single_line",
+            "help": "Name shown above the NPC and in operator tools.",
+            "example": "Ash Guard"
+          }
+        },
+        {
+          "path": "level",
+          "ui": {
+            "group": "combat",
+            "label": "Level range",
+            "help": "Inclusive minimum and maximum level; the server scales stats between them.",
+            "constraint": "Minimum must not exceed maximum."
+          }
+        },
+        {
+          "path": "stats.health",
+          "ui": {
+            "group": "combat",
+            "label": "Health",
+            "widget": "number",
+            "help": "Hit points at the minimum authored level.",
+            "constraint": "At least 1."
+          }
+        },
+        {
           "path": "stats.attack_speed_ms",
           "ui": {
             "group": "combat",
             "label": "Attack speed",
             "widget": "number",
-            "unit": "ms"
+            "unit": "ms",
+            "help": "Delay between basic attacks.",
+            "example": 2000,
+            "constraint": "At least 500 milliseconds."
           }
         },
         {
@@ -173,12 +234,40 @@
           }
         },
         {
+          "path": "ai.flee_at_health_pct",
+          "ui": {
+            "group": "ai",
+            "label": "Flee below health",
+            "widget": "number",
+            "unit": "percent",
+            "help": "Health percentage below which this NPC attempts to flee.",
+            "example": 20,
+            "constraint": "0-100 percent."
+          }
+        },
+        {
           "path": "ai.abilities[].ability",
           "ui": {
             "group": "ai",
             "label": "Ability",
             "widget": "reference_picker",
-            "reference_type": "content:ability"
+            "reference_type": "content:ability",
+            "help": "Ability ID considered by this NPC's server-side rotation.",
+            "example": "core:ability.cleave_strike",
+            "constraint": "Use an ability ID, optionally prefixed by another pack namespace.",
+            "documentation": "schema/content/README.md"
+          }
+        },
+        {
+          "path": "ai.abilities[].use_at_health_below_pct",
+          "ui": {
+            "group": "ai",
+            "label": "Use below health",
+            "widget": "number",
+            "unit": "percent",
+            "help": "Optional health threshold for considering this ability.",
+            "example": 50,
+            "constraint": "0-100 percent."
           }
         },
         {
@@ -195,7 +284,10 @@
             "label": "Creature model",
             "widget": "asset_picker",
             "reference_type": "asset:art",
-            "help": "Art-registry model rendered for this NPC or mob."
+            "help": "Art-registry model rendered for this NPC or mob.",
+            "example": "core:art.creature.kobold_miner",
+            "constraint": "Select a creature_model asset ID; Meshy generation is available when art is missing.",
+            "documentation": "schema/content/README.md"
           },
           "asset": {
             "allowed_classes": [
@@ -212,7 +304,10 @@
             "group": "presentation",
             "label": "Model scale",
             "widget": "number",
-            "unit": "scale"
+            "unit": "scale",
+            "help": "Multiplier applied to the source model size.",
+            "example": 1.0,
+            "constraint": "Greater than 0 and at most 10."
           }
         },
         {
@@ -238,6 +333,50 @@
       "content_schema": "meridian/item@2",
       "fields": [
         {
+          "path": "id",
+          "ui": {
+            "group": "identity",
+            "label": "Item ID",
+            "widget": "single_line",
+            "help": "Permanent fully qualified ID owned by this pack.",
+            "example": "emberfall:item.ashblade",
+            "constraint": "Use namespace:item.name with lowercase dot-separated segments.",
+            "documentation": "schema/content/README.md"
+          }
+        },
+        {
+          "path": "name",
+          "ui": {
+            "group": "identity",
+            "label": "Display name",
+            "widget": "single_line",
+            "help": "Item name shown in inventory, loot, and vendor interfaces.",
+            "example": "Ashblade"
+          }
+        },
+        {
+          "path": "required_level",
+          "ui": {
+            "group": "requirements",
+            "label": "Required level",
+            "widget": "number",
+            "help": "Minimum character level allowed to equip or use this item.",
+            "constraint": "At least 1."
+          }
+        },
+        {
+          "path": "weapon.speed_ms",
+          "ui": {
+            "group": "combat",
+            "label": "Weapon speed",
+            "widget": "number",
+            "unit": "ms",
+            "help": "Delay between weapon attacks.",
+            "example": 2400,
+            "constraint": "1,000-5,000 milliseconds."
+          }
+        },
+        {
           "path": "visual",
           "ui": {
             "group": "presentation",
@@ -250,7 +389,10 @@
             "group": "presentation",
             "label": "Inventory icon",
             "widget": "asset_picker",
-            "reference_type": "asset:art"
+            "reference_type": "asset:art",
+            "help": "Art-registry icon shown in inventory and loot interfaces.",
+            "example": "core:art.icon.item.rusty_pickaxe",
+            "constraint": "Select an icon asset ID; 3D generation is not available for icons."
           },
           "asset": {
             "allowed_classes": [
@@ -265,7 +407,10 @@
             "group": "presentation",
             "label": "World model",
             "widget": "asset_picker",
-            "reference_type": "asset:art"
+            "reference_type": "asset:art",
+            "help": "Optional 3D model used when the item appears in the world.",
+            "example": "core:art.weapon.rusty_pickaxe",
+            "constraint": "Select a weapon_model, armor_model, or prop asset ID; Meshy generation is available."
           },
           "asset": {
             "allowed_classes": [
@@ -295,6 +440,35 @@
               "meshy"
             ]
           }
+        },
+        {
+          "path": "visual.worn.hides",
+          "ui": {
+            "group": "presentation",
+            "label": "Hidden body regions",
+            "help": "Geoset regions hidden while this armor is worn to prevent body clipping.",
+            "documentation": "docs/superpowers/specs/2026-07-09-character-equipment-data-contract-design.md"
+          }
+        },
+        {
+          "path": "visual.worn.attach.socket",
+          "ui": {
+            "group": "presentation",
+            "label": "Equipped socket",
+            "help": "Skeleton attachment point used while this item is equipped.",
+            "example": "main_hand",
+            "documentation": "docs/superpowers/specs/2026-07-09-character-equipment-data-contract-design.md"
+          }
+        },
+        {
+          "path": "visual.worn.attach.sheath_socket",
+          "ui": {
+            "group": "presentation",
+            "label": "Sheathed socket",
+            "help": "Optional skeleton attachment point used while the item is sheathed.",
+            "example": "hip_l",
+            "documentation": "docs/superpowers/specs/2026-07-09-character-equipment-data-contract-design.md"
+          }
         }
       ]
     },
@@ -304,12 +478,37 @@
       "content_schema": "meridian/ability@1",
       "fields": [
         {
+          "path": "id",
+          "ui": {
+            "group": "identity",
+            "label": "Ability ID",
+            "widget": "single_line",
+            "help": "Permanent fully qualified ID referenced by classes, NPC rotations, and items.",
+            "example": "emberfall:ability.ash_burst",
+            "constraint": "Use namespace:ability.name with lowercase dot-separated segments.",
+            "documentation": "schema/content/README.md"
+          }
+        },
+        {
+          "path": "name",
+          "ui": {
+            "group": "identity",
+            "label": "Display name",
+            "widget": "single_line",
+            "help": "Ability name shown in tooltips and combat interfaces.",
+            "example": "Ash Burst"
+          }
+        },
+        {
           "path": "range_m",
           "ui": {
             "group": "targeting",
             "label": "Cast range",
             "widget": "number",
-            "unit": "m"
+            "unit": "m",
+            "help": "Maximum distance from caster to target; use 5 for melee reach.",
+            "example": 5,
+            "constraint": "0-60 meters."
           }
         },
         {
@@ -318,7 +517,10 @@
             "group": "timing",
             "label": "Cast time",
             "widget": "number",
-            "unit": "ms"
+            "unit": "ms",
+            "help": "Time before the ability resolves; zero means instant.",
+            "example": 0,
+            "constraint": "0-10,000 milliseconds."
           }
         },
         {
@@ -336,7 +538,11 @@
             "group": "timing",
             "label": "Cooldown",
             "widget": "number",
-            "unit": "ms"
+            "unit": "ms",
+            "help": "Time after use before this ability can be used again.",
+            "example": 6000,
+            "constraint": "Zero or more milliseconds.",
+            "documentation": "schema/content/README.md"
           }
         },
         {

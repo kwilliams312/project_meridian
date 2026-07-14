@@ -6,13 +6,35 @@ additionalProperties: false
 required: [schema, id, name, level, creature_type, faction, stats]
 properties:
   schema: { const: "meridian/npc@1" }
-  id: { $ref: "#/$defs/contentId" }
-  name: { $ref: "#/$defs/displayName" }
+  id:
+    $ref: "#/$defs/contentId"
+    x-meridian-ui:
+      group: identity
+      label: NPC ID
+      widget: single_line
+      help: Permanent fully qualified ID owned by this pack; references use this value.
+      example: emberfall:npc.ash_guard
+      constraint: Use namespace:npc.name with lowercase dot-separated segments.
+      documentation: schema/content/README.md
+  name:
+    $ref: "#/$defs/displayName"
+    x-meridian-ui:
+      group: identity
+      label: Display name
+      widget: single_line
+      help: Name shown above the NPC and in operator tools.
+      example: Ash Guard
   subtitle:
     description: Shown under the name plate, e.g. "Mining Supervisor".
     type: string
     maxLength: 80
-  level: { $ref: "#/$defs/intRange" }
+  level:
+    $ref: "#/$defs/intRange"
+    x-meridian-ui:
+      group: combat
+      label: Level range
+      help: Inclusive minimum and maximum level; the server scales stats between them.
+      constraint: Minimum must not exceed maximum.
   creature_type:
     enum: [humanoid, beast, undead, elemental, demon, dragonkin, mechanical, critter]
   rank:
@@ -28,14 +50,29 @@ properties:
     additionalProperties: false
     required: [health, damage, attack_speed_ms]
     properties:
-      health: { type: integer, minimum: 1 }
+      health:
+        type: integer
+        minimum: 1
+        x-meridian-ui:
+          group: combat
+          label: Health
+          widget: number
+          help: Hit points at the minimum authored level.
+          constraint: At least 1.
       mana: { type: integer, minimum: 0 }
       armor: { type: integer, minimum: 0 }
       damage: { $ref: "#/$defs/intRange" }
       attack_speed_ms:
         type: integer
         minimum: 500
-        x-meridian-ui: { group: combat, label: Attack speed, widget: number, unit: ms }
+        x-meridian-ui:
+          group: combat
+          label: Attack speed
+          widget: number
+          unit: ms
+          help: Delay between basic attacks.
+          example: 2000
+          constraint: At least 500 milliseconds.
 
   ai:
     description: Server-side behavior parameters (CMB-02). Ignored for faction=friendly.
@@ -64,7 +101,16 @@ properties:
         maximum: 100
         default: 0
         x-meridian-ui: { group: ai, label: Call-for-help radius, widget: number, unit: m }
-      flee_at_health_pct: { $ref: "#/$defs/pct" }
+      flee_at_health_pct:
+        $ref: "#/$defs/pct"
+        x-meridian-ui:
+          group: ai
+          label: Flee below health
+          widget: number
+          unit: percent
+          help: Health percentage below which this NPC attempts to flee.
+          example: 20
+          constraint: 0-100 percent.
       abilities:
         type: array
         items:
@@ -79,13 +125,26 @@ properties:
                 label: Ability
                 widget: reference_picker
                 reference_type: content:ability
+                help: Ability ID considered by this NPC's server-side rotation.
+                example: core:ability.cleave_strike
+                constraint: Use an ability ID, optionally prefixed by another pack namespace.
+                documentation: schema/content/README.md
             priority:
               description: Lower = considered first each AI tick.
               type: integer
               minimum: 0
               default: 0
             cooldown_override_ms: { type: integer, minimum: 0 }
-            use_at_health_below_pct: { $ref: "#/$defs/pct" }
+            use_at_health_below_pct:
+              $ref: "#/$defs/pct"
+              x-meridian-ui:
+                group: ai
+                label: Use below health
+                widget: number
+                unit: percent
+                help: Optional health threshold for considering this ability.
+                example: 50
+                constraint: 0-100 percent.
 
   movement:
     type: object
@@ -156,6 +215,9 @@ properties:
           widget: asset_picker
           reference_type: asset:art
           help: Art-registry model rendered for this NPC or mob.
+          example: core:art.creature.kobold_miner
+          constraint: Select a creature_model asset ID; Meshy generation is available when art is missing.
+          documentation: schema/content/README.md
         x-meridian-asset:
           allowed_classes: [creature_model]
           eligible_generators: [meshy]
@@ -164,7 +226,14 @@ properties:
         exclusiveMinimum: 0
         maximum: 10
         default: 1.0
-        x-meridian-ui: { group: presentation, label: Model scale, widget: number, unit: scale }
+        x-meridian-ui:
+          group: presentation
+          label: Model scale
+          widget: number
+          unit: scale
+          help: Multiplier applied to the source model size.
+          example: 1.0
+          constraint: Greater than 0 and at most 10.
       sound_set:
         $ref: "#/$defs/sfxRef"
         x-meridian-ui:

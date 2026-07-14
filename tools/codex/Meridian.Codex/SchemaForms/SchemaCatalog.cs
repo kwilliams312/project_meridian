@@ -14,7 +14,7 @@ public sealed class SchemaCatalog
     private static readonly string[] ManifestKeys = ["schema", "schemas"];
     private static readonly string[] ManifestSchemaKeys = ["schema_file", "schema_id", "content_schema", "fields"];
     private static readonly string[] ManifestFieldKeys = ["path", "ui", "asset"];
-    private static readonly string[] ManifestUiKeys = ["group", "label", "widget", "unit", "reference_type", "help", "example", "constraint"];
+    private static readonly string[] ManifestUiKeys = ["group", "label", "widget", "unit", "reference_type", "help", "example", "constraint", "documentation"];
     private static readonly string[] ManifestAssetKeys = ["allowed_classes", "eligible_generators"];
     private static readonly string[] SupportedKeywords =
     [
@@ -50,7 +50,15 @@ public sealed class SchemaCatalog
     public SchemaField GetRoot(string schemaFile)
     {
         var merged = GetMergedSchema(schemaFile);
-        return Project(schemaFile, schemaFile[..^".schema.yaml".Length], string.Empty, merged, merged, true);
+        return Project(
+            schemaFile,
+            schemaFile[..^".schema.yaml".Length],
+            string.Empty,
+            merged,
+            merged,
+            true,
+            CollectConditionalRequirements(merged),
+            availabilityCondition: null);
     }
 
     public IReadOnlyList<SchemaDiagnostic> Validate(string schemaFile, string yaml)
@@ -85,7 +93,15 @@ public sealed class SchemaCatalog
         return merged;
     }
 
-    private SchemaField Project(string schemaFile, string name, string path, JsonObject raw, JsonObject root, bool required)
+    private SchemaField Project(
+        string schemaFile,
+        string name,
+        string path,
+        JsonObject raw,
+        JsonObject root,
+        bool required,
+        IReadOnlyDictionary<string, string> conditionalRequirements,
+        string? availabilityCondition)
     {
         var schema = Dereference(raw, root);
         var descriptor = GetDescriptor(schemaFile, path);
@@ -98,7 +114,7 @@ public sealed class SchemaCatalog
             return Unsupported(name, path, required, $"Unsupported JSON Schema keyword(s): {string.Join(", ", unsupported)}. Edit this object in YAML.", ui, asset);
 
         if (schema["oneOf"] is JsonArray variants)
-            return ProjectOneOf(schemaFile, name, path, schema, root, required, variants, ui, asset);
+            return ProjectOneOf(schemaFile, name, path, schema, root, required, variants, ui, asset, conditionalRequirements, availabilityCondition);
 
         var choices = Strings(schema["enum"] as JsonArray);
         if (choices.Count > 0)
@@ -115,6 +131,8 @@ public sealed class SchemaCatalog
                 Asset = asset,
                 Kind = SchemaFieldKind.String,
                 IsRequired = required,
+                ConditionalRequirement = conditionalRequirements.GetValueOrDefault(path),
+                AvailabilityCondition = availabilityCondition,
                 IsReadOnly = true,
                 Constant = constant.DeepClone(),
                 Default = constant.DeepClone(),
@@ -142,11 +160,16 @@ public sealed class SchemaCatalog
             Asset = asset,
             Kind = kind,
             IsRequired = required,
+            ConditionalRequirement = conditionalRequirements.GetValueOrDefault(path),
+            AvailabilityCondition = availabilityCondition,
             Default = schema["default"]?.DeepClone(),
             Minimum = Decimal(schema, "minimum") ?? Decimal(schema, "exclusiveMinimum"),
             Maximum = Decimal(schema, "maximum") ?? Decimal(schema, "exclusiveMaximum"),
             HasExclusiveMinimum = schema["exclusiveMinimum"] is not null,
             HasExclusiveMaximum = schema["exclusiveMaximum"] is not null,
+            MinimumLength = Integer(schema, "minLength"),
+            MaximumLength = Integer(schema, "maxLength"),
+            Pattern = Text(schema, "pattern"),
             Choices = enumChoices ?? [],
         };
 
@@ -159,7 +182,7 @@ public sealed class SchemaCatalog
             if (schema["properties"] is JsonObject properties)
                 foreach (var (childName, childSchema) in properties)
                     if (childSchema is JsonObject childObject)
-                        children.Add(Project(schemaFile, childName, Join(path, childName), childObject, root, requiredNames.Contains(childName)));
+                        children.Add(Project(schemaFile, childName, Join(path, childName), childObject, root, requiredNames.Contains(childName), conditionalRequirements, availabilityCondition));
             return new SchemaField
             {
                 Name = name,
@@ -170,6 +193,8 @@ public sealed class SchemaCatalog
                 Asset = asset,
                 Kind = SchemaFieldKind.Object,
                 IsRequired = required,
+                ConditionalRequirement = conditionalRequirements.GetValueOrDefault(path),
+                AvailabilityCondition = availabilityCondition,
                 Children = children,
             };
         }
@@ -188,24 +213,30 @@ public sealed class SchemaCatalog
                 Asset = asset,
                 Kind = SchemaFieldKind.Array,
                 IsRequired = required,
-                Item = Project(schemaFile, "item", path + "[]", itemSchema, root, true),
+                ConditionalRequirement = conditionalRequirements.GetValueOrDefault(path),
+                AvailabilityCondition = availabilityCondition,
+                Item = Project(schemaFile, "item", path + "[]", itemSchema, root, true, conditionalRequirements, availabilityCondition),
                 Minimum = Decimal(schema, "minItems"),
                 Maximum = Decimal(schema, "maxItems"),
             };
         }
     }
 
-    private SchemaField ProjectOneOf(string schemaFile, string name, string path, JsonObject schema, JsonObject root, bool required, JsonArray rawVariants, SchemaUiDescriptor? ui, SchemaAssetDescriptor? asset)
+    private SchemaField ProjectOneOf(string schemaFile, string name, string path, JsonObject schema, JsonObject root, bool required, JsonArray rawVariants, SchemaUiDescriptor? ui, SchemaAssetDescriptor? asset, IReadOnlyDictionary<string, string> conditionalRequirements, string? availabilityCondition)
     {
         var variants = new List<SchemaVariant>();
         foreach (var raw in rawVariants)
         {
             if (raw is not JsonObject branch) return Unsupported(name, path, required, "Non-object oneOf branches are not supported.", ui, asset);
-            var projected = Project(schemaFile, name, path, branch, root, required);
-            var discriminator = projected.Children.FirstOrDefault(child => child.Constant is not null);
-            if (projected.Kind != SchemaFieldKind.Object || discriminator?.Constant is null)
+            var discriminatorEntry = FindConstDiscriminator(Dereference(branch, root), root);
+            if (discriminatorEntry is null)
                 return Unsupported(name, path, required, "oneOf needs object branches with a unique const discriminator.", ui, asset);
-            var key = discriminator.Constant.ToString();
+            var (discriminatorName, key) = discriminatorEntry.Value;
+            var branchCondition = $"{HumanizeCondition(discriminatorName)} is {Humanize(key)}";
+            var projected = Project(schemaFile, name, path, branch, root, required, conditionalRequirements, branchCondition);
+            var projectedDiscriminator = projected.Children.FirstOrDefault(child => child.Constant is not null);
+            if (projected.Kind != SchemaFieldKind.Object || projectedDiscriminator?.Constant is null)
+                return Unsupported(name, path, required, "oneOf needs object branches with a unique const discriminator.", ui, asset);
             if (variants.Any(v => v.Key == key))
                 return Unsupported(name, path, required, "oneOf discriminator values must be unique.", ui, asset);
             variants.Add(new SchemaVariant(key, Humanize(key), projected));
@@ -220,6 +251,8 @@ public sealed class SchemaCatalog
             Asset = asset,
             Kind = SchemaFieldKind.OneOf,
             IsRequired = required,
+            ConditionalRequirement = conditionalRequirements.GetValueOrDefault(path),
+            AvailabilityCondition = availabilityCondition,
             Variants = variants,
         };
     }
@@ -255,8 +288,64 @@ public sealed class SchemaCatalog
     private static string Join(string path, string name) => path.Length == 0 ? name : $"{path}.{name}";
     private static string? Text(JsonObject value, string key) => value[key]?.GetValue<string>();
     private static decimal? Decimal(JsonObject value, string key) => value[key] is JsonValue node && node.TryGetValue<decimal>(out var number) ? number : null;
+    private static int? Integer(JsonObject value, string key) => value[key] is JsonValue node && node.TryGetValue<int>(out var number) ? number : null;
     private static IReadOnlyList<string> Strings(JsonArray? values) => values?.Select(v => v?.ToString() ?? string.Empty).ToArray() ?? [];
     private static string Humanize(string value) => string.Join(' ', value.Split('_', StringSplitOptions.RemoveEmptyEntries).Select(word => char.ToUpperInvariant(word[0]) + word[1..]));
+    private static string HumanizeCondition(string value)
+    {
+        var text = Humanize(value);
+        return text.Length == 0 ? text : text[..1] + text[1..].ToLowerInvariant();
+    }
+
+    private static (string Name, string Key)? FindConstDiscriminator(JsonObject schema, JsonObject root)
+    {
+        if (schema["properties"] is not JsonObject properties) return null;
+        foreach (var (name, node) in properties)
+            if (node is JsonObject candidate && Dereference(candidate, root)["const"] is JsonNode constant)
+                return (name, constant.ToString());
+        return null;
+    }
+
+    private static IReadOnlyDictionary<string, string> CollectConditionalRequirements(JsonObject root)
+    {
+        var requirements = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        Collect(root, string.Empty);
+        return requirements.ToDictionary(
+            pair => pair.Key,
+            pair => string.Join(" or ", pair.Value.Distinct(StringComparer.Ordinal)),
+            StringComparer.Ordinal);
+
+        void Collect(JsonObject schema, string path)
+        {
+            if (schema["allOf"] is JsonArray clauses)
+                foreach (var clauseNode in clauses)
+                {
+                    if (clauseNode is not JsonObject clause ||
+                        clause["if"]?["properties"] is not JsonObject conditions ||
+                        clause["then"]?["required"] is not JsonArray requiredNames)
+                        continue;
+                    var conditionsText = conditions
+                        .Select(pair => pair.Value is JsonObject value && value["const"] is JsonNode constant
+                            ? $"{HumanizeCondition(pair.Key)} is {Humanize(constant.ToString())}"
+                            : string.Empty)
+                        .Where(value => value.Length > 0)
+                        .ToArray();
+                    if (conditionsText.Length == 0) continue;
+                    foreach (var requiredName in Strings(requiredNames))
+                    {
+                        var requiredPath = Join(path, requiredName);
+                        if (!requirements.TryGetValue(requiredPath, out var reasons))
+                            requirements[requiredPath] = reasons = [];
+                        reasons.Add(string.Join(" and ", conditionsText));
+                    }
+                }
+
+            if (schema["properties"] is not JsonObject properties) return;
+            foreach (var (name, node) in properties)
+                if (node is JsonObject child)
+                    Collect(child, Join(path, name));
+        }
+    }
 
     private JsonObject? GetDescriptor(string schemaFile, string path) =>
         _descriptors.TryGetValue(schemaFile, out var fields) && fields.TryGetValue(path, out var descriptor)
@@ -274,7 +363,8 @@ public sealed class SchemaCatalog
             Text(ui, "reference_type"),
             Text(ui, "help"),
             ui["example"]?.DeepClone(),
-            Text(ui, "constraint"));
+            Text(ui, "constraint"),
+            Text(ui, "documentation"));
     }
 
     private static SchemaAssetDescriptor? ProjectAsset(JsonObject? descriptor)
@@ -339,6 +429,8 @@ public sealed class SchemaCatalog
             EnsureKnownKeys(ui, ManifestUiKeys, location, "ui");
             foreach (var key in ManifestUiKeys.Where(key => key != "example"))
                 OptionalString(ui, key, location, "ui");
+            if (OptionalString(ui, "documentation", location, "ui") is { } documentation && !IsValidDocumentation(documentation))
+                throw new InvalidDataException($"Codex form-descriptor {location}: ui.documentation must be a repository docs path or HTTPS URL.");
             if (ui.ContainsKey("example") && ui["example"] is JsonObject or JsonArray)
                 throw new InvalidDataException($"Codex form-descriptor {location}: ui.example must be a scalar.");
         }
@@ -372,6 +464,13 @@ public sealed class SchemaCatalog
         if (value[key] is JsonValue node && node.TryGetValue<string>(out var text)) return text;
         var qualified = prefix is null ? key : $"{prefix}.{key}";
         throw new InvalidDataException($"Codex form-descriptor {location}: {qualified} must be a string.");
+    }
+
+    private static bool IsValidDocumentation(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Split('/').Contains("..", StringComparer.Ordinal)) return false;
+        if (value.StartsWith("docs/", StringComparison.Ordinal) || value.StartsWith("schema/content/README.md", StringComparison.Ordinal)) return true;
+        return Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps && !string.IsNullOrWhiteSpace(uri.Host);
     }
 
     private static IReadOnlyList<string> StringArray(JsonObject value, string key, string location, string prefix, bool required)

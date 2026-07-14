@@ -78,7 +78,7 @@ public sealed class SchemaFormTests
         var castVfx = ability.Children.Single(field => field.Name == "audio_visual").Children.Single(field => field.Name == "cast_vfx");
         Assert.Equal(["vfx"], castVfx.Asset!.AllowedClasses);
         Assert.Empty(castVfx.Asset.EligibleGenerators);
-        Assert.Null(ability.Children.Single(field => field.Name == "name").Ui);
+        Assert.Equal("Display name", ability.Children.Single(field => field.Name == "name").Ui!.Label);
     }
 
     [Fact]
@@ -109,6 +109,7 @@ public sealed class SchemaFormTests
     [InlineData("field_unknown", "unknown key(s): surprise")]
     [InlineData("ui_unknown", "unknown key(s): ui.gropu")]
     [InlineData("ui_wrong_type", "ui.group must be a string")]
+    [InlineData("documentation_invalid", "ui.documentation must be a repository docs path or HTTPS URL")]
     [InlineData("ui_not_object", "ui must be an object")]
     [InlineData("asset_unknown", "unknown key(s): asset.clas")]
     [InlineData("classes_not_array", "asset.allowed_classes must be an array of strings")]
@@ -128,6 +129,7 @@ public sealed class SchemaFormTests
             case "field_unknown": field["surprise"] = true; break;
             case "ui_unknown": field["ui"]!["gropu"] = "identity"; break;
             case "ui_wrong_type": field["ui"]!["group"] = 42; break;
+            case "documentation_invalid": field["ui"]!["documentation"] = "docs/../secret.md"; break;
             case "ui_not_object": field["ui"] = "identity"; break;
             case "asset_unknown":
                 field.Remove("ui");
@@ -166,6 +168,7 @@ public sealed class SchemaFormTests
                 ["group"] = "identity",
                 ["label"] = "Display name",
                 ["example"] = "Example",
+                ["documentation"] = "docs/content-authoring.md",
             },
             ["asset"] = new JsonObject
             {
@@ -180,6 +183,7 @@ public sealed class SchemaFormTests
         Assert.Equal("identity", name.Ui!.Group);
         Assert.Equal("Display name", name.Ui.Label);
         Assert.Equal("Example", name.Ui.Example!.GetValue<string>());
+        Assert.Equal("docs/content-authoring.md", name.Ui.Documentation);
         Assert.Equal(["icon"], name.Asset!.AllowedClasses);
         Assert.Empty(name.Asset.EligibleGenerators);
     }
@@ -203,6 +207,84 @@ public sealed class SchemaFormTests
             },
         },
     };
+
+    [Fact]
+    public void Representative_guidance_covers_required_optional_default_units_references_and_docs()
+    {
+        var pack = _catalog.GetRoot("pack.schema.yaml");
+        var packNamespace = pack.Children.Single(field => field.Name == "namespace");
+        var description = pack.Children.Single(field => field.Name == "description");
+        Assert.True(packNamespace.IsRequired);
+        Assert.Equal("emberfall", packNamespace.Ui!.Example!.ToString());
+        Assert.Contains("lowercase", packNamespace.Ui.Constraint, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("schema/content/README.md", packNamespace.Ui.Documentation);
+        Assert.False(description.IsRequired);
+        Assert.Contains("Optional summary", description.Ui!.Help, StringComparison.Ordinal);
+
+        var npc = _catalog.GetRoot("npc.schema.yaml");
+        var attackSpeed = npc.Children.Single(field => field.Name == "stats").Children.Single(field => field.Name == "attack_speed_ms");
+        var npcModel = npc.Children.Single(field => field.Name == "visual").Children.Single(field => field.Name == "model");
+        Assert.Equal("ms", attackSpeed.Ui!.Unit);
+        Assert.Contains("500", attackSpeed.Ui.Constraint, StringComparison.Ordinal);
+        Assert.Equal(["meshy"], npcModel.Asset!.EligibleGenerators);
+        Assert.Contains("Meshy", npcModel.Ui!.Constraint, StringComparison.Ordinal);
+
+        var item = _catalog.GetRoot("item.schema.yaml");
+        var requiredLevel = item.Children.Single(field => field.Name == "required_level");
+        var slot = item.Children.Single(field => field.Name == "slot");
+        var socket = item.Children.Single(field => field.Name == "visual")
+            .Children.Single(field => field.Name == "worn")
+            .Children.Single(field => field.Name == "attach")
+            .Children.Single(field => field.Name == "socket");
+        Assert.Equal("1", requiredLevel.Default!.ToString());
+        Assert.Contains("Item class is Weapon", slot.ConditionalRequirement, StringComparison.Ordinal);
+        Assert.Contains("Item class is Armor", slot.ConditionalRequirement, StringComparison.Ordinal);
+        Assert.Contains("character-equipment", socket.Ui!.Documentation, StringComparison.Ordinal);
+
+        var ability = _catalog.GetRoot("ability.schema.yaml");
+        var cooldown = ability.Children.Single(field => field.Name == "cooldown_ms");
+        Assert.Equal("ms", cooldown.Ui!.Unit);
+        Assert.Equal("6000", cooldown.Ui.Example!.ToString());
+        Assert.Equal("schema/content/README.md", cooldown.Ui.Documentation);
+    }
+
+    [Fact]
+    public void View_model_explains_requirement_constraints_defaults_and_branch_availability()
+    {
+        var yaml = File.ReadAllText(ContentFixtures.ContentCorePath("abilities/cleave_strike.ability.yaml"));
+        var form = new SchemaFormViewModel(new SchemaFormDocument(_catalog.GetRoot("ability.schema.yaml"), yaml));
+        var name = form.Root.Children.Single(field => field.Path == "name");
+        var cooldown = form.Root.Children.Single(field => field.Path == "cooldown_ms");
+        var effect = form.Root.Children.Single(field => field.Path == "effects").Children.Single();
+        var amount = effect.Children.Single(field => field.Field.Name == "amount");
+
+        Assert.Equal("Display name *", name.Label);
+        Assert.Equal("Required", name.RequirementText);
+        Assert.True(name.IsRequiredForForm);
+        Assert.Contains("Ability name", name.AutomationHelp, StringComparison.Ordinal);
+        Assert.Equal("Optional; a default is provided", cooldown.RequirementText);
+        Assert.Equal("Unit: milliseconds (ms)", cooldown.UnitText);
+        Assert.Equal("Default: 0", cooldown.DefaultText);
+        Assert.Equal("Example: 6000", cooldown.ExampleText);
+        Assert.Contains("Kind is Damage", amount.RequirementText, StringComparison.Ordinal);
+        Assert.Contains("preserved", amount.AvailabilityText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Field_diagnostic_is_actionable_and_part_of_automation_description()
+    {
+        var copy = ContentFixtures.CopyToTemp("pack.yaml");
+        var file = SchemaFormFileViewModel.TryCreate(["--schema-form", "pack", copy], out _)!;
+        var field = file.Form.Root.Children.Single(value => value.Path == "namespace");
+
+        field.TextValue = "Bad Namespace";
+
+        Assert.True(field.HasDiagnostic);
+        Assert.Contains("Fix:", field.DiagnosticText, StringComparison.Ordinal);
+        Assert.Contains("lowercase", field.DiagnosticText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Error:", field.AutomationHelp, StringComparison.Ordinal);
+        Assert.StartsWith("Invalid:", field.AutomationStatus, StringComparison.Ordinal);
+    }
 
     [Fact]
     public void Raw_extension_keywords_are_non_structural_without_a_descriptor_overlay()
@@ -339,6 +421,7 @@ public sealed class SchemaFormTests
         Assert.Null(error);
         Assert.NotNull(vm);
         Assert.False(vm!.SaveCommand.CanExecute(null));
+        Assert.Contains("no unsaved changes", vm.SaveStateDescription, StringComparison.OrdinalIgnoreCase);
 
         vm.Document.Set("name", JsonValue.Create("Changed in form"));
         Assert.True(vm.SaveCommand.CanExecute(null));
@@ -385,6 +468,7 @@ public sealed class SchemaFormTests
         Assert.False(vm.SaveCommand.CanExecute(null));
         Assert.Contains(vm.Diagnostics, diagnostic => diagnostic.Path == "name");
         Assert.Contains("validation error", vm.ValidationSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Fix the field errors", vm.SaveStateDescription, StringComparison.Ordinal);
         var nameField = vm.Form.Root.Children.Single(field => field.Path == "name");
         Assert.True(nameField.HasDiagnostic);
         Assert.False(vm.TrySave());
@@ -501,6 +585,50 @@ public sealed class SchemaFormTests
 public sealed class SchemaFormHeadlessTests
 {
     [AvaloniaFact]
+    public void Representative_pack_npc_item_and_ability_forms_expose_field_semantics()
+    {
+        var fixtures = new[]
+        {
+            ("pack.schema.yaml", "pack.yaml"),
+            ("npc.schema.yaml", "npcs/kobold_miner.npc.yaml"),
+            ("item.schema.yaml", "items/rusty_pickaxe.item.yaml"),
+            ("ability.schema.yaml", "abilities/cleave_strike.ability.yaml"),
+        };
+        var catalog = new SchemaCatalog();
+
+        foreach (var (schema, fixture) in fixtures)
+        {
+            var yaml = File.ReadAllText(ContentFixtures.ContentCorePath(fixture));
+            var vm = new SchemaFormViewModel(new SchemaFormDocument(catalog.GetRoot(schema), yaml));
+            var view = new SchemaFormView { DataContext = vm };
+            var window = new Window { Content = view };
+            window.Show();
+
+            var inputs = view.GetVisualDescendants()
+                .OfType<Control>()
+                .Where(control =>
+                    control.IsVisible &&
+                    (control is TextBox or NumericUpDown or ComboBox or CheckBox) &&
+                    AutomationProperties.GetAutomationId(control)?.StartsWith("SchemaField_", StringComparison.Ordinal) == true)
+                .ToArray();
+            Assert.NotEmpty(inputs);
+            Assert.All(inputs, control =>
+            {
+                AssertAccessible(control);
+                Assert.DoesNotContain("/", AutomationProperties.GetName(control), StringComparison.Ordinal);
+                Assert.False(string.IsNullOrWhiteSpace(AutomationProperties.GetAutomationId(control)));
+                Assert.False(string.IsNullOrWhiteSpace(AutomationProperties.GetItemStatus(control)));
+                Assert.NotNull(AutomationProperties.GetLabeledBy(control));
+                var field = Assert.IsType<SchemaFieldViewModel>(control.DataContext);
+                Assert.Equal(field.IsRequiredForForm, AutomationProperties.GetIsRequiredForForm(control));
+            });
+            Assert.Contains(view.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "Required");
+            Assert.Contains(view.GetVisualDescendants().OfType<TextBlock>(), block => block.Text?.StartsWith("Optional", StringComparison.Ordinal) == true);
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
     public void Generic_view_renders_labels_controls_and_unsupported_message()
     {
         var catalog = new SchemaCatalog();
@@ -511,7 +639,7 @@ public sealed class SchemaFormHeadlessTests
         window.Show();
 
         var labels = view.GetVisualDescendants().OfType<TextBlock>().Select(block => block.Text).ToArray();
-        Assert.Contains(labels, text => text?.StartsWith("Name", StringComparison.Ordinal) == true);
+        Assert.Contains(labels, text => text?.StartsWith("Display name", StringComparison.Ordinal) == true);
         Assert.NotEmpty(view.GetVisualDescendants().OfType<TextBox>());
         Assert.NotEmpty(view.GetVisualDescendants().OfType<ComboBox>());
         Assert.NotEmpty(view.GetVisualDescendants().OfType<NumericUpDown>());
@@ -554,6 +682,28 @@ public sealed class SchemaFormHeadlessTests
     {
         Assert.False(string.IsNullOrWhiteSpace(control.GetValue(AutomationProperties.NameProperty)));
         Assert.False(string.IsNullOrWhiteSpace(control.GetValue(AutomationProperties.HelpTextProperty)));
+    }
+
+    [AvaloniaFact]
+    public void Invalid_field_exposes_adjacent_live_error_and_invalid_automation_status()
+    {
+        var copy = ContentFixtures.CopyToTemp("pack.yaml");
+        var file = SchemaFormFileViewModel.TryCreate(["--schema-form", "pack", copy], out _)!;
+        var field = file.Form.Root.Children.Single(value => value.Path == "namespace");
+        field.TextValue = "Bad Namespace";
+        var view = new SchemaFormView { DataContext = file.Form };
+        var window = new Window { Content = view };
+        window.Show();
+
+        var input = view.GetVisualDescendants().OfType<TextBox>()
+            .Single(control => control.DataContext is SchemaFieldViewModel value && value.Path == "namespace");
+        Assert.Contains("Error:", AutomationProperties.GetHelpText(input), StringComparison.Ordinal);
+        Assert.StartsWith("Invalid:", AutomationProperties.GetItemStatus(input), StringComparison.Ordinal);
+        Assert.True(AutomationProperties.GetIsRequiredForForm(input));
+        var error = view.GetVisualDescendants().OfType<TextBlock>()
+            .Single(block => block.Text?.Contains("Fix:", StringComparison.Ordinal) == true);
+        Assert.Equal(AutomationLiveSetting.Assertive, AutomationProperties.GetLiveSetting(error));
+        window.Close();
     }
 
     [AvaloniaFact]

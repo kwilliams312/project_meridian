@@ -11,6 +11,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
@@ -28,6 +29,7 @@ UI_KEYS = {
     "help",
     "example",
     "constraint",
+    "documentation",
 }
 UI_WIDGETS = {
     "single_line",
@@ -182,9 +184,17 @@ def _validate_ui(
 ) -> dict[str, Any]:
     annotation = _mapping(value, UI_KEY, schema_file, path)
     _known_keys(annotation, UI_KEYS, UI_KEY, schema_file, path)
-    for key in ("group", "label", "help", "constraint"):
+    for key in ("group", "label", "help", "constraint", "documentation"):
         if key in annotation and not _nonempty_string(annotation[key]):
             _error(schema_file, path, f"{UI_KEY}.{key} must be a non-empty string")
+    if "documentation" in annotation and not _valid_documentation(
+        annotation["documentation"]
+    ):
+        _error(
+            schema_file,
+            path,
+            f"{UI_KEY}.documentation must be a repository docs path or HTTPS URL",
+        )
     if "group" in annotation and (
         not isinstance(annotation["group"], str)
         or not _SLUG.fullmatch(annotation["group"])
@@ -329,6 +339,15 @@ def _known_keys(
 
 def _nonempty_string(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _valid_documentation(value: str) -> bool:
+    if ".." in Path(value).parts:
+        return False
+    if value.startswith("docs/") or value.startswith("schema/content/README.md"):
+        return True
+    parsed = urlparse(value)
+    return parsed.scheme == "https" and bool(parsed.netloc)
 
 
 def _error(schema_file: str, path: str, message: str) -> None:

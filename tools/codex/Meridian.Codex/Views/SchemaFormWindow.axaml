@@ -15,14 +15,16 @@
           <TextBlock Text="{Binding FilePath}" Opacity="0.7" FontSize="12" />
         </StackPanel>
         <Button Grid.Column="1" Content="Save" Command="{Binding SaveCommand}" VerticalAlignment="Center"
-                auto:AutomationProperties.Name="Save content file" auto:AutomationProperties.HelpText="Save valid changes to the selected YAML file." />
+                auto:AutomationProperties.Name="Save content file" auto:AutomationProperties.HelpText="{Binding SaveStateDescription}"
+                auto:AutomationProperties.ItemStatus="{Binding SaveStateDescription}" />
       </Grid>
     </Border>
     <Border DockPanel.Dock="Bottom" Padding="12,6" Background="{DynamicResource SystemControlBackgroundListLowBrush}">
       <StackPanel>
         <TextBlock Text="{Binding Status}" />
         <TextBlock Text="{Binding ValidationSummary}" Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}"
-                   auto:AutomationProperties.Name="Validation summary" auto:AutomationProperties.HelpText="{Binding ValidationSummary}" />
+                   auto:AutomationProperties.Name="Validation summary" auto:AutomationProperties.HelpText="{Binding ValidationSummary}"
+                   auto:AutomationProperties.LiveSetting="Assertive" />
       </StackPanel>
     </Border>
     <views:SchemaFormView DataContext="{Binding Form}" />

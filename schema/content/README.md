@@ -93,6 +93,7 @@ their vocabulary and emits the checked-in Codex form-descriptor manifest.
 | `help` | Optional task-oriented explanation beyond the schema description. |
 | `example` | Optional scalar example; never a default. |
 | `constraint` | Optional plain-language summary of a schema-owned constraint. |
+| `documentation` | Optional repository `docs/…` path, this schema README, or HTTPS URL for deeper operator guidance. |
 
 `x-meridian-asset` is valid on asset-reference fields. `allowed_classes` is a
 non-empty, unique subset of `asset.schema.yaml`'s `class` enum.

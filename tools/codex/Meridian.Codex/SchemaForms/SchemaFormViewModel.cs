@@ -54,10 +54,54 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
 
     public SchemaField Field { get; }
     public string Path { get; }
-    public string Label => Field.Title + (Field.IsRequired ? " *" : " (optional)");
-    public string? Help => Field.Description;
-    public string AutomationName => Label;
-    public string AutomationHelp => Help ?? $"Edit {Field.Title}.";
+    public string FieldName => Field.Ui?.Label ?? Field.Title;
+    public string Label => FieldName + (Field.IsRequired ? " *" : string.Empty);
+    public string RequirementText => Field.Constant is not null
+        ? "Fixed by schema; read-only"
+        : Field.ConditionalRequirement is { } requirement
+            ? $"Required when {requirement}; optional otherwise"
+            : Field.IsRequired
+                ? Field.AvailabilityCondition is { } availability
+                    ? $"Required when {availability}"
+                    : "Required"
+                : Field.Default is not null
+                    ? "Optional; a default is provided"
+                    : "Optional";
+    public string Help => Field.Ui?.Help ?? Field.Description ?? KindHelp;
+    public string? ExampleText => Field.Ui?.Example is { } example ? $"Example: {Display(example)}" : null;
+    public string? UnitText => Field.Ui?.Unit is { } unit ? $"Unit: {UnitName(unit)}" : null;
+    public string? DefaultText => Field.Default is { } value && Field.Constant is null ? $"Default: {Display(value)}" : null;
+    public string? ConstraintText => Field.Ui?.Constraint ?? DerivedConstraint;
+    public string? DocumentationText => Field.Ui?.Documentation is { } documentation ? $"Learn more: {documentation}" : null;
+    public string? Watermark => Field.Ui?.Example is { } example ? Display(example) : null;
+    public bool HasExample => ExampleText is not null;
+    public bool HasUnit => UnitText is not null;
+    public bool HasDefault => DefaultText is not null;
+    public bool HasConstraint => ConstraintText is not null;
+    public bool HasDocumentation => DocumentationText is not null;
+    public bool HasAvailability => Field.AvailabilityCondition is not null;
+    public string? AvailabilityText => Field.AvailabilityCondition is { } condition
+        ? $"Shown because {condition}. Values from other types are preserved when you switch back."
+        : Field.Kind == SchemaFieldKind.OneOf
+            ? "Choose a type to show its fields. Switching type preserves earlier values and asks before removing active fields."
+            : null;
+    public bool HasAvailabilityText => AvailabilityText is not null;
+    public string AutomationName => FieldName;
+    public string AutomationHelp => string.Join(" ", new[]
+    {
+        RequirementText + ".",
+        Help,
+        UnitText,
+        DefaultText,
+        ExampleText,
+        ConstraintText is { } constraint ? $"Constraint: {constraint}" : null,
+        AvailabilityText,
+        DocumentationText,
+        HasDiagnostic ? $"Error: {DiagnosticText}" : null,
+    }.Where(value => !string.IsNullOrWhiteSpace(value)));
+    public string AutomationId => "SchemaField_" + Path.Replace('.', '_').Replace('[', '_').Replace("]", string.Empty, StringComparison.Ordinal);
+    public string AutomationStatus => HasDiagnostic ? $"Invalid: {DiagnosticText}" : RequirementText;
+    public bool IsRequiredForForm => Field.IsRequired;
     public string AddOptionalAutomationName => $"Add optional {Field.Title}";
     public string RemoveOptionalAutomationName => $"Remove optional {Field.Title}";
     public string AddItemAutomationName => $"Add item to {Field.Title}";
@@ -88,6 +132,57 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
     public IReadOnlyList<string> Choices => Field.Choices;
     public ObservableCollection<SchemaFieldViewModel> Children { get; } = [];
     public IReadOnlyList<string> VariantChoices => Field.Variants.Select(variant => variant.Key).ToArray();
+
+    private string KindHelp => Field.Ui?.ReferenceType switch
+    {
+        "content:ability" => "Enter an ability ID such as core:ability.cleave_strike.",
+        { } reference when reference.StartsWith("content:", StringComparison.Ordinal) => "Enter a content ID using namespace:type.name format.",
+        { } reference when reference.StartsWith("asset:", StringComparison.Ordinal) => "Enter an asset-registry ID using namespace:asset_type.name format.",
+        _ when Field.Kind == SchemaFieldKind.OneOf => "Choose the value type, then complete the fields that appear.",
+        _ when Field.Kind == SchemaFieldKind.Array => "Add, remove, or reorder entries in this list.",
+        _ when Field.Kind == SchemaFieldKind.Object => "Complete the related fields in this group.",
+        _ => $"Enter {FieldName.ToLowerInvariant()}.",
+    };
+
+    private string? DerivedConstraint
+    {
+        get
+        {
+            if (Field.Choices.Count > 0) return $"Choose one of: {string.Join(", ", Field.Choices)}.";
+            if (Field.Minimum is { } minimum && Field.Maximum is { } maximum)
+                return $"{(Field.HasExclusiveMinimum ? "Greater than" : "At least")} {minimum} and {(Field.HasExclusiveMaximum ? "less than" : "at most")} {maximum}.";
+            if (Field.Minimum is { } lower) return $"{(Field.HasExclusiveMinimum ? "Greater than" : "At least")} {lower}.";
+            if (Field.Maximum is { } upper) return $"{(Field.HasExclusiveMaximum ? "Less than" : "At most")} {upper}.";
+            if (Field.MinimumLength is { } minLength && Field.MaximumLength is { } maxLength) return $"Use {minLength}-{maxLength} characters.";
+            if (Field.MinimumLength is { } minimumLength) return $"Use at least {minimumLength} character{(minimumLength == 1 ? string.Empty : "s")}.";
+            if (Field.MaximumLength is { } maximumLength) return $"Use at most {maximumLength} characters.";
+            if (Field.Pattern is not null) return "Use the required ID or value format shown in the example.";
+            return null;
+        }
+    }
+
+    private string RepairHint
+    {
+        get
+        {
+            if (ConstraintText is { } constraint) return $"Fix: {constraint}";
+            if (ExampleText is { } example) return $"Fix: follow the format in {example.ToLowerInvariant()}.";
+            return $"Fix: enter a valid value for {FieldName}.";
+        }
+    }
+
+    private static string UnitName(string unit) => unit switch
+    {
+        "ms" => "milliseconds (ms)",
+        "m" => "meters (m)",
+        "mps" => "meters per second (m/s)",
+        "percent" => "percent (%)",
+        "copper" => "copper (100 copper = 1 silver; 10,000 copper = 1 gold)",
+        "scale" => "model scale multiplier",
+        _ => unit,
+    };
+
+    private static string Display(JsonNode value) => value.ToString();
 
     [ObservableProperty] private string? _branchWarning;
 
@@ -243,10 +338,16 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
 
     internal void SetDiagnostics(IReadOnlyList<SchemaDiagnostic> diagnostics)
     {
-        var messages = diagnostics.Where(diagnostic => diagnostic.Path == Path).Select(diagnostic => diagnostic.Message).Distinct().ToArray();
+        var messages = diagnostics
+            .Where(diagnostic => diagnostic.Path == Path)
+            .Select(diagnostic => $"{diagnostic.Message} {RepairHint}")
+            .Distinct()
+            .ToArray();
         DiagnosticText = messages.Length == 0 ? null : string.Join(Environment.NewLine, messages);
         OnPropertyChanged(nameof(DiagnosticText));
         OnPropertyChanged(nameof(HasDiagnostic));
+        OnPropertyChanged(nameof(AutomationHelp));
+        OnPropertyChanged(nameof(AutomationStatus));
         foreach (var child in Children) child.SetDiagnostics(diagnostics);
     }
 

@@ -13,6 +13,8 @@ public sealed class SchemaField
     public SchemaAssetDescriptor? Asset { get; init; }
     public SchemaFieldKind Kind { get; init; }
     public bool IsRequired { get; init; }
+    public string? ConditionalRequirement { get; init; }
+    public string? AvailabilityCondition { get; init; }
     public bool IsReadOnly { get; init; }
     public string? UnsupportedReason { get; init; }
     public JsonNode? Default { get; init; }
@@ -21,6 +23,9 @@ public sealed class SchemaField
     public decimal? Maximum { get; init; }
     public bool HasExclusiveMinimum { get; init; }
     public bool HasExclusiveMaximum { get; init; }
+    public int? MinimumLength { get; init; }
+    public int? MaximumLength { get; init; }
+    public string? Pattern { get; init; }
     public IReadOnlyList<string> Choices { get; init; } = [];
     public IReadOnlyList<SchemaField> Children { get; init; } = [];
     public SchemaField? Item { get; init; }
@@ -35,7 +40,8 @@ public sealed record SchemaUiDescriptor(
     string? ReferenceType,
     string? Help,
     JsonNode? Example,
-    string? Constraint);
+    string? Constraint,
+    string? Documentation);
 
 public sealed record SchemaAssetDescriptor(
     IReadOnlyList<string> AllowedClasses,
