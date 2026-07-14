@@ -1,0 +1,34 @@
+# IF-8 sidecar (meridian/asset@1) — first chibi character intake candidate (story #725).
+# RAW Meshy output, structurally QUARANTINED: restyle_status is 'pending' on purpose,
+# so validate_content's L024 restyle-quarantine lint fires by design and blocks a merge
+# until a human restyle marks it 'done' (Art SAD §3.2, Art PRD §3.4, TD-09). This is a
+# reference candidate, NOT final art. Follow-on human/art work (do NOT do here):
+#   - canonical-skeleton rig via `python -m meshy convert-rig` (spec ④ §7.3) -> I020/I022
+#   - restyle pass to the locked "colored pills" look -> restyle_status: done
+#   - LOD chain (lod0 + lod1+) -> I023
+schema: meridian/asset@1
+id: core:art.chibi_warrior
+class: character_model
+source: assets/art/chibi_warrior/sk_chibi_warrior.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  origin_url: https://www.meshy.ai/
+  license_verified_on: "2026-07-14"
+  authors: [meridian-contributors]
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: chibi_warrior.prompts.yaml
+  transform_notes: >-
+    OBJ+texture -> GLB via the sanctioned meridian_export preset (export_yup,
+    export_apply); transforms applied (1 BU = 1 m), single mesh, texture as base
+    color. Baked texture downscaled 4096 -> 2048 to the character_model cap and
+    embedded in the GLB. No rig conversion, no restyle, no LODs — raw Meshy
+    geometry landed as an intake candidate.
+budget:
+  lod0_tris: 10371
+  texture_max_px: 2048
+import_hints:
+  lod_policy: single
+restyle_status: pending
+tags: [chibi, character, warrior, candidate, colored_pills]
