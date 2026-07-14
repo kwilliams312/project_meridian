@@ -25,7 +25,7 @@
         <TextBlock Text="{Binding DocumentationText}" IsVisible="{Binding HasDocumentation}" Opacity="0.72" FontSize="12" TextWrapping="Wrap" />
       </StackPanel>
       <StackPanel Grid.Column="1" Spacing="6">
-        <Button Content="Add optional field" Command="{Binding AddOptionalCommand}" IsVisible="{Binding CanAddOptional}" HorizontalAlignment="Left"
+        <Button Content="{Binding AddFieldActionText}" Command="{Binding AddOptionalCommand}" IsVisible="{Binding CanAddOptional}" HorizontalAlignment="Left"
                 auto:AutomationProperties.Name="{Binding AddOptionalAutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
         <Button Content="Remove optional field" Command="{Binding RemoveOptionalCommand}" IsVisible="{Binding CanRemoveOptional}" HorizontalAlignment="Left"
                 auto:AutomationProperties.Name="{Binding RemoveOptionalAutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />

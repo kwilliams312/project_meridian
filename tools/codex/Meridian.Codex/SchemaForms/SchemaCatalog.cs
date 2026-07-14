@@ -100,7 +100,7 @@ public sealed class SchemaCatalog
         JsonObject raw,
         JsonObject root,
         bool required,
-        IReadOnlyDictionary<string, string> conditionalRequirements,
+        IReadOnlyDictionary<string, IReadOnlyList<SchemaConditionalRequirement>> conditionalRequirements,
         string? availabilityCondition)
     {
         var schema = Dereference(raw, root);
@@ -131,7 +131,7 @@ public sealed class SchemaCatalog
                 Asset = asset,
                 Kind = SchemaFieldKind.String,
                 IsRequired = required,
-                ConditionalRequirement = conditionalRequirements.GetValueOrDefault(path),
+                ConditionalRequirements = conditionalRequirements.GetValueOrDefault(path) ?? [],
                 AvailabilityCondition = availabilityCondition,
                 IsReadOnly = true,
                 Constant = constant.DeepClone(),
@@ -160,7 +160,7 @@ public sealed class SchemaCatalog
             Asset = asset,
             Kind = kind,
             IsRequired = required,
-            ConditionalRequirement = conditionalRequirements.GetValueOrDefault(path),
+            ConditionalRequirements = conditionalRequirements.GetValueOrDefault(path) ?? [],
             AvailabilityCondition = availabilityCondition,
             Default = schema["default"]?.DeepClone(),
             Minimum = Decimal(schema, "minimum") ?? Decimal(schema, "exclusiveMinimum"),
@@ -193,7 +193,7 @@ public sealed class SchemaCatalog
                 Asset = asset,
                 Kind = SchemaFieldKind.Object,
                 IsRequired = required,
-                ConditionalRequirement = conditionalRequirements.GetValueOrDefault(path),
+                ConditionalRequirements = conditionalRequirements.GetValueOrDefault(path) ?? [],
                 AvailabilityCondition = availabilityCondition,
                 Children = children,
             };
@@ -213,7 +213,7 @@ public sealed class SchemaCatalog
                 Asset = asset,
                 Kind = SchemaFieldKind.Array,
                 IsRequired = required,
-                ConditionalRequirement = conditionalRequirements.GetValueOrDefault(path),
+                ConditionalRequirements = conditionalRequirements.GetValueOrDefault(path) ?? [],
                 AvailabilityCondition = availabilityCondition,
                 Item = Project(schemaFile, "item", path + "[]", itemSchema, root, true, conditionalRequirements, availabilityCondition),
                 Minimum = Decimal(schema, "minItems"),
@@ -222,7 +222,7 @@ public sealed class SchemaCatalog
         }
     }
 
-    private SchemaField ProjectOneOf(string schemaFile, string name, string path, JsonObject schema, JsonObject root, bool required, JsonArray rawVariants, SchemaUiDescriptor? ui, SchemaAssetDescriptor? asset, IReadOnlyDictionary<string, string> conditionalRequirements, string? availabilityCondition)
+    private SchemaField ProjectOneOf(string schemaFile, string name, string path, JsonObject schema, JsonObject root, bool required, JsonArray rawVariants, SchemaUiDescriptor? ui, SchemaAssetDescriptor? asset, IReadOnlyDictionary<string, IReadOnlyList<SchemaConditionalRequirement>> conditionalRequirements, string? availabilityCondition)
     {
         var variants = new List<SchemaVariant>();
         foreach (var raw in rawVariants)
@@ -251,7 +251,7 @@ public sealed class SchemaCatalog
             Asset = asset,
             Kind = SchemaFieldKind.OneOf,
             IsRequired = required,
-            ConditionalRequirement = conditionalRequirements.GetValueOrDefault(path),
+            ConditionalRequirements = conditionalRequirements.GetValueOrDefault(path) ?? [],
             AvailabilityCondition = availabilityCondition,
             Variants = variants,
         };
@@ -306,13 +306,13 @@ public sealed class SchemaCatalog
         return null;
     }
 
-    private static IReadOnlyDictionary<string, string> CollectConditionalRequirements(JsonObject root)
+    private static IReadOnlyDictionary<string, IReadOnlyList<SchemaConditionalRequirement>> CollectConditionalRequirements(JsonObject root)
     {
-        var requirements = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var requirements = new Dictionary<string, List<SchemaConditionalRequirement>>(StringComparer.Ordinal);
         Collect(root, string.Empty);
         return requirements.ToDictionary(
             pair => pair.Key,
-            pair => string.Join(" or ", pair.Value.Distinct(StringComparer.Ordinal)),
+            pair => (IReadOnlyList<SchemaConditionalRequirement>)pair.Value,
             StringComparer.Ordinal);
 
         void Collect(JsonObject schema, string path)
@@ -324,19 +324,21 @@ public sealed class SchemaCatalog
                         clause["if"]?["properties"] is not JsonObject conditions ||
                         clause["then"]?["required"] is not JsonArray requiredNames)
                         continue;
-                    var conditionsText = conditions
+                    var projectedConditions = conditions
                         .Select(pair => pair.Value is JsonObject value && value["const"] is JsonNode constant
-                            ? $"{HumanizeCondition(pair.Key)} is {Humanize(constant.ToString())}"
-                            : string.Empty)
-                        .Where(value => value.Length > 0)
+                            ? new SchemaCondition(Join(path, pair.Key), constant.ToString())
+                            : null)
+                        .OfType<SchemaCondition>()
                         .ToArray();
-                    if (conditionsText.Length == 0) continue;
+                    if (projectedConditions.Length == 0) continue;
+                    var description = string.Join(" and ", projectedConditions.Select(condition =>
+                        $"{HumanizeCondition(condition.Path.Split('.').Last())} is {Humanize(condition.ExpectedValue)}"));
                     foreach (var requiredName in Strings(requiredNames))
                     {
                         var requiredPath = Join(path, requiredName);
                         if (!requirements.TryGetValue(requiredPath, out var reasons))
                             requirements[requiredPath] = reasons = [];
-                        reasons.Add(string.Join(" and ", conditionsText));
+                        reasons.Add(new SchemaConditionalRequirement(projectedConditions, description));
                     }
                 }
 

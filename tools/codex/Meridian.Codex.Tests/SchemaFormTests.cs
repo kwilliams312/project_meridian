@@ -237,8 +237,22 @@ public sealed class SchemaFormTests
             .Children.Single(field => field.Name == "attach")
             .Children.Single(field => field.Name == "socket");
         Assert.Equal("1", requiredLevel.Default!.ToString());
-        Assert.Contains("Item class is Weapon", slot.ConditionalRequirement, StringComparison.Ordinal);
-        Assert.Contains("Item class is Armor", slot.ConditionalRequirement, StringComparison.Ordinal);
+        Assert.Collection(
+            slot.ConditionalRequirements,
+            requirement =>
+            {
+                Assert.Equal("Item class is Weapon", requirement.Description);
+                var condition = Assert.Single(requirement.Conditions);
+                Assert.Equal("item_class", condition.Path);
+                Assert.Equal("weapon", condition.ExpectedValue);
+            },
+            requirement =>
+            {
+                Assert.Equal("Item class is Armor", requirement.Description);
+                var condition = Assert.Single(requirement.Conditions);
+                Assert.Equal("item_class", condition.Path);
+                Assert.Equal("armor", condition.ExpectedValue);
+            });
         Assert.Contains("character-equipment", socket.Ui!.Documentation, StringComparison.Ordinal);
 
         var ability = _catalog.GetRoot("ability.schema.yaml");
@@ -246,6 +260,31 @@ public sealed class SchemaFormTests
         Assert.Equal("ms", cooldown.Ui!.Unit);
         Assert.Equal("6000", cooldown.Ui.Example!.ToString());
         Assert.Equal("schema/content/README.md", cooldown.Ui.Documentation);
+    }
+
+    [Fact]
+    public void Conditional_requirement_tracks_the_document_instead_of_schema_shape_alone()
+    {
+        var yaml = File.ReadAllText(ContentFixtures.ContentCorePath("items/rusty_pickaxe.item.yaml"));
+        var document = new SchemaFormDocument(_catalog.GetRoot("item.schema.yaml"), yaml);
+        var form = new SchemaFormViewModel(document);
+        var slot = form.Root.Children.Single(field => field.Path == "slot");
+
+        Assert.True(slot.IsRequiredForForm);
+        Assert.Equal("Slot *", slot.Label);
+        Assert.Equal("Required because Item class is Weapon", slot.RequirementText);
+
+        document.Set("item_class", JsonValue.Create("trade_good"));
+
+        Assert.False(slot.IsRequiredForForm);
+        Assert.Equal("Slot", slot.Label);
+        Assert.Equal("Optional now; required when Item class is Weapon or Item class is Armor", slot.RequirementText);
+
+        document.Set("item_class", JsonValue.Create("armor"));
+
+        Assert.True(slot.IsRequiredForForm);
+        Assert.Equal("Slot *", slot.Label);
+        Assert.Equal("Required because Item class is Armor", slot.RequirementText);
     }
 
     [Fact]
@@ -626,6 +665,58 @@ public sealed class SchemaFormHeadlessTests
             Assert.Contains(view.GetVisualDescendants().OfType<TextBlock>(), block => block.Text?.StartsWith("Optional", StringComparison.Ordinal) == true);
             window.Close();
         }
+    }
+
+    [AvaloniaFact]
+    public void Item_class_transitions_update_visible_and_accessible_conditional_required_state()
+    {
+        var copy = ContentFixtures.CopyToTemp("items/rusty_pickaxe.item.yaml");
+        var file = SchemaFormFileViewModel.TryCreate(["--schema-form", "item", copy], out _)!;
+        var slotField = file.Form.Root.Children.Single(field => field.Path == "slot");
+        var view = new SchemaFormView { DataContext = file.Form };
+        var window = new Window { Content = view };
+        window.Show();
+        var slot = view.GetVisualDescendants().OfType<ComboBox>()
+            .Single(control => control.IsVisible && AutomationProperties.GetAutomationId(control) == "SchemaField_slot");
+        var slotLabel = view.GetVisualDescendants().OfType<TextBlock>()
+            .Single(block => ReferenceEquals(block.DataContext, slotField) && block.Text == "Slot *");
+        var requirement = view.GetVisualDescendants().OfType<TextBlock>()
+            .Single(block => ReferenceEquals(block.DataContext, slotField) && block.Text == "Required because Item class is Weapon");
+
+        Assert.True(AutomationProperties.GetIsRequiredForForm(slot));
+        Assert.Contains("Required because Item class is Weapon", AutomationProperties.GetItemStatus(slot), StringComparison.Ordinal);
+
+        file.Document.Set("item_class", JsonValue.Create("trade_good"));
+
+        Assert.False(AutomationProperties.GetIsRequiredForForm(slot));
+        Assert.Equal("Slot", slotLabel.Text);
+        Assert.StartsWith("Optional now", requirement.Text, StringComparison.Ordinal);
+        Assert.StartsWith("Optional now", AutomationProperties.GetItemStatus(slot), StringComparison.Ordinal);
+        Assert.True(slotField.CanRemoveOptional);
+
+        file.Document.Set("slot", null);
+        Assert.True(file.IsValid);
+        var add = view.GetVisualDescendants().OfType<Button>()
+            .Single(button => ReferenceEquals(button.Command, slotField.AddOptionalCommand) && button.IsVisible);
+        Assert.Equal("Add optional field", add.Content);
+
+        file.Document.Set("item_class", JsonValue.Create("weapon"));
+
+        Assert.False(file.IsValid);
+        Assert.True(slotField.IsRequiredForForm);
+        Assert.Equal("Slot *", slotLabel.Text);
+        Assert.True(AutomationProperties.GetIsRequiredForForm(slot));
+        Assert.Equal("Add required field", add.Content);
+        Assert.Contains("required", AutomationProperties.GetName(add), StringComparison.OrdinalIgnoreCase);
+        Assert.False(slotField.CanRemoveOptional);
+        Assert.True(slotField.HasDiagnostic);
+        Assert.Contains("add the required field", slotField.DiagnosticText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Error:", slotField.AutomationHelp, StringComparison.Ordinal);
+
+        file.Document.Set("item_class", JsonValue.Create("armor"));
+        Assert.True(slotField.IsRequiredForForm);
+        Assert.Contains("item class is armor", AutomationProperties.GetItemStatus(slot), StringComparison.OrdinalIgnoreCase);
+        window.Close();
     }
 
     [AvaloniaFact]

@@ -14,6 +14,7 @@ public sealed partial class SchemaFormViewModel : ObservableObject
     {
         Document = document;
         Root = new SchemaFieldViewModel(document.Schema, document, Refresh);
+        document.Changed += (_, _) => Root.NotifyRequirementStateChanged();
     }
 
     public SchemaFormDocument Document { get; }
@@ -55,11 +56,13 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
     public SchemaField Field { get; }
     public string Path { get; }
     public string FieldName => Field.Ui?.Label ?? Field.Title;
-    public string Label => FieldName + (Field.IsRequired ? " *" : string.Empty);
+    public string Label => FieldName + (IsRequiredForForm ? " *" : string.Empty);
     public string RequirementText => Field.Constant is not null
         ? "Fixed by schema; read-only"
-        : Field.ConditionalRequirement is { } requirement
-            ? $"Required when {requirement}; optional otherwise"
+        : ActiveConditionalRequirement is { } activeRequirement
+            ? $"Required because {activeRequirement.Description}"
+            : Field.ConditionalRequirements.Count > 0
+                ? $"Optional now; required when {ConditionalRequirementDescription}"
             : Field.IsRequired
                 ? Field.AvailabilityCondition is { } availability
                     ? $"Required when {availability}"
@@ -101,8 +104,9 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
     }.Where(value => !string.IsNullOrWhiteSpace(value)));
     public string AutomationId => "SchemaField_" + Path.Replace('.', '_').Replace('[', '_').Replace("]", string.Empty, StringComparison.Ordinal);
     public string AutomationStatus => HasDiagnostic ? $"Invalid: {DiagnosticText}" : RequirementText;
-    public bool IsRequiredForForm => Field.IsRequired;
-    public string AddOptionalAutomationName => $"Add optional {Field.Title}";
+    public bool IsRequiredForForm => Field.IsRequired || ActiveConditionalRequirement is not null;
+    public string AddFieldActionText => IsRequiredForForm ? "Add required field" : "Add optional field";
+    public string AddOptionalAutomationName => $"Add {(IsRequiredForForm ? "required" : "optional")} {Field.Title}";
     public string RemoveOptionalAutomationName => $"Remove optional {Field.Title}";
     public string AddItemAutomationName => $"Add item to {Field.Title}";
     public string MoveUpAutomationName => $"Move {Field.Title} up";
@@ -120,8 +124,8 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
     public bool IsUnsupported => Field.Kind == SchemaFieldKind.Unsupported;
     public bool IsArrayItem => _arrayPath is not null;
     public bool HasVariants => IsPresent && Field.Variants.Count > 0;
-    public bool CanAddOptional => !Field.IsRequired && !IsPresent && CanEdit;
-    public bool CanRemoveOptional => !Field.IsRequired && IsPresent && CanEdit && !IsArrayItem;
+    public bool CanAddOptional => !IsPresent && CanEdit;
+    public bool CanRemoveOptional => !IsRequiredForForm && IsPresent && CanEdit && !IsArrayItem;
     public bool ShowScalar => IsPresent && IsScalar;
     public bool ShowNumeric => IsPresent && IsNumeric;
     public bool ShowBoolean => IsPresent && IsBoolean;
@@ -143,6 +147,14 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
         _ when Field.Kind == SchemaFieldKind.Object => "Complete the related fields in this group.",
         _ => $"Enter {FieldName.ToLowerInvariant()}.",
     };
+
+    private SchemaConditionalRequirement? ActiveConditionalRequirement => Field.ConditionalRequirements.FirstOrDefault(requirement =>
+        requirement.Conditions.All(condition => string.Equals(
+            _document.Get(condition.Path)?.ToString(),
+            condition.ExpectedValue,
+            StringComparison.Ordinal)));
+
+    private string ConditionalRequirementDescription => string.Join(" or ", Field.ConditionalRequirements.Select(requirement => requirement.Description));
 
     private string? DerivedConstraint
     {
@@ -341,14 +353,37 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
         var messages = diagnostics
             .Where(diagnostic => diagnostic.Path == Path)
             .Select(diagnostic => $"{diagnostic.Message} {RepairHint}")
-            .Distinct()
-            .ToArray();
-        DiagnosticText = messages.Length == 0 ? null : string.Join(Environment.NewLine, messages);
+            .ToList();
+        if (IsRequiredForForm && !IsPresent)
+            messages.Add($"This field is {RequirementText.ToLowerInvariant()}. Fix: add the required field and choose a value.");
+        var distinctMessages = messages.Distinct().ToArray();
+        DiagnosticText = distinctMessages.Length == 0 ? null : string.Join(Environment.NewLine, distinctMessages);
         OnPropertyChanged(nameof(DiagnosticText));
         OnPropertyChanged(nameof(HasDiagnostic));
         OnPropertyChanged(nameof(AutomationHelp));
         OnPropertyChanged(nameof(AutomationStatus));
         foreach (var child in Children) child.SetDiagnostics(diagnostics);
+    }
+
+    internal void NotifyRequirementStateChanged()
+    {
+        OnPropertyChanged(nameof(Label));
+        OnPropertyChanged(nameof(RequirementText));
+        OnPropertyChanged(nameof(AutomationHelp));
+        OnPropertyChanged(nameof(AutomationStatus));
+        OnPropertyChanged(nameof(IsRequiredForForm));
+        OnPropertyChanged(nameof(AddFieldActionText));
+        OnPropertyChanged(nameof(AddOptionalAutomationName));
+        OnPropertyChanged(nameof(IsPresent));
+        OnPropertyChanged(nameof(CanAddOptional));
+        OnPropertyChanged(nameof(CanRemoveOptional));
+        OnPropertyChanged(nameof(ShowScalar));
+        OnPropertyChanged(nameof(ShowNumeric));
+        OnPropertyChanged(nameof(ShowBoolean));
+        OnPropertyChanged(nameof(ShowEnum));
+        OnPropertyChanged(nameof(ShowChildren));
+        OnPropertyChanged(nameof(CanAddArrayItem));
+        foreach (var child in Children) child.NotifyRequirementStateChanged();
     }
 
 }

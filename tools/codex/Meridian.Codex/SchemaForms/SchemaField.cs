@@ -13,7 +13,7 @@ public sealed class SchemaField
     public SchemaAssetDescriptor? Asset { get; init; }
     public SchemaFieldKind Kind { get; init; }
     public bool IsRequired { get; init; }
-    public string? ConditionalRequirement { get; init; }
+    public IReadOnlyList<SchemaConditionalRequirement> ConditionalRequirements { get; init; } = [];
     public string? AvailabilityCondition { get; init; }
     public bool IsReadOnly { get; init; }
     public string? UnsupportedReason { get; init; }
@@ -46,6 +46,12 @@ public sealed record SchemaUiDescriptor(
 public sealed record SchemaAssetDescriptor(
     IReadOnlyList<string> AllowedClasses,
     IReadOnlyList<string> EligibleGenerators);
+
+public sealed record SchemaConditionalRequirement(
+    IReadOnlyList<SchemaCondition> Conditions,
+    string Description);
+
+public sealed record SchemaCondition(string Path, string ExpectedValue);
 
 public sealed record SchemaVariant(string Key, string Label, SchemaField Schema);
 
