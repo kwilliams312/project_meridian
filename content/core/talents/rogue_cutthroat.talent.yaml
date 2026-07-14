@@ -1,0 +1,12 @@
+# SP5 chibi roster (#723) — Rogue tier-2 talent: grants Gash + a crit passive.
+schema: meridian/talent@1
+id: core:talent.rogue_cutthroat
+name: Cutthroat
+description: Unlocks Gash and sharpens your critical strike.
+grants:
+  - kind: ability
+    ability: core:ability.rogue_gash
+  - kind: buff
+    attribute: core:attribute.crit
+    amount: 2
+    modifier: flat

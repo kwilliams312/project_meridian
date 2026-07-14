@@ -1,0 +1,24 @@
+# SP5 chibi roster (#723) — Priest: the cloth healer. roster_id 8 (append-only).
+# race_limits omitted = all races. Clean-room original archetype.
+schema: meridian/class@1
+id: core:class.priest
+roster_id: 8
+name: Priest
+description: A cloth-robed healer who mends allies, shields them, and purges foes.
+abilities:
+  - core:ability.priest_mend
+  - core:ability.priest_renewal
+  - core:ability.priest_aegis
+  - core:ability.priest_purge
+usable_armor_types:
+  - core:equip_type.cloth
+usable_weapon_types:
+  - core:equip_type.wand
+  - core:equip_type.staff
+role: healer
+attribute_mods:
+  - attribute: core:attribute.intellect
+    value: 2
+  - attribute: core:attribute.stamina
+    value: 1
+talent_tree: core:talent_tree.light_and_shadow

@@ -8,7 +8,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 INSERT INTO world_manifest
   (pack_namespace, pack_version, id_band, content_hash, schema_version, compatibility_version, mcc_version, built_at)
 VALUES
-  ('core', '0.1.0', 0, '45abe405e85a795219129e2b68240ea378108e0e6854a4e2955c90c87b6253b0', 1, 1, '0.0.0', '1970-01-01 00:00:00');
+  ('core', '0.1.0', 0, '350ad36c418a6629d3cf7b355bc6e69f9c381223da58cc24a8e55a2c5caeab7a', 1, 1, '0.0.0', '1970-01-01 00:00:00');
 
 -- npc_template (8 rows)
 INSERT INTO npc_template (id, name, subtitle, level_min, level_max, creature_type, `rank`, faction, stat_health, stat_mana, stat_armor, stat_damage_min, stat_damage_max, stat_attack_speed_ms, ai_behavior, ai_aggro_radius_m, ai_leash_radius_m, ai_call_for_help_radius_m, ai_flee_at_health_pct, move_walk_speed_mps, move_run_speed_mps, vendor_ref_id, loot_table_ref_id, loot_money_min, loot_money_max, visual_model_id, visual_scale, visual_sound_set_id) VALUES
@@ -47,7 +47,7 @@ INSERT INTO equip_type (content_id, equip_ref, name, category, slot_class) VALUE
   (124, 'core:equip_type.two_hand', 'Two-Hand', 'weapon', 'two_hand'),
   (125, 'core:equip_type.wand', 'Wand', 'weapon', 'main');
 
--- item_template (20 rows)
+-- item_template (28 rows)
 INSERT INTO item_template (id, name, flavor_text, item_class, subclass, slot, equip_type_id, rarity, required_level, item_level, is_unique, binding, stack_size, weapon_damage_min, weapon_damage_max, weapon_speed_ms, weapon_school, armor, effect_on_use_id, price_sell, price_buy, visual_icon_id, visual_model_id) VALUES
   (16, 'Bren''s Signet', 'The quartermaster''s seal, good for a discount he''ll deny offering.', 'armor', 'misc', 'finger', NULL, 'uncommon', 4, 9, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 380, NULL, 12, NULL),
   (17, 'Kobold Ear', 'Proof of a culling. Bren doesn''t ask how you got it.', 'quest', NULL, NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 20, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 8, NULL),
@@ -68,9 +68,17 @@ INSERT INTO item_template (id, name, flavor_text, item_class, subclass, slot, eq
   (105, 'Warden''s Helm', 'Full steel, cheek to crown. The Wardens see everything and show nothing.', 'armor', 'plate', 'head', 122, 'rare', 10, 12, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 40, NULL, 480, NULL, 48, NULL),
   (106, 'Warden''s Greaves', 'Leg guards cut for the long descent into the Cinderdeep.', 'armor', 'plate', 'legs', 122, 'rare', 10, 13, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 60, NULL, 720, NULL, 48, NULL),
   (107, 'Warden''s Pauldrons', 'Twin plates that shrug off a kobold''s overhand as if it were rain.', 'armor', 'plate', 'shoulders', 122, 'rare', 10, 12, FALSE, 'on_equip', 1, NULL, NULL, NULL, NULL, 45, NULL, 540, NULL, 48, NULL),
-  (114, 'Iron Sword', 'A plain arming sword of forge-black iron — honest steel, no frills.', 'weapon', 'sword_1h', 'main_hand', 121, 'common', 1, 5, FALSE, 'none', 1, 6, 11, 2400, NULL, NULL, NULL, 120, NULL, 112, 113);
+  (114, 'Iron Sword', 'A plain arming sword of forge-black iron — honest steel, no frills.', 'weapon', 'sword_1h', 'main_hand', 121, 'common', 1, 5, FALSE, 'none', 1, 6, 11, 2400, NULL, NULL, NULL, 120, NULL, 112, 113),
+  (164, 'Apprentice''s Robe', 'Coarse-woven wool, singed at the cuffs from too-eager practice.', 'armor', 'cloth', 'chest', 118, 'common', 1, 1, FALSE, 'none', 1, NULL, NULL, NULL, NULL, 8, NULL, 50, NULL, 48, NULL),
+  (165, 'Apprentice''s Staff', 'A plain ashwood stave, its focus-crystal barely a chip of quartz.', 'weapon', 'staff', 'two_hand', 123, 'common', 1, 1, FALSE, 'none', 1, 4, 8, 3000, NULL, NULL, NULL, 80, NULL, 112, NULL),
+  (166, 'Acolyte''s Prayer Wand', 'A thumb-worn rod of birch, blessed by a hedge-priest for a copper.', 'weapon', 'wand', 'main_hand', 125, 'common', 1, 1, FALSE, 'none', 1, 3, 6, 2000, 'holy', NULL, NULL, 80, NULL, 112, NULL),
+  (167, 'Acolyte''s Vestments', 'Undyed linen, the hem still stiff from the temple''s starch.', 'armor', 'cloth', 'chest', 118, 'common', 1, 1, FALSE, 'none', 1, NULL, NULL, NULL, NULL, 8, NULL, 50, NULL, 48, NULL),
+  (168, 'Recruit''s Leathers', 'Supple, quiet, and cut close so nothing snags in the dark.', 'armor', 'leather', 'chest', 119, 'common', 1, 1, FALSE, 'none', 1, NULL, NULL, NULL, NULL, 20, NULL, 55, NULL, 48, NULL),
+  (169, 'Recruit''s Shiv', 'A ground-down file with a leather grip. Deniable, and quick.', 'weapon', 'dagger', 'main_hand', 121, 'common', 1, 1, FALSE, 'none', 1, 4, 7, 1800, NULL, NULL, NULL, 80, NULL, 112, NULL),
+  (170, 'Recruit''s Battleblade', 'Standard-issue steel, blunt at the tip and honest in the swing.', 'weapon', 'sword_1h', 'main_hand', 121, 'common', 1, 1, FALSE, 'none', 1, 5, 9, 2400, NULL, NULL, NULL, 80, NULL, 112, NULL),
+  (171, 'Recruit''s Platemail', 'Dented drill plate, re-issued more times than anyone can count.', 'armor', 'plate', 'chest', 122, 'common', 1, 1, FALSE, 'none', 1, NULL, NULL, NULL, NULL, 40, NULL, 60, NULL, 48, NULL);
 
--- item_stat (15 rows)
+-- item_stat (22 rows)
 INSERT INTO item_stat (item_id, stat, amount) VALUES
   (16, 'intellect', 2),
   (16, 'spirit', 2),
@@ -86,16 +94,39 @@ INSERT INTO item_stat (item_id, stat, amount) VALUES
   (104, 'stamina', 3),
   (105, 'stamina', 3),
   (106, 'stamina', 3),
-  (107, 'stamina', 3);
+  (107, 'stamina', 3),
+  (164, 'intellect', 2),
+  (165, 'intellect', 2),
+  (166, 'intellect', 2),
+  (167, 'intellect', 2),
+  (168, 'agility', 2),
+  (169, 'agility', 2),
+  (171, 'stamina', 2);
 
--- ability (6 rows)
+-- ability (22 rows)
 INSERT INTO ability (id, name, description, school, target, range_m, cast_time_ms, cast_channel_ms, cooldown_ms, triggers_gcd, resource_type, resource_amount, av_cast_anim, av_cast_vfx_id, av_cast_sfx_id, av_impact_vfx_id, av_impact_sfx_id, effects_json) VALUES
   (1, 'Minor Healing', 'Restores {amount} health.', 'holy', 'self', 0, 0, NULL, 60000, FALSE, NULL, NULL, NULL, 14, 33, NULL, NULL, '[{"amount":{"max":60,"min":40},"kind":"heal"}]'),
   (2, 'Pickaxe Slam', 'Slams the target for {amount} physical damage and leaves them bleeding.', 'physical', 'enemy', 5, 0, NULL, 10000, TRUE, 'energy', 20, 'attack_overhead', NULL, NULL, 15, 32, '[{"amount":{"max":13,"min":8},"kind":"damage"},{"duration_ms":9000,"kind":"aura","periodic":{"amount":{"max":3,"min":2},"kind":"damage","tick_ms":3000}}]'),
   (133, 'Cleave Strike', 'A sweeping blow that hits for {amount} physical damage.', 'physical', 'enemy', 5, 0, NULL, 6000, TRUE, 'rage', 15, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":18,"min":12},"coefficient":0.4,"kind":"damage"}]'),
   (134, 'Iron Resolve', 'Steels the body, increasing stamina for a time.', 'physical', 'self', 0, 0, NULL, 45000, FALSE, 'rage', 10, NULL, NULL, NULL, NULL, NULL, '[{"duration_ms":12000,"kind":"aura","stat_mods":[{"amount":8,"stat":"stamina"}]}]'),
   (135, 'Mending Word', 'A whispered blessing that restores {amount} health.', 'holy', 'friendly', 30, 1500, NULL, 0, TRUE, 'mana', 25, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":45,"min":30},"coefficient":0.6,"kind":"heal"}]'),
-  (136, 'Searing Brand', 'Marks the target with fire, dealing {amount} damage over time and weakening it.', 'fire', 'enemy', 30, 0, NULL, 12000, TRUE, 'mana', 20, NULL, NULL, NULL, NULL, NULL, '[{"duration_ms":9000,"kind":"aura","periodic":{"amount":{"max":6,"min":4},"kind":"damage","tick_ms":3000},"stat_mods":[{"amount":-5,"stat":"strength"}]}]');
+  (136, 'Searing Brand', 'Marks the target with fire, dealing {amount} damage over time and weakening it.', 'fire', 'enemy', 30, 0, NULL, 12000, TRUE, 'mana', 20, NULL, NULL, NULL, NULL, NULL, '[{"duration_ms":9000,"kind":"aura","periodic":{"amount":{"max":6,"min":4},"kind":"damage","tick_ms":3000},"stat_mods":[{"amount":-5,"stat":"strength"}]}]'),
+  (144, 'Arcane Bolt', 'A bolt of raw arcane force striking for {amount} damage.', 'arcane', 'enemy', 30, 1500, NULL, 0, TRUE, 'mana', 20, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":26,"min":18},"coefficient":0.6,"kind":"damage"}]'),
+  (145, 'Arcane Storm', 'A crashing wave of arcane energy that hits for {amount} damage.', 'arcane', 'enemy', 30, 2000, NULL, 8000, TRUE, 'mana', 40, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":30,"min":22},"coefficient":0.7,"kind":"damage"}]'),
+  (146, 'Frost Lock', 'Encases the target''s legs in ice, rooting them in place.', 'frost', 'enemy', 30, 0, NULL, 12000, TRUE, 'mana', 20, NULL, NULL, NULL, NULL, NULL, '[{"duration_ms":6000,"kind":"cc","type":"root"}]'),
+  (147, 'Cinderburn', 'Sets the target ablaze, searing them for {amount} fire damage each tick.', 'fire', 'enemy', 30, 0, NULL, 6000, TRUE, 'mana', 25, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":9,"min":6},"coefficient":0.2,"duration_ms":12000,"kind":"dot","tick_ms":3000}]'),
+  (148, 'Aegis', 'Wraps an ally in holy light, absorbing {amount} incoming damage.', 'holy', 'friendly', 30, 0, NULL, 8000, TRUE, 'mana', 30, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":150,"min":100},"coefficient":0.5,"duration_ms":12000,"kind":"shield"}]'),
+  (149, 'Mend', 'A prayer that knits wounds, restoring {amount} health.', 'holy', 'friendly', 30, 1500, NULL, 0, TRUE, 'mana', 25, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":60,"min":40},"coefficient":0.6,"kind":"heal"}]'),
+  (150, 'Purge', 'Scours the target with holy fire, sapping its strength.', 'holy', 'enemy', 30, 0, NULL, 8000, TRUE, 'mana', 20, NULL, NULL, NULL, NULL, NULL, '[{"amount":-10,"attribute":"core:attribute.strength","duration_ms":10000,"kind":"debuff","modifier":"flat"}]'),
+  (151, 'Renewal', 'A blessing that mends the target for {amount} health each tick.', 'holy', 'friendly', 30, 0, NULL, 0, TRUE, 'mana', 25, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":12,"min":8},"coefficient":0.2,"duration_ms":12000,"kind":"hot","tick_ms":3000}]'),
+  (152, 'Ribcut', 'A precise thrust to a vital point for {amount} physical damage.', 'physical', 'enemy', 5, 0, NULL, 6000, TRUE, 'energy', 35, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":28,"min":20},"coefficient":0.5,"kind":"damage"}]'),
+  (153, 'Weakpoint', 'Finds the gaps in the target''s guard, weakening its armor.', 'physical', 'enemy', 5, 0, NULL, 10000, TRUE, 'energy', 25, NULL, NULL, NULL, NULL, NULL, '[{"amount":-40,"attribute":"core:attribute.armor","duration_ms":15000,"kind":"debuff","modifier":"flat"}]'),
+  (154, 'Gash', 'A ragged cut that bleeds the target for {amount} damage each tick.', 'physical', 'enemy', 5, 0, NULL, 6000, TRUE, 'energy', 30, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":8,"min":5},"coefficient":0.15,"duration_ms":12000,"kind":"dot","tick_ms":3000}]'),
+  (155, 'Veilstep', 'Slips forward through the veiling shadows, closing the gap.', 'shadow', 'self', 0, 0, NULL, 15000, FALSE, 'energy', 25, NULL, NULL, NULL, NULL, NULL, '[{"distance_m":15,"kind":"movement","motion":"dash"}]'),
+  (156, 'Bulwark', 'Braces behind raised guard, absorbing {amount} incoming damage.', 'physical', 'self', 0, 0, NULL, 20000, FALSE, 'rage', 10, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":120,"min":80},"coefficient":0.4,"duration_ms":10000,"kind":"shield"}]'),
+  (157, 'Bellow', 'A defiant bellow that seizes the target''s attention.', 'physical', 'enemy', 5, 0, NULL, 8000, TRUE, 'rage', 10, NULL, NULL, NULL, NULL, NULL, '[{"amount":500,"kind":"threat"}]'),
+  (158, 'Crushing Blow', 'A heavy overhead swing that hits for {amount} physical damage.', 'physical', 'enemy', 5, 0, NULL, 6000, TRUE, 'rage', 15, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":24,"min":16},"coefficient":0.5,"kind":"damage"}]'),
+  (159, 'Skullcrack', 'A stunning blow to the head that dazes the target for a few seconds.', 'physical', 'enemy', 5, 0, NULL, 15000, TRUE, 'rage', 20, NULL, NULL, NULL, NULL, NULL, '[{"duration_ms":4000,"kind":"cc","type":"stun"}]');
 
 -- attribute (7 rows)
 INSERT INTO attribute (attr_ref, content_id, name, kind) VALUES
@@ -112,17 +143,21 @@ INSERT INTO race (roster_id, content_id, name, description) VALUES
   (1, 139, 'Ardent', 'Resilient folk of the central realm.'),
   (2, 140, 'Dolmen', 'Stoic mountain folk hewn from the deep stone.');
 
--- class (2 rows)
+-- class (6 rows)
 INSERT INTO class (roster_id, content_id, name, description, talent_tree_id) VALUES
   (1, 137, 'Vanguard', 'A front-line melee defender who holds the line.', 143),
-  (3, 138, 'Warden', 'A ranged hybrid who mends allies and burns foes at distance.', NULL);
+  (3, 138, 'Warden', 'A ranged hybrid who mends allies and burns foes at distance.', NULL),
+  (5, 163, 'Warrior', 'A plate-clad tank who holds the front line and controls the fight.', 183),
+  (6, 160, 'Mage', 'A cloth-robed spellcaster who burns and controls foes from range.', 180),
+  (7, 162, 'Rogue', 'A leather-clad skirmisher who strikes from the shadows and bleeds foes dry.', 182),
+  (8, 161, 'Priest', 'A cloth-robed healer who mends allies, shields them, and purges foes.', 181);
 
 -- class_race_limit (2 rows)
 INSERT INTO class_race_limit (class_roster_id, race_roster_id) VALUES
   (1, 1),
   (1, 2);
 
--- class_usable_equip_type (8 rows)
+-- class_usable_equip_type (19 rows)
 INSERT INTO class_usable_equip_type (class_roster_id, equip_type_id, list) VALUES
   (1, 120, 'armor'),
   (1, 121, 'weapon'),
@@ -131,45 +166,110 @@ INSERT INTO class_usable_equip_type (class_roster_id, equip_type_id, list) VALUE
   (3, 119, 'armor'),
   (3, 120, 'armor'),
   (3, 121, 'weapon'),
-  (3, 123, 'weapon');
+  (3, 123, 'weapon'),
+  (5, 121, 'weapon'),
+  (5, 122, 'armor'),
+  (5, 124, 'weapon'),
+  (6, 118, 'armor'),
+  (6, 123, 'weapon'),
+  (6, 125, 'weapon'),
+  (7, 119, 'armor'),
+  (7, 121, 'weapon'),
+  (8, 118, 'armor'),
+  (8, 123, 'weapon'),
+  (8, 125, 'weapon');
 
--- class_role (3 rows)
+-- class_role (7 rows)
 INSERT INTO class_role (class_roster_id, role) VALUES
   (1, 'tank'),
   (3, 'dps_ranged'),
-  (3, 'healer');
+  (3, 'healer'),
+  (5, 'tank'),
+  (6, 'dps_ranged'),
+  (7, 'dps_melee'),
+  (8, 'healer');
 
--- class_attribute_mod (3 rows)
+-- class_attribute_mod (9 rows)
 INSERT INTO class_attribute_mod (class_roster_id, attr_ref, value) VALUES
   (1, 'core:attribute.stamina', 1),
   (1, 'core:attribute.strength', 2),
-  (3, 'core:attribute.agility', 2);
+  (3, 'core:attribute.agility', 2),
+  (5, 'core:attribute.stamina', 2),
+  (5, 'core:attribute.strength', 2),
+  (6, 'core:attribute.intellect', 3),
+  (7, 'core:attribute.agility', 3),
+  (8, 'core:attribute.intellect', 2),
+  (8, 'core:attribute.stamina', 1);
 
--- talent (2 rows)
+-- talent (10 rows)
 INSERT INTO talent (content_id, talent_ref, name, rank_max) VALUES
   (141, 'core:talent.battle_fury', 'Battle Fury', 3),
-  (142, 'core:talent.warding_grace', 'Warding Grace', 1);
+  (142, 'core:talent.warding_grace', 'Warding Grace', 1),
+  (172, 'core:talent.mage_frostwork', 'Frostwork', 1),
+  (173, 'core:talent.mage_kindling', 'Kindling', 3),
+  (174, 'core:talent.priest_devotion', 'Devotion', 3),
+  (175, 'core:talent.priest_sanctuary', 'Sanctuary', 1),
+  (176, 'core:talent.rogue_cutthroat', 'Cutthroat', 1),
+  (177, 'core:talent.rogue_finesse', 'Finesse', 3),
+  (178, 'core:talent.warrior_frontline', 'Frontline Fury', 3),
+  (179, 'core:talent.warrior_guardian', 'Guardian''s Oath', 1);
 
--- talent_grant (4 rows)
+-- talent_grant (20 rows)
 INSERT INTO talent_grant (talent_id, ordinal, kind, ability_id, attribute_ref, amount, modifier, duration_ms, max_stacks) VALUES
   (141, 0, 'ability', 133, NULL, NULL, NULL, NULL, NULL),
   (141, 1, 'buff', NULL, 'core:attribute.strength', 5, 'flat', NULL, 1),
   (142, 0, 'ability', 135, NULL, NULL, NULL, NULL, NULL),
-  (142, 1, 'buff', NULL, 'core:attribute.intellect', 3, 'flat', NULL, 1);
+  (142, 1, 'buff', NULL, 'core:attribute.intellect', 3, 'flat', NULL, 1),
+  (172, 0, 'ability', 146, NULL, NULL, NULL, NULL, NULL),
+  (172, 1, 'buff', NULL, 'core:attribute.crit', 2, 'flat', NULL, 1),
+  (173, 0, 'ability', 147, NULL, NULL, NULL, NULL, NULL),
+  (173, 1, 'buff', NULL, 'core:attribute.intellect', 5, 'flat', NULL, 1),
+  (174, 0, 'ability', 151, NULL, NULL, NULL, NULL, NULL),
+  (174, 1, 'buff', NULL, 'core:attribute.intellect', 5, 'flat', NULL, 1),
+  (175, 0, 'ability', 148, NULL, NULL, NULL, NULL, NULL),
+  (175, 1, 'buff', NULL, 'core:attribute.stamina', 3, 'flat', NULL, 1),
+  (176, 0, 'ability', 154, NULL, NULL, NULL, NULL, NULL),
+  (176, 1, 'buff', NULL, 'core:attribute.crit', 2, 'flat', NULL, 1),
+  (177, 0, 'ability', 152, NULL, NULL, NULL, NULL, NULL),
+  (177, 1, 'buff', NULL, 'core:attribute.agility', 5, 'flat', NULL, 1),
+  (178, 0, 'ability', 158, NULL, NULL, NULL, NULL, NULL),
+  (178, 1, 'buff', NULL, 'core:attribute.stamina', 5, 'flat', NULL, 1),
+  (179, 0, 'ability', 156, NULL, NULL, NULL, NULL, NULL),
+  (179, 1, 'buff', NULL, 'core:attribute.strength', 3, 'flat', NULL, 1);
 
--- talent_tree (1 rows)
+-- talent_tree (5 rows)
 INSERT INTO talent_tree (content_id, tree_ref, name, description) VALUES
-  (143, 'core:talent_tree.vanguard_path', 'Vanguard Path', 'The Vanguard''s tiered talent progression.');
+  (143, 'core:talent_tree.vanguard_path', 'Vanguard Path', 'The Vanguard''s tiered talent progression.'),
+  (180, 'core:talent_tree.arcane_mastery', 'Arcane Mastery', 'The Mage''s tiered talent progression.'),
+  (181, 'core:talent_tree.light_and_shadow', 'Light and Shadow', 'The Priest''s tiered talent progression.'),
+  (182, 'core:talent_tree.shadow_arts', 'Shadow Arts', 'The Rogue''s tiered talent progression.'),
+  (183, 'core:talent_tree.warriors_resolve', 'Warrior''s Resolve', 'The Warrior''s tiered talent progression.');
 
--- talent_tree_tier (2 rows)
+-- talent_tree_tier (10 rows)
 INSERT INTO talent_tree_tier (talent_tree_id, tier_ordinal, required_points) VALUES
   (143, 0, 0),
-  (143, 1, 5);
+  (143, 1, 5),
+  (180, 0, 0),
+  (180, 1, 5),
+  (181, 0, 0),
+  (181, 1, 5),
+  (182, 0, 0),
+  (182, 1, 5),
+  (183, 0, 0),
+  (183, 1, 5);
 
--- talent_tree_tier_talent (2 rows)
+-- talent_tree_tier_talent (10 rows)
 INSERT INTO talent_tree_tier_talent (talent_tree_id, tier_ordinal, ordinal, talent_id) VALUES
   (143, 0, 0, 141),
-  (143, 1, 0, 142);
+  (143, 1, 0, 142),
+  (180, 0, 0, 173),
+  (180, 1, 0, 172),
+  (181, 0, 0, 174),
+  (181, 1, 0, 175),
+  (182, 0, 0, 177),
+  (182, 1, 0, 176),
+  (183, 0, 0, 178),
+  (183, 1, 0, 179);
 
 -- quest_template (10 rows)
 INSERT INTO quest_template (id, name, summary, offer_text, completion_text, level, required_level, zone_ref_id, giver_npc_id, turn_in_npc_id, reward_xp, reward_money) VALUES

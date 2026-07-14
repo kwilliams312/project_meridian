@@ -1,0 +1,24 @@
+# SP5 chibi roster (#723) — Rogue starter armor (leather chest). Reuses placeholder art.
+schema: meridian/item@2
+id: core:item.rogue_leathers
+name: Recruit's Leathers
+flavor_text: Supple, quiet, and cut close so nothing snags in the dark.
+item_class: armor
+subclass: leather
+equip_type: core:equip_type.leather
+slot: chest
+rarity: common
+required_level: 1
+item_level: 1
+armor: 20
+stats:
+  - stat: agility
+    amount: 2
+price:
+  sell: 55
+visual:
+  icon: core:art.icon.item.warden_crest
+  worn:
+    models: [{ model: core:art.item.armor.warden_chest, mirror: none }]
+    hides: [torso]
+    dye_channels: [primary, secondary]

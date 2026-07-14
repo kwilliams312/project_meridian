@@ -887,6 +887,34 @@ target_compile_definitions(worldd-itm1-chain-load-test PRIVATE
 set_target_properties(worldd-itm1-chain-load-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-itm1-chain-load COMMAND worldd-itm1-chain-load-test)
 
+# --- SP5 CHIBI CLASSES boot->create->equip->cast DB-backed test (#723; epic #722). -
+# The SP2-discipline runtime proof that a whole new class roster ships as PURE PACK
+# DATA on the SP2 kernel with zero engine change. Runs the REAL pipeline like
+# worldd-itm1-chain-load: mcc emit-sql content/core -> throwaway MariaDB (world DDL +
+# emitted DML) -> load_world_content, then drives boot (the 4 chibi classes Warrior/
+# Mage/Rogue/Priest, roster 5-8, load into the Roster + ClassCatalog with the right
+# role + proficiencies), create (an Ardent/Warrior character validated vs the DB
+# roster), equip (gate_equip accepts each class's starter items, rejects a wrong-type
+# item), and cast (the chibi abilities execute through the MapTick ability engine —
+# Warrior Crushing Blow damages + Bulwark shields, Mage Cinderburn burns, Priest Mend
+# heals). Links meridian::characters for the create-vs-roster path. Same TOOL-/ENV-
+# guards (MERIDIAN_WORLDDB_*/MERIDIAN_DB_* + a mariadb/mysql client + an mcc binary);
+# SKIPS (exit 0) otherwise — inert in the plain server ctest, real under test.sh --db.
+add_executable(worldd-chibi-classes-db-test
+  test/chibi_classes_db_it.cpp
+)
+target_link_libraries(worldd-chibi-classes-db-test
+  PRIVATE
+    meridian::world-dispatch
+    meridian::characters
+)
+target_compile_definitions(worldd-chibi-classes-db-test PRIVATE
+  CHIBI_CONTENT_DIR="${CMAKE_SOURCE_DIR}/../content"
+  CHIBI_WORLD_DDL_DIR="${CMAKE_SOURCE_DIR}/../schema/sql/world"
+  CHIBI_MCC_BIN="${CMAKE_BINARY_DIR}/../mcc/mcc")
+set_target_properties(worldd-chibi-classes-db-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-chibi-classes-db COMMAND worldd-chibi-classes-db-test)
+
 # --- DB-loaded area-trigger POI -> explore crediting test (#398). ---------------
 # Proves the last content-load link: the world-DB `area` (POI) rows load (via
 # load_world_content) into discovery TriggerVolumes carrying the real `poi`, and a

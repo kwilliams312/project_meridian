@@ -1,0 +1,14 @@
+# SP5 chibi roster (#723) — Warrior opening talent. Mixed grant: an ABILITY
+# (crushing_blow) + a permanent passive `buff` over stamina. L011-resolved.
+schema: meridian/talent@1
+id: core:talent.warrior_frontline
+name: Frontline Fury
+description: Unlocks Crushing Blow and permanently toughens your stamina.
+rank_max: 3
+grants:
+  - kind: ability
+    ability: core:ability.warrior_crushing_blow
+  - kind: buff
+    attribute: core:attribute.stamina
+    amount: 5
+    modifier: flat

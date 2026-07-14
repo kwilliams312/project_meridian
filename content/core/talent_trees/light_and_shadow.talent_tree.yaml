@@ -1,0 +1,12 @@
+# SP5 chibi roster (#723) — Priest talent tree (two-tier row-unlock). Referenced by class.priest.
+schema: meridian/talent_tree@1
+id: core:talent_tree.light_and_shadow
+name: Light and Shadow
+description: The Priest's tiered talent progression.
+tiers:
+  - required_points: 0
+    talents:
+      - core:talent.priest_devotion
+  - required_points: 5
+    talents:
+      - core:talent.priest_sanctuary

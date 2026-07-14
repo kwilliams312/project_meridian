@@ -1,0 +1,24 @@
+# SP5 chibi roster (#723) — Warrior starter weapon (one_hand). equip_type gates it
+# to the Warrior's usable_weapon_types. Reuses existing placeholder weapon art
+# (iron_sword icon/model) — this is a DATA slice, chibi art lands in SP5b.
+schema: meridian/item@2
+id: core:item.warrior_battleblade
+name: Recruit's Battleblade
+flavor_text: Standard-issue steel, blunt at the tip and honest in the swing.
+item_class: weapon
+subclass: sword_1h
+equip_type: core:equip_type.one_hand
+slot: main_hand
+rarity: common
+required_level: 1
+item_level: 1
+weapon:
+  damage: { min: 5, max: 9 }
+  speed_ms: 2400
+price:
+  sell: 80
+visual:
+  icon: core:art.icon.item.iron_sword
+  worn:
+    models: [{ model: core:art.item.weapon.iron_sword, mirror: none }]
+    attach: { socket: main_hand, sheath_socket: back }
