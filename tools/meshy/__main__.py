@@ -509,8 +509,8 @@ def cmd_generate(args: argparse.Namespace) -> int:
 
     def completed() -> int:
         nonlocal terminal_emitted
-        if args.json_events and events.was_emitted("completed"):
-            events.ensure_flushed("completed")
+        if args.json_events and events.has_delivery("completed"):
+            events.resume("completed")
             terminal_emitted = True
         if not terminal_emitted:
             asset_id = intake.asset_id(args.ns, args.name)
@@ -524,8 +524,8 @@ def cmd_generate(args: argparse.Namespace) -> int:
             else:
                 print(f"OK — landed {asset_id} at {paths.asset_dir}")
             # Record completion only after the terminal output is flushed.
-            # EventEmitter separately tracks an accepted line so committed
-            # recovery can retry a failed flush without writing a duplicate.
+            # EventEmitter journals the exact serialized line and accepted
+            # offset so recovery resumes it rather than writing a duplicate.
             terminal_emitted = True
         return 0
 

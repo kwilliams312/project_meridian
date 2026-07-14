@@ -663,6 +663,107 @@ def test_interrupt_at_completed_stream_flush_reuses_the_accepted_line(
     assert (tmp_path / "content/core/assets/art/protocol_marker").is_dir()
 
 
+def test_repeated_short_writes_preserve_distinct_same_name_event_deliveries():
+    class ShortWriteStream:
+        def __init__(self):
+            self.output = ""
+
+        def write(self, value):
+            count = min(3, len(value))
+            self.output += value[:count]
+            return count
+
+        def flush(self):
+            pass
+
+    stream = ShortWriteStream()
+    emitter = protocol.EventEmitter(stream=stream)
+    emitter.emit(
+        "poll.progress",
+        model_version="meshy-5",
+        task_id="task-1",
+        stage="preview",
+        status="IN_PROGRESS",
+        progress=10,
+    )
+    emitter.emit(
+        "poll.progress",
+        model_version="meshy-5",
+        task_id="task-1",
+        stage="preview",
+        status="IN_PROGRESS",
+        progress=20,
+    )
+
+    events = _events(stream.output)
+    assert [event["event"] for event in events] == [
+        "poll.progress",
+        "poll.progress",
+    ]
+    assert [event["sequence"] for event in events] == [1, 2]
+    assert [event["progress"] for event in events] == [10, 20]
+
+
+@pytest.mark.parametrize("failure", ["keyboard", "error"])
+def test_completed_delivery_resumes_after_short_write_prefix_and_failure(
+    failure, tmp_path, monkeypatch
+):
+    class ShortWriteThenFailStream:
+        def __init__(self):
+            self.output = ""
+            self.current_line = ""
+            self.fail_next = False
+            self.failed = False
+
+        def write(self, value):
+            if self.fail_next and not self.failed:
+                self.failed = True
+                if failure == "keyboard":
+                    raise KeyboardInterrupt
+                raise OSError("injected stream write failure")
+            count = min(7, len(value))
+            prefix = value[:count]
+            self.output += prefix
+            self.current_line += prefix
+            if (
+                not self.failed
+                and '"event":"completed"' in self.current_line
+                and count < len(value)
+            ):
+                self.fail_next = True
+            return count
+
+        def flush(self):
+            self.current_line = ""
+
+    glb = _make_glb(tmp_path / "source.glb", triangle_count=2)
+    handler, _calls = _text_to_3d_handler(glb_bytes=glb.read_bytes())
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        meshy_main,
+        "_new_client",
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+            client_mod.MeshyClient(
+                api_key, model_version=model_version, transport=transport
+            )
+        ),
+    )
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    stream = ShortWriteThenFailStream()
+    monkeypatch.setattr(meshy_main.sys, "stdout", stream)
+
+    assert meshy_main.main(_base_args(tmp_path)) == 0
+    assert stream.failed
+    events = _events(stream.output)
+    terminals = [
+        event
+        for event in events
+        if event["event"] in {"completed", "cancelled", "error"}
+    ]
+    assert [event["event"] for event in terminals] == ["completed"]
+    assert (tmp_path / "content/core/assets/art/protocol_marker").is_dir()
+
+
 def test_client_close_failure_emits_one_redacted_error_and_rolls_back(
     tmp_path, monkeypatch, capsys
 ):

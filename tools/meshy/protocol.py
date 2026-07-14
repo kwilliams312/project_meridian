@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -38,6 +39,17 @@ EVENT_NAMES = (
 _BEARER_RE = re.compile(r"(?i)(authorization\s*:\s*)?bearer\s+[^\s,;\"']+")
 
 
+@dataclass
+class _Delivery:
+    """Resumable delivery state for one exact serialized event document."""
+
+    event: str
+    document: dict[str, Any]
+    line: str
+    offset: int = 0
+    flushed: bool = False
+
+
 class EventEmitter:
     """Build and optionally emit deterministic, one-object-per-line events."""
 
@@ -52,8 +64,7 @@ class EventEmitter:
         self._stream = stream if stream is not None else sys.stdout
         self._enabled = enabled
         self._sequence = 0
-        self._emitted_events: set[str] = set()
-        self._pending_flush_events: set[str] = set()
+        self._deliveries: list[_Delivery] = []
 
     def build(self, event: str, **fields: Any) -> dict[str, Any]:
         if event not in EVENT_NAMES:
@@ -72,32 +83,57 @@ class EventEmitter:
         document = self.build(event, **fields)
         if self._enabled:
             line = json.dumps(document, separators=(",", ":"), sort_keys=True) + "\n"
-            written = self._stream.write(line)
-            if written is not None and written != len(line):
-                raise OSError(
-                    f"short Meshy protocol write: {written} of {len(line)} characters"
-                )
-            # The complete line is now accepted by the stream.  Record that
-            # fact before flushing so recovery retries this same buffered flush
-            # rather than serializing a duplicate line when flush() stores the
-            # bytes and then raises (for example from a delivered SIGINT).
-            self._emitted_events.add(event)
-            self._pending_flush_events.add(event)
-            self.ensure_flushed(event)
+            delivery = _Delivery(event=event, document=document, line=line)
+            # Journal the exact line before its first byte is offered.  A
+            # short write or interruption can therefore resume this document
+            # and sequence rather than serializing a second event onto a prefix.
+            self._deliveries.append(delivery)
+            self._advance(delivery)
         return document
 
     def was_emitted(self, event: str) -> bool:
-        """Whether this emitter accepted one complete line for the event."""
+        """Whether a complete line for this event has been accepted."""
 
-        return event in self._emitted_events
+        return any(
+            delivery.event == event and delivery.offset == len(delivery.line)
+            for delivery in self._deliveries
+        )
+
+    def has_delivery(self, event: str) -> bool:
+        """Whether an exact serialized delivery exists for this event."""
+
+        return any(delivery.event == event for delivery in self._deliveries)
+
+    def resume(self, event: str) -> dict[str, Any]:
+        """Resume the latest unflushed delivery for ``event`` idempotently."""
+
+        for delivery in reversed(self._deliveries):
+            if delivery.event == event:
+                self._advance(delivery)
+                return delivery.document
+        raise ValueError(f"no Meshy protocol delivery exists for {event!r}")
 
     def ensure_flushed(self, event: str) -> None:
-        """Idempotently flush an already accepted event line."""
+        """Compatibility wrapper: resume the latest event through flush."""
 
-        if event not in self._pending_flush_events:
-            return
-        self._stream.flush()
-        self._pending_flush_events.discard(event)
+        self.resume(event)
+
+    def _advance(self, delivery: _Delivery) -> None:
+        """Write all remaining characters, then flush exactly once successfully."""
+
+        while delivery.offset < len(delivery.line):
+            remaining = delivery.line[delivery.offset :]
+            written = self._stream.write(remaining)
+            count = len(remaining) if written is None else written
+            if not isinstance(count, int) or count <= 0 or count > len(remaining):
+                raise OSError(
+                    "invalid Meshy protocol write count "
+                    f"{count!r} for {len(remaining)} remaining characters"
+                )
+            delivery.offset += count
+        if not delivery.flushed:
+            self._stream.flush()
+            delivery.flushed = True
 
     def redact(self, value: Any) -> Any:
         if isinstance(value, dict):
