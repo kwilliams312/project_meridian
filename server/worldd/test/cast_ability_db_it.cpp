@@ -120,6 +120,75 @@ void seed_fixture(db::Connection& c) {
         "VALUES (100, 'Test Vigor', 'nature', 'friendly', 30, 1500, NULL, 0, TRUE, 'mana', 15,"
         "        '[{\"duration_ms\":30000,\"kind\":\"aura\",\"max_stacks\":2,"
         "\"stat_mods\":[{\"amount\":7,\"stat\":\"stamina\"}]}]')");
+
+    // ── SP2.2 full-palette fixtures (#692) ──────────────────────────────────
+    // One synthetic ability per NEW EffectKind, its effects_json written in the
+    // canonical form mcc emits (object keys ascending; intRange as {max,min}). These
+    // are clearly-synthetic ids (200+), NOT authored content — they exist to prove
+    // db_content_store materializes EACH new palette kind into the right runtime
+    // AbilityEffect variant with the right fields (LOAD/representation; #693 executes).
+    auto ins = [&](int id, const char* name, const char* school, const char* target,
+                   const char* res_type, const char* effects_json) {
+        // resource_type NULL when res_type is empty; resource_amount fixed 10 otherwise.
+        std::string sql =
+            "INSERT INTO ability (id, name, school, target, range_m, cast_time_ms, "
+            "cast_channel_ms, cooldown_ms, triggers_gcd, resource_type, resource_amount, "
+            "effects_json) VALUES (";
+        sql += std::to_string(id);
+        sql += ", '"; sql += name; sql += "', '"; sql += school; sql += "', '";
+        sql += target; sql += "', 30, 0, NULL, 0, TRUE, ";
+        if (res_type[0] == '\0') sql += "NULL, NULL, '";
+        else { sql += "'"; sql += res_type; sql += "', 10, '"; }
+        sql += effects_json;
+        sql += "')";
+        c.execute(sql);
+    };
+
+    // 200 dot — per-tick 4-6 over 9 s @ 3 s, 3 stacks, coefficient 0.1.
+    ins(200, "Test Dot", "fire", "enemy", "mana",
+        "[{\"amount\":{\"max\":6,\"min\":4},\"coefficient\":0.1,\"duration_ms\":9000,"
+        "\"kind\":\"dot\",\"max_stacks\":3,\"tick_ms\":3000}]");
+    // 201 hot — per-tick 5-8 over 12 s @ 3 s (max_stacks/coefficient default).
+    ins(201, "Test Hot", "holy", "friendly", "mana",
+        "[{\"amount\":{\"max\":8,\"min\":5},\"duration_ms\":12000,\"kind\":\"hot\","
+        "\"tick_ms\":3000}]");
+    // 202 buff — +8 stamina (flat default) for 12 s.
+    ins(202, "Test Buff", "physical", "self", "",
+        "[{\"amount\":8,\"attribute\":\"core:attribute.stamina\",\"duration_ms\":12000,"
+        "\"kind\":\"buff\"}]");
+    // 203 debuff — -5 strength percent, 8 s, 2 stacks.
+    ins(203, "Test Debuff", "shadow", "enemy", "mana",
+        "[{\"amount\":-5,\"attribute\":\"core:attribute.strength\",\"duration_ms\":8000,"
+        "\"kind\":\"debuff\",\"max_stacks\":2,\"modifier\":\"percent\"}]");
+    // 204 shield — absorb 100-150 for 10 s, coefficient 0.5.
+    ins(204, "Test Shield", "holy", "self", "mana",
+        "[{\"amount\":{\"max\":150,\"min\":100},\"coefficient\":0.5,\"duration_ms\":10000,"
+        "\"kind\":\"shield\"}]");
+    // 205 cc — root for 4 s.
+    ins(205, "Test Root", "nature", "enemy", "mana",
+        "[{\"duration_ms\":4000,\"kind\":\"cc\",\"type\":\"root\"}]");
+    // 206 resource — grant 200 mana.
+    ins(206, "Test Mana Font", "arcane", "self", "",
+        "[{\"amount\":200,\"kind\":\"resource\",\"operation\":\"grant\",\"pool\":\"mana\"}]");
+    // 207 movement — knockback 8 m.
+    ins(207, "Test Knockback", "physical", "enemy", "rage",
+        "[{\"distance_m\":8,\"kind\":\"movement\",\"motion\":\"knockback\"}]");
+    // 208 summon — 2 spirit wolves for 30 s (npc ref kept verbatim; resolved by #693).
+    ins(208, "Test Summon", "nature", "self", "mana",
+        "[{\"count\":2,\"duration_ms\":30000,\"kind\":\"summon\","
+        "\"npc\":\"core:npc.spirit_wolf\"}]");
+    // 209 boss slam — an ORDERED multi-primitive: damage → dot → debuff → cc → movement.
+    ins(209, "Test Boss Slam", "physical", "enemy", "rage",
+        "[{\"amount\":{\"max\":20,\"min\":15},\"kind\":\"damage\"},"
+        "{\"amount\":{\"max\":3,\"min\":2},\"duration_ms\":6000,\"kind\":\"dot\",\"tick_ms\":2000},"
+        "{\"amount\":-10,\"attribute\":\"core:attribute.agility\",\"duration_ms\":6000,\"kind\":\"debuff\"},"
+        "{\"duration_ms\":2000,\"kind\":\"cc\",\"type\":\"stun\"},"
+        "{\"distance_m\":5,\"kind\":\"movement\",\"motion\":\"knockback\"}]");
+    // 210 forward-compat — an UNKNOWN future kind is SKIPPED (never crash), the known
+    // damage effect still loads. Proves the defensive skip invariant is preserved.
+    ins(210, "Test Unknown Skip", "physical", "enemy", "mana",
+        "[{\"amount\":{\"max\":13,\"min\":8},\"kind\":\"damage\"},"
+        "{\"kind\":\"bogus_future_kind\",\"amount\":99}]");
 }
 
 }  // namespace
@@ -176,7 +245,7 @@ int main() {
         // The boot load path: read the authored ability catalog from the world DB.
         const worldd::AbilityStore store = worldd::load_db_ability_store(conn);
 
-        check("DB store loaded 3 abilities", store.size() == 3);
+        check("DB store loaded 14 abilities (3 base + 11 full-palette)", store.size() == 14);
 
         // ---- FIX: authored id 1 (minor_healing) now RESOLVES (not UNKNOWN_ABILITY) --
         {
@@ -247,6 +316,130 @@ int main() {
                           aura.stat_mods[0].amount == 7);
             } else {
                 check("id 100 has exactly one aura effect", false);
+            }
+        }
+
+        // ======================================================================
+        // SP2.2 FULL PALETTE (#692) — each new EffectKind deserializes correctly.
+        // ======================================================================
+        // These prove the acceptance bar for #692: the effects_json payload for
+        // every Tier-1 primitive materializes into the right runtime AbilityEffect
+        // variant with the right fields (LOAD-time; combat execution is #693).
+        auto only_effect = [&](int id) -> const worldd::AbilityEffect* {
+            const worldd::Ability* a = store.find(static_cast<worldd::AbilityId>(id));
+            if (a == nullptr) { check("full-palette id resolves", false); return nullptr; }
+            if (a->effects.size() != 1) {
+                check("full-palette id has exactly one effect", false);
+                return nullptr;
+            }
+            return &a->effects[0];
+        };
+
+        // 200 dot — per-tick 4-6 over 9 s @ 3 s, 3 stacks, coefficient 0.1.
+        if (const worldd::AbilityEffect* e = only_effect(200)) {
+            check("id 200 kDot: amount 4-6, dur 9 s, tick 3 s, 3 stacks, coeff 0.1",
+                  e->kind == worldd::EffectKind::kDot && e->amount_min == 4 &&
+                      e->amount_max == 6 && e->duration_ms == 9000 && e->tick_ms == 3000 &&
+                      e->max_stacks == 3 && e->coefficient > 0.09f && e->coefficient < 0.11f);
+        }
+        // 201 hot — per-tick 5-8 over 12 s @ 3 s (defaults elsewhere).
+        if (const worldd::AbilityEffect* e = only_effect(201)) {
+            check("id 201 kHot: amount 5-8, dur 12 s, tick 3 s, default 1 stack",
+                  e->kind == worldd::EffectKind::kHot && e->amount_min == 5 &&
+                      e->amount_max == 8 && e->duration_ms == 12000 && e->tick_ms == 3000 &&
+                      e->max_stacks == 1);
+        }
+        // 202 buff — +8 stamina flat (default) for 12 s.
+        if (const worldd::AbilityEffect* e = only_effect(202)) {
+            check("id 202 kBuff: +8 core:attribute.stamina, flat, 12 s",
+                  e->kind == worldd::EffectKind::kBuff &&
+                      e->attribute == "core:attribute.stamina" && e->attribute_amount == 8 &&
+                      e->attribute_modifier == worldd::AttributeModifier::kFlat &&
+                      e->duration_ms == 12000);
+        }
+        // 203 debuff — -5 strength percent, 8 s, 2 stacks.
+        if (const worldd::AbilityEffect* e = only_effect(203)) {
+            check("id 203 kDebuff: -5 core:attribute.strength, percent, 8 s, 2 stacks",
+                  e->kind == worldd::EffectKind::kDebuff &&
+                      e->attribute == "core:attribute.strength" && e->attribute_amount == -5 &&
+                      e->attribute_modifier == worldd::AttributeModifier::kPercent &&
+                      e->duration_ms == 8000 && e->max_stacks == 2);
+        }
+        // 204 shield — absorb 100-150 for 10 s, coefficient 0.5.
+        if (const worldd::AbilityEffect* e = only_effect(204)) {
+            check("id 204 kShield: absorb 100-150, 10 s, coeff 0.5",
+                  e->kind == worldd::EffectKind::kShield && e->amount_min == 100 &&
+                      e->amount_max == 150 && e->duration_ms == 10000 &&
+                      e->coefficient > 0.49f && e->coefficient < 0.51f);
+        }
+        // 205 cc — root for 4 s.
+        if (const worldd::AbilityEffect* e = only_effect(205)) {
+            check("id 205 kCc: root, 4 s",
+                  e->kind == worldd::EffectKind::kCc &&
+                      e->cc_kind == worldd::CrowdControlKind::kRoot && e->duration_ms == 4000);
+        }
+        // 206 resource — grant 200 mana.
+        if (const worldd::AbilityEffect* e = only_effect(206)) {
+            check("id 206 kResource: grant 200 mana",
+                  e->kind == worldd::EffectKind::kResource &&
+                      e->resource_pool == worldd::ResourcePool::kMana &&
+                      e->resource_op == worldd::ResourceOp::kGrant &&
+                      e->resource_amount == 200);
+        }
+        // 207 movement — knockback 8 m.
+        if (const worldd::AbilityEffect* e = only_effect(207)) {
+            check("id 207 kMovement: knockback 8 m",
+                  e->kind == worldd::EffectKind::kMovement &&
+                      e->movement_motion == worldd::MovementMotion::kKnockback &&
+                      e->distance_m > 7.9f && e->distance_m < 8.1f);
+        }
+        // 208 summon — 2 spirit wolves for 30 s (npc ref verbatim).
+        if (const worldd::AbilityEffect* e = only_effect(208)) {
+            check("id 208 kSummon: 2x core:npc.spirit_wolf, 30 s",
+                  e->kind == worldd::EffectKind::kSummon &&
+                      e->summon_npc == "core:npc.spirit_wolf" && e->summon_count == 2 &&
+                      e->duration_ms == 30000);
+        }
+        // 209 boss slam — an ORDERED multi-primitive chain (order + mixed kinds).
+        {
+            const worldd::Ability* slam = store.find(209);
+            check("id 209 boss slam resolves", slam != nullptr);
+            if (slam) {
+                check("id 209 has 5 ordered effects", slam->effects.size() == 5);
+                if (slam->effects.size() == 5) {
+                    check("id 209 [0] damage 15-20",
+                          slam->effects[0].kind == worldd::EffectKind::kDamage &&
+                              slam->effects[0].amount_min == 15 &&
+                              slam->effects[0].amount_max == 20);
+                    check("id 209 [1] dot 2-3 @ 2 s / 6 s",
+                          slam->effects[1].kind == worldd::EffectKind::kDot &&
+                              slam->effects[1].amount_min == 2 &&
+                              slam->effects[1].tick_ms == 2000 &&
+                              slam->effects[1].duration_ms == 6000);
+                    check("id 209 [2] debuff -10 agility",
+                          slam->effects[2].kind == worldd::EffectKind::kDebuff &&
+                              slam->effects[2].attribute == "core:attribute.agility" &&
+                              slam->effects[2].attribute_amount == -10);
+                    check("id 209 [3] cc stun 2 s",
+                          slam->effects[3].kind == worldd::EffectKind::kCc &&
+                              slam->effects[3].cc_kind == worldd::CrowdControlKind::kStun &&
+                              slam->effects[3].duration_ms == 2000);
+                    check("id 209 [4] movement knockback 5 m",
+                          slam->effects[4].kind == worldd::EffectKind::kMovement &&
+                              slam->effects[4].movement_motion ==
+                                  worldd::MovementMotion::kKnockback);
+                }
+            }
+        }
+        // 210 forward-compat — an UNKNOWN kind is SKIPPED, the known damage survives.
+        {
+            const worldd::Ability* a = store.find(210);
+            check("id 210 (unknown-kind ability) still loads", a != nullptr);
+            if (a) {
+                check("id 210 unknown future kind SKIPPED — only the damage effect kept",
+                      a->effects.size() == 1 &&
+                          a->effects[0].kind == worldd::EffectKind::kDamage &&
+                          a->effects[0].amount_min == 8 && a->effects[0].amount_max == 13);
             }
         }
 

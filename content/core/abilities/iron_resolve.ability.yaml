@@ -1,12 +1,14 @@
 # Seed skeleton pack (SP1.8 integration proof) — a self buff that raises stamina.
-# Reworked (#688 CI fix) onto the currently-emittable `aura` primitive with a
-# stat_mods entry. The world-DB DDL (schema/sql/world/30_ability.sql) only carries
-# the SP1 effect palette — damage / heal / aura / threat — so the richer
-# buff/debuff/dot/… kinds the ability *schema* gained in #653 have no world.sql
-# emission yet. Extending the `ability_effect` DDL + mcc emit-sql per new kind is
-# real kernel-consumption work and is DEFERRED to sub-project 2 (kernel
-# ability-engine). New-effect-kind coverage still lives in the tests/ validation
-# fixtures, which never emit to the DB.
+# Modelled on the `aura` primitive with a stat_mods entry.
+#
+# NOTE (SP2 — #691/#692): the world DB now transports the FULL effect palette. The
+# `ability` row carries the ordered effects[] recipe as a generic `effects_json`
+# JSON payload (schema/sql/world/30_ability.sql; the per-kind `ability_effect` DDL
+# is retired), so `mcc emit-sql` emits ANY kind without a per-kind DDL change and
+# worldd deserializes the full palette at load (server/worldd/db_content_store.cpp,
+# SP2.2). Re-authoring this ability onto the richer `buff` kind
+# (attribute: core:attribute.stamina) would emit + load cleanly; it is left on
+# `aura` here — an optional follow-up — to avoid a golden/staged-pack rewrite.
 schema: meridian/ability@1
 id: core:ability.iron_resolve
 name: Iron Resolve

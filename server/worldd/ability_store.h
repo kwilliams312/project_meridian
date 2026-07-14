@@ -93,16 +93,69 @@ enum class AbilityResourceType : std::uint8_t {
     kEnergy,
 };
 
-// Effect discriminator — mirrors `ability_effect.kind`
-// ENUM('damage','heal','aura','threat'). NOTE (issue reconciliation): issue #343's
-// prose lists `direct_damage | heal | apply_aura`; the authoritative IF-4 DDL uses
-// `damage | heal | aura | threat` (a superset — `threat` is CMB-04's aggro effect).
-// We follow the DDL, the real contract mcc fills and the resolver will read.
+// Effect discriminator — the Tier-1 effect-primitive palette
+// (`ability.schema.yaml` effects[] oneOf `kind`). The FIRST FOUR
+// (damage/heal/aura/threat) are the SP1 originals the retired per-kind
+// `ability_effect` DDL carried; the rest are the SP2.2 full-palette extension
+// (#692) that db_content_store now materializes out of the generic
+// `ability.effects_json` payload (SP2.1 #691 moved the effect recipe into that one
+// column). The combat EXECUTION of the new kinds is a separate story (#693); this
+// model is LOAD/representation only — a resolver switches on `kind`.
 enum class EffectKind : std::uint8_t {
+    // SP1 originals.
     kDamage,
     kHeal,
     kAura,
     kThreat,
+    // SP2.2 full palette (#692) — deserialized from effects_json.
+    kDot,        // periodic damage: `amount` per `tick_ms` over `duration_ms`
+    kHot,        // periodic heal (same shape as kDot)
+    kBuff,       // attribute modifier (typically +) for `duration_ms`
+    kDebuff,     // attribute modifier (typically −) for `duration_ms`
+    kShield,     // absorb pool (`amount`) for `duration_ms`
+    kCc,         // crowd control (stun/root/silence) for `duration_ms`
+    kResource,   // grant/drain a resource pool
+    kMovement,   // forced movement (knockback/pull/dash)
+    kSummon,     // summon an NPC
+};
+
+// buff/debuff application mode — mirrors effects[].modifier ENUM('flat','percent').
+// flat = raw attribute units; percent = hundredths of a percent-point.
+enum class AttributeModifier : std::uint8_t {
+    kFlat,     // schema default
+    kPercent,
+};
+
+// cc.type — the crowd-control category applied for `duration_ms`
+// (effects[].type for kind:cc, ENUM('stun','root','silence')).
+enum class CrowdControlKind : std::uint8_t {
+    kStun,
+    kRoot,
+    kSilence,
+};
+
+// resource.pool — which resource a kResource effect grants/drains
+// (effects[].pool ENUM('mana','rage','energy')). Distinct from AbilityResourceType
+// (which models a NULLable ability COST); a resource effect's pool is never NULL.
+enum class ResourcePool : std::uint8_t {
+    kMana,
+    kRage,
+    kEnergy,
+};
+
+// resource.operation — grant restores the pool, drain removes from it
+// (effects[].operation ENUM('grant','drain')).
+enum class ResourceOp : std::uint8_t {
+    kGrant,
+    kDrain,
+};
+
+// movement.motion — forced movement relative to caster/target
+// (effects[].motion ENUM('knockback','pull','dash')).
+enum class MovementMotion : std::uint8_t {
+    kKnockback,  // push the target away
+    kPull,       // drag the target toward the caster
+    kDash,       // move the caster
 };
 
 // Periodic sub-kind of an aura effect — mirrors `ability_effect.periodic_kind`
@@ -131,16 +184,18 @@ struct StatMod {
     std::int32_t amount = 0;
 };
 
-// One compiled effect of an ability — mirrors an `ability_effect` row (the
-// `effects[]` oneOf array, 1..4 per ability). Only the fields relevant to `kind`
-// are meaningful; the rest keep their zero defaults (as the DDL keeps them NULL
-// for the other variants). The resolver switches on `kind`.
+// One compiled effect of an ability — one entry of the `effects[]` oneOf array
+// (1..6 per ability). Deserialized ONCE at load from the generic `effects_json`
+// payload (db_content_store; SP2.1 #691 + SP2.2 #692) into this compact tagged
+// union — the combat path never re-parses JSON. Only the fields relevant to `kind`
+// are meaningful; the rest keep their zero defaults. A resolver switches on `kind`.
 struct AbilityEffect {
     EffectKind kind = EffectKind::kDamage;
 
-    // kDamage / kHeal: the `amount` intRange (amount_min..amount_max, inclusive)
-    // and the caster power `coefficient` (fraction of spell/attack power added,
-    // 0..2; server-side formula, M2 tuning — SAD/ability.schema.yaml).
+    // kDamage / kHeal / kDot / kHot / kShield: the `amount` intRange
+    // (amount_min..amount_max, inclusive) and the caster power `coefficient`
+    // (fraction of spell/attack power added, 0..2; server-side formula, M2 tuning —
+    // ability.schema.yaml). For kDot/kHot the amount is PER TICK.
     std::uint32_t amount_min = 0;
     std::uint32_t amount_max = 0;
     float         coefficient = 0.0f;
@@ -148,14 +203,51 @@ struct AbilityEffect {
     // kThreat: flat threat added (signed — taunts/detaunts special-cased later).
     std::int32_t threat_amount = 0;
 
-    // kAura: how long it lasts, how high it stacks, and an optional periodic tick.
+    // kAura / kDot / kHot / kBuff / kDebuff / kShield / kCc / kSummon: how long it
+    // lasts. kAura / kDot / kHot / kBuff / kDebuff / kShield also stack up to
+    // max_stacks. (For kSummon, duration_ms 0 = permanent/until-dismissed.)
     std::uint32_t duration_ms = 0;
     std::uint16_t max_stacks = 1;
+
+    // kAura: an optional periodic tick (kNone = a pure stat-mod aura). NOTE kDot/kHot
+    // are DISTINCT kinds carrying their own per-tick `amount` (above) + `tick_ms`
+    // (below); the aura periodic_* fields belong to kAura alone.
     PeriodicKind  periodic_kind = PeriodicKind::kNone;
     std::uint32_t periodic_amount_min = 0;
     std::uint32_t periodic_amount_max = 0;
     std::uint32_t periodic_tick_ms = 0;
     std::vector<StatMod> stat_mods;  // aura stat modifiers (may be empty)
+
+    // ─── SP2.2 full palette (#692) — deserialized from effects_json ──────────
+
+    // kDot / kHot: interval between ticks (the per-tick amount is amount_min/max,
+    // duration_ms bounds the total, coefficient + max_stacks also apply).
+    std::uint32_t tick_ms = 0;
+
+    // kBuff / kDebuff: modify one `attribute` by a signed `attribute_amount` for
+    // `duration_ms` (+ max_stacks). `attribute` is the contentId ref carried
+    // VERBATIM from effects_json (an unresolved `<ns>:attribute.<name>` — the combat
+    // resolver #693 resolves it against the attribute catalog).
+    std::string       attribute;
+    std::int32_t      attribute_amount = 0;
+    AttributeModifier attribute_modifier = AttributeModifier::kFlat;
+
+    // kCc: crowd-control category applied for `duration_ms`.
+    CrowdControlKind cc_kind = CrowdControlKind::kStun;
+
+    // kResource: grant/drain `resource_amount` of `resource_pool`.
+    ResourcePool  resource_pool = ResourcePool::kMana;
+    ResourceOp    resource_op = ResourceOp::kGrant;
+    std::uint32_t resource_amount = 0;
+
+    // kMovement: forced `movement_motion` of `distance_m` metres.
+    MovementMotion movement_motion = MovementMotion::kKnockback;
+    float          distance_m = 0.0f;
+
+    // kSummon: summon `summon_count` of the NPC `summon_npc` (a contentId ref carried
+    // verbatim from effects_json; resolved by #693), for `duration_ms` (0 = permanent).
+    std::string   summon_npc;
+    std::uint16_t summon_count = 1;
 };
 
 // One compiled ability — mirrors an `ability` row + its `ability_effect` children.
@@ -259,6 +351,11 @@ const char* school_name(School s);
 const char* target_kind_name(TargetKind t);
 const char* resource_type_name(AbilityResourceType r);
 const char* effect_kind_name(EffectKind k);
+const char* attribute_modifier_name(AttributeModifier m);
+const char* crowd_control_kind_name(CrowdControlKind c);
+const char* resource_pool_name(ResourcePool p);
+const char* resource_op_name(ResourceOp o);
+const char* movement_motion_name(MovementMotion m);
 
 }  // namespace meridian::worldd
 
