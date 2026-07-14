@@ -1,0 +1,10 @@
+task_id: 019f6156-c823-74dd-8bad-62278f546d32
+model_version: meshy-5
+preview_task_id: 019f6155-2c1b-7475-a166-d046164c826f
+request:
+  mode: preview
+  prompt: a chibi cute baby dragon, chibi, colored rounded pill / clay toy aesthetic,
+    bright saturated colors, big cute friendly, clean readable silhouette, game-ready,
+    matching a whimsical fairytale pill-mascot village
+  ai_model: meshy-5
+  target_polycount: 72000

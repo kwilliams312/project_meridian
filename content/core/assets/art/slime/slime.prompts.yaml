@@ -1,0 +1,10 @@
+task_id: 019f614a-bba8-7509-93a1-2c795820fe89
+model_version: meshy-5
+preview_task_id: 019f6149-fb3f-71e7-949e-b583ea318798
+request:
+  mode: preview
+  prompt: a chibi cute bouncy slime with a face, chibi, colored rounded pill / clay
+    toy aesthetic, bright saturated colors, big cute friendly, clean readable silhouette,
+    game-ready, matching a whimsical fairytale pill-mascot village
+  ai_model: meshy-5
+  target_polycount: 72000

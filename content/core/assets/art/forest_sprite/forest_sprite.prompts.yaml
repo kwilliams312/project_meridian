@@ -1,0 +1,10 @@
+task_id: 019f6159-83d0-7c61-bda5-7c47fa77ac72
+model_version: meshy-5
+preview_task_id: 019f6158-725e-753b-a84b-a2106385400e
+request:
+  mode: preview
+  prompt: a chibi glowing forest sprite, chibi, colored rounded pill / clay toy aesthetic,
+    bright saturated colors, big cute friendly, clean readable silhouette, game-ready,
+    matching a whimsical fairytale pill-mascot village
+  ai_model: meshy-5
+  target_polycount: 72000
