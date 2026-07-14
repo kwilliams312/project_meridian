@@ -1,0 +1,10 @@
+task_id: 019f6149-8048-77a7-8454-6700472de602
+model_version: meshy-5
+preview_task_id: 019f6148-a8d4-717f-93ec-72f3eabcd0e2
+request:
+  mode: preview
+  prompt: a simple chibi cloth wizard robe sized for a pill body; chibi, colored rounded
+    PILL-shaped body, big cute expressive eyes and a friendly face, smooth clay-like
+    toy-like, bright saturated colors, clean readable silhouette, game-ready
+  ai_model: meshy-5
+  target_polycount: 6400

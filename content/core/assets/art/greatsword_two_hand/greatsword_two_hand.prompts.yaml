@@ -1,0 +1,10 @@
+task_id: 019f6156-4e94-762b-a596-cf7199d03bd1
+model_version: meshy-5
+preview_task_id: 019f6153-8ebf-7af1-a99d-35f75aa5d63c
+request:
+  mode: preview
+  prompt: a chibi two-handed greatsword; chibi, colored rounded PILL-shaped body,
+    big cute expressive eyes and a friendly face, smooth clay-like toy-like, bright
+    saturated colors, clean readable silhouette, game-ready
+  ai_model: meshy-5
+  target_polycount: 12000

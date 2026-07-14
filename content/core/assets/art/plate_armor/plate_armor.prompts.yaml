@@ -1,0 +1,10 @@
+task_id: 019f6164-1113-7b2a-86b2-0ff77e43abcb
+model_version: meshy-5
+preview_task_id: 019f6163-050d-77cb-ba07-bc07e4bc6be6
+request:
+  mode: preview
+  prompt: chibi silver knight plate armor for a pill body; chibi, colored rounded
+    PILL-shaped body, big cute expressive eyes and a friendly face, smooth clay-like
+    toy-like, bright saturated colors, clean readable silhouette, game-ready
+  ai_model: meshy-5
+  target_polycount: 6400

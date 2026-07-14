@@ -1,0 +1,16 @@
+schema: meridian/asset@1
+id: core:art.cloth_robe
+class: armor_model
+source: assets/art/cloth_robe/sk_cloth_robe.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors:
+  - meridian-contributors
+  origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/019f6149-8048-77a7-8454-6700472de602
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: cloth_robe.prompts.yaml
+budget:
+  lod0_tris: 6641
+restyle_status: pending

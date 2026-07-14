@@ -1,0 +1,10 @@
+task_id: 019f615d-f06f-7ddd-b0c6-1d2fa104a1a2
+model_version: meshy-5
+preview_task_id: 019f615d-3182-7bca-9bf4-059b10656df9
+request:
+  mode: preview
+  prompt: a chibi wizard staff; chibi, colored rounded PILL-shaped body, big cute
+    expressive eyes and a friendly face, smooth clay-like toy-like, bright saturated
+    colors, clean readable silhouette, game-ready
+  ai_model: meshy-5
+  target_polycount: 12000

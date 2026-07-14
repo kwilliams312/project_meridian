@@ -1,0 +1,10 @@
+task_id: 019f615b-1c4a-75f6-b332-2127abf78b28
+model_version: meshy-5
+preview_task_id: 019f615a-476e-7767-a451-da8d28679c1c
+request:
+  mode: preview
+  prompt: a chibi magic wand; chibi, colored rounded PILL-shaped body, big cute expressive
+    eyes and a friendly face, smooth clay-like toy-like, bright saturated colors,
+    clean readable silhouette, game-ready
+  ai_model: meshy-5
+  target_polycount: 12000

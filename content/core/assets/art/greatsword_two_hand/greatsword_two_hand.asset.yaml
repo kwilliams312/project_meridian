@@ -1,0 +1,16 @@
+schema: meridian/asset@1
+id: core:art.greatsword_two_hand
+class: weapon_model
+source: assets/art/greatsword_two_hand/sm_greatsword_two_hand.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors:
+  - meridian-contributors
+  origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/019f6156-4e94-762b-a596-cf7199d03bd1
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: greatsword_two_hand.prompts.yaml
+budget:
+  lod0_tris: 12484
+restyle_status: pending

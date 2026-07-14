@@ -1,0 +1,11 @@
+task_id: 019f6147-27ac-76be-8a16-6272bfd00827
+model_version: meshy-5
+preview_task_id: 019f6146-66c9-7fa3-bfea-c4676002d388
+request:
+  mode: preview
+  prompt: a plain neutral colored PILL-body character with a cute face, no armor,
+    T-pose, the base body for gear; chibi, colored rounded PILL-shaped body, big cute
+    expressive eyes and a friendly face, smooth clay-like toy-like, bright saturated
+    colors, clean readable silhouette, game-ready
+  ai_model: meshy-5
+  target_polycount: 48000

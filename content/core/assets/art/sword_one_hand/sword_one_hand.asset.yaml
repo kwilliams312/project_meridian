@@ -1,0 +1,16 @@
+schema: meridian/asset@1
+id: core:art.sword_one_hand
+class: weapon_model
+source: assets/art/sword_one_hand/sm_sword_one_hand.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors:
+  - meridian-contributors
+  origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/019f6151-ac5f-7861-a600-30b06177b126
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: sword_one_hand.prompts.yaml
+budget:
+  lod0_tris: 12483
+restyle_status: pending
