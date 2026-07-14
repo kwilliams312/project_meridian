@@ -14,6 +14,7 @@ Covers the three requirements from the task:
 from __future__ import annotations
 
 import sys
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -265,6 +266,21 @@ def test_checked_in_output_matches_schema_no_drift():
 def test_check_cli_passes_when_in_sync():
     # The --check drift guard the CI job runs.
     assert generate.main(["--check"]) == 0
+
+
+@pytest.mark.integration
+def test_generate_module_entrypoint_has_no_runpy_warning():
+    """The legacy fully-qualified entry point remains warning-clean (#720)."""
+
+    result = subprocess.run(
+        [sys.executable, "-W", "error", "-m", "tools.schema_gen.generate", "--check"],
+        cwd=REPO,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "RuntimeWarning" not in result.stderr
 
 
 # --- output well-formedness (cheap structural sanity) ----------------------
