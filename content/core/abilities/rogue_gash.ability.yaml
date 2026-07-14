@@ -1,8 +1,8 @@
 # SP5 chibi roster (#723) — Rogue bleed: a physical damage-over-time.
 # Tier-1 `dot` primitive. Original clean-room archetype (CONTRIBUTING.md).
 schema: meridian/ability@1
-id: core:ability.rogue_rend
-name: Rend
+id: core:ability.rogue_gash
+name: Gash
 description: A ragged cut that bleeds the target for {amount} damage each tick.
 school: physical
 target: enemy

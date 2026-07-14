@@ -2,9 +2,9 @@
 # Tier-1 `movement` primitive (dash moves the caster). Original clean-room
 # archetype (CONTRIBUTING.md).
 schema: meridian/ability@1
-id: core:ability.rogue_shadowstep
-name: Shadowstep
-description: Blinks forward through the shadows, closing the gap.
+id: core:ability.rogue_veilstep
+name: Veilstep
+description: Slips forward through the veiling shadows, closing the gap.
 school: shadow
 target: self
 range_m: 0

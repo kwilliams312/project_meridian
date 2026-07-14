@@ -7,8 +7,8 @@ map:                         # append-only; local index (SAD §2.4)
   core:ability.iron_resolve: 134
   core:ability.mage_arcane_bolt: 144
   core:ability.mage_arcane_storm: 145
+  core:ability.mage_cinderburn: 147
   core:ability.mage_frost_lock: 146
-  core:ability.mage_immolation: 147
   core:ability.mending_word: 135
   core:ability.minor_healing: 1
   core:ability.pickaxe_slam: 2
@@ -16,13 +16,13 @@ map:                         # append-only; local index (SAD §2.4)
   core:ability.priest_mend: 149
   core:ability.priest_purge: 150
   core:ability.priest_renewal: 151
-  core:ability.rogue_backstab: 152
-  core:ability.rogue_expose_armor: 153
-  core:ability.rogue_rend: 154
-  core:ability.rogue_shadowstep: 155
+  core:ability.rogue_gash: 154
+  core:ability.rogue_ribcut: 152
+  core:ability.rogue_veilstep: 155
+  core:ability.rogue_weakpoint: 153
   core:ability.searing_brand: 136
+  core:ability.warrior_bellow: 157
   core:ability.warrior_bulwark: 156
-  core:ability.warrior_challenging_roar: 157
   core:ability.warrior_crushing_blow: 158
   core:ability.warrior_skullcrack: 159
   core:amb.zone01.forest_day: 3

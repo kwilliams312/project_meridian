@@ -26,7 +26,7 @@
 //   7. CAST   — the chibi abilities loaded from the pack CAST through the SP2 ability
 //               engine (MapTick) and their effects EXECUTE, observed server-side:
 //               Warrior Crushing Blow deals damage + Bulwark grants an absorb shield,
-//               Mage Immolation burns (periodic dot damage), Priest Mend heals. The
+//               Mage Cinderburn burns (periodic dot damage), Priest Mend heals. The
 //               Warrior Skullcrack stun effect is asserted to have loaded from the
 //               pack as a cc/stun primitive (execution semantics are unit-proven in
 //               ability_primitives_test).
@@ -417,7 +417,7 @@ int main() {
             const std::uint32_t idCrushing = id_by_name(conn, "ability", "Crushing Blow");
             const std::uint32_t idBulwark = id_by_name(conn, "ability", "Bulwark");
             const std::uint32_t idSkullcrack = id_by_name(conn, "ability", "Skullcrack");
-            const std::uint32_t idImmolation = id_by_name(conn, "ability", "Immolation");
+            const std::uint32_t idCinderburn = id_by_name(conn, "ability", "Cinderburn");
             const std::uint32_t idMend = id_by_name(conn, "ability", "Mend");
 
             // Warrior Crushing Blow (damage) on a creature → its HP drops.
@@ -452,7 +452,7 @@ int main() {
                           sk->effects[0].cc_kind == worldd::CrowdControlKind::kStun &&
                           sk->effects[0].duration_ms == 4000);
             }
-            // Mage Immolation (dot) on a creature → periodic burn damage over ticks.
+            // Mage Cinderburn (dot) on a creature → periodic burn damage over ticks.
             {
                 w::MapTick mt(store, 0x723006ULL, /*dt=*/3000);
                 const w::ObjectGuid p =
@@ -460,9 +460,9 @@ int main() {
                 const w::ObjectGuid c = mt.add_creature(target_mob(at(5, 0)));
                 mt.ai().creature(c)->set_max_health(500);
                 const std::uint32_t hp0 = mt.ai().creature(c)->health();
-                mt.enqueue_cast(w::AbilityUseCmd{p, idImmolation, c});
+                mt.enqueue_cast(w::AbilityUseCmd{p, idCinderburn, c});
                 mt.advance(5);  // dot ticks 6-9 @ 3 s over 12 s
-                check("CAST: Mage Immolation burned the target over time (periodic dot)",
+                check("CAST: Mage Cinderburn burned the target over time (periodic dot)",
                       mt.ai().creature(c)->health() < hp0);
             }
             // Priest Mend (heal) on a wounded self → HP recovers.

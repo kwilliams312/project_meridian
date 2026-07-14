@@ -6,10 +6,10 @@ roster_id: 7
 name: Rogue
 description: A leather-clad skirmisher who strikes from the shadows and bleeds foes dry.
 abilities:
-  - core:ability.rogue_backstab
-  - core:ability.rogue_rend
-  - core:ability.rogue_shadowstep
-  - core:ability.rogue_expose_armor
+  - core:ability.rogue_ribcut
+  - core:ability.rogue_gash
+  - core:ability.rogue_veilstep
+  - core:ability.rogue_weakpoint
 usable_armor_types:
   - core:equip_type.leather
 usable_weapon_types:

@@ -896,7 +896,7 @@ add_test(NAME worldd-itm1-chain-load COMMAND worldd-itm1-chain-load-test)
 # role + proficiencies), create (an Ardent/Warrior character validated vs the DB
 # roster), equip (gate_equip accepts each class's starter items, rejects a wrong-type
 # item), and cast (the chibi abilities execute through the MapTick ability engine —
-# Warrior Crushing Blow damages + Bulwark shields, Mage Immolation burns, Priest Mend
+# Warrior Crushing Blow damages + Bulwark shields, Mage Cinderburn burns, Priest Mend
 # heals). Links meridian::characters for the create-vs-roster path. Same TOOL-/ENV-
 # guards (MERIDIAN_WORLDDB_*/MERIDIAN_DB_* + a mariadb/mysql client + an mcc binary);
 # SKIPS (exit 0) otherwise — inert in the plain server ctest, real under test.sh --db.

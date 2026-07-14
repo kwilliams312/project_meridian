@@ -8,7 +8,7 @@ name: Warrior
 description: A plate-clad tank who holds the front line and controls the fight.
 abilities:
   - core:ability.warrior_crushing_blow
-  - core:ability.warrior_challenging_roar
+  - core:ability.warrior_bellow
   - core:ability.warrior_bulwark
   - core:ability.warrior_skullcrack
 usable_armor_types:

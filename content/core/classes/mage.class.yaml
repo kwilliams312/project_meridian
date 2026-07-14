@@ -7,7 +7,7 @@ name: Mage
 description: A cloth-robed spellcaster who burns and controls foes from range.
 abilities:
   - core:ability.mage_arcane_bolt
-  - core:ability.mage_immolation
+  - core:ability.mage_cinderburn
   - core:ability.mage_arcane_storm
   - core:ability.mage_frost_lock
 usable_armor_types:

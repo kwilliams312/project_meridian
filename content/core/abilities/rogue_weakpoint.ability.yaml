@@ -2,8 +2,8 @@
 # Tier-1 `debuff` primitive over the core:attribute.armor id (L011-resolved).
 # Original clean-room archetype (CONTRIBUTING.md).
 schema: meridian/ability@1
-id: core:ability.rogue_expose_armor
-name: Expose Armor
+id: core:ability.rogue_weakpoint
+name: Weakpoint
 description: Finds the gaps in the target's guard, weakening its armor.
 school: physical
 target: enemy
