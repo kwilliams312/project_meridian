@@ -55,6 +55,83 @@ public sealed class SchemaFormTests
     }
 
     [Fact]
+    public void Embedded_form_descriptors_overlay_schema_fields_without_replacing_constraints()
+    {
+        var npc = _catalog.GetRoot("npc.schema.yaml");
+        var visual = npc.Children.Single(field => field.Name == "visual");
+        var model = visual.Children.Single(field => field.Name == "model");
+        var scale = visual.Children.Single(field => field.Name == "scale");
+        Assert.Equal("presentation", model.Ui!.Group);
+        Assert.Equal("Creature model", model.Ui.Label);
+        Assert.Equal("asset:art", model.Ui.ReferenceType);
+        Assert.Equal(["creature_model"], model.Asset!.AllowedClasses);
+        Assert.Equal(["meshy"], model.Asset.EligibleGenerators);
+        Assert.Equal("scale", scale.Ui!.Unit);
+        Assert.True(scale.HasExclusiveMinimum);
+
+        var item = _catalog.GetRoot("item.schema.yaml");
+        var icon = item.Children.Single(field => field.Name == "visual").Children.Single(field => field.Name == "icon");
+        Assert.Equal(["icon"], icon.Asset!.AllowedClasses);
+        Assert.Empty(icon.Asset.EligibleGenerators);
+
+        var ability = _catalog.GetRoot("ability.schema.yaml");
+        var castVfx = ability.Children.Single(field => field.Name == "audio_visual").Children.Single(field => field.Name == "cast_vfx");
+        Assert.Equal(["vfx"], castVfx.Asset!.AllowedClasses);
+        Assert.Empty(castVfx.Asset.EligibleGenerators);
+        Assert.Null(ability.Children.Single(field => field.Name == "name").Ui);
+    }
+
+    [Fact]
+    public void Descriptor_manifest_version_and_duplicate_paths_fail_closed()
+    {
+        var schemas = new Dictionary<string, JsonObject>
+        {
+            ["sample.schema.yaml"] = SchemaCatalog.ParseYaml("type: object\nproperties: { name: { type: string } }\n").AsObject(),
+            ["common.defs.yaml"] = new(),
+            ["skeleton.defs.yaml"] = new(),
+        };
+        var wrongVersion = JsonNode.Parse("""{"schema":"meridian/codex-form-descriptors@2","schemas":[]}""")!.AsObject();
+        Assert.Throws<InvalidDataException>(() => new SchemaCatalog(schemas, wrongVersion));
+
+        var duplicate = JsonNode.Parse("""
+            {
+              "schema": "meridian/codex-form-descriptors@1",
+              "schemas": [{
+                "schema_file": "sample.schema.yaml",
+                "fields": [{"path":"name","ui":{}},{"path":"name","ui":{}}]
+              }]
+            }
+            """)!.AsObject();
+        Assert.Throws<InvalidDataException>(() => new SchemaCatalog(schemas, duplicate));
+    }
+
+    [Fact]
+    public void Raw_extension_keywords_are_non_structural_without_a_descriptor_overlay()
+    {
+        const string schemaYaml = """
+            type: object
+            properties:
+              name:
+                type: string
+                x-meridian-ui: { group: identity }
+                x-meridian-asset: { allowed_classes: [icon], eligible_generators: [] }
+            """;
+        var schemas = new Dictionary<string, JsonObject>
+        {
+            ["sample.schema.yaml"] = SchemaCatalog.ParseYaml(schemaYaml).AsObject(),
+            ["common.defs.yaml"] = new(),
+            ["skeleton.defs.yaml"] = new(),
+        };
+
+        var name = new SchemaCatalog(schemas).GetRoot("sample.schema.yaml").Children.Single();
+
+        Assert.Equal(SchemaFieldKind.String, name.Kind);
+        Assert.False(name.IsReadOnly);
+        Assert.Null(name.Ui);
+        Assert.Null(name.Asset);
+    }
+
+    [Fact]
     public void Scalar_edit_is_cst_surgical_and_keeps_comments()
     {
         const string yaml = "schema: meridian/pack@1\nnamespace: core # keep\nname: Meridian Core\nversion: 0.1.0\ncontent_schema_version: 1\nengine:\n  godot: \"4.6\"\nlicense: Apache-2.0\n";

@@ -13,11 +13,15 @@ Covers the three requirements from the task:
 
 from __future__ import annotations
 
-import sys
+import json
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+import yaml
+from jsonschema import Draft202012Validator
 
 REPO = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO))
@@ -30,6 +34,7 @@ from tools.schema_gen.ir import (  # noqa: E402
     RefType,
     ScalarType,
     UnionType,
+    SchemaError,
     build_model,
     enum_member_ident,
     pascal,
@@ -233,6 +238,111 @@ def test_real_schema_ref_kinds_complete():
         "zone",
     }
     assert set(model.asset_ref_kinds) >= {"art", "mus", "sfx", "amb", "asset"}
+
+
+@pytest.mark.integration
+def test_form_descriptor_manifest_covers_authoring_asset_contract():
+    manifest = json.loads(generate.render(SCHEMA_DIR)["descriptors"])
+    assert manifest["schema"] == "meridian/codex-form-descriptors@1"
+    schemas = {entry["schema_file"]: entry for entry in manifest["schemas"]}
+
+    def field(schema_file, path):
+        return next(
+            descriptor
+            for descriptor in schemas[schema_file]["fields"]
+            if descriptor["path"] == path
+        )
+
+    assert field("pack.schema.yaml", "namespace")["ui"]["widget"] == "slug"
+    assert field("pack.schema.yaml", "theme.preview_asset")["asset"]["allowed_classes"] == ["icon", "ui_art"]
+    assert field("npc.schema.yaml", "visual.model")["asset"] == {
+        "allowed_classes": ["creature_model"],
+        "eligible_generators": ["meshy"],
+    }
+    assert field("appearance.schema.yaml", "body_model")["asset"]["allowed_classes"] == ["character_model"]
+    assert field("appearance.schema.yaml", "skeleton")["asset"]["eligible_generators"] == []
+    assert field("item.schema.yaml", "visual.icon")["asset"]["allowed_classes"] == ["icon"]
+    assert field("item.schema.yaml", "visual.model")["asset"]["eligible_generators"] == ["meshy"]
+    assert field("ability.schema.yaml", "audio_visual.cast_vfx")["asset"] == {
+        "allowed_classes": ["vfx"],
+        "eligible_generators": [],
+    }
+    assert field("ability.schema.yaml", "audio_visual.cast_sfx")["asset"]["allowed_classes"] == ["sfx"]
+
+
+@pytest.mark.integration
+def test_annotations_do_not_change_runtime_model_outputs(tmp_path):
+    stripped = tmp_path / "schemas"
+    stripped.mkdir()
+
+    def strip_annotations(value):
+        if isinstance(value, dict):
+            return {
+                key: strip_annotations(child)
+                for key, child in value.items()
+                if key not in {"x-meridian-ui", "x-meridian-asset"}
+            }
+        if isinstance(value, list):
+            return [strip_annotations(child) for child in value]
+        return value
+
+    for source in SCHEMA_DIR.glob("*.yaml"):
+        parsed = yaml.safe_load(source.read_text(encoding="utf-8"))
+        (stripped / source.name).write_text(
+            yaml.safe_dump(strip_annotations(parsed), sort_keys=False),
+            encoding="utf-8",
+        )
+
+    annotated = generate.render(SCHEMA_DIR)
+    without_annotations = generate.render(stripped)
+    assert annotated["cpp"] == without_annotations["cpp"]
+    assert annotated["csharp"] == without_annotations["csharp"]
+
+
+@pytest.mark.unit
+def test_descriptor_emitter_rejects_unknown_annotation_keys(tmp_path):
+    for source in FIXTURE_DIR.glob("*.yaml"):
+        shutil.copy2(source, tmp_path / source.name)
+    fixture = tmp_path / "widget.schema.yaml"
+    schema = yaml.safe_load(fixture.read_text(encoding="utf-8"))
+    schema["properties"]["name"]["x-meridian-ui"] = {"gropu": "identity"}
+    fixture.write_text(yaml.safe_dump(schema, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(SchemaError, match=r"widget\.schema\.yaml:name:.*unknown key.*gropu"):
+        generate.render(tmp_path)
+
+
+@pytest.mark.unit
+def test_asset_annotation_requires_an_asset_reference(tmp_path):
+    for source in FIXTURE_DIR.glob("*.yaml"):
+        shutil.copy2(source, tmp_path / source.name)
+    (tmp_path / "asset.schema.yaml").write_text(
+        """
+        type: object
+        required: [schema, class]
+        properties:
+          schema: { const: meridian/asset@1 }
+          class: { enum: [icon] }
+        """,
+        encoding="utf-8",
+    )
+    fixture = tmp_path / "widget.schema.yaml"
+    schema = yaml.safe_load(fixture.read_text(encoding="utf-8"))
+    schema["properties"]["name"]["x-meridian-asset"] = {
+        "allowed_classes": ["icon"],
+        "eligible_generators": [],
+    }
+    fixture.write_text(yaml.safe_dump(schema, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(SchemaError, match=r"widget\.schema\.yaml:name:.*asset-reference"):
+        generate.render(tmp_path)
+
+
+@pytest.mark.integration
+def test_ui_annotations_are_non_validating_draft_2020_12_keywords():
+    for schema_file in ("pack", "npc", "appearance", "item", "ability"):
+        schema = yaml.safe_load((SCHEMA_DIR / f"{schema_file}.schema.yaml").read_text(encoding="utf-8"))
+        Draft202012Validator.check_schema(schema)
 
 
 # --- (c) determinism + drift guard -----------------------------------------

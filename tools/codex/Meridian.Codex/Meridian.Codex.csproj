@@ -53,6 +53,9 @@
                       Link="Schemas\common.defs.yaml" />
     <EmbeddedResource Include="..\..\..\schema\content\skeleton.defs.yaml"
                       Link="Schemas\skeleton.defs.yaml" />
+    <!-- Drift-checked annotation overlay emitted by schema_gen (#669). -->
+    <EmbeddedResource Include="..\..\schema_gen\generated\codex\FormDescriptors.g.json"
+                      LogicalName="Meridian.Codex.FormDescriptors.g.json" />
   </ItemGroup>
 
   <ItemGroup>

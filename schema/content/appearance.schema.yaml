@@ -14,8 +14,27 @@ properties:
   id: { $ref: "#/$defs/contentId" }
   race: { $ref: "#/$defs/raceName" }
   sex: { enum: [male, female] }
-  skeleton: { $ref: "#/$defs/artRef" }
-  body_model: { $ref: "#/$defs/artRef" }
+  skeleton:
+    $ref: "#/$defs/artRef"
+    x-meridian-ui:
+      group: body
+      label: Reference skeleton
+      widget: asset_picker
+      reference_type: asset:art
+      help: Canonical rig used by every body and wearable in this appearance catalog.
+    x-meridian-asset:
+      allowed_classes: [character_model]
+      eligible_generators: []
+  body_model:
+    $ref: "#/$defs/artRef"
+    x-meridian-ui:
+      group: body
+      label: Character body model
+      widget: asset_picker
+      reference_type: asset:art
+    x-meridian-asset:
+      allowed_classes: [character_model]
+      eligible_generators: [meshy]
   presets:
     description: >-
       Customization set v1 (art-prd §5): hair meshes, face textures, skin
@@ -33,7 +52,16 @@ properties:
           required: [id, model]
           properties:
             id: { type: integer, minimum: 1, maximum: 255 }
-            model: { $ref: "#/$defs/artRef" }
+            model:
+              $ref: "#/$defs/artRef"
+              x-meridian-ui:
+                group: customization
+                label: Hair model
+                widget: asset_picker
+                reference_type: asset:art
+              x-meridian-asset:
+                allowed_classes: [character_model]
+                eligible_generators: [meshy]
       face:
         type: array
         items:
@@ -42,7 +70,16 @@ properties:
           required: [id, texture]
           properties:
             id: { type: integer, minimum: 1, maximum: 255 }
-            texture: { $ref: "#/$defs/artRef" }
+            texture:
+              $ref: "#/$defs/artRef"
+              x-meridian-ui:
+                group: customization
+                label: Face texture
+                widget: asset_picker
+                reference_type: asset:art
+              x-meridian-asset:
+                allowed_classes: [texture_set]
+                eligible_generators: []
       skin:
         type: array
         items:
@@ -51,7 +88,16 @@ properties:
           required: [id, palette]
           properties:
             id: { type: integer, minimum: 1, maximum: 255 }
-            palette: { $ref: "#/$defs/artRef" }
+            palette:
+              $ref: "#/$defs/artRef"
+              x-meridian-ui:
+                group: customization
+                label: Skin palette
+                widget: asset_picker
+                reference_type: asset:art
+              x-meridian-asset:
+                allowed_classes: [texture_set]
+                eligible_generators: []
   morphs:
     description: >-
       0 at M1; ships only if the §2.5 crowd budget allows (A-03/D-32). Capped at

@@ -9,6 +9,7 @@ targets — the single source of truth the Tools SAD calls for:
 |--------|--------|----------|-----|
 | **C++20** | [`generated/cpp/content_types.gen.hpp`](generated/cpp/content_types.gen.hpp) | `mcc` / `worldd` typed decode (`namespace mcc::content`) | §2.1 "one C++ struct per schema type, generated from /schema/content … the same generator emits the Server's table-loading structs" |
 | **C#** | [`generated/csharp/ContentTypes.g.cs`](generated/csharp/ContentTypes.g.cs) | Codex editor `Models/` (`namespace Meridian.Codex.Models`) | §6.1 `Models/ # generated from /schema/content (same generator as mcc's structs, C# target)` |
+| **Form descriptors** | [`generated/codex/FormDescriptors.g.json`](generated/codex/FormDescriptors.g.json) | Codex schema-form catalog | `x-meridian-ui` / `x-meridian-asset` authoring metadata |
 
 Today `mcc` parses content into untyped `yaml-cpp` nodes
 (`tools/mcc/src/stages/model.h`: *"Full typed per-schema structs … arrive with
@@ -40,6 +41,9 @@ uv run python -m tools.schema_gen --check    # CI drift guard: exit 1 if stale
 
 Output is **deterministic** (schema-declaration field order, stable derived
 names, no host/wall-clock state) — regenerating twice is byte-identical.
+The descriptor target is an annotation-only overlay keyed by schema file and
+logical dotted field path (`[]` marks array elements). It never duplicates
+validation rules or enters the generated runtime C++/C# model IR.
 
 ## Drift guard
 
@@ -60,6 +64,7 @@ tools/schema_gen/
   ir.py           # schema -> language-neutral IR (all schema-shape knowledge)
   emit_cpp.py     # IR -> C++20 header
   emit_csharp.py  # IR -> C# records
+  emit_form_descriptors.py  # schema annotations -> Codex JSON overlay
   generate.py     # CLI driver + --check drift guard
   generated/      # checked-in output (cpp/, csharp/)
 tests/schema_gen/

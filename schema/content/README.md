@@ -73,3 +73,43 @@ Deferred to M2 (do not invent early): `statprofile` (class/level stat tables), `
 ## Versioning
 
 Schema major version is embedded in the envelope (`@1`). Additive optional fields are non-breaking (same major); renames/removals/semantic changes bump the major, and `mcc` must support reading N and N−1 during a migration window. Schema changes require client+server+tools sign-off (Baseline §5.1).
+
+## Codex authoring annotations
+
+Schemas may carry the Draft 2020-12 extension keywords `x-meridian-ui` and
+`x-meridian-asset`. They are non-validating annotations: content validity,
+runtime models, and `mcc` behavior never depend on them. `schema_gen` validates
+their vocabulary and emits the checked-in Codex form-descriptor manifest.
+
+`x-meridian-ui` supports:
+
+| Key | Contract |
+|---|---|
+| `group` | Stable lower-snake-case section id local to the schema. |
+| `label` | Non-empty human-facing field label. |
+| `widget` | `single_line`, `multiline`, `slug`, `semver`, `number`, `asset_picker`, `reference_picker`, or `animation`. |
+| `unit` | `ms`, `m`, `mps`, `percent`, `copper`, or `scale`. |
+| `reference_type` | Typed target in `content:<type>` or `asset:<type>` form. |
+| `help` | Optional task-oriented explanation beyond the schema description. |
+| `example` | Optional scalar example; never a default. |
+| `constraint` | Optional plain-language summary of a schema-owned constraint. |
+
+`x-meridian-asset` is valid on asset-reference fields. `allowed_classes` is a
+non-empty, unique subset of `asset.schema.yaml`'s `class` enum.
+`eligible_generators` is a unique list of approved remote generators; v1 knows
+only `meshy`. An omitted or empty list means selection only. Generator
+eligibility is explicit and field-local: for example a creature model may be
+Meshy-eligible while an icon, VFX, SFX, or canonical skeleton is not.
+
+```yaml
+model:
+  $ref: "#/$defs/artRef"
+  x-meridian-ui:
+    group: presentation
+    label: Creature model
+    widget: asset_picker
+    reference_type: asset:art
+  x-meridian-asset:
+    allowed_classes: [creature_model]
+    eligible_generators: [meshy]
+```
