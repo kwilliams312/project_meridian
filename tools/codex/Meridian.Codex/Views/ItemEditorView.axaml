@@ -47,7 +47,7 @@
         <StackPanel Spacing="4">
 
           <TextBlock Classes="section" Text="Identity / classification" />
-          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
             <TextBlock Grid.Row="0" Grid.Column="0" Classes="field" Text="ID" />
             <TextBox   Grid.Row="0" Grid.Column="1" Text="{Binding Id}" />
             <TextBlock Grid.Row="1" Grid.Column="0" Classes="field" Text="Name" />
@@ -60,25 +60,27 @@
               <ComboBox Width="150" ItemsSource="{Binding ItemClasses}" SelectedItem="{Binding ItemClass}" />
               <TextBox Width="150" Watermark="subclass" Text="{Binding Subclass}" />
             </StackPanel>
-            <TextBlock Grid.Row="4" Grid.Column="0" Classes="field" Text="Slot" />
-            <ComboBox  Grid.Row="4" Grid.Column="1" HorizontalAlignment="Left" Width="150"
-                       ItemsSource="{Binding Slots}" SelectedItem="{Binding Slot}" />
-            <TextBlock Grid.Row="5" Grid.Column="0" Classes="field" Text="Rarity" />
+            <TextBlock Grid.Row="4" Grid.Column="0" Classes="field" Text="Equip type" />
+            <TextBox   Grid.Row="4" Grid.Column="1" Watermark="equip_type reference" Text="{Binding EquipType}" />
+            <TextBlock Grid.Row="5" Grid.Column="0" Classes="field" Text="Slot" />
             <ComboBox  Grid.Row="5" Grid.Column="1" HorizontalAlignment="Left" Width="150"
+                       ItemsSource="{Binding Slots}" SelectedItem="{Binding Slot}" />
+            <TextBlock Grid.Row="6" Grid.Column="0" Classes="field" Text="Rarity" />
+            <ComboBox  Grid.Row="6" Grid.Column="1" HorizontalAlignment="Left" Width="150"
                        ItemsSource="{Binding Rarities}" SelectedItem="{Binding Rarity}" />
-            <TextBlock Grid.Row="6" Grid.Column="0" Classes="field" Text="Req / item level" />
-            <StackPanel Grid.Row="6" Grid.Column="1" Orientation="Horizontal" Spacing="8">
+            <TextBlock Grid.Row="7" Grid.Column="0" Classes="field" Text="Req / item level" />
+            <StackPanel Grid.Row="7" Grid.Column="1" Orientation="Horizontal" Spacing="8">
               <TextBox Width="80" Watermark="req lvl" Text="{Binding RequiredLevel}" />
               <TextBox Width="80" Watermark="item lvl" Text="{Binding ItemLevel}" />
             </StackPanel>
-            <TextBlock Grid.Row="7" Grid.Column="0" Classes="field" Text="Binding / stack" />
-            <StackPanel Grid.Row="7" Grid.Column="1" Orientation="Horizontal" Spacing="8">
+            <TextBlock Grid.Row="8" Grid.Column="0" Classes="field" Text="Binding / stack" />
+            <StackPanel Grid.Row="8" Grid.Column="1" Orientation="Horizontal" Spacing="8">
               <ComboBox Width="130" ItemsSource="{Binding Bindings}" SelectedItem="{Binding Binding}" />
               <TextBox Width="80" Watermark="stack" Text="{Binding StackSize}" />
               <CheckBox Content="Unique" IsChecked="{Binding Unique}" VerticalAlignment="Center" />
             </StackPanel>
-            <TextBlock Grid.Row="8" Grid.Column="0" Classes="field" Text="Icon / model" />
-            <StackPanel Grid.Row="8" Grid.Column="1" Orientation="Horizontal" Spacing="8">
+            <TextBlock Grid.Row="9" Grid.Column="0" Classes="field" Text="Icon / model" />
+            <StackPanel Grid.Row="9" Grid.Column="1" Orientation="Horizontal" Spacing="8">
               <TextBox Width="180" Watermark="icon art ref" Text="{Binding VisualIcon}" />
               <TextBox Width="180" Watermark="model art ref" Text="{Binding VisualModel}" />
             </StackPanel>

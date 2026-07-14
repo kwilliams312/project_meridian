@@ -18,6 +18,8 @@ public class GeneratedModelTests
     {
         var t = typeof(Item);
 
+        Assert.Equal("meridian/item@2", Item.SchemaTag);
+
         // Record type generated from item.schema.yaml.
         Assert.True(t.IsClass);
 
@@ -35,6 +37,10 @@ public class GeneratedModelTests
         var rarity = t.GetProperty("Rarity");
         Assert.NotNull(rarity);
         Assert.Equal(typeof(ItemRarity), rarity!.PropertyType);
+
+        var equipType = t.GetProperty("EquipType");
+        Assert.NotNull(equipType);
+        Assert.Equal(typeof(EquipTypeRef?), equipType!.PropertyType);
 
         // Optional scalar surfaces as nullable (FlavorText: string?).
         var flavor = t.GetProperty("FlavorText");

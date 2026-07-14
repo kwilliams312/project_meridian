@@ -95,6 +95,7 @@ public sealed partial class ItemEditorViewModel : ViewModelBase
     public string FlavorText { get => Field("flavor_text"); set => SetField("flavor_text", value); }
     public string ItemClass { get => Field("item_class"); set => SetField("item_class", value); }
     public string Subclass { get => Field("subclass"); set => SetField("subclass", value); }
+    public string EquipType { get => Field("equip_type"); set => SetField("equip_type", value); }
     public string Slot { get => Field("slot"); set => SetField("slot", value); }
     public string Rarity { get => Field("rarity"); set => SetField("rarity", value); }
     public string RequiredLevel { get => Field("required_level"); set => SetField("required_level", value); }

@@ -116,6 +116,7 @@ class IrField:
 class IrStruct:
     name: str  # generated type name, e.g. "Npc", "NpcStats", "NpcAiEntry"
     schema_type: str | None  # the `type` const suffix (e.g. "npc") for root structs
+    schema_tag: str | None = None  # root `schema.const`, e.g. "meridian/npc@1"
     fields: list[IrField] = field(default_factory=list)
     description: str | None = None
     # True when this struct is a flattened tagged union (oneOf of variants). Then
@@ -305,7 +306,14 @@ class _Lowerer:
     def _lower_object(
         self, name: str, node: dict[str, Any], *, schema_type: str | None = None
     ) -> IrStruct:
-        struct = IrStruct(name=name, schema_type=schema_type)
+        schema_tag = None
+        if schema_type is not None:
+            schema_tag = node.get("properties", {}).get("schema", {}).get("const")
+            if not isinstance(schema_tag, str) or not schema_tag:
+                raise SchemaError(
+                    f"{name}: root schema must declare a non-empty string properties.schema.const"
+                )
+        struct = IrStruct(name=name, schema_type=schema_type, schema_tag=schema_tag)
         required = set(node.get("required", []))
         props: dict[str, Any] = node.get("properties", {})
         for key, prop in props.items():

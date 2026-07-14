@@ -65,6 +65,24 @@ public class ItemEditorViewModelTests
     }
 
     [Fact]
+    public void Equip_type_edits_round_trip_through_the_viewmodel()
+    {
+        var path = ContentFixtures.NewTempPath("equip-type.item.yaml");
+        var vm = new ItemEditorViewModel
+        {
+            FilePath = path,
+            EquipType = "core:equip_type.one_hand",
+        };
+
+        vm.SaveCommand.Execute(null);
+
+        var reloaded = new ItemEditorViewModel { FilePath = path };
+        reloaded.OpenCommand.Execute(null);
+        Assert.Equal("core:equip_type.one_hand", reloaded.EquipType);
+        Assert.Contains("equip_type: core:equip_type.one_hand", reloaded.PreviewYaml);
+    }
+
+    [Fact]
     public void Adding_a_stat_row_appears_in_the_model_and_preview()
     {
         var vm = new ItemEditorViewModel();

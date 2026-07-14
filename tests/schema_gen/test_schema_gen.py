@@ -77,6 +77,7 @@ def test_pascal_and_enum_ident():
 def test_fixture_root_struct_required_vs_optional():
     model = build_model(FIXTURE_DIR)
     widget = _struct(model, "Widget")
+    assert widget.schema_tag == "meridian/widget@1"
     # `schema` const is dropped (it is the type discriminator).
     assert "schema" not in [f.name for f in widget.fields]
     # Required scalars.
@@ -295,3 +296,6 @@ def test_csharp_output_is_wellformed():
     # C# syntax error — regression guard for the quest.script / zone.chunk_manifest
     # reserved-null fields).
     assert "??" not in text
+    # Root records expose the schema envelope from the source schema so editors
+    # never need to duplicate a versioned discriminator by hand.
+    assert 'public const string SchemaTag = "meridian/item@2";' in text
