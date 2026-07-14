@@ -9,6 +9,7 @@
 # later a characters service) and the integration test drive the same code path.
 add_library(meridian-characters-lib STATIC
   src/characters.cpp
+  src/roster.cpp
 )
 add_library(meridian::characters ALIAS meridian-characters-lib)
 target_include_directories(meridian-characters-lib

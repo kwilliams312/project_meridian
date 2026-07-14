@@ -155,8 +155,8 @@ int main() {
             chr::CreateRequest req;
             req.account_id = account_a;
             req.name = name_a;
-            req.race = static_cast<std::uint8_t>(chr::Race::kSylvane);
-            req.char_class = static_cast<std::uint8_t>(chr::Class::kRuncaller);
+            req.race = static_cast<std::uint8_t>(chr::kRaceSylvane);
+            req.char_class = static_cast<std::uint8_t>(chr::kClassRuncaller);
             minted = chr::create_character(a, req).character_id;
             check("A: create_character returns a server-minted id", minted > 0);
         }  // connection A closed HERE — its handle is gone before B opens.
@@ -182,10 +182,10 @@ int main() {
                 check("B: listed account_id matches the creating account",
                       listed[0].account_id == account_a);
                 check("B: listed race round-trips across the connection",
-                      listed[0].race == static_cast<std::uint8_t>(chr::Race::kSylvane));
+                      listed[0].race == static_cast<std::uint8_t>(chr::kRaceSylvane));
                 check("B: listed class round-trips across the connection",
                       listed[0].char_class ==
-                          static_cast<std::uint8_t>(chr::Class::kRuncaller));
+                          static_cast<std::uint8_t>(chr::kClassRuncaller));
             }
         }
 
@@ -204,7 +204,7 @@ int main() {
                 check("B: loaded name matches what A created", owned->name == name_a);
                 check("B: loaded class round-trips",
                       owned->class_id ==
-                          static_cast<std::uint8_t>(chr::Class::kRuncaller));
+                          static_cast<std::uint8_t>(chr::kClassRuncaller));
             }
         }
 

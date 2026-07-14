@@ -551,6 +551,38 @@ void emit_ability(std::uint32_t id, const YAML::Node& n, const std::string& ns,
     };
 }
 
+// race / class -> the playable roster tables (SP2.5 #695). Unlike every other
+// content family, these rows are KEYED and ORDERED by `roster_id` (the canonical
+// append-only 1-based id the server persists in character.race/class), NOT by the
+// IF-9 numeric id — that preserves the persisted-id contract across the roster.h
+// retirement. The IF-9 id (`id`) is still recorded in `content_id` for
+// traceability. Only the identity (id + name + description) is emitted; the richer
+// class rules columns are deferred to #696/#697 (SP2 design §2.2). `roster_id` is a
+// schema-required integer in [1,255], so it fits the TINYINT UNSIGNED PK.
+void emit_race(std::uint32_t id, const YAML::Node& n, const std::string& /*ns*/,
+               const std::string& /*file*/, Ctx& cx) {
+    const auto roster_id = static_cast<std::uint64_t>(as_int(n["roster_id"]));
+    Row& r = new_row(cx.tbl("race"), roster_id);
+    r.cells = {
+        Val::u(static_cast<std::uint32_t>(roster_id)),
+        Val::u(id),  // content_id (IF-9)
+        Val::str(as_str(n["name"])),
+        has(n, "description") ? Val::str(as_str(n["description"])) : Val::null(),
+    };
+}
+
+void emit_class(std::uint32_t id, const YAML::Node& n, const std::string& /*ns*/,
+                const std::string& /*file*/, Ctx& cx) {
+    const auto roster_id = static_cast<std::uint64_t>(as_int(n["roster_id"]));
+    Row& r = new_row(cx.tbl("class"), roster_id);
+    r.cells = {
+        Val::u(static_cast<std::uint32_t>(roster_id)),
+        Val::u(id),  // content_id (IF-9)
+        Val::str(as_str(n["name"])),
+        has(n, "description") ? Val::str(as_str(n["description"])) : Val::null(),
+    };
+}
+
 void emit_quest(std::uint32_t id, const YAML::Node& n, const std::string& ns,
                 const std::string& file, Ctx& cx) {
     Row& r = new_row(cx.tbl("quest_template"), id);
@@ -842,6 +874,9 @@ std::map<std::string, Table> make_tables() {
     add("ability", {"id","name","description","school","target","range_m","cast_time_ms","cast_channel_ms",
         "cooldown_ms","triggers_gcd","resource_type","resource_amount","av_cast_anim","av_cast_vfx_id",
         "av_cast_sfx_id","av_impact_vfx_id","av_impact_sfx_id","effects_json"});
+    // roster (SP2.5 #695) — keyed by roster_id, not the IF-9 id (see emit_race).
+    add("race", {"roster_id","content_id","name","description"});
+    add("class", {"roster_id","content_id","name","description"});
     add("quest_template", {"id","name","summary","offer_text","completion_text","level","required_level",
         "zone_ref_id","giver_npc_id","turn_in_npc_id","reward_xp","reward_money"});
     add("quest_objective", {"quest_id","ordinal","type","target_npc_id","item_id","to_npc_id","zone_ref_id","poi","count"});
@@ -871,6 +906,7 @@ const std::vector<std::string> kEmitOrder = {
     "npc_template", "npc_ability", "npc_trainer", "npc_trainer_ability",
     "item_template", "item_stat", "item_effect_on_equip",
     "ability",
+    "race", "class",
     "quest_template", "quest_objective", "quest_prereq", "quest_reward",
     "loot_table", "loot_group", "loot_entry",
     "vendor_inventory", "vendor_inventory_item", "vendor_inventory_buys",
@@ -965,6 +1001,8 @@ EmitSqlResult emit_sql(const model::ContentModel& model, const LinkResult& linke
         if (type == "npc") emit_npc(id, n, ns, file, cx);
         else if (type == "item") emit_item(id, n, ns, file, cx);
         else if (type == "ability") emit_ability(id, n, ns, file, cx);
+        else if (type == "race") emit_race(id, n, ns, file, cx);
+        else if (type == "class") emit_class(id, n, ns, file, cx);
         else if (type == "quest") emit_quest(id, n, ns, file, cx);
         else if (type == "loot") emit_loot(id, n, ns, file, cx);
         else if (type == "vendor") emit_vendor(id, n, ns, file, cx);

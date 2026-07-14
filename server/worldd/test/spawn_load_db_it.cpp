@@ -79,6 +79,7 @@ void create_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS npc_trainer",      "DROP TABLE IF EXISTS npc_template",
         "DROP TABLE IF EXISTS area",             "DROP TABLE IF EXISTS ability",
         "DROP TABLE IF EXISTS spawn_point",
+        "DROP TABLE IF EXISTS race",             "DROP TABLE IF EXISTS class",
     };
     for (const char* d : drops) c.execute(d);
 
@@ -184,6 +185,16 @@ void create_tables(db::Connection& c) {
         "  orientation_deg FLOAT NOT NULL DEFAULT 0, respawn_min INT UNSIGNED NOT NULL DEFAULT 0,"
         "  respawn_max INT UNSIGNED NOT NULL DEFAULT 0, wander_radius_m FLOAT NULL, PRIMARY KEY (id))"
         " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // race / class — load_world_content also loads the roster (SP2.5 #695,
+    // load_db_roster). This test seeds no roster rows and does not assert on it, so
+    // the tables are created EMPTY (the loader returns just the compiled fallback).
+    // Without the tables load_world_content throws "Table 'race' doesn't exist".
+    c.execute("CREATE TABLE race (roster_id TINYINT UNSIGNED NOT NULL, content_id INT UNSIGNED NOT NULL,"
+              "  name VARCHAR(64) NOT NULL, description VARCHAR(500) NULL, PRIMARY KEY (roster_id))"
+              " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    c.execute("CREATE TABLE class (roster_id TINYINT UNSIGNED NOT NULL, content_id INT UNSIGNED NOT NULL,"
+              "  name VARCHAR(64) NOT NULL, description VARCHAR(500) NULL, PRIMARY KEY (roster_id))"
+              " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 }
 
 void drop_tables(db::Connection& c) {
@@ -197,6 +208,7 @@ void drop_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS npc_trainer",      "DROP TABLE IF EXISTS npc_template",
         "DROP TABLE IF EXISTS area",             "DROP TABLE IF EXISTS ability",
         "DROP TABLE IF EXISTS spawn_point",
+        "DROP TABLE IF EXISTS race",             "DROP TABLE IF EXISTS class",
     };
     for (const char* d : drops) c.execute(d);
 }

@@ -57,6 +57,7 @@
 #include "loot_table.h"       // meridian::loot::LootTableStore / LootTable
 #include "npc_def.h"          // meridian::npc::NpcStore / NpcDef
 #include "quest_def.h"        // meridian::worldd::QuestStore / QuestDef
+#include "roster.h"           // meridian::characters::Roster — DB-loaded playable roster (#695)
 #include "vendor_catalog.h"   // meridian::vendor::VendorCatalog / VendorListing
 
 namespace meridian::worldd {
@@ -208,6 +209,13 @@ struct WorldContent {
     // WorldServer::set_abilities() so a client casting an authored id (minor_healing=1)
     // resolves against real content instead of the placeholder store's synthetic ids.
     std::unique_ptr<AbilityStore>     abilities;
+    // The runtime playable roster (SP2.5 #695) — the `race`/`class` rows loaded from
+    // pack data, MERGED with the compiled fallback (the entries not yet authorable in
+    // the pack). Installed onto the CHAR_CREATE validation path via
+    // WorldServer::set_roster() so a create validates against pack data instead of the
+    // retired compiled enum. Always populated by load_world_content (the fallback
+    // alone is non-empty), so std::optional only marks "a world DB was loaded".
+    std::optional<meridian::characters::Roster> roster;
     // The authored spawn placements (spawn_point rows resolved against npc_template,
     // #486). Spawned into the live world at boot via WorldServer::install_spawns() so
     // the seeded quest-givers/creatures EXIST, are AoI-visible (ENTITY_ENTER), and are
@@ -222,6 +230,14 @@ struct WorldContent {
 // live cast path in place of the M1 placeholder store.
 // Throws meridian::db::DbError on a query failure (same fail-fast policy as the others).
 AbilityStore load_db_ability_store(db::Connection& world_db);
+
+// Load the playable roster from the world DB (SP2.5 #695). Starts from the compiled
+// fallback (meridian::characters::Roster::compiled_fallback() — the entries not yet
+// authorable in the pack) and MERGES every `race` / `class` row on top (keyed by
+// roster_id, the canonical character.race/class id), so a pack entry supersedes a
+// same-id fallback entry (the pack is the source of truth). Throws
+// meridian::db::DbError on a query failure (same fail-fast policy as the others).
+meridian::characters::Roster load_db_roster(db::Connection& world_db);
 
 // Load every content store from the (already-boot-verified) world DB connection.
 // Throws meridian::db::DbError on a query failure — the caller treats a load fault

@@ -36,6 +36,7 @@
 // Clean-room, original code (CONTRIBUTING.md — designed from OUR world DDL + seams;
 // no GPL/AGPL/CMaNGOS/TrinityCore/leaked source consulted).
 
+#include "characters.h"  // create/list a character validated against the loaded roster (#695)
 #include "db_content_store.h"
 #include "meridian/db/connection.h"
 
@@ -208,6 +209,20 @@ void create_tables(db::Connection& c) {
         "  respawn_min INT UNSIGNED NOT NULL DEFAULT 0, respawn_max INT UNSIGNED NOT NULL DEFAULT 0,"
         "  wander_radius_m FLOAT NULL, PRIMARY KEY (id)"
         ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // race / class — the SP2.5 #695 roster loader load_world_content now also reads
+    // (load_db_roster). Seeded below with the seed-pack roster; the loader merges
+    // them with the compiled fallback. Columns mirror schema/sql/world/35_roster.sql.
+    // Without the tables load_world_content throws "Table 'race' doesn't exist".
+    c.execute(
+        "CREATE TABLE race ("
+        "  roster_id TINYINT UNSIGNED NOT NULL, content_id INT UNSIGNED NOT NULL,"
+        "  name VARCHAR(64) NOT NULL, description VARCHAR(500) NULL,"
+        "  PRIMARY KEY (roster_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    c.execute(
+        "CREATE TABLE class ("
+        "  roster_id TINYINT UNSIGNED NOT NULL, content_id INT UNSIGNED NOT NULL,"
+        "  name VARCHAR(64) NOT NULL, description VARCHAR(500) NULL,"
+        "  PRIMARY KEY (roster_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 }
 
 void drop_tables(db::Connection& c) {
@@ -221,6 +236,7 @@ void drop_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS npc_trainer",      "DROP TABLE IF EXISTS npc_template",
         "DROP TABLE IF EXISTS area",             "DROP TABLE IF EXISTS ability",
         "DROP TABLE IF EXISTS spawn_point",
+        "DROP TABLE IF EXISTS race",             "DROP TABLE IF EXISTS class",
     };
     for (const char* d : drops) c.execute(d);
 }
@@ -321,6 +337,18 @@ void seed_fixture(db::Connection& c) {
     c.execute(
         "INSERT INTO vendor_inventory_item (vendor_id, ordinal, item_id, price_override, limited_count, "
         "limited_restock_minutes) VALUES (10, 1, 3, 500, NULL, NULL)");
+
+    // race / class roster (SP2.5 #695) — the seed-pack rows keyed by roster_id (the
+    // canonical character.race/class id), content_id = the IF-9 numeric id mcc emits.
+    // Ardent=1/Dolmen=2 races, Vanguard=1/Warden=3 classes (Warden=3 skips the not-
+    // yet-in-pack Runcaller=2). load_db_roster merges these with the compiled fallback
+    // (Sylvane=3/Emberkin=4 races, Runcaller=2/Mender=4 classes).
+    c.execute("INSERT INTO race (roster_id, content_id, name, description) VALUES "
+              "(1, 139, 'Ardent', 'Resilient folk of the central realm.'),"
+              "(2, 140, 'Dolmen', 'Stoic mountain folk hewn from the deep stone.')");
+    c.execute("INSERT INTO class (roster_id, content_id, name, description) VALUES "
+              "(1, 137, 'Vanguard', 'A front-line melee defender who holds the line.'),"
+              "(3, 138, 'Warden', 'A ranged hybrid who mends allies and burns foes at distance.')");
 }
 
 // Find an objective of a given type in a quest def.
@@ -542,6 +570,90 @@ int main() {
             if (well) {
                 check("old_well box uses its own 25 m radius",
                       well->min_x == -75.0f && well->max_x == -25.0f);
+            }
+        }
+
+        // ---- Roster (SP2.5 #695) — loaded from the `race`/`class` rows, MERGED with
+        // the compiled fallback. Proves the retired roster.h enum is now sourced from
+        // pack data at boot (character CREATE validates against this).
+        {
+            check("roster loaded from world DB", content.roster.has_value());
+            if (content.roster) {
+                const characters::Roster& r = *content.roster;
+                // Pack entries (from the seeded race/class rows).
+                check("roster: race Ardent(1) from pack",
+                      r.is_valid_race(1) && r.race_name(1) == "Ardent");
+                check("roster: race Dolmen(2) from pack",
+                      r.is_valid_race(2) && r.race_name(2) == "Dolmen");
+                check("roster: class Vanguard(1) from pack",
+                      r.is_valid_class(1) && r.class_name(1) == "Vanguard");
+                check("roster: class Warden(3) from pack",
+                      r.is_valid_class(3) && r.class_name(3) == "Warden");
+                // Compiled fallback entries (not yet authorable in the pack), merged.
+                check("roster: race Sylvane(3) from fallback",
+                      r.is_valid_race(3) && r.race_name(3) == "Sylvane");
+                check("roster: race Emberkin(4) from fallback",
+                      r.is_valid_race(4) && r.race_name(4) == "Emberkin");
+                check("roster: class Runcaller(2) from fallback",
+                      r.is_valid_class(2) && r.class_name(2) == "Runcaller");
+                check("roster: class Mender(4) from fallback",
+                      r.is_valid_class(4) && r.class_name(4) == "Mender");
+                // Full M0 set = 4 races + 4 classes; 0 and out-of-range reject.
+                check("roster: 4 races + 4 classes merged",
+                      r.race_count() == 4 && r.class_count() == 4);
+                check("roster: id 0 and 5 are invalid",
+                      !r.is_valid_race(0) && !r.is_valid_race(5) &&
+                      !r.is_valid_class(0) && !r.is_valid_class(5));
+
+                // ---- Character CREATE + LOAD round-trips against the DB-LOADED
+                // roster (the SP2.5 #695 acceptance bar): a character with a seed
+                // race/class (Ardent=1 / Vanguard=1, both from the pack rows) is
+                // created — validated against `r`, the roster loaded from MariaDB —
+                // then read back with its ids intact; an id NOT in the roster is
+                // refused. Uses a standalone `character` table on the same MariaDB
+                // (no FK — the soft-ref account_id rule, §4.4).
+                conn.execute(
+                    "CREATE TEMPORARY TABLE `character` ("
+                    "  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,"
+                    "  account_id BIGINT UNSIGNED NOT NULL, name VARCHAR(32) NOT NULL,"
+                    "  race TINYINT UNSIGNED NOT NULL, class TINYINT UNSIGNED NOT NULL,"
+                    "  appearance JSON NULL, level SMALLINT UNSIGNED NOT NULL DEFAULT 1,"
+                    "  map_id INT UNSIGNED NOT NULL DEFAULT 0,"
+                    "  pos_x FLOAT NOT NULL DEFAULT 0, pos_y FLOAT NOT NULL DEFAULT 0,"
+                    "  pos_z FLOAT NOT NULL DEFAULT 0, PRIMARY KEY (id),"
+                    "  UNIQUE KEY uq_character_name (name)"
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+                characters::CreateRequest cr;
+                cr.account_id = 424242;
+                cr.name = "RosterProof";
+                cr.race = 1;         // Ardent — a PACK roster id
+                cr.char_class = 1;   // Vanguard — a PACK roster id
+                bool created_ok = false;
+                try {
+                    characters::create_character(conn, cr, r);  // validate vs DB roster
+                    created_ok = true;
+                } catch (const std::exception&) {
+                    created_ok = false;
+                }
+                check("create character (Ardent/Vanguard) vs DB-loaded roster", created_ok);
+
+                std::vector<characters::CharacterSummary> mine =
+                    characters::list_characters(conn, 424242);
+                check("created character round-trips (race=1, class=1, name)",
+                      mine.size() == 1 && mine[0].race == 1 &&
+                          mine[0].char_class == 1 && mine[0].name == "RosterProof");
+
+                // A race id NOT in the loaded roster is refused (InvalidRace).
+                characters::CreateRequest bad = cr;
+                bad.name = "BadRace";
+                bad.race = 200;  // not in the roster
+                bool refused = false;
+                try {
+                    characters::create_character(conn, bad, r);
+                } catch (const characters::InvalidRace&) {
+                    refused = true;
+                }
+                check("create with an unknown race id is refused (InvalidRace)", refused);
             }
         }
 

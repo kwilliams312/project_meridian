@@ -21,10 +21,23 @@ $schema: "https://json-schema.org/draft/2020-12/schema"
 $id: "meridian://schema/content/race.schema.yaml"
 type: object
 additionalProperties: false
-required: [schema, id, name, appearance]
+required: [schema, id, roster_id, name, appearance]
 properties:
   schema: { const: "meridian/race@1" }
   id: { $ref: "#/$defs/raceId" }
+  roster_id:
+    description: >-
+      Canonical APPEND-ONLY roster id (1-based; 0 is reserved as unset/invalid).
+      This is the STABLE numeric id the server persists in `character.race` and
+      the client roster mirror (character_roster.gd) sends on create — it is NOT
+      the IF-9 content id (that stays the pack-internal numeric id). The kernel
+      loads race/class from pack data into a runtime Roster keyed by this id
+      (SP2.5 #695). Append-only: a shipped id NEVER changes meaning and is never
+      renumbered (later milestones extend the set). Fits `character.race`
+      TINYINT UNSIGNED, so the range is [1, 255].
+    type: integer
+    minimum: 1
+    maximum: 255
   name: { $ref: "#/$defs/displayName" }
   description:
     type: string

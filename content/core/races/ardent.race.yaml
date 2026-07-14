@@ -5,6 +5,7 @@
 # archetype mirroring server/characters/src/roster.h's placeholder roster.
 schema: meridian/race@1
 id: core:race.ardent
+roster_id: 1   # canonical roster id (character.race); mirrors roster.h kArdent
 name: Ardent
 description: Resilient folk of the central realm.
 appearance: core:appearance.ardent.male

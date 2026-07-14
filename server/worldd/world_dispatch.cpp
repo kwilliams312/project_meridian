@@ -39,7 +39,6 @@
 #include "meridian/trace/tracer.h"
 #include "npc_def.h"      // NPC-01/02 NpcStore / PlaceholderNpcStore (#372)
 #include "quest_def.h"    // QST-01 QuestStore / PlaceholderQuestStore (#371)
-#include "roster.h"       // M0-frozen race/class roster (validated by create)
 #include "trainer.h"      // NPC-02 trainer plan/learn (#372)
 #include "vendor.h"          // ECO-01 vendor buy/sell/buyback (#370)
 #include "vendor_catalog.h"  // placeholder vendor inventories (M1; mcc #28 later)
@@ -1855,7 +1854,13 @@ void Dispatcher::register_m0_stubs() {
                    cr.appearance = rec;
                }
                try {
-                   minted = chr::create_character(*ctx.char_db, cr).character_id;
+                   // Validate against the boot-loaded roster (pack `race`/`class`
+                   // rows merged with the compiled fallback, #695); fall back to the
+                   // full offline M0 set for a directly-built ConnCtx (dispatch smoke).
+                   const chr::Roster& roster =
+                       ctx.roster != nullptr ? *ctx.roster : chr::Roster::offline_full();
+                   minted =
+                       chr::create_character(*ctx.char_db, cr, roster).character_id;
                } catch (const chr::CharacterLimitReached&) {
                    status = mn::CharCreateStatus::LIMIT_REACHED;
                } catch (const chr::DuplicateName&) {
@@ -3440,6 +3445,14 @@ struct WorldServer::Impl {
     // looks abilities up here with no lock (O(1), single load — client SAD §2.4).
     AbilityStore abilities = load_placeholder_ability_store();
 
+    // The runtime playable roster CHAR_CREATE validates against (SP2.5 #695).
+    // Defaults to the full offline M0 set so a DB-less run still creates characters;
+    // set_roster() swaps in the pack-loaded roster (the `race`/`class` world-DB rows
+    // merged with the compiled fallback) at boot. Shared read-only across every
+    // serve_connection by address (ctx.roster), so the move-assign in set_roster
+    // keeps every ConnCtx pointer valid.
+    chr::Roster roster = chr::Roster::offline_full();
+
     // The per-map tick orchestrator (SAD §2.5 phase order; #349). Owned by + run
     // ONLY on the world thread. Each tick it runs the AI -> combat/auras ->
     // spawns/respawns passes for the map's server-controlled creatures + auras +
@@ -3585,6 +3598,13 @@ void WorldServer::set_abilities(AbilityStore store) {
     impl_->abilities = std::move(store);
 }
 
+void WorldServer::set_roster(chr::Roster roster) {
+    // Move-assign into the roster every ConnCtx borrows by address (impl_->roster).
+    // The object's address is unchanged by a move-assign, so ctx.roster pointers stay
+    // valid. Boot-time only (before start()), so no concurrent reader races the swap.
+    impl_->roster = std::move(roster);
+}
+
 void WorldServer::world_thread_main() {
     // The per-map map tick (SAD §2.5 / §3.2), 20 Hz with a 40 ms soft budget
     // (SAD §8.1). Each wake runs ONE tick in the SAD §2.5 PHASE ORDER:
@@ -3694,6 +3714,7 @@ void WorldServer::serve_connection(net::Session sess) {
     ctx.tracer = cfg_.tracer;   // OPS-05: session-flow trace exporter (#166)
     ctx.world = &impl_->world;  // shared AoI relay registry (#87)
     ctx.abilities = &impl_->abilities;  // shared ability template store (#343 / CMB-01)
+    ctx.roster = &impl_->roster;  // runtime playable roster CHAR_CREATE validates against (#695)
     ctx.active_sessions = &impl_->active_sessions;  // single-session registry (#326)
     ctx.loot = &impl_->loot;  // shared corpse loot registry (ITM-02 wire; #388)
     ctx.quest_credit = &impl_->quest_credit;  // MapTick→session kill credit bus (#396)

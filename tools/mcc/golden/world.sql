@@ -8,7 +8,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 INSERT INTO world_manifest
   (pack_namespace, pack_version, id_band, content_hash, schema_version, compatibility_version, mcc_version, built_at)
 VALUES
-  ('core', '0.1.0', 0, '7dac834514cf0d6546001c3c3866e954fb170b9c04bf46811898510cab86d214', 1, 1, '0.0.0', '1970-01-01 00:00:00');
+  ('core', '0.1.0', 0, '45abe405e85a795219129e2b68240ea378108e0e6854a4e2955c90c87b6253b0', 1, 1, '0.0.0', '1970-01-01 00:00:00');
 
 -- npc_template (8 rows)
 INSERT INTO npc_template (id, name, subtitle, level_min, level_max, creature_type, `rank`, faction, stat_health, stat_mana, stat_armor, stat_damage_min, stat_damage_max, stat_attack_speed_ms, ai_behavior, ai_aggro_radius_m, ai_leash_radius_m, ai_call_for_help_radius_m, ai_flee_at_health_pct, move_walk_speed_mps, move_run_speed_mps, vendor_ref_id, loot_table_ref_id, loot_money_min, loot_money_max, visual_model_id, visual_scale, visual_sound_set_id) VALUES
@@ -85,6 +85,16 @@ INSERT INTO ability (id, name, description, school, target, range_m, cast_time_m
   (134, 'Iron Resolve', 'Steels the body, increasing stamina for a time.', 'physical', 'self', 0, 0, NULL, 45000, FALSE, 'rage', 10, NULL, NULL, NULL, NULL, NULL, '[{"duration_ms":12000,"kind":"aura","stat_mods":[{"amount":8,"stat":"stamina"}]}]'),
   (135, 'Mending Word', 'A whispered blessing that restores {amount} health.', 'holy', 'friendly', 30, 1500, NULL, 0, TRUE, 'mana', 25, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":45,"min":30},"coefficient":0.6,"kind":"heal"}]'),
   (136, 'Searing Brand', 'Marks the target with fire, dealing {amount} damage over time and weakening it.', 'fire', 'enemy', 30, 0, NULL, 12000, TRUE, 'mana', 20, NULL, NULL, NULL, NULL, NULL, '[{"duration_ms":9000,"kind":"aura","periodic":{"amount":{"max":6,"min":4},"kind":"damage","tick_ms":3000},"stat_mods":[{"amount":-5,"stat":"strength"}]}]');
+
+-- race (2 rows)
+INSERT INTO race (roster_id, content_id, name, description) VALUES
+  (1, 139, 'Ardent', 'Resilient folk of the central realm.'),
+  (2, 140, 'Dolmen', 'Stoic mountain folk hewn from the deep stone.');
+
+-- class (2 rows)
+INSERT INTO class (roster_id, content_id, name, description) VALUES
+  (1, 137, 'Vanguard', 'A front-line melee defender who holds the line.'),
+  (3, 138, 'Warden', 'A ranged hybrid who mends allies and burns foes at distance.');
 
 -- quest_template (10 rows)
 INSERT INTO quest_template (id, name, summary, offer_text, completion_text, level, required_level, zone_ref_id, giver_npc_id, turn_in_npc_id, reward_xp, reward_money) VALUES

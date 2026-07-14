@@ -3,6 +3,7 @@
 # attribute_mods (see ardent.race.yaml). Clean-room placeholder per roster.h.
 schema: meridian/race@1
 id: core:race.dolmen
+roster_id: 2   # canonical roster id (character.race); mirrors roster.h kDolmen
 name: Dolmen
 description: Stoic mountain folk hewn from the deep stone.
 appearance: core:appearance.dolmen.male
