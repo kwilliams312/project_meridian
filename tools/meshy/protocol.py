@@ -51,6 +51,28 @@ class ProtocolSinkAmbiguousWriteError(ProtocolSinkError):
     """A write raised, leaving its accepted character count unknowable."""
 
 
+class ProtocolSinkFlushError(ProtocolSinkError):
+    """A fully accepted delivery encountered an exception while flushing."""
+
+    def __init__(
+        self,
+        event: str,
+        original: BaseException,
+        *,
+        retry_succeeded: bool,
+    ) -> None:
+        super().__init__("Meshy JSON event sink flush failed")
+        self.event = event
+        self.original = original
+        self.retry_succeeded = retry_succeeded
+
+    @property
+    def is_process_control(self) -> bool:
+        """Whether the sink raised a non-cancellation process-control signal."""
+
+        return isinstance(self.original, (SystemExit, GeneratorExit))
+
+
 @dataclass
 class _Delivery:
     """Resumable delivery state for one exact serialized event document."""
@@ -174,8 +196,25 @@ class EventEmitter:
                 )
             delivery.offset += count
         if not delivery.flushed:
-            self._stream.flush()
-            delivery.flushed = True
+            try:
+                self._stream.flush()
+            except BaseException as exc:
+                # All characters are already accepted, so retrying flush cannot
+                # duplicate the JSON line. Retry once here so parser errors and
+                # early validation events have the same recovery opportunity as
+                # events emitted inside cmd_generate's guarded runtime region.
+                try:
+                    self._stream.flush()
+                except BaseException:
+                    raise ProtocolSinkFlushError(
+                        delivery.event, exc, retry_succeeded=False
+                    ) from exc
+                delivery.flushed = True
+                raise ProtocolSinkFlushError(
+                    delivery.event, exc, retry_succeeded=True
+                ) from exc
+            else:
+                delivery.flushed = True
 
     def redact(self, value: Any) -> Any:
         if isinstance(value, dict):

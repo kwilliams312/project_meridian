@@ -116,7 +116,14 @@ The emitter then fails closed: it poisons the sink, writes nothing further to
 stdout, prints only a deterministic redacted diagnostic to stderr, and exits
 `1`. Consequently, an exact terminal JSON document cannot be guaranteed when a
 sink violates or obscures this contract. A failure from `flush()` remains
-resumable because the full line's accepted character count is already known.
+resumable because the full line's accepted character count is already known:
+the emitter retries the same flush once without rewriting the line and retains
+the delivery for idempotent resumption. Ordinary exceptions and
+`KeyboardInterrupt` retain their normal runtime/error or cancellation semantics.
+Process-control exceptions (`SystemExit` and `GeneratorExit`) raised by a custom
+sink never escape with an arbitrary status; the CLI writes no additional stdout,
+prints the deterministic sink diagnostic to stderr, and exits `1` (even when the
+retry made the already-accepted event durable).
 
 | Exit | Meaning | Terminal JSON event |
 |---:|---|---|

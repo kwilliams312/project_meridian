@@ -663,6 +663,35 @@ def cmd_generate(args: argparse.Namespace) -> int:
         reservation.commit()
         _post_commit_hook()
         return completed()
+    except protocol.ProtocolSinkFlushError as exc:
+        if exc.is_process_control:
+            return _report_json_sink_failure()
+        if isinstance(exc.original, KeyboardInterrupt):
+            if reservation is not None and reservation.is_committed():
+                reservation.finish_committed()
+                return completed()
+            if args.json_events:
+                events.emit(
+                    "cancelled",
+                    message="generation cancelled by operator",
+                    task_ids=task_ids,
+                )
+            else:
+                print("cancelled: generation interrupted by operator", file=sys.stderr)
+            return 130
+        if reservation is not None and reservation.is_committed():
+            reservation.finish_committed()
+            return completed()
+        if args.json_events:
+            events.emit(
+                "error",
+                error_code="internal_error",
+                message=str(exc.original),
+                task_ids=task_ids,
+            )
+        else:
+            print(f"error: {events.redact(str(exc.original))}", file=sys.stderr)
+        return 1
     except intake.IntakeError as exc:
         return refuse(str(exc))
     except KeyboardInterrupt:
@@ -907,6 +936,10 @@ def main(argv: list[str] | None = None) -> int:
                     message=parse_stderr.getvalue().strip()
                     or "invalid command arguments",
                 )
+            except protocol.ProtocolSinkFlushError as exc:
+                if exc.retry_succeeded and not exc.is_process_control:
+                    return 2
+                return _report_json_sink_failure()
             except protocol.ProtocolSinkError:
                 return _report_json_sink_failure()
             return 2
@@ -917,6 +950,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_generate(args)
         if args.command == "convert-rig":
             return cmd_convert_rig(args)
+    except protocol.ProtocolSinkFlushError:
+        return _report_json_sink_failure()
     except protocol.ProtocolSinkError:
         return _report_json_sink_failure()
     parser.error(f"unknown command: {args.command}")

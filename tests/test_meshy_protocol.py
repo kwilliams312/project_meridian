@@ -290,6 +290,75 @@ def test_json_protocol_wraps_argument_parser_errors(capsys):
     assert "required" in final["message"]
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["generate", "--json-events"],
+        ["convert-rig", "missing.glb", "--json-events"],
+    ],
+)
+@pytest.mark.parametrize("process_control", [SystemExit, GeneratorExit])
+def test_parse_error_flush_process_control_is_retried_then_controlled(
+    argv, process_control, monkeypatch, capsys
+):
+    class ProcessControlFlushStream:
+        def __init__(self):
+            self.pending = ""
+            self.durable = ""
+            self.flush_calls = 0
+
+        def write(self, value):
+            self.pending += value
+            return len(value)
+
+        def flush(self):
+            self.flush_calls += 1
+            if self.flush_calls == 1:
+                raise process_control(9)
+            self.durable += self.pending
+            self.pending = ""
+
+    stream = ProcessControlFlushStream()
+    monkeypatch.setattr(meshy_main.sys, "stdout", stream)
+
+    assert meshy_main.main(argv) == 1
+    assert stream.flush_calls == 2
+    assert stream.pending == ""
+    events = _events(stream.durable)
+    assert [event["event"] for event in events] == ["error"]
+    assert events[0]["error_code"] == "invalid_request"
+    assert capsys.readouterr().err == (
+        "error: Meshy JSON event sink failed; refusing further stdout output\n"
+    )
+
+
+@pytest.mark.parametrize("flush_failure", [OSError, KeyboardInterrupt])
+def test_parse_error_recoverable_flush_failure_preserves_refusal_status(
+    flush_failure, monkeypatch, capsys
+):
+    class RecoverableFlushStream:
+        def __init__(self):
+            self.output = ""
+            self.flush_calls = 0
+
+        def write(self, value):
+            self.output += value
+            return len(value)
+
+        def flush(self):
+            self.flush_calls += 1
+            if self.flush_calls == 1:
+                raise flush_failure("injected recoverable flush failure")
+
+    stream = RecoverableFlushStream()
+    monkeypatch.setattr(meshy_main.sys, "stdout", stream)
+
+    assert meshy_main.main(["generate", "--json-events"]) == 2
+    assert stream.flush_calls == 2
+    assert [event["event"] for event in _events(stream.output)] == ["error"]
+    assert capsys.readouterr().err == ""
+
+
 def test_json_protocol_reports_status_drift(tmp_path, monkeypatch, capsys):
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
@@ -661,6 +730,152 @@ def test_interrupt_at_completed_stream_flush_reuses_the_accepted_line(
     ]
     assert [event["event"] for event in terminals] == ["completed"]
     assert (tmp_path / "content/core/assets/art/protocol_marker").is_dir()
+
+
+@pytest.mark.parametrize("process_control", [SystemExit, GeneratorExit])
+def test_emitter_process_control_flush_remains_idempotently_resumable(
+    process_control,
+):
+    class OneFailureFlushStream:
+        def __init__(self):
+            self.output = ""
+            self.flush_calls = 0
+
+        def write(self, value):
+            self.output += value
+            return len(value)
+
+        def flush(self):
+            self.flush_calls += 1
+            if self.flush_calls == 1:
+                raise process_control(9)
+
+    stream = OneFailureFlushStream()
+    emitter = protocol.EventEmitter(stream=stream)
+
+    with pytest.raises(protocol.ProtocolSinkFlushError) as raised:
+        emitter.emit("validation.started", mode="text", model_version="meshy-5")
+    assert raised.value.is_process_control
+    assert raised.value.retry_succeeded
+    emitter.resume("validation.started")
+    assert stream.flush_calls == 2
+    assert [event["event"] for event in _events(stream.output)] == [
+        "validation.started"
+    ]
+
+
+@pytest.mark.parametrize("process_control", [SystemExit, GeneratorExit])
+@pytest.mark.parametrize("target_event", ["preview.submitted", "completed"])
+def test_process_control_flush_exits_one_without_duplicate_stdout(
+    process_control, target_event, tmp_path, monkeypatch, capsys
+):
+    class ProcessControlFlushStream:
+        def __init__(self):
+            self.pending = ""
+            self.durable = ""
+            self.failed = False
+            self.write_calls_after_failure = 0
+
+        def write(self, value):
+            if self.failed:
+                self.write_calls_after_failure += 1
+            self.pending += value
+            return len(value)
+
+        def flush(self):
+            if not self.failed and f'"event":"{target_event}"' in self.pending:
+                self.failed = True
+                raise process_control(9)
+            self.durable += self.pending
+            self.pending = ""
+
+    glb = _make_glb(tmp_path / "source.glb", triangle_count=2)
+    handler, _calls = _text_to_3d_handler(glb_bytes=glb.read_bytes())
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        meshy_main,
+        "_new_client",
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+            client_mod.MeshyClient(
+                api_key, model_version=model_version, transport=transport
+            )
+        ),
+    )
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    stream = ProcessControlFlushStream()
+    monkeypatch.setattr(meshy_main.sys, "stdout", stream)
+
+    assert meshy_main.main(_base_args(tmp_path)) == 1
+    assert stream.failed
+    assert stream.pending == ""
+    assert stream.write_calls_after_failure == 0
+    events = _events(stream.durable)
+    terminals = [
+        event
+        for event in events
+        if event["event"] in {"completed", "cancelled", "error"}
+    ]
+    expected_terminals = ["completed"] if target_event == "completed" else []
+    assert [event["event"] for event in terminals] == expected_terminals
+    assert capsys.readouterr().err == (
+        "error: Meshy JSON event sink failed; refusing further stdout output\n"
+    )
+    asset_dir = tmp_path / "content/core/assets/art/protocol_marker"
+    assert asset_dir.is_dir() is (target_event == "completed")
+
+
+@pytest.mark.parametrize(
+    ("flush_failure", "expected_rc", "terminal"),
+    [(OSError, 1, "error"), (KeyboardInterrupt, 130, "cancelled")],
+)
+def test_uncommitted_recoverable_flush_failure_preserves_runtime_semantics(
+    flush_failure, expected_rc, terminal, tmp_path, monkeypatch, capsys
+):
+    class RecoverablePreviewFlushStream:
+        def __init__(self):
+            self.pending = ""
+            self.durable = ""
+            self.failed = False
+
+        def write(self, value):
+            self.pending += value
+            return len(value)
+
+        def flush(self):
+            if not self.failed and '"event":"preview.submitted"' in self.pending:
+                self.failed = True
+                raise flush_failure("injected recoverable flush failure")
+            self.durable += self.pending
+            self.pending = ""
+
+    glb = _make_glb(tmp_path / "source.glb", triangle_count=2)
+    handler, _calls = _text_to_3d_handler(glb_bytes=glb.read_bytes())
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        meshy_main,
+        "_new_client",
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION: (
+            client_mod.MeshyClient(
+                api_key, model_version=model_version, transport=transport
+            )
+        ),
+    )
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    stream = RecoverablePreviewFlushStream()
+    monkeypatch.setattr(meshy_main.sys, "stdout", stream)
+
+    assert meshy_main.main(_base_args(tmp_path)) == expected_rc
+    assert stream.pending == ""
+    events = _events(stream.durable)
+    assert [event["event"] for event in events].count("preview.submitted") == 1
+    terminals = [
+        event["event"]
+        for event in events
+        if event["event"] in {"completed", "cancelled", "error"}
+    ]
+    assert terminals == [terminal]
+    assert capsys.readouterr().err == ""
+    assert not (tmp_path / "content/core/assets/art/protocol_marker").exists()
 
 
 def test_repeated_short_writes_preserve_distinct_same_name_event_deliveries():
