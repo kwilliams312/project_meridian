@@ -223,6 +223,14 @@ void create_tables(db::Connection& c) {
         "  roster_id TINYINT UNSIGNED NOT NULL, content_id INT UNSIGNED NOT NULL,"
         "  name VARCHAR(64) NOT NULL, description VARCHAR(500) NULL,"
         "  PRIMARY KEY (roster_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // class_race_limit — the SP2.6 #696 class race_limits gate load_db_roster now
+    // also reads. Columns mirror schema/sql/world/35_roster.sql. Seeded below with
+    // the seed pack's Vanguard→{Ardent,Dolmen} gate (Warden omits race_limits → no
+    // rows → all races). Without the table load_db_roster throws "Table 'class_race_limit' doesn't exist".
+    c.execute(
+        "CREATE TABLE class_race_limit ("
+        "  class_roster_id TINYINT UNSIGNED NOT NULL, race_roster_id TINYINT UNSIGNED NOT NULL,"
+        "  PRIMARY KEY (class_roster_id, race_roster_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 }
 
 void drop_tables(db::Connection& c) {
@@ -236,6 +244,7 @@ void drop_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS npc_trainer",      "DROP TABLE IF EXISTS npc_template",
         "DROP TABLE IF EXISTS area",             "DROP TABLE IF EXISTS ability",
         "DROP TABLE IF EXISTS spawn_point",
+        "DROP TABLE IF EXISTS class_race_limit",
         "DROP TABLE IF EXISTS race",             "DROP TABLE IF EXISTS class",
     };
     for (const char* d : drops) c.execute(d);
@@ -349,6 +358,11 @@ void seed_fixture(db::Connection& c) {
     c.execute("INSERT INTO class (roster_id, content_id, name, description) VALUES "
               "(1, 137, 'Vanguard', 'A front-line melee defender who holds the line.'),"
               "(3, 138, 'Warden', 'A ranged hybrid who mends allies and burns foes at distance.')");
+    // class_race_limit (SP2.6 #696) — the seed pack's Vanguard→{Ardent=1,Dolmen=2}
+    // race_limits gate. Warden omits race_limits (no rows → all races permitted).
+    // Mirrors what mcc emit-sql produces from content/core/classes/vanguard.class.yaml.
+    c.execute("INSERT INTO class_race_limit (class_roster_id, race_roster_id) VALUES "
+              "(1, 1), (1, 2)");
 }
 
 // Find an objective of a given type in a quest def.
@@ -654,6 +668,78 @@ int main() {
                     refused = true;
                 }
                 check("create with an unknown race id is refused (InvalidRace)", refused);
+
+                // A class id NOT in the loaded roster is refused (InvalidClass).
+                characters::CreateRequest bad_class = cr;
+                bad_class.name = "BadClass";
+                bad_class.char_class = 200;  // not in the roster
+                bool refused_class = false;
+                try {
+                    characters::create_character(conn, bad_class, r);
+                } catch (const characters::InvalidClass&) {
+                    refused_class = true;
+                }
+                check("create with an unknown class id is refused (InvalidClass)",
+                      refused_class);
+
+                // ---- SP2.6 #696: race ∈ class race_limits gate, against the
+                // DB-LOADED class_race_limit rows. Vanguard(1) is gated to
+                // {Ardent=1, Dolmen=2}; Warden(3) omits race_limits (all races).
+                // (a) A race NOT in the class's race_limits is refused with the
+                //     DISTINCT InvalidRaceForClass — both ids valid, combo refused.
+                //     Sylvane(3) is a VALID race (compiled fallback) but ∉ Vanguard's
+                //     {1,2}, so it exercises the gate rather than InvalidRace.
+                characters::CreateRequest gated = cr;
+                gated.name = "SylvaneVanguard";
+                gated.race = 3;        // Sylvane — valid race, NOT in Vanguard limits
+                gated.char_class = 1;  // Vanguard — gated to {1,2}
+                bool gate_refused = false;
+                bool wrong_exc = false;
+                try {
+                    characters::create_character(conn, gated, r);
+                } catch (const characters::InvalidRaceForClass&) {
+                    gate_refused = true;
+                } catch (const characters::InvalidRace&) {
+                    wrong_exc = true;  // must NOT collapse to unknown-race
+                } catch (const characters::InvalidClass&) {
+                    wrong_exc = true;
+                }
+                check("create race∉class race_limits refused (InvalidRaceForClass)",
+                      gate_refused);
+                check("race_limits refusal is DISTINCT from InvalidRace/InvalidClass",
+                      !wrong_exc);
+
+                // (b) A race IN the class's race_limits is accepted. Dolmen(2) ∈
+                //     Vanguard's {1,2}.
+                characters::CreateRequest in_limits = cr;
+                in_limits.name = "DolmenVanguard";
+                in_limits.race = 2;        // Dolmen ∈ Vanguard limits {1,2}
+                in_limits.char_class = 1;  // Vanguard
+                bool in_ok = false;
+                try {
+                    characters::create_character(conn, in_limits, r);
+                    in_ok = true;
+                } catch (const std::exception&) {
+                    in_ok = false;
+                }
+                check("create race∈class race_limits accepted (Dolmen/Vanguard)", in_ok);
+
+                // (c) A class with NO race_limits (Warden=3) permits ANY valid race,
+                //     including Sylvane(3) that Vanguard rejects — proves the
+                //     "no rows = all races" semantics against the DB-loaded gate.
+                characters::CreateRequest ungated = cr;
+                ungated.name = "SylvaneWarden";
+                ungated.race = 3;        // Sylvane
+                ungated.char_class = 3;  // Warden — no race_limits rows → all races
+                bool ungated_ok = false;
+                try {
+                    characters::create_character(conn, ungated, r);
+                    ungated_ok = true;
+                } catch (const std::exception&) {
+                    ungated_ok = false;
+                }
+                check("create any race for a class without race_limits accepted "
+                      "(Sylvane/Warden)", ungated_ok);
             }
         }
 

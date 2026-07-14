@@ -225,8 +225,53 @@ void run_from_json_unit_checks() {
     }
 }
 
+// Pure (no-DB) unit checks for the Roster class `race_limits` gate (SP2.6 #696),
+// exercising Roster::is_race_allowed_for_class directly. Runs in the PLAIN server
+// ctest (no MariaDB) — the create-path enforcement is proven DB-backed below.
+void run_roster_unit_checks() {
+    using characters::Roster;
+
+    // (1) offline_full() mirrors the seed pack's gate: Vanguard(1) is limited to
+    //     Ardent(1) + Dolmen(2); every other class omits race_limits (all races).
+    const Roster& full = Roster::offline_full();
+    check("roster gate: Vanguard permits Ardent",
+          full.is_race_allowed_for_class(characters::kClassVanguard, characters::kRaceArdent));
+    check("roster gate: Vanguard permits Dolmen",
+          full.is_race_allowed_for_class(characters::kClassVanguard, characters::kRaceDolmen));
+    check("roster gate: Vanguard REFUSES Sylvane (∉ race_limits)",
+          !full.is_race_allowed_for_class(characters::kClassVanguard, characters::kRaceSylvane));
+    check("roster gate: Vanguard REFUSES Emberkin (∉ race_limits)",
+          !full.is_race_allowed_for_class(characters::kClassVanguard, characters::kRaceEmberkin));
+    // Warden(3) omits race_limits → permits every race, including the fallback ones.
+    check("roster gate: Warden (no race_limits) permits Ardent",
+          full.is_race_allowed_for_class(characters::kClassWarden, characters::kRaceArdent));
+    check("roster gate: Warden (no race_limits) permits Sylvane",
+          full.is_race_allowed_for_class(characters::kClassWarden, characters::kRaceSylvane));
+    check("roster gate: Runcaller (no race_limits) permits Emberkin",
+          full.is_race_allowed_for_class(characters::kClassRuncaller, characters::kRaceEmberkin));
+
+    // (2) A hand-built Roster: a class GAINS a limit set the first time a limit is
+    //     added; a class never given one permits all races. id 0 is rejected.
+    Roster r;
+    r.add_race(1, "R1");
+    r.add_race(2, "R2");
+    r.add_class(10, "Gated");
+    r.add_class(11, "Open");
+    r.add_class_race_limit(10, 1);  // Gated permits only race 1
+    check("built gate: gated class permits its listed race", r.is_race_allowed_for_class(10, 1));
+    check("built gate: gated class refuses an unlisted race", !r.is_race_allowed_for_class(10, 2));
+    check("built gate: class with no limit permits any race", r.is_race_allowed_for_class(11, 2));
+    r.add_class_race_limit(0, 1);   // id 0 rejected — no phantom gate created
+    r.add_class_race_limit(10, 0);  // race 0 rejected — not added to the set
+    check("built gate: add_class_race_limit rejects class id 0 (still all-permit)",
+          r.is_race_allowed_for_class(0, 5));
+    check("built gate: add_class_race_limit rejects race id 0 (not added)",
+          !r.is_race_allowed_for_class(10, 0));
+}
+
 int main() {
     run_from_json_unit_checks();
+    run_roster_unit_checks();
 
     db::ConnectParams p;
     bool configured = false;
@@ -381,6 +426,46 @@ int main() {
                 threw = true;
             }
             check("invalid class refused (InvalidClass)", threw);
+        }
+
+        // ---- 4b. race ∈ class race_limits gate (#696) ----------------------
+        // The default offline_full() roster mirrors the seed pack: Vanguard(1) is
+        // gated to Ardent(1)+Dolmen(2); Warden(3) omits race_limits (all races).
+        // (a) a VALID race that is NOT permitted for the chosen class is refused
+        //     with the DISTINCT InvalidRaceForClass (not InvalidRace) — Sylvane(3)
+        //     is a valid roster race but ∉ Vanguard's limits.
+        {
+            characters::CreateRequest gated;
+            gated.account_id = account_b;
+            gated.name = "GateVanguardBad_" + std::to_string(salt);
+            gated.race = static_cast<std::uint8_t>(characters::kRaceSylvane);   // valid race
+            gated.char_class = static_cast<std::uint8_t>(characters::kClassVanguard);  // gated
+            bool gate_refused = false;
+            bool wrong_exc = false;
+            try {
+                characters::create_character(db, gated);
+            } catch (const characters::InvalidRaceForClass&) {
+                gate_refused = true;
+            } catch (const characters::InvalidRace&) {
+                wrong_exc = true;  // must NOT collapse to unknown-race
+            } catch (const characters::InvalidClass&) {
+                wrong_exc = true;
+            }
+            check("race∉class race_limits refused (InvalidRaceForClass)", gate_refused);
+            check("race_limits refusal is DISTINCT from InvalidRace/InvalidClass",
+                  !wrong_exc);
+
+            // (b) a class WITHOUT race_limits (Warden) accepts ANY valid race,
+            //     including the Sylvane that Vanguard rejects — the "no gate = all
+            //     races" rule, proven through the real create path + INSERT.
+            characters::CreateRequest open;
+            open.account_id = account_b;
+            open.name = "GateWardenOk_" + std::to_string(salt);
+            open.race = static_cast<std::uint8_t>(characters::kRaceSylvane);
+            open.char_class = static_cast<std::uint8_t>(characters::kClassWarden);
+            characters::CreateResult r = characters::create_character(db, open);
+            check("any race accepted for a class without race_limits (Sylvane/Warden)",
+                  r.character_id > 0);
         }
 
         // ---- 5. deleting another account's character is refused ------------

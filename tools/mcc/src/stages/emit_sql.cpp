@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <iomanip>
 #include <locale>
 #include <map>
@@ -349,6 +350,14 @@ Row& new_row(Table& t, std::uint64_t sort_key) {
 struct Ctx {
     std::map<std::string, Table>& tables;
     Resolver& resolver;
+    diag::Diagnostics& diags;
+    // race content-id (fully qualified) -> its append-only roster_id. Populated
+    // before the emit walk from every `race` entity's `roster_id` field, so
+    // emit_class can lower a class's race_limits[] refs (which name races by
+    // content id) to the race ROSTER ids the runtime Roster + character.race are
+    // keyed by (#696). Separate from the Resolver's IF-9 map — roster_id is a
+    // schema field, not an idmap band index.
+    std::unordered_map<std::string, std::uint32_t> race_roster_by_id;
 
     Table& tbl(const std::string& name) { return tables.at(name); }
     std::uint32_t ref(const YAML::Node& n, const std::string& ns, const std::string& file,
@@ -360,6 +369,24 @@ struct Ctx {
                  const std::string& file) {
         if (!has(parent, key)) return Val::null();
         return Val::u(ref(parent[key], ns, file, std::string("$.") + key));
+    }
+    // Resolve a raceRef (bare or namespaced, defaulting to `owner_ns`) to the
+    // referenced race's roster_id. On a miss emits E001 and returns 0 — a
+    // race_limits ref that did not resolve to a known race with a roster_id (the
+    // L011 content check already guarantees the race exists, so this only trips on
+    // a genuine tool bug / stale idmap).
+    std::uint32_t race_roster(const YAML::Node& n, const std::string& owner_ns,
+                              const std::string& file, const std::string& where) {
+        const std::string r = as_str(n);
+        const std::string full = r.find(':') != std::string::npos ? r : owner_ns + ":" + r;
+        const auto it = race_roster_by_id.find(full);
+        if (it == race_roster_by_id.end()) {
+            diags.error("E001", file, where,
+                        "emit-sql: race_limits reference '" + full +
+                            "' has no race roster_id");
+            return 0;
+        }
+        return it->second;
     }
 };
 
@@ -571,8 +598,8 @@ void emit_race(std::uint32_t id, const YAML::Node& n, const std::string& /*ns*/,
     };
 }
 
-void emit_class(std::uint32_t id, const YAML::Node& n, const std::string& /*ns*/,
-                const std::string& /*file*/, Ctx& cx) {
+void emit_class(std::uint32_t id, const YAML::Node& n, const std::string& ns,
+                const std::string& file, Ctx& cx) {
     const auto roster_id = static_cast<std::uint64_t>(as_int(n["roster_id"]));
     Row& r = new_row(cx.tbl("class"), roster_id);
     r.cells = {
@@ -581,6 +608,28 @@ void emit_class(std::uint32_t id, const YAML::Node& n, const std::string& /*ns*/
         Val::str(as_str(n["name"])),
         has(n, "description") ? Val::str(as_str(n["description"])) : Val::null(),
     };
+
+    // race_limits[] -> class_race_limit rows (SP2.6 #696). Each ref names a race;
+    // lower it to that race's roster_id (the id character.race carries) so the
+    // runtime gate compares like-for-like. Omitted/empty = no rows = all races
+    // permitted (the ABSENCE of rows is the "no gate" signal). Rows sort by
+    // (class, race) roster ids for deterministic emit; race id is zero-padded in
+    // the secondary key so 2 sorts before 10 (string compare).
+    if (has(n, "race_limits") && n["race_limits"].IsSequence()) {
+        Table& rl = cx.tbl("class_race_limit");
+        for (const auto& ref : n["race_limits"]) {
+            const std::uint32_t race_roster_id =
+                cx.race_roster(ref, ns, file, "$.race_limits");
+            Row& lr = new_row(rl, roster_id);
+            char pad[4];
+            std::snprintf(pad, sizeof(pad), "%03u", race_roster_id & 0xFFu);
+            lr.sort_key2 = pad;
+            lr.cells = {
+                Val::u(static_cast<std::uint32_t>(roster_id)),  // class_roster_id
+                Val::u(race_roster_id),                         // race_roster_id
+            };
+        }
+    }
 }
 
 void emit_quest(std::uint32_t id, const YAML::Node& n, const std::string& ns,
@@ -877,6 +926,9 @@ std::map<std::string, Table> make_tables() {
     // roster (SP2.5 #695) — keyed by roster_id, not the IF-9 id (see emit_race).
     add("race", {"roster_id","content_id","name","description"});
     add("class", {"roster_id","content_id","name","description"});
+    // class `race_limits` content gate (SP2.6 #696): one row per (class, permitted
+    // race), both by roster_id. No rows for a class = all races permitted.
+    add("class_race_limit", {"class_roster_id","race_roster_id"});
     add("quest_template", {"id","name","summary","offer_text","completion_text","level","required_level",
         "zone_ref_id","giver_npc_id","turn_in_npc_id","reward_xp","reward_money"});
     add("quest_objective", {"quest_id","ordinal","type","target_npc_id","item_id","to_npc_id","zone_ref_id","poi","count"});
@@ -906,7 +958,7 @@ const std::vector<std::string> kEmitOrder = {
     "npc_template", "npc_ability", "npc_trainer", "npc_trainer_ability",
     "item_template", "item_stat", "item_effect_on_equip",
     "ability",
-    "race", "class",
+    "race", "class", "class_race_limit",
     "quest_template", "quest_objective", "quest_prereq", "quest_reward",
     "loot_table", "loot_group", "loot_entry",
     "vendor_inventory", "vendor_inventory_item", "vendor_inventory_buys",
@@ -950,7 +1002,19 @@ EmitSqlResult emit_sql(const model::ContentModel& model, const LinkResult& linke
     EmitSqlResult result;
     Resolver resolver(linked.idmaps, diags);
     std::map<std::string, Table> tables = make_tables();
-    Ctx cx{tables, resolver};
+    Ctx cx{tables, resolver, diags, {}};
+
+    // Pre-pass: map every race content-id -> its roster_id, so emit_class can lower
+    // a class's race_limits[] refs to race roster ids (#696). Races are their own
+    // content family, emitted independently; this is the only cross-entity lookup
+    // emit-sql needs (race_limits names races that may live in any file).
+    for (const auto& pf : model.files) {
+        if (!pf.parsed || pf.file.file_type != "race" || pf.id.empty()) continue;
+        if (has(pf.root, "roster_id")) {
+            cx.race_roster_by_id[pf.id] =
+                static_cast<std::uint32_t>(as_int(pf.root["roster_id"]));
+        }
+    }
 
     // Spawn placements need per-placement numeric ids that don't collide with
     // file-level ids. They come from the top of each pack's band, growing DOWN

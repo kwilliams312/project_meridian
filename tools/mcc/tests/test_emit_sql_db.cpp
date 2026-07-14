@@ -221,6 +221,11 @@ int main() {
     check("spawn_point populated",
           std::stoi("0" + query_scalar(client, flags, db,
                     "SELECT COUNT(*) FROM spawn_point;", scratch)) >= 5);
+    // class_race_limit — the SP2.6 #696 race_limits gate. The seed Vanguard(1) is
+    // gated to Ardent(1)+Dolmen(2) (2 rows); Warden omits race_limits (no rows).
+    check("class_race_limit populated (seed Vanguard gate)",
+          std::stoi("0" + query_scalar(client, flags, db,
+                    "SELECT COUNT(*) FROM class_race_limit;", scratch)) >= 2);
 
     // 6. Referential integrity: every quest_template.giver_npc_id points at a real
     //    npc_template row (the *Ref -> numeric id resolution loaded cleanly with
@@ -235,6 +240,18 @@ int main() {
                        "SELECT COUNT(*) FROM item_template i "
                        "LEFT JOIN ability a ON i.effect_on_use_id=a.id "
                        "WHERE i.effect_on_use_id IS NOT NULL AND a.id IS NULL;", scratch) == "0");
+    // Every class_race_limit row references a real class + a real race (by roster
+    // id) — proves emit lowered race_limits[] refs to roster ids that resolve.
+    check("class_race_limit class refs resolve to real class rows",
+          query_scalar(client, flags, db,
+                       "SELECT COUNT(*) FROM class_race_limit crl "
+                       "LEFT JOIN class c ON crl.class_roster_id=c.roster_id "
+                       "WHERE c.roster_id IS NULL;", scratch) == "0");
+    check("class_race_limit race refs resolve to real race rows",
+          query_scalar(client, flags, db,
+                       "SELECT COUNT(*) FROM class_race_limit crl "
+                       "LEFT JOIN race r ON crl.race_roster_id=r.roster_id "
+                       "WHERE r.roster_id IS NULL;", scratch) == "0");
 
     // Cleanup — drop the throwaway database.
     {

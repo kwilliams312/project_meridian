@@ -19,10 +19,12 @@
 -- `content_id` (UNIQUE) for traceability back to the pack entity.
 --
 -- SCOPE: SP2.5 loads the roster IDENTITY (id + name) — enough to validate a
--- create and name a race/class. The richer class fields (race_limits, the
--- spellbook, usable armor/weapon types, role/talents) that #696 (create-time
--- membership) and #697 (equip-gating) consume are deferred to those stories,
--- which extend these tables. Ranges match TINYINT UNSIGNED (roster_id 1..255).
+-- create and name a race/class. SP2.6 (#696) adds the class `race_limits`
+-- content gate (the `class_race_limit` child table below), consumed by
+-- character CREATE (race ∈ class race_limits). The remaining richer class fields
+-- (the spellbook, usable armor/weapon types, role/talents) that #697
+-- (equip-gating) consumes stay deferred to that story, which extends these
+-- tables. Ranges match TINYINT UNSIGNED (roster_id 1..255).
 
 -- ---------------------------------------------------------------------
 -- race — a playable race (meridian/race@1). Cosmetic identity at M1.
@@ -49,4 +51,23 @@ CREATE TABLE class (
 
   PRIMARY KEY (roster_id),
   UNIQUE KEY uq_class_content (content_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- class_race_limit — the class `race_limits` content gate (#696). One row per
+-- (class, permitted race) pair, BOTH keyed by roster_id (character.class /
+-- character.race). mcc emit-sql resolves each class's race_limits[] refs to race
+-- roster_ids and emits a row per permitted race. worldd loads these into the
+-- runtime Roster; character CREATE refuses a race NOT permitted for its class.
+--
+-- SEMANTICS: a class with NO rows here permits ALL races (empty/omitted
+-- race_limits = all races, per class.schema.yaml) — the ABSENCE of rows is the
+-- "no gate" signal, so a class is never required to enumerate every race. A
+-- class WITH rows permits only the races listed.
+-- ---------------------------------------------------------------------
+CREATE TABLE class_race_limit (
+  class_roster_id TINYINT UNSIGNED NOT NULL,  -- class.roster_id (character.class)
+  race_roster_id  TINYINT UNSIGNED NOT NULL,  -- permitted race.roster_id (character.race)
+
+  PRIMARY KEY (class_roster_id, race_roster_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

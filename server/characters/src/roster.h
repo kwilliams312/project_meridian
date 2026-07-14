@@ -36,6 +36,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <string_view>
 
@@ -79,10 +80,28 @@ public:
     void add_race(std::uint8_t id, std::string name);
     void add_class(std::uint8_t id, std::string name);
 
+    // Register a race id as PERMITTED for a class id — one edge of the class's
+    // `race_limits` content gate (class.schema.yaml → the `class_race_limit` pack
+    // table, loaded at boot; SP2 design §2.2, #696). A class GAINS a limit set the
+    // first time this is called for it; a class with NO registered limit permits
+    // ALL races (empty/omitted race_limits = all races, per the schema). id 0 is
+    // rejected for either argument (reserved as unset/invalid).
+    void add_class_race_limit(std::uint8_t class_id, std::uint8_t race_id);
+
     // True iff `id` is a defined race/class id in this roster (rejects 0 and any
     // id not present). Replaces the old free is_valid_race / is_valid_class.
     bool is_valid_race(std::uint8_t id) const { return races_.count(id) != 0; }
     bool is_valid_class(std::uint8_t id) const { return classes_.count(id) != 0; }
+
+    // True iff `race_id` may play `class_id` under that class's `race_limits`
+    // gate (#696). A class with NO registered limit (empty/omitted race_limits)
+    // permits ALL races → always true; otherwise true only when race_id is in the
+    // class's permitted set. This is a CONTENT/LORE gate, orthogonal to
+    // is_valid_race/is_valid_class (which is set-membership): a caller validates
+    // race + class exist FIRST, then this combination gate. Does not itself check
+    // that race_id/class_id are defined — callers gate on is_valid_* beforehand.
+    bool is_race_allowed_for_class(std::uint8_t class_id,
+                                   std::uint8_t race_id) const;
 
     // Display name for a race/class id (diagnostics/logging only). "" for unknown.
     std::string_view race_name(std::uint8_t id) const;
@@ -110,6 +129,13 @@ public:
 private:
     std::map<std::uint8_t, std::string> races_;
     std::map<std::uint8_t, std::string> classes_;
+    // Per-class `race_limits`: class id → the set of race ids permitted to play
+    // it (#696). A class ABSENT from this map has NO limit and permits all races
+    // (empty/omitted race_limits = all races); a class present maps to a
+    // non-empty permitted set. Kept separate from classes_ so a class's identity
+    // (name) and its content gate load independently (identity from `class`, the
+    // gate from `class_race_limit`).
+    std::map<std::uint8_t, std::set<std::uint8_t>> class_race_limits_;
 };
 
 }  // namespace meridian::characters

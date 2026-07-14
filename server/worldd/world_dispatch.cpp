@@ -1867,6 +1867,14 @@ void Dispatcher::register_m0_stubs() {
                    status = mn::CharCreateStatus::DUPLICATE_NAME;
                } catch (const chr::InvalidRace&) {
                    status = mn::CharCreateStatus::INVALID_RACE;
+               } catch (const chr::InvalidRaceForClass&) {
+                   // Race valid but not permitted for the chosen class (class
+                   // race_limits gate, #696). Surfaced to the client as
+                   // INVALID_RACE — the chosen race cannot be used with this
+                   // class — reusing the existing wire status rather than
+                   // expanding the CharCreateStatus enum (no protocol/client
+                   // change): the C++ exception stays distinct for the server.
+                   status = mn::CharCreateStatus::INVALID_RACE;
                } catch (const chr::InvalidClass&) {
                    status = mn::CharCreateStatus::INVALID_CLASS;
                } catch (const chr::InvalidName&) {

@@ -16,6 +16,18 @@ void Roster::add_class(std::uint8_t id, std::string name) {
     classes_[id] = std::move(name);
 }
 
+void Roster::add_class_race_limit(std::uint8_t class_id, std::uint8_t race_id) {
+    if (class_id == 0 || race_id == 0) return;  // 0 reserved as unset/invalid
+    class_race_limits_[class_id].insert(race_id);
+}
+
+bool Roster::is_race_allowed_for_class(std::uint8_t class_id,
+                                       std::uint8_t race_id) const {
+    const auto it = class_race_limits_.find(class_id);
+    if (it == class_race_limits_.end()) return true;  // no gate → all races
+    return it->second.count(race_id) != 0;
+}
+
 std::string_view Roster::race_name(std::uint8_t id) const {
     const auto it = races_.find(id);
     return it == races_.end() ? std::string_view{} : std::string_view{it->second};
@@ -49,6 +61,14 @@ const Roster& Roster::offline_full() {
         r.add_race(kRaceDolmen, "Dolmen");
         r.add_class(kClassVanguard, "Vanguard");
         r.add_class(kClassWarden, "Warden");
+        // Mirror the seed pack's class `race_limits` (#696): Vanguard is gated to
+        // Ardent + Dolmen (content/core/classes/vanguard.class.yaml); Warden omits
+        // race_limits (all races). The compiled-fallback classes (Runcaller/Mender)
+        // carry no gate here either — they permit all races until SP5 authors them
+        // in-pack. Keeps DB-less callers (CLI, unit tests, DB-less dispatch smoke)
+        // enforcing the same combination gate as the pack-loaded roster.
+        r.add_class_race_limit(kClassVanguard, kRaceArdent);
+        r.add_class_race_limit(kClassVanguard, kRaceDolmen);
         return r;
     }();
     return kFull;

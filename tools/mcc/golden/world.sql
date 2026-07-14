@@ -96,6 +96,11 @@ INSERT INTO class (roster_id, content_id, name, description) VALUES
   (1, 137, 'Vanguard', 'A front-line melee defender who holds the line.'),
   (3, 138, 'Warden', 'A ranged hybrid who mends allies and burns foes at distance.');
 
+-- class_race_limit (2 rows)
+INSERT INTO class_race_limit (class_roster_id, race_roster_id) VALUES
+  (1, 1),
+  (1, 2);
+
 -- quest_template (10 rows)
 INSERT INTO quest_template (id, name, summary, offer_text, completion_text, level, required_level, zone_ref_id, giver_npc_id, turn_in_npc_id, reward_xp, reward_money) VALUES
   (28, 'Culling the Kobolds', 'Kill 8 Kobold Miners in Cinderdeep Mine for Quartermaster Bren.', 'The kobolds crawled out of Cinderdeep like ants from a kicked hill, and every wagon they hit is food that doesn''t reach the village. Thin them out for me — eight ought to make the rest reconsider.', 'Eight fewer thieving hands in the hollow. You''ve earned this, and my thanks.', 4, 2, 37, 27, NULL, 340, 250),
