@@ -1,0 +1,10 @@
+task_id: 019f6158-a108-7c1b-8bc4-f8c45269d8fa
+model_version: meshy-5
+preview_task_id: 019f6157-e1b8-7bf5-9161-12fc16d0dc36
+request:
+  mode: preview
+  prompt: chibi water cattail reeds, chibi, colored rounded pill and clay toy aesthetic,
+    bright saturated colors, big cute and friendly, clean readable silhouette, game-ready,
+    matching a whimsical fairytale pill-mascot village
+  ai_model: meshy-5
+  target_polycount: 16000

@@ -1,0 +1,10 @@
+task_id: 019f6156-3125-79f9-aed3-fbba2a2428ec
+model_version: meshy-5
+preview_task_id: 019f6154-2827-744c-9db4-1ba516a8e40c
+request:
+  mode: preview
+  prompt: a chibi little waterfall over rocks, chibi, colored rounded pill and clay
+    toy aesthetic, bright saturated colors, big cute and friendly, clean readable
+    silhouette, game-ready, matching a whimsical fairytale pill-mascot village
+  ai_model: meshy-5
+  target_polycount: 2400
