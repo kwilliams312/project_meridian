@@ -6,7 +6,7 @@
 schema: meridian/ability@1
 id: chibi:ability.mage_arcane_storm
 name: Arcane Storm
-description: A crashing wave of arcane energy that hits for {amount} damage.
+description: Focuses a crashing arcane storm onto one enemy for {amount} damage.
 school: arcane
 target: enemy
 range_m: 30

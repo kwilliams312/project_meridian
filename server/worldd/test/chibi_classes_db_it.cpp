@@ -1,23 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // worldd — SP5 CHIBI CLASSES boot -> create -> equip -> cast DB-backed integration
-// test (story #723, epic #722). The MANDATORY SP2-discipline runtime proof that a
+// test (stories #723/#776; epics #722/#774). The MANDATORY SP2-discipline runtime
+// proof that a
 // brand-new class roster ships as PURE PACK DATA on the SP2 kernel with ZERO engine
-// change: it runs the REAL mcc pipeline against content/core (the 4 chibi classes
-// this story authored — Warrior/Mage/Rogue/Priest, roster ids 5-8) and drives the
+// change: it runs the REAL mcc pipeline against the standalone chibi pack (the 4
+// classes Warrior/Mage/Rogue/Priest, roster ids 1-4) and drives the
 // whole boot -> create -> equip -> cast chain over the loaded pack.
 //
 // WHAT IT DOES (throwaway MariaDB + real mcc emit-sql, modeled on the #394
 // worldd-itm1-chain-load test and the #390 content-load test):
-//   1. runs `mcc emit-sql content` to compile content/core -> world DB DML;
+//   1. runs `mcc emit-sql content --pack chibi` to compile chibi -> world DB DML;
 //   2. loads the REAL world DDL (schema/sql/world/*.sql) + the emitted DML into a
 //      throwaway database it owns (created + dropped here);
 //   3. constructs the DB-backed stores via worldd::load_world_content() over it —
 //      "worldd boots the pack";
 //   4. BOOT   — the runtime Roster + ClassCatalog carry the 4 chibi classes
-//               (Warrior 5, Mage 6, Rogue 7, Priest 8) loaded from pack data, with
+//               (Warrior 1, Mage 2, Rogue 3, Priest 4) loaded from pack data, with
 //               the right role + usable armor/weapon types;
-//   5. CREATE — a character is created as a chibi class (Ardent race + Warrior
+//   5. CREATE — a character is created as a chibi class (Blue race + Warrior
 //               class), VALIDATED against the DB-loaded roster; an undefined class
 //               id is refused;
 //   6. EQUIP  — gate_equip ACCEPTS each class's starter items (equip_type in the
@@ -43,7 +44,9 @@
 // #390/#697/#693 seams; no GPL/AGPL/CMaNGOS/TrinityCore/leaked source consulted).
 
 #include "characters.h"        // create/validate a character vs the DB-loaded roster (#695)
+#include "aura_container.h"    // deterministic timed-effect execution (#693)
 #include "class_kernel.h"      // gate_equip / EquipGate / ClassRecord / ClassCatalog (#697)
+#include "combat_resolver.h"   // deterministic direct-effect execution (#345)
 #include "combat_unit.h"       // UnitStats / ResourceType / Faction
 #include "creature_ai.h"       // CreatureSpawnDef / Creature
 #include "db_content_store.h"  // load_world_content / WorldContent (#390)
@@ -161,7 +164,7 @@ w::Position at(float x, float y) {
 }
 w::UnitStats pstats(std::uint32_t hp, w::ResourceType rt, std::uint32_t res) {
     w::UnitStats s;
-    s.level = 5;
+    s.level = 1;
     s.max_health = hp;
     s.resource_type = rt;
     s.max_resource = res;
@@ -209,11 +212,11 @@ int main() {
     fs::remove_all(scratch, ec);
     fs::create_directories(scratch);
 
-    // --- 1. mcc emit-sql content/core -> world.sql. ----------------------------
+    // --- 1. mcc emit-sql content --pack chibi -> world.sql. --------------------
     const fs::path world_sql = scratch / "world.sql";
     {
         std::string cmd = "\"" + mcc + "\" emit-sql \"" + std::string(CHIBI_CONTENT_DIR) +
-                          "\" --out \"" + world_sql.string() + "\" >" +
+                          "\" --pack chibi --out \"" + world_sql.string() + "\" >" +
                           (scratch / "emit.log").string() + " 2>&1";
         const int rc = std::system(cmd.c_str());
         check("mcc emit-sql produced world.sql", rc == 0 && fs::exists(world_sql));
@@ -266,7 +269,7 @@ int main() {
         worldd::WorldContent content = worldd::load_world_content(conn);
 
         // roster_ids the pack authored (stable, append-only).
-        constexpr std::uint8_t kWarrior = 5, kMage = 6, kRogue = 7, kPriest = 8;
+        constexpr std::uint8_t kWarrior = 1, kMage = 2, kRogue = 3, kPriest = 4;
 
         check("BOOT: roster loaded from the pack", content.roster.has_value());
         if (!content.roster) {
@@ -274,19 +277,16 @@ int main() {
             return 1;
         }
         const characters::Roster& roster = *content.roster;
-        check("BOOT: Warrior(5) in roster from pack",
+        check("BOOT: Warrior(1) in roster from pack",
               roster.is_valid_class(kWarrior) && roster.class_name(kWarrior) == "Warrior");
-        check("BOOT: Mage(6) in roster from pack",
+        check("BOOT: Mage(2) in roster from pack",
               roster.is_valid_class(kMage) && roster.class_name(kMage) == "Mage");
-        check("BOOT: Rogue(7) in roster from pack",
+        check("BOOT: Rogue(3) in roster from pack",
               roster.is_valid_class(kRogue) && roster.class_name(kRogue) == "Rogue");
-        check("BOOT: Priest(8) in roster from pack",
+        check("BOOT: Priest(4) in roster from pack",
               roster.is_valid_class(kPriest) && roster.class_name(kPriest) == "Priest");
-        // The pre-existing seed roster is untouched (append-only): Vanguard(1) survives.
-        check("BOOT: existing Vanguard(1) still present (append-only, not renumbered)",
-              roster.is_valid_class(1) && roster.class_name(1) == "Vanguard");
-        // Chibi races are cosmetic: race_limits omitted => all races may play (Ardent OK).
-        check("BOOT: Ardent(1) may play Warrior (race_limits omitted = all races)",
+        // Chibi races are cosmetic: race_limits omitted => all races may play (Blue OK).
+        check("BOOT: Blue(1) may play Warrior (race_limits omitted = all races)",
               roster.is_race_allowed_for_class(kWarrior, /*race=*/1));
 
         // ClassCatalog: role + usable armor/weapon types loaded from the pack.
@@ -309,12 +309,12 @@ int main() {
             if (r.rows.empty() || !r.rows[0].cols[0].has_value()) return 0;
             return static_cast<std::uint32_t>(std::stoul(*r.rows[0].cols[0]));
         };
-        const std::uint32_t etCloth = etype("core:equip_type.cloth");
-        const std::uint32_t etLeather = etype("core:equip_type.leather");
-        const std::uint32_t etOneHand = etype("core:equip_type.one_hand");
-        const std::uint32_t etPlate = etype("core:equip_type.plate");
-        const std::uint32_t etStaff = etype("core:equip_type.staff");
-        const std::uint32_t etWand = etype("core:equip_type.wand");
+        const std::uint32_t etCloth = etype("chibi:equip_type.cloth");
+        const std::uint32_t etLeather = etype("chibi:equip_type.leather");
+        const std::uint32_t etOneHand = etype("chibi:equip_type.one_hand");
+        const std::uint32_t etPlate = etype("chibi:equip_type.plate");
+        const std::uint32_t etStaff = etype("chibi:equip_type.staff");
+        const std::uint32_t etWand = etype("chibi:equip_type.wand");
         check("BOOT: Warrior proficiencies = plate armor + 1H/2H weapons",
               warrior->can_use_armor(etPlate) && warrior->can_use_weapon(etOneHand));
         check("BOOT: Mage proficiencies = cloth armor + staff/wand",
@@ -345,7 +345,7 @@ int main() {
             characters::CreateRequest cr;
             cr.account_id = 723723;
             cr.name = "ChibiWarrior";
-            cr.race = 1;              // Ardent — a PACK race
+            cr.race = 1;              // Blue — a PACK race
             cr.char_class = kWarrior; // Warrior — a PACK chibi class
             bool ok = false;
             try {
@@ -354,11 +354,11 @@ int main() {
             } catch (const std::exception& e) {
                 std::printf("      (create threw: %s)\n", e.what());
             }
-            check("CREATE: Ardent/Warrior character created vs the DB-loaded roster", ok);
+            check("CREATE: Blue/Warrior character created vs the DB-loaded roster", ok);
 
             const std::vector<characters::CharacterSummary> mine =
                 characters::list_characters(conn, cr.account_id);
-            check("CREATE: character persisted with race=Ardent(1), class=Warrior(5)",
+            check("CREATE: character persisted with race=Blue(1), class=Warrior(1)",
                   mine.size() == 1 && mine[0].race == 1 && mine[0].char_class == kWarrior);
 
             // An undefined class id is refused by roster validation.
@@ -415,16 +415,102 @@ int main() {
         if (content.abilities) {
             const worldd::AbilityStore& store = *content.abilities;
             const std::uint32_t idCrushing = id_by_name(conn, "ability", "Crushing Blow");
+            const std::uint32_t idBellow = id_by_name(conn, "ability", "Bellow");
             const std::uint32_t idBulwark = id_by_name(conn, "ability", "Bulwark");
             const std::uint32_t idSkullcrack = id_by_name(conn, "ability", "Skullcrack");
+            const std::uint32_t idArcaneBolt = id_by_name(conn, "ability", "Arcane Bolt");
             const std::uint32_t idCinderburn = id_by_name(conn, "ability", "Cinderburn");
+            const std::uint32_t idArcaneStorm = id_by_name(conn, "ability", "Arcane Storm");
+            const std::uint32_t idFrostLock = id_by_name(conn, "ability", "Frost Lock");
+            const std::uint32_t idRibcut = id_by_name(conn, "ability", "Ribcut");
+            const std::uint32_t idGash = id_by_name(conn, "ability", "Gash");
+            const std::uint32_t idVeilstep = id_by_name(conn, "ability", "Veilstep");
+            const std::uint32_t idWeakpoint = id_by_name(conn, "ability", "Weakpoint");
             const std::uint32_t idMend = id_by_name(conn, "ability", "Mend");
+            const std::uint32_t idRenewal = id_by_name(conn, "ability", "Renewal");
+            const std::uint32_t idAegis = id_by_name(conn, "ability", "Aegis");
+            const std::uint32_t idPurge = id_by_name(conn, "ability", "Purge");
+
+            const std::vector<std::uint32_t> warrior_ids =
+                {idCrushing, idBellow, idBulwark, idSkullcrack};
+            const std::vector<std::uint32_t> mage_ids =
+                {idArcaneBolt, idCinderburn, idArcaneStorm, idFrostLock};
+            const std::vector<std::uint32_t> rogue_ids =
+                {idRibcut, idGash, idVeilstep, idWeakpoint};
+            const std::vector<std::uint32_t> priest_ids =
+                {idMend, idRenewal, idAegis, idPurge};
+            auto all_loaded = [&](const std::vector<std::uint32_t>& ids) {
+                return std::all_of(ids.begin(), ids.end(),
+                                   [&](std::uint32_t id) { return id != 0 && store.find(id) != nullptr; });
+            };
+            auto resource_total = [&](const std::vector<std::uint32_t>& ids) {
+                std::uint32_t total = 0;
+                for (const std::uint32_t id : ids) total += store.find(id)->resource_amount;
+                return total;
+            };
+            auto recipes_valid = [&](const std::vector<std::uint32_t>& ids) {
+                return std::all_of(ids.begin(), ids.end(), [&](std::uint32_t id) {
+                    const w::Ability* a = store.find(id);
+                    return a != nullptr && !a->effects.empty();
+                });
+            };
+
+            check("CAST: standalone chibi pack contains exactly 16 abilities",
+                  store.size() == 16);
+            check("CAST: all four Warrior ability recipes loaded", all_loaded(warrior_ids));
+            check("CAST: all four Mage ability recipes loaded", all_loaded(mage_ids));
+            check("CAST: all four Rogue ability recipes loaded", all_loaded(rogue_ids));
+            check("CAST: all four Priest ability recipes loaded", all_loaded(priest_ids));
+            if (!all_loaded(warrior_ids) || !all_loaded(mage_ids) ||
+                !all_loaded(rogue_ids) || !all_loaded(priest_ids)) {
+                std::printf("FAIL: an expected chibi ability failed to load — aborting\n");
+                return 1;
+            }
+            check("CAST: every class ability has at least one executable effect",
+                  recipes_valid(warrior_ids) && recipes_valid(mage_ids) &&
+                      recipes_valid(rogue_ids) && recipes_valid(priest_ids));
+            check("TUNE: Warrior four-ability demo costs 55/100 rage",
+                  resource_total(warrior_ids) == 55);
+            check("TUNE: Mage four-ability demo costs 105/150 mana",
+                  resource_total(mage_ids) == 105);
+            check("TUNE: Rogue four-ability demo costs 80/100 energy",
+                  resource_total(rogue_ids) == 80);
+            check("TUNE: Priest four-ability demo costs 100/140 mana",
+                  resource_total(priest_ids) == 100);
+
+            const w::Ability* crushing = store.find(idCrushing);
+            const w::Ability* bellow = store.find(idBellow);
+            const w::Ability* bulwark = store.find(idBulwark);
+            const w::Ability* skullcrack = store.find(idSkullcrack);
+            const w::Ability* arcane_storm = store.find(idArcaneStorm);
+            const w::Ability* frost_lock = store.find(idFrostLock);
+            const w::Ability* veilstep = store.find(idVeilstep);
+            const w::Ability* aegis = store.find(idAegis);
+            const w::Ability* purge = store.find(idPurge);
+            check("CAST: Warrior recipes have legal enemy/self targets",
+                  crushing->target == w::TargetKind::kEnemy &&
+                      bellow->target == w::TargetKind::kEnemy &&
+                      bulwark->target == w::TargetKind::kSelf &&
+                      skullcrack->target == w::TargetKind::kEnemy);
+            check("CAST: Mage Storm is one-enemy direct damage, not implied AoE",
+                  arcane_storm->target == w::TargetKind::kEnemy &&
+                      arcane_storm->effects.size() == 1 &&
+                      arcane_storm->effects[0].kind == w::EffectKind::kDamage);
+            check("CAST: Rogue Veilstep is a legal self-target movement recipe",
+                  veilstep->target == w::TargetKind::kSelf &&
+                      veilstep->effects.size() == 1 &&
+                      veilstep->effects[0].kind == w::EffectKind::kMovement);
+            check("CAST: Priest Purge is a legal enemy damage + debuff recipe",
+                  purge->target == w::TargetKind::kEnemy && purge->effects.size() == 2 &&
+                      purge->effects[0].kind == w::EffectKind::kDamage &&
+                      purge->effects[1].kind == w::EffectKind::kDebuff);
 
             // Warrior Crushing Blow (damage) on a creature → its HP drops.
             {
                 w::MapTick mt(store, 0x723001ULL, /*dt=*/1000);
                 const w::ObjectGuid p =
-                    mt.add_player(1, at(0, 0), pstats(1000, w::ResourceType::kRage, 100), 5);
+                    mt.add_player(1, at(0, 0), pstats(1000, w::ResourceType::kRage, 100),
+                                  kWarrior);
                 const w::ObjectGuid c = mt.add_creature(target_mob(at(2, 0)));
                 mt.ai().creature(c)->set_max_health(500);
                 const std::uint32_t hp0 = mt.ai().creature(c)->health();
@@ -433,15 +519,15 @@ int main() {
                 check("CAST: Warrior Crushing Blow dealt damage (engine executed the pack effect)",
                       mt.ai().creature(c)->health() < hp0);
             }
-            // Warrior Bulwark (shield, self) → an absorb pool is granted.
+            // Warrior Bulwark executes at the documented level-1 50% health cap.
             {
-                w::MapTick mt(store, 0x723002ULL, /*dt=*/1000);
-                const w::ObjectGuid p =
-                    mt.add_player(1, at(0, 0), pstats(1000, w::ResourceType::kRage, 100), 5);
-                mt.enqueue_cast(w::AbilityUseCmd{p, idBulwark, p});
-                mt.advance(2);
-                check("CAST: Warrior Bulwark granted an absorb shield (>=80)",
-                      mt.unit_for_guid(p)->absorb() >= 80);
+                w::Unit host(1, w::ObjectType::kPlayer, at(0, 0),
+                             pstats(120, w::ResourceType::kRage, 100));
+                w::AuraContainer auras(host);
+                w::CombatRng rng(0x776002ULL);
+                auras.apply_ability_effects(*bulwark, /*caster=*/1, w::DispelType::kNone, &rng);
+                check("CAST: Warrior Bulwark grants 40-60 absorb (<=50% of 120 HP)",
+                      host.absorb() >= 40 && host.absorb() <= 60);
             }
             // Warrior Skullcrack loaded from the pack as a cc/stun primitive.
             {
@@ -452,11 +538,26 @@ int main() {
                           sk->effects[0].cc_kind == worldd::CrowdControlKind::kStun &&
                           sk->effects[0].duration_ms == 4000);
             }
+            // Mage Frost Lock executes as a three-second root and expires on time.
+            {
+                w::Unit mob(2, w::ObjectType::kCreature, at(3, 0),
+                            w::placeholder_creature_stats(1));
+                w::AuraContainer auras(mob);
+                w::CombatRng rng(0x776003ULL);
+                auras.apply_ability_effects(*frost_lock, /*caster=*/1,
+                                            w::DispelType::kNone, &rng);
+                check("CAST: Mage Frost Lock applies a root", auras.is_rooted());
+                auras.tick(2999, rng);
+                check("CAST: Mage Frost Lock remains before 3000 ms", auras.is_rooted());
+                auras.tick(1, rng);
+                check("CAST: Mage Frost Lock expires at 3000 ms", !auras.is_rooted());
+            }
             // Mage Cinderburn (dot) on a creature → periodic burn damage over ticks.
             {
                 w::MapTick mt(store, 0x723006ULL, /*dt=*/3000);
                 const w::ObjectGuid p =
-                    mt.add_player(1, at(0, 0), pstats(1000, w::ResourceType::kMana, 1000), 6);
+                    mt.add_player(1, at(0, 0), pstats(1000, w::ResourceType::kMana, 1000),
+                                  kMage);
                 const w::ObjectGuid c = mt.add_creature(target_mob(at(5, 0)));
                 mt.ai().creature(c)->set_max_health(500);
                 const std::uint32_t hp0 = mt.ai().creature(c)->health();
@@ -469,13 +570,41 @@ int main() {
             {
                 w::MapTick mt(store, 0x723008ULL, /*dt=*/2000);
                 const w::ObjectGuid p =
-                    mt.add_player(1, at(0, 0), pstats(1000, w::ResourceType::kMana, 1000), 8);
+                    mt.add_player(1, at(0, 0), pstats(1000, w::ResourceType::kMana, 1000),
+                                  kPriest);
                 mt.unit_for_guid(p)->apply_damage(500);  // 500/1000
                 const std::uint32_t hp0 = mt.unit_for_guid(p)->health();
                 mt.enqueue_cast(w::AbilityUseCmd{p, idMend, p});  // 1.5 s cast
                 mt.advance(3);
                 check("CAST: Priest Mend healed the wounded target (heal executed)",
                       mt.unit_for_guid(p)->health() > hp0);
+            }
+            // Priest Aegis executes at the documented level-1 50% health cap.
+            {
+                w::Unit host(3, w::ObjectType::kPlayer, at(0, 0),
+                             pstats(90, w::ResourceType::kMana, 140));
+                w::AuraContainer auras(host);
+                w::CombatRng rng(0x776004ULL);
+                auras.apply_ability_effects(*aegis, /*caster=*/3, w::DispelType::kNone, &rng);
+                check("CAST: Priest Aegis grants 30-45 absorb (<=50% of 90 HP)",
+                      host.absorb() >= 30 && host.absorb() <= 45);
+            }
+            // Priest Purge executes both supported primitives deterministically.
+            {
+                w::Unit caster(4, w::ObjectType::kPlayer, at(0, 0),
+                               pstats(90, w::ResourceType::kMana, 140));
+                w::Unit mob(5, w::ObjectType::kCreature, at(3, 0),
+                            w::placeholder_creature_stats(1));
+                mob.set_max_health(100);
+                w::CombatRng rng(0x776005ULL);
+                const w::ResolveResult rr =
+                    w::apply_outcome(*purge, caster, mob, w::AttackOutcome::kHit, rng);
+                w::AuraContainer auras(mob);
+                auras.apply_ability_effects(*purge, caster.guid(), w::DispelType::kNone, &rng);
+                check("CAST: Priest Purge deals its authored 18-24 holy damage",
+                      rr.amount >= 18 && rr.amount <= 24);
+                check("CAST: Priest Purge applies its -10 strength debuff",
+                      auras.attribute_delta("chibi:attribute.strength").flat == -10);
             }
         }
 

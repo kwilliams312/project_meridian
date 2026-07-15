@@ -12,7 +12,7 @@ cast:
 cooldown_ms: 6000
 resource:
   type: energy
-  amount: 30
+  amount: 20
 effects:
   - kind: dot
     amount: { min: 5, max: 8 }

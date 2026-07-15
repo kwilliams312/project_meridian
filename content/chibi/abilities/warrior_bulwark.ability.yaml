@@ -16,6 +16,5 @@ resource:
   amount: 10
 effects:
   - kind: shield
-    amount: { min: 80, max: 120 }
+    amount: { min: 40, max: 60 }
     duration_ms: 10000
-    coefficient: 0.4

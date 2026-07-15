@@ -13,7 +13,7 @@ cooldown_ms: 15000
 triggers_gcd: false
 resource:
   type: energy
-  amount: 25
+  amount: 15
 effects:
   - kind: movement
     motion: dash
