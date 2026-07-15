@@ -295,6 +295,7 @@ void MapTick::phase_drain_inbound(std::vector<TickEvent>& out) {
 }
 
 void MapTick::phase_ai(std::vector<TickEvent>& out) {
+    pending_creature_attacks_.clear();
     // Build the aggro-target snapshot from the map's players, in ascending-guid
     // order so the AI's tie-breaks (and our logging) are byte-stable regardless of
     // the unordered_map iteration order.
@@ -314,6 +315,7 @@ void MapTick::phase_ai(std::vector<TickEvent>& out) {
               [](const AiTargetView& a, const AiTargetView& b) { return a.guid < b.guid; });
 
     CreatureAiTickResult r = ai_.tick(dt_ms_, targets);
+    pending_creature_attacks_ = std::move(r.attacks);
 
     std::sort(r.spawned.begin(), r.spawned.end());
     std::sort(r.despawned.begin(), r.despawned.end());
@@ -349,7 +351,46 @@ void MapTick::phase_ai(std::vector<TickEvent>& out) {
 }
 
 void MapTick::phase_combat_auras(std::vector<TickEvent>& out) {
-    // A) advance cast timers → resolve completed casts (+ spend resource). Iterate
+    // A) Resolve the authoritative hostile basic-attack intents emitted by AI.
+    // AI owns target/range/cadence; this phase owns seeded rolls, armor -> shield
+    // -> health application, death state, and audit logging.
+    for (const CreatureBasicAttack& attack : pending_creature_attacks_) {
+        Creature* attacker = ai_.creature(attack.attacker_guid);
+        Unit* target = unit_for_guid(attack.target_guid);
+        if (attacker == nullptr || target == nullptr || attacker->is_dead() ||
+            target->is_dead() || ai_.state_of(attack.attacker_guid) != AiState::kCombat ||
+            ai_.target_of(attack.attacker_guid) != attack.target_guid) {
+            continue;
+        }
+
+        const BasicAttackResult rr = resolve_basic_attack(
+            *attacker, *target, attack.damage_min, attack.damage_max, rng_);
+        TickEvent attack_event{
+            tick_no_, now_ms_, TickPhase::kCombat,
+            "basic_attack attacker=" + u(attack.attacker_guid) +
+                " target=" + u(attack.target_guid) +
+                " outcome=" + outcome_name(rr.outcome) +
+                " raw=" + u(rr.raw_amount) + " amount=" + u(rr.amount) +
+                " absorbed=" + u(rr.absorbed) + " target_hp=" +
+                u(rr.target_health) + " died=" + u(rr.target_died ? 1 : 0)};
+        if (report_vitals_ && rr.amount > 0 && target->type() == ObjectType::kPlayer) {
+            attack_event.kind = TickEventKind::kVitalsChanged;
+            attack_event.vitals.guid = attack.target_guid;
+            attack_event.vitals.level = target->level();
+            attack_event.vitals.health = target->health();
+            attack_event.vitals.max_health = target->max_health();
+            attack_event.vitals.power = target->resource();
+            attack_event.vitals.max_power = target->max_resource();
+        }
+        out.push_back(std::move(attack_event));
+        if (rr.target_died) {
+            on_unit_died(attack.target_guid, *target, attack.attacker_guid,
+                         u(attack.attacker_guid), TickPhase::kCombat, out);
+        }
+    }
+    pending_creature_attacks_.clear();
+
+    // B) advance cast timers → resolve completed casts (+ spend resource). Iterate
     //    players in ascending guid order for determinism.
     std::vector<ObjectGuid> pguids;
     pguids.reserve(players_.size());
@@ -360,6 +401,13 @@ void MapTick::phase_combat_auras(std::vector<TickEvent>& out) {
         PlayerCombatant& pc = *players_[g];
         std::optional<PendingCast> done = pc.combat.take_completed(now_ms_);
         if (!done) continue;
+
+        if (pc.unit.is_dead()) {
+            emit(out, TickPhase::kCombat,
+                 "cast_fizzle caster=" + u(g) + " ability=" +
+                     u(done->ability_id) + " reason=CASTER_DEAD");
+            continue;
+        }
 
         const Ability* ab = abilities_.find(done->ability_id);
         if (ab == nullptr) {
@@ -399,7 +447,7 @@ void MapTick::phase_combat_auras(std::vector<TickEvent>& out) {
         resolve_and_log(*ab, pc.unit, g, *target, tguid, TickPhase::kCombat, out);
     }
 
-    // B) tick aura periodics (DoT/HoT) for every host with a container, players
+    // C) tick aura periodics (DoT/HoT) for every host with a container, players
     //    then creatures, ascending guid — deterministic. A dead host takes none.
     auto tick_host = [&](ObjectGuid g, Unit& host, AuraContainer& c) {
         if (host.is_dead() || c.empty()) return;

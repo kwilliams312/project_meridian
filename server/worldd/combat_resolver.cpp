@@ -51,6 +51,18 @@ bool can_assist(Faction caster, Faction target) {
 // ---------------------------------------------------------------------------
 bool flat_map_los(const Position& /*from*/, const Position& /*to*/) { return true; }
 
+std::uint32_t mitigate_damage(std::uint32_t raw_damage, School school,
+                              std::int64_t effective_armor) {
+    if (raw_damage == 0) return 0;
+    if (school != School::kPhysical) return raw_damage;
+
+    const std::uint64_t armor = static_cast<std::uint64_t>(
+        std::max<std::int64_t>(0, effective_armor));
+    const std::uint64_t scaled = static_cast<std::uint64_t>(raw_damage) * 100ULL;
+    const std::uint64_t reduced = scaled / (100ULL + armor);
+    return static_cast<std::uint32_t>(std::max<std::uint64_t>(1ULL, reduced));
+}
+
 // ---------------------------------------------------------------------------
 // Attack-table classifiers (pure — testable at each band boundary).
 // ---------------------------------------------------------------------------
@@ -170,7 +182,8 @@ ResolveResult apply_outcome(const Ability& ability, Unit& caster, Unit& target,
             if (avoided) continue;  // miss/dodge/parry — nothing lands
             std::uint32_t amount = rng.roll_amount(e.amount_min, e.amount_max);
             if (crit) amount = apply_crit(amount);
-            DamageResult dr = target.apply_damage(amount);  // shield soaks first (#693)
+            amount = mitigate_damage(amount, ability.school, target.effective_armor());
+            DamageResult dr = target.apply_damage(amount);  // armor, then shield, then HP
             total_applied += dr.applied;
             total_absorbed += dr.absorbed;
             died = died || dr.lethal;
@@ -217,6 +230,36 @@ ResolveResult apply_outcome(const Ability& ability, Unit& caster, Unit& target,
     res.target_died = died;
     res.target_health = target.health();
     return res;
+}
+
+BasicAttackResult resolve_basic_attack(Unit& attacker, Unit& target,
+                                       std::uint32_t damage_min,
+                                       std::uint32_t damage_max, CombatRng& rng) {
+    BasicAttackResult result;
+    result.target_health = target.health();
+    if (attacker.is_dead() || target.is_dead() ||
+        !can_attack(attacker.faction(), target.faction())) {
+        return result;
+    }
+
+    result.outcome = classify_attack(rng.roll_bp());
+    if (result.outcome == AttackOutcome::kMiss ||
+        result.outcome == AttackOutcome::kDodge ||
+        result.outcome == AttackOutcome::kParry) {
+        return result;
+    }
+
+    result.raw_amount = rng.roll_amount(damage_min, damage_max);
+    if (result.outcome == AttackOutcome::kCrit)
+        result.raw_amount = apply_crit(result.raw_amount);
+    const std::uint32_t mitigated =
+        mitigate_damage(result.raw_amount, School::kPhysical, target.effective_armor());
+    const DamageResult dr = target.apply_damage(mitigated);
+    result.amount = dr.applied;
+    result.absorbed = dr.absorbed;
+    result.target_health = target.health();
+    result.target_died = dr.lethal;
+    return result;
 }
 
 ResolveResult resolve_ability(const Ability& ability, Unit& caster, Unit& target,

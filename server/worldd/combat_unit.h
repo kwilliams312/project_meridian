@@ -122,6 +122,11 @@ protected:
 struct UnitStats {
     std::uint16_t level = 1;
     std::uint32_t max_health = 1;  // clamped to >= 1 by Unit (a live Unit has HP)
+    // Effective physical armor at spawn. Authored NPC armor enters here; player
+    // equipment/stat aggregation may replace it through set_effective_armor().
+    // Signed so future debuffs can reduce it below zero; the mitigation contract
+    // clamps negative effective armor to zero when damage is resolved.
+    std::int64_t armor = 0;
     ResourceType resource_type = ResourceType::kNone;
     std::uint32_t max_resource = 0;
     Faction faction = Faction::kNeutral;
@@ -168,6 +173,12 @@ public:
     // Raise/lower the health cap. Current health is clamped down if it now exceeds
     // the cap; a cap of 0 is coerced to 1 (a Unit always has room for >= 1 HP).
     void set_max_health(std::uint32_t max_health);
+
+    // Physical mitigation reads this already-aggregated value. This is the narrow
+    // #785 seam: equipment/derived-stat plumbing owns recomputation, while combat
+    // owns only the approved armor formula.
+    std::int64_t effective_armor() const { return effective_armor_; }
+    void set_effective_armor(std::int64_t armor) { effective_armor_ = armor; }
 
     ResourceType resource_type() const { return resource_type_; }
     std::uint32_t resource() const { return resource_; }
@@ -229,6 +240,7 @@ protected:
 
     std::uint32_t max_health_ = 1;
     std::uint32_t health_ = 1;
+    std::int64_t effective_armor_ = 0;
 
     ResourceType resource_type_ = ResourceType::kNone;
     std::uint32_t max_resource_ = 0;

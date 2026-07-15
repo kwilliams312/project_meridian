@@ -417,6 +417,17 @@ target_link_libraries(worldd-creature-ai-test
 set_target_properties(worldd-creature-ai-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-creature-ai COMMAND worldd-creature-ai-test)
 
+# --- Authored hostile basic-attack integration (#784). ----------------------
+add_executable(worldd-mob-basic-attack-test
+  test/mob_basic_attack_test.cpp
+)
+target_link_libraries(worldd-mob-basic-attack-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-mob-basic-attack-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-mob-basic-attack COMMAND worldd-mob-basic-attack-test)
+
 # --- Combat resolver UNIT test (CMB-01 #344 + #345). --------------------------
 # PURE (no DB, no socket, no session): drives the combat resolver core directly —
 # the attack-table classifiers at each band boundary, seeded-RNG damage/heal

@@ -205,8 +205,105 @@ void test_threat_ordering() {
 }
 
 // ---------------------------------------------------------------------------
+void test_basic_attack_intents() {
+    std::printf("C. authored range/cadence + friendly safety\n");
+
+    CreatureSpawnDef d = sentinel(at(0, 0), 1, /*aggro=*/10, /*leash=*/30);
+    d.damage_min = 3;
+    d.damage_max = 5;
+    d.attack_speed_ms = 1000;
+    d.move_speed = 2.0f;
+
+    // Aggro transitions on one tick; combat then chases to exactly melee range
+    // and swings immediately, never moving through the target.
+    {
+        CreatureAi ai;
+        const ObjectGuid c = ai.add_spawn(d);
+        CreatureAiTickResult r = ai.tick(100, {player(42, at(10, 0), 1)});
+        check("aggro transition emits no premature attack", r.attacks.empty());
+        r = ai.tick(1000, {player(42, at(10, 0), 1)});
+        check("first chase step remains out of range", r.attacks.empty());
+        r = ai.tick(1000, {player(42, at(10, 0), 1)});
+        check("second chase step remains out of range", r.attacks.empty());
+        r = ai.tick(1000, {player(42, at(10, 0), 1)});
+        check("chase stops at 5m and emits first swing",
+              near_eq(ai.creature(c)->position().x, 5.0f) && r.attacks.size() == 1 &&
+                  r.attacks[0].attacker_guid == c && r.attacks[0].target_guid == 42 &&
+                  r.attacks[0].damage_min == 3 && r.attacks[0].damage_max == 5);
+
+        r = ai.tick(999, {player(42, at(10, 0), 1)});
+        check("cadence blocks early repeat", r.attacks.empty());
+        r = ai.tick(1, {player(42, at(10, 0), 1)});
+        check("cadence fires exactly at authored interval", r.attacks.size() == 1);
+
+        AiTargetView dead = player(42, at(10, 0), 1);
+        dead.alive = false;
+        r = ai.tick(1000, {dead});
+        check("target death stops attacks immediately", r.attacks.empty());
+    }
+
+    // Leashing clears the old cadence. After returning home and reacquiring, the
+    // mob is entitled to a fresh immediate swing rather than carrying stale time.
+    {
+        CreatureSpawnDef leasher = d;
+        leasher.leash_radius = 6.0f;
+        leasher.move_speed = 10.0f;
+        CreatureAi ai;
+        const ObjectGuid c = ai.add_spawn(leasher);
+        ai.tick(100, {player(42, at(1, 0), 1)});  // acquire
+        CreatureAiTickResult r = ai.tick(100, {player(42, at(1, 0), 1)});
+        check("pre-leash combat swings immediately", r.attacks.size() == 1);
+
+        r = ai.tick(1000, {player(42, at(20, 0), 1)});  // chase beyond leash
+        check("chase toward runaway emits no out-of-range attack", r.attacks.empty());
+        r = ai.tick(1000, {player(42, at(20, 0), 1)});  // evade + return home
+        check("leash reset emits no attack and returns to patrol",
+              r.attacks.empty() && ai.state_of(c) == AiState::kPatrol);
+        ai.tick(100, {player(42, at(1, 0), 1)});  // reacquire
+        r = ai.tick(100, {player(42, at(1, 0), 1)});
+        check("post-leash reacquire restarts with an immediate swing",
+              r.attacks.size() == 1);
+    }
+
+    // Death and respawn likewise clear attack state before a fresh acquisition.
+    {
+        CreatureSpawnDef respawner = d;
+        respawner.respawn_ms = 100;
+        CreatureAi ai;
+        const ObjectGuid c = ai.add_spawn(respawner);
+        ai.tick(100, {player(42, at(1, 0), 1)});
+        check("pre-death combat emits a swing",
+              ai.tick(100, {player(42, at(1, 0), 1)}).attacks.size() == 1);
+        ai.creature(c)->kill();
+        CreatureAiTickResult r = ai.tick(100, {player(42, at(1, 0), 1)});
+        check("death edge emits no attack", r.attacks.empty());
+        r = ai.tick(100, {player(42, at(1, 0), 1)});
+        check("respawn emits no attack", r.attacks.empty() && r.spawned.size() == 1);
+        ai.tick(100, {player(42, at(1, 0), 1)});
+        r = ai.tick(100, {player(42, at(1, 0), 1)});
+        check("post-respawn reacquire restarts with an immediate swing",
+              r.attacks.size() == 1);
+    }
+
+    // Required stats on a friendly passive NPC cannot make it attack.
+    {
+        CreatureSpawnDef friendly = d;
+        friendly.faction = Faction::kFriendly;
+        friendly.behavior = CreatureBehavior::kPassive;
+        CreatureAi ai;
+        const ObjectGuid c = ai.add_spawn(friendly);
+        CreatureAiTickResult r = ai.tick(5000, {player(42, at(1, 0), 1)});
+        ai.add_threat(c, 42, 100.0f);
+        CreatureAiTickResult r2 = ai.tick(5000, {player(42, at(1, 0), 1)});
+        check("friendly passive NPC never aggros or attacks",
+              ai.state_of(c) == AiState::kPatrol && r.attacks.empty() &&
+                  r2.attacks.empty() && ai.threat_of(c, 42) == 0.0f);
+    }
+}
+
+// ---------------------------------------------------------------------------
 void test_leash_evade_heal() {
-    std::printf("C. leash -> evade -> full-heal\n");
+    std::printf("D. leash -> evade -> full-heal\n");
 
     CreatureSpawnDef d;
     d.template_id = 1;
@@ -249,7 +346,7 @@ void test_leash_evade_heal() {
 
 // ---------------------------------------------------------------------------
 void test_respawn_timing() {
-    std::printf("D. respawn timing\n");
+    std::printf("E. respawn timing\n");
 
     CreatureSpawnDef d = sentinel(at(5, 5), /*level=*/4, /*aggro=*/0, /*leash=*/100);
     d.respawn_ms = 1000;
@@ -284,7 +381,7 @@ void test_respawn_timing() {
 
 // ---------------------------------------------------------------------------
 void test_waypoint_patrol() {
-    std::printf("E. waypoint patrol progression + movement output\n");
+    std::printf("F. waypoint patrol progression + movement output\n");
 
     // Loop patrol: home == w0 (0,0) -> w1 (0,10) -> w2 (10,10) -> w3 (10,0) -> wrap.
     CreatureSpawnDef d;
@@ -349,7 +446,7 @@ void test_waypoint_patrol() {
 
 // ---------------------------------------------------------------------------
 void test_placeholder_spawns() {
-    std::printf("F. placeholder greybox spawn set\n");
+    std::printf("G. placeholder greybox spawn set\n");
     CreatureAi ai;
     const std::vector<ObjectGuid> guids = ai.load_placeholder_spawns(at(0, 0));
     check("seeds three placeholder creatures", guids.size() == 3);
@@ -369,6 +466,7 @@ int main() {
     std::printf("worldd creature-ai unit test (issues #347 + #348)\n");
     test_aggro_by_level_delta();
     test_threat_ordering();
+    test_basic_attack_intents();
     test_leash_evade_heal();
     test_respawn_timing();
     test_waypoint_patrol();

@@ -3590,9 +3590,16 @@ void WorldServer::install_spawns(const std::vector<SpawnPlacement>& spawns) {
         def.template_id = sp.npc_id;
         def.level = sp.stats.level;
         def.faction = sp.stats.faction;
+        def.authored_stats = sp.stats;
+        def.behavior = sp.behavior;
+        def.damage_min = sp.damage_min;
+        def.damage_max = sp.damage_max;
+        def.attack_speed_ms = sp.attack_speed_ms;
         def.home = sp.pos;
-        def.leash_radius = sp.wander_radius_m.value_or(0.0f);
+        def.aggro_base_radius = sp.aggro_radius_m;
+        def.leash_radius = sp.leash_radius_m;
         def.respawn_ms = sp.respawn_min * 1000u;
+        def.move_speed = sp.run_speed_mps;
         impl_->map.add_creature(def);
 
         // (2) AoI visibility + interactability. The wire projection: a unique guid, the

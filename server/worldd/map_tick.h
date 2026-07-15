@@ -430,6 +430,7 @@ private:
     std::unordered_map<ObjectGuid, std::unique_ptr<PlayerCombatant>> players_;
     std::unordered_map<ObjectGuid, std::unique_ptr<AuraContainer>> creature_auras_;
     std::unordered_map<ObjectGuid, AiState> prev_ai_state_;  // AI transition edges
+    std::vector<CreatureBasicAttack> pending_creature_attacks_;  // AI -> combat phase
     std::vector<AbilityUseCmd> inbound_;
     std::vector<ObjectGuid> release_requests_;    // C→S RELEASE_REQUEST queue (#359)
     std::vector<ObjectGuid> resurrect_requests_;  // C→S RESURRECT_REQUEST queue (#359)

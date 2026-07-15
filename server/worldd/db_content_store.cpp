@@ -1178,6 +1178,13 @@ Faction npc_faction_from_db(const db::Cell& c) {
     return Faction::kNeutral;
 }
 
+CreatureBehavior npc_behavior_from_db(const db::Cell& c) {
+    if (!c.has_value()) return CreatureBehavior::kDefensive;
+    if (*c == "aggressive") return CreatureBehavior::kAggressive;
+    if (*c == "passive") return CreatureBehavior::kPassive;
+    return CreatureBehavior::kDefensive;
+}
+
 }  // namespace
 
 std::vector<SpawnPlacement> load_spawn_points(db::Connection& world_db) {
@@ -1222,20 +1229,32 @@ std::vector<SpawnPlacement> load_spawn_points(db::Connection& world_db) {
     }
 
     // PASS 2 — resolve each placement's npc_template combat identity (name, level,
-    // faction, health, mana). Only reached when at least one placement exists (so the
-    // extended npc_template columns are never referenced on an empty spawn set). One
+    // faction, health, mana, armor, damage, cadence, and AI movement). Only reached
+    // when at least one placement exists (so the extended npc_template columns are
+    // never referenced on an empty spawn set). One
     // query over the whole template table -> a lookup map, so N spawns of one template
     // read the row once. level uses level_min (the low end of the intRange band —
     // level_max scaling is a later AI/content concern); max_health = stat_health;
     // resource is Mana when stat_mana is present (a caster NPC), else none.
     db::Result tpl = world_db.execute(
-        "SELECT id, name, level_min, faction, stat_health, stat_mana FROM npc_template");
+        "SELECT id, name, level_min, faction, stat_health, stat_mana, stat_armor, "
+        "       stat_damage_min, stat_damage_max, stat_attack_speed_ms, ai_behavior, "
+        "       ai_aggro_radius_m, ai_leash_radius_m, move_run_speed_mps "
+        "FROM npc_template");
     struct TemplateCombat {
         std::string name;
         std::uint16_t level = 1;
         Faction faction = Faction::kNeutral;
         std::uint32_t health = 1;
         std::optional<std::uint32_t> mana;
+        std::int64_t armor = 0;
+        std::uint32_t damage_min = 0;
+        std::uint32_t damage_max = 0;
+        std::uint32_t attack_speed_ms = 0;
+        CreatureBehavior behavior = CreatureBehavior::kDefensive;
+        float aggro_radius_m = 0.0f;
+        float leash_radius_m = 0.0f;
+        float run_speed_mps = 0.0f;
     };
     std::unordered_map<std::uint32_t, TemplateCombat> by_id;
     by_id.reserve(tpl.rows.size());
@@ -1246,6 +1265,14 @@ std::vector<SpawnPlacement> load_spawn_points(db::Connection& world_db) {
         tc.faction = npc_faction_from_db(r[3]);
         tc.health = as_u32(r[4], 1);
         if (r[5].has_value()) tc.mana = as_u32(r[5]);
+        tc.armor = static_cast<std::int64_t>(as_u32(r[6]));
+        tc.damage_min = as_u32(r[7]);
+        tc.damage_max = as_u32(r[8]);
+        tc.attack_speed_ms = as_u32(r[9]);
+        tc.behavior = npc_behavior_from_db(r[10]);
+        tc.aggro_radius_m = as_f32(r[11]);
+        tc.leash_radius_m = as_f32(r[12]);
+        tc.run_speed_mps = as_f32(r[13]);
         by_id.emplace(as_u32(r[0]), std::move(tc));
     }
 
@@ -1256,7 +1283,15 @@ std::vector<SpawnPlacement> load_spawn_points(db::Connection& world_db) {
         sp.name = tc.name;
         sp.stats.level = tc.level;
         sp.stats.max_health = tc.health == 0 ? 1 : tc.health;  // a live Unit has >= 1 HP
+        sp.stats.armor = tc.armor;
         sp.stats.faction = tc.faction;
+        sp.damage_min = tc.damage_min;
+        sp.damage_max = tc.damage_max;
+        sp.attack_speed_ms = tc.attack_speed_ms;
+        sp.behavior = tc.behavior;
+        sp.aggro_radius_m = tc.aggro_radius_m;
+        sp.leash_radius_m = tc.leash_radius_m;
+        sp.run_speed_mps = tc.run_speed_mps;
         if (tc.mana) {
             sp.stats.resource_type = ResourceType::kMana;
             sp.stats.max_resource = *tc.mana;
