@@ -1,0 +1,38 @@
+# IF-8 sidecar (meridian/asset@1). Chibi body RECOLOR-READY base albedo (story
+# #755, C4; design ① §6 / spec §6). The albedo the dye-mask shader MULTIPLIES for
+# the colour races: the SKIN region is neutralised to a light, luminance-preserving
+# grey so a race dye reads as its true colour (the Warden lesson — a saturated base
+# makes dyes muddy; the atlas skin is yellow with blue ≈ 57/255, which would make
+# blue/silver races impossible). Eyes, pupils, highlights and the cloth-wrap are
+# kept from the atlas so the painted face + wraps survive the recolor.
+#
+# C5 wires the colour-race body material to: albedo = THIS, dye_mask =
+# chibi:art.chibi_pill_body_mask, dye = the race's chibi:dye.* on the primary
+# channel (metallic 1.0 for gold/silver). The body glb keeps its own yellow atlas
+# untouched — this is a separate, additive recolor base.
+#
+# source_tier: ai — it retains the Meshy-generated eye/cloth texels of the #746
+# body atlas (origin below), post-processed by tools/art/generate_chibi_skin_mask.py
+# (skin neutralised). restyle_status: done (the raw sculpt already shipped restyled;
+# this is a further deterministic transform of its atlas).
+schema: meridian/asset@1
+id: chibi:art.chibi_pill_body_recolor_base
+class: texture_set
+source: assets/art/chibi_pill_body/chibi_pill_body_recolor_bc.png
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors: [meridian-contributors]
+  origin_url: https://api.meshy.ai/openapi/v1/image-to-3d/019f6262-fc61-7c3c-839e-ec6d2a9a1220
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: chibi_pill_body_recolor_base.prompts.yaml
+  transform_notes: >-
+    Derived from chibi:art.chibi_pill_body's diffuse atlas by
+    tools/art/generate_chibi_skin_mask.py: skin texels neutralised to a light
+    luminance-preserving grey; eyes/cloth kept from the atlas.
+budget:
+  # 1024² — under the 2048 Art PRD §2.3 player-character-body texture_set cap.
+  texture_max_px: 1024
+restyle_status: done
+tags: [body_color, recolor_base]
