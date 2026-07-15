@@ -81,14 +81,15 @@ encouraged only where these blocking edges remain satisfied:
 
 1. **Freeze and document the contract:** #780 owns the canonical IDs, tuning targets, quest
    rewards, and the physical mitigation formula consumed by #784. #777 owns this executable
-   guide. #776 tunes the four class kits against the frozen contract and requires #784 runtime
-   behavior for its survival benchmark.
+   guide. #776 tunes the four class kits against the frozen contract and uses the completed #784
+   runtime behavior for its survival benchmark.
 2. **Land required 2D icons before item data:** #800 supplies the five final Chibi icon assets and
    their IF-8 provenance; #775 may reference them only after #800 merges.
-3. **Land runtime and tooling foundations:** #784 supplies hostile attacks and the binding armor
-   behavior; #799 supplies durable quest XP/level progression; #801 supplies Forge placement and
-   deterministic spawn export; #802 supplies authoritative purchase/equip interaction; #786
-   supplies selected-pack loading; and #787 resolves the Godot compatibility rule.
+3. **Land runtime and tooling foundations:** #784, completed by PR #804, supplies hostile attacks
+   and the binding armor behavior; #799 supplies durable quest XP/level progression; #801 supplies
+   Forge placement and deterministic spawn export; #802 supplies authoritative purchase/equip
+   interaction; #786 supplies selected-pack loading; and #787 resolves the Godot compatibility
+   rule.
 4. **Assemble the demo graph:** #781 authors Pippa, Tink, and the vendor; #775 authors items,
    Sunny Sip, mobs, and loot; #782 authors the quest chain; #779 consumes #801 to place it; and
    #778 wires finalized art, including #800's icons.
@@ -578,9 +579,9 @@ scripts/dev/run-client.sh
 selection and data loading explicit and verify the running `worldd` booted the same content hash
 the client mounted. #783 may proceed only by consuming that completed path.
 
-**Binding physical mitigation dependency (#780 -> #784):** when the #780 contract file named
-above exists in the target branch, it defines the exact physical-only rule that #784 must
-implement for NPC and player targets:
+**Implemented physical mitigation (#780 -> [#784](https://github.com/kwilliams312/project_meridian/issues/784) / [PR #804](https://github.com/kwilliams312/project_meridian/pull/804)):**
+the #780 contract file exists in the current branch, and #784 implements its exact physical-only
+rule for NPC and player targets:
 
 ```text
 effective_armor = base_armor + gear_armor
@@ -588,19 +589,18 @@ physical_damage = max(1, floor(raw_damage * 100 /
                                (100 + max(0, effective_armor))))
 ```
 
-The server applies armor, then shields, then health; nonphysical schools bypass armor. Base armor
-comes from the authoritative unit/content profile and gear armor from authoritative equipped
-contributions. #784 acceptance must show this exact calculation and ordering, without a Chibi or
-class special case. If the #780 contract file is absent, this formula remains proposed and cannot
-be used as authoritative acceptance evidence.
+The server applies armor, then shields, then health; nonphysical schools bypass armor. Authored
+hostile damage, cadence, and NPC base armor now flow through this shared resolver without a Chibi
+or class special case. #785 remains responsible for deriving player combat stats, including gear
+armor, from the authoritative loadout supplied by #802 and for applying ability coefficients.
 
-**Current runtime blockers:** schema/build success is not playable balance evidence. #784 owns
-executing creature basic attacks from authored damage/attack speed and the mitigation contract
-above. #802 owns live purchase and equip/unequip protocol/client/server behavior. #785 consumes
-#802's authoritative loadout to derive player combat stats and apply authored ability
-coefficients. #799 owns durable reward XP and level progression. Until they land in dependency
-order, survival, gear-impact, coefficient-based tuning, and level 1–3 claims are blocked. Record
-raw data checks separately; never report them as runtime results.
+**Current runtime blockers:** schema/build success is not playable balance evidence. #784/#804 now
+execute authored hostile basic attacks and the mitigation contract above. #802 still owns live
+purchase and equip/unequip protocol/client/server behavior. #785 consumes #802's authoritative
+loadout to derive player combat stats and apply authored ability coefficients. #799 owns durable
+reward XP and level progression. Until the remaining stories land in dependency order,
+gear-impact, coefficient-based tuning, and level 1–3 claims are blocked. Record completed authored
+mob-combat evidence separately from still-blocked equipment and progression results.
 
 ## 13. Acceptance matrix
 
@@ -629,8 +629,8 @@ raw data checks separately; never report them as runtime results.
 | Explicit-pack DB harnesses | [#798](https://github.com/kwilliams312/project_meridian/issues/798) / [PR #803](https://github.com/kwilliams312/project_meridian/pull/803) (closed) | Core harnesses use `--pack core`; the Chibi class harness uses `--pack chibi` | Keep every runtime DB emit explicitly pinned to exactly one theme pack |
 | Quest XP and level progression | #799, consumed by #782/#783 | Reward XP surfaced; XP/level not applied or persisted | Exactly-once award, authoritative level change, durable reconnect state, and no duplicate turn-in progression |
 | Purchase/equip interaction | #802, consumed by #785/#783 | Vendor/inventory data exists; no complete live equip action | Server-authoritative buy/equip/unequip/replace, persistence, snapshots, and wrong-class rollback through the client |
-| Physical mitigation | #780 contract; #784 implementation | Verify the #780 contract file in the target branch; authored NPC combat/armor not executed | Exact shared armor formula and armor->shield->health order for NPC/player targets, with seeded evidence |
-| Runtime/player proof | #783, consuming #784/#785/#786/#787/#799/#801/#802 | Local load, progression, placement, interaction, and combat gaps above | Matching selected-pack runtime plus complete level 1–3 human E2E |
+| Hostile attacks and physical mitigation | #780 contract; [#784](https://github.com/kwilliams312/project_meridian/issues/784) / [PR #804](https://github.com/kwilliams312/project_meridian/pull/804) (closed); #785 gear integration | Authored hostile damage/cadence and NPC base armor use the shared armor-before-shield-before-health resolver; authoritative equipped contributions remain pending | Preserve seeded #784 evidence; #785 must derive gear armor and ability scaling from #802's authoritative loadout |
+| Runtime/player proof | #783, consuming completed #784 plus #785/#786/#787/#799/#801/#802 | Authored hostile attacks/mitigation are live; selected load, progression, placement, equipment, and scaling gaps remain | Matching selected-pack runtime plus complete level 1–3 human E2E |
 
 Any failed row stays failed. A temporary fallback cannot be used to turn a Target row green.
 
@@ -654,7 +654,6 @@ lands; if a new gap is found during #783, add it here and to the tracker.
 | Existing Chibi pack/zone/items and several asset/provenance files fail `mcc fmt --check` | #774 content stories must clear drift before #783 |
 | Chibi manifest pins Godot 4.6 while the client and Forge projects declare 4.7 | #787 |
 | `run-local.sh` creates the world schema but does not select/load the Chibi single-pack SQL before `worldd` boot | #786; #783 consumes the completed path |
-| Runtime does not execute NPC basic attacks from authored damage/speed or apply NPC armor | #784 |
 | Quest turn-in surfaces reward XP but does not apply/persist XP or advance durable level state | #799; blocks #782 runtime proof and #783 level 1–3 acceptance |
 | Five required Chibi item icons are not final pack-local IF-8/aesthetic-approved assets; `icon` is not Meshy-eligible | #800; blocks #775 item data and is consumed by #778 |
 | Forge lacks create/select/move/duplicate/delete typed placement and deterministic `spawn@1` export | #801; blocks #779 and #783 |
