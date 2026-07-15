@@ -1266,6 +1266,46 @@ std::vector<SpawnPlacement> load_spawn_points(db::Connection& world_db) {
 }
 
 // =============================================================================
+// load_start_zone_spawn  (zone.start_zone -> graveyard ordinal 0 -> enter spawn)
+// =============================================================================
+// The enter-world spawn point (C8, #761). zone.schema.yaml makes the START ZONE's
+// FIRST graveyard the enter-world spawn ("start_zone: spawn point = first
+// graveyard"); the emitter stores graveyards[] with ordinal 0 = the first entry
+// (schema/sql/world/80_zone.sql). We JOIN the (one) start zone to its ordinal-0
+// graveyard and convert the position from the DB's Godot Y-up frame to the worldd
+// Z-up runtime frame — the SAME #498 conversion load_spawn_points applies (planar
+// x stays x, Godot planar z -> server planar y, Godot height y -> server height z).
+// ORDER BY z.id keeps it deterministic if a merged DB somehow carried two start
+// zones; the realm world DB is single-pack (content-build.sh) so there is exactly
+// one. No start zone / no graveyard -> nullopt (the handler keeps the placeholder).
+std::optional<EnterSpawn> load_start_zone_spawn(db::Connection& world_db) {
+    // Degrees -> radians for the Position facing (movement_validation.h Position:
+    // orientation is radians). The graveyard orientation_deg is a yaw [0,360).
+    constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+
+    db::Result rows = world_db.execute(
+        "SELECT z.id, g.pos_x, g.pos_y, g.pos_z, g.orientation_deg "
+        "FROM zone z "
+        "JOIN graveyard g ON g.zone_id = z.id AND g.ordinal = 0 "
+        "WHERE z.start_zone = TRUE "
+        "ORDER BY z.id LIMIT 1");
+    if (rows.rows.empty()) return std::nullopt;
+
+    const db::Row& r = rows.rows[0];
+    EnterSpawn es;
+    es.zone_id = as_u32(r[0]);
+    // COORDINATE-SYSTEM CONVERSION (Godot Y-up content -> worldd Z-up runtime), #498:
+    // the graveyard position is authored Y-up (position.{x,y,z}, common.defs "Y-up,
+    // X east, -Z north") and mirrored verbatim into pos_{x,y,z}. Map onto server
+    // (x=planar east, y=planar north, z=height), exactly as load_spawn_points does.
+    es.pos.x = as_f32(r[1]);              // pos_x = content.x  (east planar)  -> server planar x
+    es.pos.y = as_f32(r[3]);              // pos_z = content.z  (north planar) -> server planar y
+    es.pos.z = as_f32(r[2]);              // pos_y = content.y  (Godot height) -> server height z
+    es.pos.orientation = as_f32(r[4]) * kDegToRad;  // graveyard facing (deg) -> radians
+    return es;
+}
+
+// =============================================================================
 // load_world_content
 // =============================================================================
 meridian::characters::Roster load_db_roster(db::Connection& world_db) {
@@ -1508,6 +1548,7 @@ WorldContent load_world_content(db::Connection& world_db) {
     content.classes = load_db_class_catalog(world_db);
     content.talents = load_db_talents(world_db);
     content.spawns = load_spawn_points(world_db);
+    content.enter_spawn = load_start_zone_spawn(world_db);  // C8 #761 — start-zone spawn
     return content;
 }
 

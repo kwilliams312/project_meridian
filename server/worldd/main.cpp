@@ -535,6 +535,23 @@ int main(int argc, char** argv) {
     // empty, so every class's multiplier is 1.0 and threat is unscaled.
     world.set_class_catalog(std::move(content.classes));
 
+    // Install the pack-loaded enter-world spawn (C8 enter-as-chibi, #761): the realm's
+    // START ZONE first graveyard (zone.schema.yaml "start_zone: spawn point = first
+    // graveyard"). Replaces the D-11 placeholder so a character entering the chibi realm
+    // spawns in Sprout Meadow (graveyard at origin) — pack-driven, any theme. No-op when
+    // the world DB ships no start zone (content.enter_spawn nullopt) — the enter-world
+    // handler then keeps the movement::kZoneSpawnXY placeholder.
+    if (content.enter_spawn) {
+        const meridian::worldd::EnterSpawn& es = *content.enter_spawn;
+        world.set_enter_spawn(es.pos);
+        meridian::core::log::info(
+            kDaemonName,
+            "enter-world spawn resolved from start zone " +
+                std::to_string(es.zone_id) + " graveyard: (" +
+                std::to_string(es.pos.x) + ", " + std::to_string(es.pos.y) + ", " +
+                std::to_string(es.pos.z) + ")");
+    }
+
     // Spawn the authored content placements into the live world (NPC-01 spawn seam,
     // #486): read from spawn_point at boot, each becomes a live creature in the map
     // tick AND an AoI-visible entity (ENTITY_ENTER with #430 vitals + name), so the

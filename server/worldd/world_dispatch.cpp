@@ -2051,14 +2051,24 @@ void Dispatcher::register_m0_stubs() {
            const LoadedCharacter& pc = *loaded;
 
            // Seed the authoritative movement state (#86) at the character's spawn.
-           // Zone-01 flat ground (D-19): spawn at the play-area centre (#562:
-           // kZoneSpawnXY = -320 m, the manifest-derived Zone-01 centre) so the
-           // first legal moves in any direction stay in bounds. The guid lets the
-           // world thread stamp MovementState; spawn_time_ms = 0 seeds Δt.
+           // C8 enter-as-chibi (#761): spawn at the realm's START ZONE first graveyard
+           // (zone.schema.yaml "start_zone: spawn point = first graveyard"), resolved
+           // from the loaded pack at boot (load_start_zone_spawn) and borrowed here by
+           // address (ctx.enter_spawn) already in the worldd Z-up runtime frame + facing.
+           // Pack-driven: the chibi realm drops the character into Sprout Meadow
+           // (graveyard at origin); any theme works the same way. When no start zone was
+           // loaded (DB-less smoke path / degraded or start-zone-less world DB) the
+           // D-11 PLACEHOLDER stands in — Zone-01 flat-ground play-area centre (#562:
+           // kZoneSpawnXY = -320 m) so the first legal moves stay in bounds. The guid
+           // lets the world thread stamp MovementState; spawn_time_ms = 0 seeds Δt.
            Position spawn;
-           spawn.x = movement::kZoneSpawnXY;   // -320 m — Zone-01 play-area centre
-           spawn.y = movement::kZoneSpawnXY;
-           spawn.z = movement::kFlatGroundZ;   // flat ground (D-19)
+           if (ctx.enter_spawn != nullptr) {
+               spawn = *ctx.enter_spawn;        // start-zone graveyard (server frame + facing)
+           } else {
+               spawn.x = movement::kZoneSpawnXY;   // -320 m — Zone-01 play-area centre (placeholder)
+               spawn.y = movement::kZoneSpawnXY;
+               spawn.z = movement::kFlatGroundZ;   // flat ground (D-19)
+           }
            ctx.movement.emplace(spawn, /*spawn_time_ms=*/0);
            ctx.movement->set_entity_guid(pc.char_guid);  // may be refined below (AoI)
 
@@ -3471,6 +3481,14 @@ struct WorldServer::Impl {
     // 1.0 for every class, so a DB-less run's threat is unscaled.
     ClassCatalog classes;
 
+    // The enter-world spawn (C8 enter-as-chibi, #761): the realm's START ZONE first
+    // graveyard position (load_start_zone_spawn), in the worldd Z-up runtime frame.
+    // std::nullopt until set_enter_spawn() installs it at boot; every ConnCtx borrows
+    // it by address (ctx.enter_spawn = &*enter_spawn), so the move-assign in
+    // set_enter_spawn keeps that pointer valid. nullopt (DB-less / no start zone) ->
+    // the ENTER_WORLD handler keeps the movement::kZoneSpawnXY D-11 placeholder.
+    std::optional<Position> enter_spawn;
+
     // The per-map tick orchestrator (SAD §2.5 phase order; #349). Owned by + run
     // ONLY on the world thread. Each tick it runs the AI -> combat/auras ->
     // spawns/respawns passes for the map's server-controlled creatures + auras +
@@ -3635,6 +3653,14 @@ void WorldServer::set_class_catalog(ClassCatalog classes) {
     impl_->classes = std::move(classes);
 }
 
+void WorldServer::set_enter_spawn(std::optional<Position> spawn) {
+    // Move-assign into the optional every ConnCtx borrows by address (ctx.enter_spawn
+    // = &*impl_->enter_spawn). The optional's storage address is unchanged by an
+    // assignment, so those pointers stay valid. Boot-time only (before start()), so no
+    // reader races the swap. std::nullopt keeps the movement::kZoneSpawnXY placeholder.
+    impl_->enter_spawn = std::move(spawn);
+}
+
 void WorldServer::world_thread_main() {
     // The per-map map tick (SAD §2.5 / §3.2), 20 Hz with a 40 ms soft budget
     // (SAD §8.1). Each wake runs ONE tick in the SAD §2.5 PHASE ORDER:
@@ -3745,6 +3771,9 @@ void WorldServer::serve_connection(net::Session sess) {
     ctx.world = &impl_->world;  // shared AoI relay registry (#87)
     ctx.abilities = &impl_->abilities;  // shared ability template store (#343 / CMB-01)
     ctx.roster = &impl_->roster;  // runtime playable roster CHAR_CREATE validates against (#695)
+    // Enter-world spawn (C8 #761): borrow the boot-loaded start-zone graveyard position
+    // by address when a start zone was loaded; nullptr keeps the D-11 placeholder.
+    ctx.enter_spawn = impl_->enter_spawn ? &*impl_->enter_spawn : nullptr;
     ctx.active_sessions = &impl_->active_sessions;  // single-session registry (#326)
     ctx.loot = &impl_->loot;  // shared corpse loot registry (ITM-02 wire; #388)
     ctx.quest_credit = &impl_->quest_credit;  // MapTick→session kill credit bus (#396)

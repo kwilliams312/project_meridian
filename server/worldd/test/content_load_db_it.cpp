@@ -88,6 +88,8 @@ void create_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS area",
         "DROP TABLE IF EXISTS ability",
         "DROP TABLE IF EXISTS spawn_point",
+        "DROP TABLE IF EXISTS graveyard",
+        "DROP TABLE IF EXISTS zone",
     };
     for (const char* d : drops) c.execute(d);
 
@@ -301,6 +303,20 @@ void create_tables(db::Connection& c) {
         "  ordinal SMALLINT UNSIGNED NOT NULL, talent_id INT UNSIGNED NOT NULL,"
         "  PRIMARY KEY (talent_tree_id, tier_ordinal, ordinal))"
         " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // zone / graveyard — load_world_content also resolves the enter-world start-zone
+    // spawn (C8 #761, load_start_zone_spawn). Created EMPTY (this test seeds no start
+    // zone and does not assert on the enter spawn); the loader returns std::nullopt.
+    // Without the tables load_world_content throws "Table 'zone' doesn't exist".
+    c.execute(
+        "CREATE TABLE zone (id INT UNSIGNED NOT NULL, name VARCHAR(80) NOT NULL,"
+        "  level_min SMALLINT UNSIGNED NOT NULL DEFAULT 1, level_max SMALLINT UNSIGNED NOT NULL DEFAULT 1,"
+        "  start_zone BOOLEAN NOT NULL DEFAULT FALSE, PRIMARY KEY (id))"
+        " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    c.execute(
+        "CREATE TABLE graveyard (zone_id INT UNSIGNED NOT NULL, ordinal SMALLINT UNSIGNED NOT NULL,"
+        "  pos_x FLOAT NOT NULL, pos_y FLOAT NOT NULL, pos_z FLOAT NOT NULL,"
+        "  orientation_deg FLOAT NOT NULL DEFAULT 0, PRIMARY KEY (zone_id, ordinal))"
+        " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 }
 
 void drop_tables(db::Connection& c) {
@@ -322,6 +338,7 @@ void drop_tables(db::Connection& c) {
         "DROP TABLE IF EXISTS talent_grant", "DROP TABLE IF EXISTS talent_tree",
         "DROP TABLE IF EXISTS talent_tree_tier", "DROP TABLE IF EXISTS talent_tree_tier_talent",
         "DROP TABLE IF EXISTS race",             "DROP TABLE IF EXISTS class",
+        "DROP TABLE IF EXISTS graveyard",        "DROP TABLE IF EXISTS zone",
     };
     for (const char* d : drops) c.execute(d);
 }
