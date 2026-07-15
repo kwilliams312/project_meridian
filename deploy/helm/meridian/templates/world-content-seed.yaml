@@ -12,9 +12,13 @@
   Idempotent + versioned by the #89 IF-4 content hash:
     * reads the baked world_manifest.content_hash from the SQL and the live
       hash from the DB; if they already match, it does NOTHING (skip); else
-    * TRUNCATEs every meridian_world table (FK checks off) and reloads the
-      INSERT-only DML — a whole-artifact refresh (the world DB is a read-only
-      mcc artifact with NO user data, "replaced wholesale by the build").
+    * DROPs + recreates meridian_world from the image's baked DDL wrapper
+      (03-world.sql) so the schema is refreshed to the current build, then loads
+      the INSERT-only content DML — a whole-artifact refresh (the world DB is a
+      read-only mcc artifact with NO user data, "replaced wholesale by the
+      build"). A plain TRUNCATE (the old path) left a persistent PVC frozen at
+      its first-initdb schema, so content that evolved the schema failed to load
+      (#814). Grants are not re-applied (see the command below for why).
   => ephemeral dev (fresh DB each deploy) reseeds every run; persistent PTR/Prod
      refresh only when a promotion carries new content.
 
@@ -113,12 +117,30 @@ spec:
                 exit 0
               fi
               echo "seeding world content: '${CURRENT:-<none>}' -> '${BAKED:-<unknown>}'"
-              # TRUNCATE every world table (whole-artifact refresh), then load DML.
-              TABLES=$(mysql -N -B information_schema \
-                         -e "SELECT table_name FROM tables WHERE table_schema='$DB_NAME'")
-              { echo "SET FOREIGN_KEY_CHECKS=0;"
-                for t in $TABLES; do echo "TRUNCATE TABLE \`$t\`;"; done
-              } | mysql "$DB_NAME"
-              mysql "$DB_NAME" < "$SQL_PATH"
+              # Wholesale SCHEMA refresh (#814), not just TRUNCATE. The world DB is a
+              # read-only, no-user-data mcc artifact "replaced wholesale by the build",
+              # so a reseed must re-apply the CURRENT baked DDL — else a persistent PVC
+              # keeps its stale first-initdb schema and newer content DML fails (e.g.
+              # #698 added world_manifest.compatibility_version -> ERROR 1054 Unknown
+              # column, then #492 swallows it, leaving empty world tables). So DROP +
+              # recreate meridian_world from the image's baked DDL wrapper — the SAME
+              # /docker-entrypoint-initdb.d/03-world.sql that init runs (the single
+              # source of truth for the SOURCE list, CI-gated by
+              # tests/test_db_init_migration_coverage.py; do NOT duplicate it here) —
+              # then load the content DML. ONLY meridian_world is touched (no user
+              # data); meridian_characters / meridian_auth are never dropped.
+              #
+              # Grants are intentionally NOT re-applied here: this Job connects as the
+              # app user ($DB_USER, MERIDIAN_DB_PASS), which holds ALL PRIVILEGES on
+              # meridian_world.* but NOT GRANT OPTION — so it can DROP/CREATE this DB
+              # (db-scoped privileges survive DROP DATABASE, so the app user keeps
+              # access across the recreate) but CANNOT run 04-grants.sql. Attempting it
+              # would fail access-denied and, under `set -e`, trip the #492 trap BEFORE
+              # the content load below — reintroducing the exact empty-world-tables bug
+              # this fix removes. (04-grants.sql still runs as root on first-boot init;
+              # its grants persist the drop.)
+              mysql -e "DROP DATABASE IF EXISTS \`$DB_NAME\`;"
+              mysql < /docker-entrypoint-initdb.d/03-world.sql   # CREATE DATABASE + SOURCE current world DDL
+              mysql "$DB_NAME" < "$SQL_PATH"                     # load the baked content DML
               echo "world content seeded (${BAKED:-unknown})"
 {{- end }}
