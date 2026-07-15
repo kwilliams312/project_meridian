@@ -259,6 +259,46 @@ int main() {
               g.reason.find("dlc1") != std::string::npos);
     }
 
+    // -----------------------------------------------------------------------
+    // P. Realm theme-selection seam (#754, chibi-theme design §4). The primary
+    //    pack is the row whose pack_namespace == the realm's selected theme; the
+    //    default theme is "core" (historical behaviour); an absent theme falls
+    //    back to the first row.
+    // -----------------------------------------------------------------------
+    {
+        std::vector<ManifestRow> rows = {
+            good_row("chibi", "2.0.0", kOtherHash),  // sorts before "core"
+            good_row("core", "1.0.0", kGoodHash),
+        };
+
+        // P1. Default (no theme arg) resolves "core" as primary — unchanged.
+        BootReport def = verify_world_manifest(rows);
+        check("P1 default theme -> core primary",
+              def.verdict == BootVerdict::kOk &&
+                  def.content_version == "core@1.0.0" &&
+                  def.content_hash == kGoodHash);
+
+        // P2. theme="chibi" resolves the chibi row as primary (the §4 seam).
+        BootReport chibi = verify_world_manifest(rows, std::nullopt, "chibi");
+        check("P2 theme=chibi -> chibi primary",
+              chibi.verdict == BootVerdict::kOk &&
+                  chibi.content_version == "chibi@2.0.0" &&
+                  chibi.content_hash == kOtherHash);
+
+        // P3. theme="core" explicit -> identical to the default (core primary).
+        BootReport core = verify_world_manifest(rows, std::nullopt, "core");
+        check("P3 theme=core -> core primary (unchanged)",
+              core.verdict == BootVerdict::kOk &&
+                  core.content_version == "core@1.0.0");
+
+        // P4. A selected theme absent from the manifest -> first-row fallback
+        //     (the existing 'first row' behaviour, generalised).
+        BootReport missing = verify_world_manifest(rows, std::nullopt, "nonesuch");
+        check("P4 absent theme -> first-row fallback",
+              missing.verdict == BootVerdict::kOk &&
+                  missing.content_version == "chibi@2.0.0");  // rows.front()
+    }
+
     // verdict name mapping (diagnostics).
     check("boot_verdict_name kOk", std::string(boot_verdict_name(BootVerdict::kOk)) == "ok");
     check("boot_verdict_name kCompatBreaking",

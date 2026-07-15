@@ -705,6 +705,33 @@ int main() {
                       !r.is_valid_race(0) && !r.is_valid_race(5) &&
                       !r.is_valid_class(0) && !r.is_valid_class(5));
 
+                // ---- R1 (chibi-theme design §4 / #754): the PACK ROSTER is
+                // authoritative over the compiled roster.h fallback for any id it
+                // ships. A pack race/class row that reuses a FALLBACK id (Sylvane=3,
+                // Mender=4) must SUPERSEDE the fallback entry — this is exactly what
+                // removes the char-create `catalog:3|0`/`4|0` errors for a theme pack
+                // (e.g. chibi) that ships those ids WITH a catalog, instead of the
+                // catalog-less compiled Sylvane/Emberkin leaking through. Seed a pack
+                // row at each fallback id and re-load: the pack name wins, and the
+                // roster size is unchanged (the id is REPLACED, not added).
+                conn.execute(
+                    "INSERT INTO race (roster_id, content_id, name, description) "
+                    "VALUES (3, 200, 'ChibiForest', 'A themed race that ships a catalog.')");
+                conn.execute(
+                    "INSERT INTO class (roster_id, content_id, name, description) "
+                    "VALUES (4, 201, 'ChibiMystic', 'A themed class shipped in-pack.')");
+                const characters::Roster merged = worldd::load_db_roster(conn);
+                check("R1 pack race supersedes same-id fallback (3: Sylvane -> ChibiForest)",
+                      merged.is_valid_race(3) && merged.race_name(3) == "ChibiForest");
+                check("R1 pack class supersedes same-id fallback (4: Mender -> ChibiMystic)",
+                      merged.is_valid_class(4) && merged.class_name(4) == "ChibiMystic");
+                check("R1 supersede REPLACES (not adds): still 4 races + 4 classes",
+                      merged.race_count() == 4 && merged.class_count() == 4);
+                // A fallback id the pack does NOT ship still remains the fallback —
+                // roster.h stays the fallback ONLY for entries a pack omits.
+                check("R1 unshipped fallback id remains (race 4 still Emberkin)",
+                      merged.is_valid_race(4) && merged.race_name(4) == "Emberkin");
+
                 // ---- Character CREATE + LOAD round-trips against the DB-LOADED
                 // roster (the SP2.5 #695 acceptance bar): a character with a seed
                 // race/class (Ardent=1 / Vanguard=1, both from the pack rows) is
