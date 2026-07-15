@@ -851,6 +851,28 @@ target_link_libraries(worldd-spawn-load-db-test
 set_target_properties(worldd-spawn-load-db-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-spawn-load-db COMMAND worldd-spawn-load-db-test)
 
+# --- Enter-world START-ZONE SPAWN load DB-backed integration test (C8, #761). ----
+# The acceptance bar for enter-as-chibi: a character entering the world spawns at
+# its realm's START ZONE first graveyard (zone.schema.yaml "start_zone: spawn point
+# = first graveyard"), not the D-11 placeholder. Proves load_start_zone_spawn
+# resolves the start zone's ordinal-0 graveyard with the #498 Godot-Y-up -> server-
+# Z-up axis conversion, ignores non-start zones + later ordinals, matches the real
+# chibi Sprout-Meadow-at-origin shape, and degrades to nullopt (no start zone / no
+# graveyard) so the handler keeps the placeholder. DB-LEVEL isolated (#707): a unique
+# pid-keyed throwaway database seeded with only the zone/graveyard tables the loader
+# reads. Reads MERIDIAN_WORLDDB_* (falls back to MERIDIAN_DB_*) and SKIPS (exit 0)
+# when none are set — inert in the plain server ctest, real only in the DB CI job /
+# test.sh --db.
+add_executable(worldd-enter-spawn-db-test
+  test/enter_spawn_db_it.cpp
+)
+target_link_libraries(worldd-enter-spawn-db-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-enter-spawn-db-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-enter-spawn-db COMMAND worldd-enter-spawn-db-test)
+
 # --- Ability-catalog world-DB load + cast-resolution regression test (#481). ----
 # Reproduces the UNKNOWN_ABILITY cast bug (the placeholder store does not know the
 # authored ids the CAST_REQUEST handler resolves against) and proves load_db_ability_store

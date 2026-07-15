@@ -199,6 +199,44 @@ struct SpawnPlacement {
 // same policy as the other loaders).
 std::vector<SpawnPlacement> load_spawn_points(db::Connection& world_db);
 
+// --- DB-backed enter-world spawn (C8 enter-as-chibi, #761) -------------------
+// The character's ENTER-WORLD spawn point, resolved from the loaded pack: the
+// realm's START ZONE (`zone.start_zone = TRUE`) first graveyard (`graveyard`
+// ordinal 0). This is exactly zone.schema.yaml's contract — "start_zone: spawn
+// point = first graveyard" (the graveyards[] first entry is the zone default and,
+// for a start zone, the enter-world spawn). The realm world DB is built SINGLE-PACK
+// (scripts/content-build.sh `emit-sql --pack <ns>`), so it ships exactly one start
+// zone — the theme's own (the chibi realm's Sprout Meadow, graveyard at origin);
+// core's is not present. `pos` is already converted to the worldd Z-up runtime
+// frame (the DB mirrors Godot Y-up content, common.defs "Y-up, X east, -Z north" —
+// the same #498 conversion load_spawn_points applies) and carries the graveyard
+// facing as its orientation. Replaces the D-11 PLACEHOLDER spawn (movement::
+// kZoneSpawnXY, the Zone-01 flat-ground centre) the enter-world handler used before.
+struct EnterSpawn {
+    std::uint32_t zone_id = 0;   // zone.id of the resolved start zone (for logging)
+    Position pos;                // graveyard[0] position + facing, in the Z-up runtime frame
+};
+
+// PURE resolver (#761): the start zone's first graveyard, converted to the worldd
+// Z-up runtime frame. Returns std::nullopt when the world DB ships NO start zone with
+// a graveyard. Deterministic (lowest start-zone id wins if a merged DB somehow carries
+// more than one; the realm DB is single-pack so there is exactly one). Throws
+// meridian::db::DbError on a query failure (fail-fast, same policy as the other loaders).
+//
+// DORMANT in the M0 era: its result is in the zone-local content frame (no manifest-
+// origin translation), which lands OUTSIDE the server movement bounds [-512,-128], so
+// load_start_zone_spawn() does NOT call it yet. Kept + unit-tested (test/enter_spawn_db_it)
+// and re-activated when A-08 lands a per-zone real-terrain signal. See the .cpp.
+std::optional<EnterSpawn> resolve_start_zone_graveyard_spawn(db::Connection& world_db);
+
+// The enter-world spawn load_world_content installs into WorldContent.enter_spawn (#761).
+// M0 GATE (lead-approved fix): returns std::nullopt today — no zone ships real terrain
+// yet (zone.chunk_manifest is RESERVED/A-08 and not emitted to the world DB), so the
+// ENTER_WORLD handler keeps the movement::kZoneSpawnXY (-320) flat-bootstrap placeholder
+// that the client (world.gd, aligned by #805) and the headless bot (#562) both use.
+// Re-activates resolve_start_zone_graveyard_spawn() when A-08 lands. See the .cpp.
+std::optional<EnterSpawn> load_start_zone_spawn(db::Connection& world_db);
+
 // --- The loaded world content bundle -----------------------------------------
 // Owns one of each DB-backed store, loaded from the world DB at boot. Held for the
 // process lifetime (main() owns it) so the pointers install_content_stores() /
@@ -254,6 +292,14 @@ struct WorldContent {
     // interactable (GOSSIP_HELLO / kill objectives). Empty when the world DB has no
     // spawn_point rows.
     std::vector<SpawnPlacement>       spawns;
+    // The enter-world spawn (C8, #761): the start zone's first graveyard, resolved
+    // from the loaded pack (load_start_zone_spawn). Installed onto the enter-world
+    // path via WorldServer::set_enter_spawn so a character spawns at its realm's
+    // start zone (the chibi realm's Sprout Meadow graveyard) instead of the D-11
+    // placeholder. std::nullopt when the world DB ships no start zone with a
+    // graveyard — the enter-world handler then keeps the movement::kZoneSpawnXY
+    // placeholder (DB-less / degraded / no-start-zone).
+    std::optional<EnterSpawn>         enter_spawn;
 };
 
 // Load the authored ability catalog (ability rows; effects[] deserialized from the

@@ -316,6 +316,15 @@ struct ConnCtx {
     // falls back to Roster::offline_full().
     const meridian::characters::Roster* roster = nullptr;
 
+    // The enter-world spawn (C8 enter-as-chibi, #761). Points at the WorldServer's
+    // boot-loaded start-zone spawn POSITION (set by serve_connection by address,
+    // like `roster`) — the realm's START ZONE first graveyard (load_start_zone_spawn),
+    // already in the worldd Z-up runtime frame + carrying the graveyard facing. The
+    // ENTER_WORLD handler spawns the character here when set (a pack ships a start
+    // zone); nullptr (a directly-built ConnCtx / DB-less smoke path, or a world DB
+    // with no start zone) falls back to the movement::kZoneSpawnXY D-11 placeholder.
+    const Position* enter_spawn = nullptr;
+
     // AoI relay (#87). `world` is the shared world-thread-owned session registry
     // + grid (set by serve_connection; may be null in the DB-less dispatch smoke
     // test, where no relay is wired and movement replies only to the mover).
@@ -651,6 +660,17 @@ public:
     // BEFORE start(); not thread-safe. When never called, the catalog is empty and
     // every class's threat multiplier is 1.0 (a DB-less run's threat is unscaled).
     void set_class_catalog(ClassCatalog classes);
+
+    // Install the boot-loaded enter-world spawn (C8 enter-as-chibi, #761): the realm's
+    // START ZONE first graveyard position (load_start_zone_spawn), already in the
+    // worldd Z-up runtime frame. The ENTER_WORLD handler spawns a character here
+    // instead of the movement::kZoneSpawnXY D-11 placeholder, so entering the chibi
+    // realm drops the character into Sprout Meadow (graveyard at origin) — pack-driven,
+    // works for any theme. Stored by value; every ConnCtx borrows it by address
+    // (ctx.enter_spawn), so the move preserves that address. std::nullopt (never
+    // called / no start zone in the world DB) keeps the placeholder. Call at boot
+    // BEFORE start(); not thread-safe.
+    void set_enter_spawn(std::optional<Position> spawn);
 
 private:
     void world_thread_main();

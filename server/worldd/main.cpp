@@ -46,6 +46,7 @@
 
 #include "area_triggers.h"
 #include "db_content_store.h"
+#include "movement_constants.h"  // movement::kZoneSpawnXY / kFlatGroundZ (the M0 enter-spawn fallback)
 #include "world_boot.h"
 #include "world_dispatch.h"
 
@@ -534,6 +535,31 @@ int main(int argc, char** argv) {
     // (threat_multiplier). No-op semantics when no world DB is wired: the catalog is
     // empty, so every class's multiplier is 1.0 and threat is unscaled.
     world.set_class_catalog(std::move(content.classes));
+
+    // Install the pack-loaded enter-world spawn (#761). The start-zone graveyard spawn is
+    // M0-GATED in load_start_zone_spawn (returns nullopt until A-08 ships real terrain), so
+    // content.enter_spawn is nullopt today and the enter-world handler keeps the flat-
+    // bootstrap placeholder — the movement::kZoneSpawnXY (-320) Zone-01 play-area centre,
+    // inside the movement bounds [-512,-128], matching the client flat-bootstrap (#805) and
+    // the headless bot (#562). We log the resolved enter spawn either way so the E2E can
+    // confirm it (-320 in the M0 era, the graveyard once A-08 re-activates it).
+    namespace mv = meridian::worldd::movement;
+    if (content.enter_spawn) {
+        const meridian::worldd::EnterSpawn& es = *content.enter_spawn;
+        world.set_enter_spawn(es.pos);
+        meridian::core::log::info(
+            kDaemonName,
+            "enter-world spawn resolved from start zone " +
+                std::to_string(es.zone_id) + " graveyard: (" +
+                std::to_string(es.pos.x) + ", " + std::to_string(es.pos.y) + ", " +
+                std::to_string(es.pos.z) + ")");
+    } else {
+        meridian::core::log::info(
+            kDaemonName,
+            "enter-world spawn: M0 flat-bootstrap placeholder (movement::kZoneSpawnXY): (" +
+                std::to_string(mv::kZoneSpawnXY) + ", " + std::to_string(mv::kZoneSpawnXY) +
+                ", " + std::to_string(mv::kFlatGroundZ) + ")");
+    }
 
     // Spawn the authored content placements into the live world (NPC-01 spawn seam,
     // #486): read from spawn_point at boot, each becomes a live creature in the map
