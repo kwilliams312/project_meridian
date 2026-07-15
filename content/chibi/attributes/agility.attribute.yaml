@@ -1,0 +1,6 @@
+# Chibi pack (#757) — attribute seed re-authored into the chibi namespace (design §5/§7).
+schema: meridian/attribute@1
+id: chibi:attribute.agility
+name: Agility
+kind: primary
+description: Speed and finesse — scales ranged attack power, dodge, and crit.

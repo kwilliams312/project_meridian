@@ -1,0 +1,25 @@
+# Chibi pack (#757) — Rogue starter armor (leather chest). Re-authored into the
+# chibi namespace (design §5/§7). visual.* reuses core placeholder art (FLAGGED).
+schema: meridian/item@2
+id: chibi:item.rogue_leathers
+name: Recruit's Leathers
+flavor_text: Supple, quiet, and cut close so nothing snags in the dark.
+item_class: armor
+subclass: leather
+equip_type: chibi:equip_type.leather
+slot: chest
+rarity: common
+required_level: 1
+item_level: 1
+armor: 20
+stats:
+  - stat: agility
+    amount: 2
+price:
+  sell: 55
+visual:
+  icon: core:art.icon.item.warden_crest
+  worn:
+    models: [{ model: core:art.item.armor.warden_chest, mirror: none }]
+    hides: [torso]
+    dye_channels: [primary, secondary]

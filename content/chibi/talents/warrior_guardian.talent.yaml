@@ -1,0 +1,13 @@
+# Chibi pack (#757) — Warrior tier-2 talent: grants Bulwark + a strength passive.
+# Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/talent@1
+id: chibi:talent.warrior_guardian
+name: Guardian's Oath
+description: Unlocks Bulwark and steels your strength.
+grants:
+  - kind: ability
+    ability: chibi:ability.warrior_bulwark
+  - kind: buff
+    attribute: chibi:attribute.strength
+    amount: 3
+    modifier: flat

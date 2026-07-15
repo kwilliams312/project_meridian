@@ -1,0 +1,14 @@
+# Chibi pack (#757) — Mage opening talent: grants Cinderburn + an intellect passive.
+# Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/talent@1
+id: chibi:talent.mage_kindling
+name: Kindling
+description: Unlocks Cinderburn and sharpens your intellect.
+rank_max: 3
+grants:
+  - kind: ability
+    ability: chibi:ability.mage_cinderburn
+  - kind: buff
+    attribute: chibi:attribute.intellect
+    amount: 5
+    modifier: flat

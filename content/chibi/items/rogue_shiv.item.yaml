@@ -1,0 +1,26 @@
+# Chibi pack (#757) — Rogue starter weapon (one_hand). Re-authored into the chibi
+# namespace (design §5/§7). visual.* reuses core placeholder art (FLAGGED).
+schema: meridian/item@2
+id: chibi:item.rogue_shiv
+name: Recruit's Shiv
+flavor_text: A ground-down file with a leather grip. Deniable, and quick.
+item_class: weapon
+subclass: dagger
+equip_type: chibi:equip_type.one_hand
+slot: main_hand
+rarity: common
+required_level: 1
+item_level: 1
+weapon:
+  damage: { min: 4, max: 7 }
+  speed_ms: 1800
+stats:
+  - stat: agility
+    amount: 2
+price:
+  sell: 80
+visual:
+  icon: core:art.icon.item.iron_sword
+  worn:
+    models: [{ model: core:art.item.weapon.iron_sword, mirror: none }]
+    attach: { socket: main_hand, sheath_socket: hip_l }

@@ -1,0 +1,13 @@
+# Chibi pack (#757) — Priest tier-2 talent: grants Aegis + a stamina passive.
+# Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/talent@1
+id: chibi:talent.priest_sanctuary
+name: Sanctuary
+description: Unlocks Aegis and fortifies your stamina.
+grants:
+  - kind: ability
+    ability: chibi:ability.priest_aegis
+  - kind: buff
+    attribute: chibi:attribute.stamina
+    amount: 3
+    modifier: flat

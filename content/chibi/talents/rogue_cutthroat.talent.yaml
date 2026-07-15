@@ -1,0 +1,13 @@
+# Chibi pack (#757) — Rogue tier-2 talent: grants Gash + a crit passive.
+# Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/talent@1
+id: chibi:talent.rogue_cutthroat
+name: Cutthroat
+description: Unlocks Gash and sharpens your critical strike.
+grants:
+  - kind: ability
+    ability: chibi:ability.rogue_gash
+  - kind: buff
+    attribute: chibi:attribute.crit
+    amount: 2
+    modifier: flat

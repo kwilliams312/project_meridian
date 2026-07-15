@@ -1,0 +1,7 @@
+# Chibi pack (#757) — kernel-blessed attribute seed, re-authored from the retired
+# core copy into the chibi namespace (design §5/§7). Clean-room original text.
+schema: meridian/attribute@1
+id: chibi:attribute.strength
+name: Strength
+kind: primary
+description: Raw physical power — scales melee attack power and carrying capacity.

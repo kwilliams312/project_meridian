@@ -1,0 +1,6 @@
+# Chibi pack (#757) — equip_type re-authored into the chibi namespace (design §5/§7).
+schema: meridian/equip_type@1
+id: chibi:equip_type.cloth
+name: Cloth
+description: The lightest armor material. Worn by casters who forgo protection for power.
+category: armor

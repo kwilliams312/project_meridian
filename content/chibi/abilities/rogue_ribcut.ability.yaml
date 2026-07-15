@@ -1,0 +1,19 @@
+# Chibi pack (#757) — Rogue opener: a precise melee strike. Tier-1 `damage`
+# primitive. Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/ability@1
+id: chibi:ability.rogue_ribcut
+name: Ribcut
+description: A precise thrust to a vital point for {amount} physical damage.
+school: physical
+target: enemy
+range_m: 5
+cast:
+  time_ms: 0
+cooldown_ms: 6000
+resource:
+  type: energy
+  amount: 35
+effects:
+  - kind: damage
+    amount: { min: 20, max: 28 }
+    coefficient: 0.5

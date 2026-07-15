@@ -1,0 +1,14 @@
+# Chibi pack (#757) — Rogue opening talent: grants Ribcut + an agility passive.
+# Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/talent@1
+id: chibi:talent.rogue_finesse
+name: Finesse
+description: Unlocks Ribcut and quickens your agility.
+rank_max: 3
+grants:
+  - kind: ability
+    ability: chibi:ability.rogue_ribcut
+  - kind: buff
+    attribute: chibi:attribute.agility
+    amount: 5
+    modifier: flat

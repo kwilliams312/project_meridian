@@ -3,14 +3,70 @@ namespace: chibi
 band: 1                      # assigned once, immutable (SAD §2.4)
 released_watermark: 0      # highest local index frozen by a tagged release
 map:                         # append-only; local index (SAD §2.4)
+  chibi:ability.mage_arcane_bolt: 12
+  chibi:ability.mage_arcane_storm: 13
+  chibi:ability.mage_cinderburn: 14
+  chibi:ability.mage_frost_lock: 15
+  chibi:ability.priest_aegis: 16
+  chibi:ability.priest_mend: 17
+  chibi:ability.priest_purge: 18
+  chibi:ability.priest_renewal: 19
+  chibi:ability.rogue_gash: 20
+  chibi:ability.rogue_ribcut: 21
+  chibi:ability.rogue_veilstep: 22
+  chibi:ability.rogue_weakpoint: 23
+  chibi:ability.warrior_bellow: 24
+  chibi:ability.warrior_bulwark: 25
+  chibi:ability.warrior_crushing_blow: 26
+  chibi:ability.warrior_skullcrack: 27
   chibi:art.chibi_pill_body: 3
   chibi:art.chibi_pill_body_mask: 4
   chibi:art.chibi_pill_body_recolor_base: 5
   chibi:art.ui.theme_preview: 1
+  chibi:attribute.agility: 28
+  chibi:attribute.armor: 29
+  chibi:attribute.crit: 30
+  chibi:attribute.haste: 31
+  chibi:attribute.intellect: 32
+  chibi:attribute.stamina: 33
+  chibi:attribute.strength: 34
+  chibi:class.mage: 35
+  chibi:class.priest: 36
+  chibi:class.rogue: 37
+  chibi:class.warrior: 38
   chibi:dye.blue: 6
   chibi:dye.gold: 7
   chibi:dye.green: 8
   chibi:dye.red: 9
   chibi:dye.silver: 10
   chibi:dye.yellow: 11
+  chibi:equip_type.cloth: 39
+  chibi:equip_type.leather: 40
+  chibi:equip_type.mail: 41
+  chibi:equip_type.one_hand: 42
+  chibi:equip_type.plate: 43
+  chibi:equip_type.staff: 44
+  chibi:equip_type.two_hand: 45
+  chibi:equip_type.wand: 46
+  chibi:item.base_cloth_wrap: 47
+  chibi:item.mage_apprentice_robe: 48
+  chibi:item.mage_apprentice_staff: 49
+  chibi:item.priest_prayer_wand: 50
+  chibi:item.priest_vestments: 51
+  chibi:item.rogue_leathers: 52
+  chibi:item.rogue_shiv: 53
+  chibi:item.warrior_battleblade: 54
+  chibi:item.warrior_platemail: 55
+  chibi:talent.mage_frostwork: 56
+  chibi:talent.mage_kindling: 57
+  chibi:talent.priest_devotion: 58
+  chibi:talent.priest_sanctuary: 59
+  chibi:talent.rogue_cutthroat: 60
+  chibi:talent.rogue_finesse: 61
+  chibi:talent.warrior_frontline: 62
+  chibi:talent.warrior_guardian: 63
+  chibi:talent_tree.arcane_mastery: 64
+  chibi:talent_tree.light_and_shadow: 65
+  chibi:talent_tree.shadow_arts: 66
+  chibi:talent_tree.warriors_resolve: 67
   chibi:zone.sprout_meadow: 2

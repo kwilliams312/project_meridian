@@ -1,0 +1,22 @@
+# Chibi pack (#757) — Mage "aoe" nuke. NOTE: the SP2 Tier-1 palette has no
+# area-of-effect targeting primitive (targeting radius is not modeled); this is
+# authored as the closest available `damage` primitive and themed as a storm.
+# Flagged to the lead — AoE targeting would be an engine (kernel) addition, not
+# data. Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/ability@1
+id: chibi:ability.mage_arcane_storm
+name: Arcane Storm
+description: A crashing wave of arcane energy that hits for {amount} damage.
+school: arcane
+target: enemy
+range_m: 30
+cast:
+  time_ms: 2000
+cooldown_ms: 8000
+resource:
+  type: mana
+  amount: 40
+effects:
+  - kind: damage
+    amount: { min: 22, max: 30 }
+    coefficient: 0.7

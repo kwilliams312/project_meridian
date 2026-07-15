@@ -1,0 +1,24 @@
+# Chibi pack (#757) — Priest dispel/debuff. NOTE: the SP2 Tier-1 palette has no
+# aura-removal (dispel) primitive; this is authored as the closest available
+# `debuff` primitive — a holy purge that saps the foe's strength — and flagged to
+# the lead (a true dispel would be an engine/kernel addition, not data).
+# Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/ability@1
+id: chibi:ability.priest_purge
+name: Purge
+description: Scours the target with holy fire, sapping its strength.
+school: holy
+target: enemy
+range_m: 30
+cast:
+  time_ms: 0
+cooldown_ms: 8000
+resource:
+  type: mana
+  amount: 20
+effects:
+  - kind: debuff
+    attribute: chibi:attribute.strength
+    amount: -10
+    modifier: flat
+    duration_ms: 10000

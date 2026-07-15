@@ -1,0 +1,13 @@
+# Chibi pack (#757) — Mage tier-2 talent: grants Frost Lock + a crit passive.
+# Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/talent@1
+id: chibi:talent.mage_frostwork
+name: Frostwork
+description: Unlocks Frost Lock and hones your critical strike.
+grants:
+  - kind: ability
+    ability: chibi:ability.mage_frost_lock
+  - kind: buff
+    attribute: chibi:attribute.crit
+    amount: 2
+    modifier: flat

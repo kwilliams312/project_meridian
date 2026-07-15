@@ -1,0 +1,21 @@
+# Chibi pack (#757) — Warrior defensive: a self absorb shield. Tier-1 `shield`
+# primitive. Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/ability@1
+id: chibi:ability.warrior_bulwark
+name: Bulwark
+description: Braces behind raised guard, absorbing {amount} incoming damage.
+school: physical
+target: self
+range_m: 0
+cast:
+  time_ms: 0
+cooldown_ms: 20000
+triggers_gcd: false
+resource:
+  type: rage
+  amount: 10
+effects:
+  - kind: shield
+    amount: { min: 80, max: 120 }
+    duration_ms: 10000
+    coefficient: 0.4

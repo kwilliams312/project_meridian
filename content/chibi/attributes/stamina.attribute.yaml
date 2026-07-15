@@ -1,0 +1,6 @@
+# Chibi pack (#757) — attribute seed re-authored into the chibi namespace (design §5/§7).
+schema: meridian/attribute@1
+id: chibi:attribute.stamina
+name: Stamina
+kind: primary
+description: Vitality and endurance — scales maximum health.

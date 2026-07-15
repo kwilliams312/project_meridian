@@ -1,0 +1,19 @@
+# Chibi pack (#757) — Mage nuke: a ranged arcane bolt. Tier-1 `damage` primitive.
+# Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/ability@1
+id: chibi:ability.mage_arcane_bolt
+name: Arcane Bolt
+description: A bolt of raw arcane force striking for {amount} damage.
+school: arcane
+target: enemy
+range_m: 30
+cast:
+  time_ms: 1500
+cooldown_ms: 0
+resource:
+  type: mana
+  amount: 20
+effects:
+  - kind: damage
+    amount: { min: 18, max: 26 }
+    coefficient: 0.6

@@ -1,0 +1,14 @@
+# Chibi pack (#757) — Priest opening talent: grants Renewal + an intellect passive.
+# Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/talent@1
+id: chibi:talent.priest_devotion
+name: Devotion
+description: Unlocks Renewal and deepens your intellect.
+rank_max: 3
+grants:
+  - kind: ability
+    ability: chibi:ability.priest_renewal
+  - kind: buff
+    attribute: chibi:attribute.intellect
+    amount: 5
+    modifier: flat

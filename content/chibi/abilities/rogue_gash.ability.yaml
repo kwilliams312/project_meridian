@@ -1,0 +1,21 @@
+# Chibi pack (#757) — Rogue bleed: a physical damage-over-time. Tier-1 `dot`
+# primitive. Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/ability@1
+id: chibi:ability.rogue_gash
+name: Gash
+description: A ragged cut that bleeds the target for {amount} damage each tick.
+school: physical
+target: enemy
+range_m: 5
+cast:
+  time_ms: 0
+cooldown_ms: 6000
+resource:
+  type: energy
+  amount: 30
+effects:
+  - kind: dot
+    amount: { min: 5, max: 8 }
+    duration_ms: 12000
+    tick_ms: 3000
+    coefficient: 0.15
