@@ -53,8 +53,9 @@ The approved demo contains:
 - reachable placements in `chibi:zone.sprout_meadow` supporting level 1–3 play without waiting
   for respawns or involuntary multi-pulls.
 
-The canonical IDs and exact relationships are owned by #780. Its frozen manifest for this guide
-is:
+The following IDs are the **approved proposed contract** from #780. They are included so parallel
+stories converge, but #780 has not merged into `dev` yet; this table is not a landed registry.
+#780 becomes authoritative only when it merges:
 
 | Kind | Canonical IDs |
 |---|---|
@@ -68,8 +69,9 @@ is:
 | Forge spawn groups | `chibi:spawn.sprout_meadow_guides`, `chibi:spawn.sprout_meadow_dewdrop_slimes`, `chibi:spawn.sprout_meadow_sproutcap_scamps` |
 | Zone | `chibi:zone.sprout_meadow` |
 
-The existing eight class-gear IDs remain unchanged. Treat all of these IDs as permanent after
-allocation; changes go through #780 rather than creating a competing alias in another story.
+The existing eight class-gear IDs remain unchanged. While #780 is pending, do not allocate a
+competing alias in another story. After #780 merges and these IDs are allocated, treat them as
+permanent and route any contract change through the tracker rather than silently renaming them.
 
 ## 1. Prepare and open the workspace
 
@@ -350,9 +352,11 @@ Acceptance requires:
 placements. Opening it today is useful only to verify the skeleton:
 
 ```bash
-cd client/gdextension/forge_core
-cmake -B build -DGODOTCPP_TARGET=editor
-cmake --build build -j
+git submodule update --init --recursive client/godot-cpp
+cmake -S client/gdextension/forge_core \
+  -B client/gdextension/forge_core/build \
+  -DGODOTCPP_TARGET=editor
+cmake --build client/gdextension/forge_core/build -j
 ```
 
 Then open `client/forge/project` in the pinned Godot 4.7 editor. The current dock displays
@@ -381,8 +385,10 @@ class, license, provenance, budget, import hints, and restyle state.
 4. **Restyle:** hand the candidate to the human art workflow. Record meaningful transformation,
    complete review/provenance, pass import and asset budgets, and set `restyle_status: done` only
    after the human gate.
-5. **Wire:** return to the original missing-art finding, select the accepted asset ID, inspect its
-   backlinks, and rerun the pack audit. Never replace an ID reference with a file path.
+5. **Wire (#778 for the Chibi demo):** return to the original missing-art finding, select the
+   accepted final Chibi asset ID, inspect its backlinks, and rerun the pack audit. #778 owns wiring
+   finalized, provenance-complete Chibi artwork into the demo records; it does not bypass #678 or
+   #680. Never replace an ID reference with a file path.
 
 ### Available temporary CLI intake
 
@@ -470,11 +476,18 @@ Run the build twice from identical source with the fixed default timestamp. Comp
 artifact byte-for-byte and confirm the SQL `world_manifest` hash equals the Chibi client manifest
 hash. A wall-clock timestamp is not allowed in determinism evidence.
 
+For database evidence, always emit one explicit selected pack. #790 tracks five legacy integration
+tests that omit `--pack`, produce multi-pack SQL, and fail when separate themes reuse valid
+per-pack roster IDs. A focused `emit-sql content --pack chibi` result remains valid. Until #790
+lands, a failure in those five full-DB tests is a known harness regression, not permission to omit
+the selected-pack proof or to weaken roster isolation.
+
 ### Database and playable target
 
-**Target (#783):** load the Chibi single-pack SQL into a clean world database through the supported
-local realm workflow, boot `worldd` against that manifest, mount the matching client pack, and run
-the player proof. The final E2E is:
+**Target (#786, consumed by #783):** the supported local workflow must select `chibi`, emit/load its
+single-pack SQL before `worldd` verifies the manifest, and mount or expose the matching client pack.
+#786 owns the local selected-pack load mechanism and its objective boot/hash evidence. #783 consumes
+that mechanism for the player proof; it does not own repairing the loader itself. The final E2E is:
 
 1. Create any of six races with any of four classes.
 2. Enter Sprout Meadow in the base cloth outfit.
@@ -495,10 +508,10 @@ scripts/dev/build-client.sh
 scripts/dev/run-client.sh
 ```
 
-**Current blocker:** `scripts/dev/run-local.sh` creates the world schema but does not load
-`build/chibi-world.sql`. It is not currently a one-command Chibi runtime. The final #783 recipe
-must make the selected single-pack data load explicit and verify the running `worldd` booted the
-same content hash the client mounted.
+**Current blocker (#786):** `scripts/dev/run-local.sh` creates the world schema but does not load
+`build/chibi-world.sql`. It is not currently a selected-pack Chibi runtime. #786 must make pack
+selection and data loading explicit and verify the running `worldd` booted the same content hash
+the client mounted. #783 may proceed only by consuming that completed path.
 
 **Current combat blockers:** schema/build success is not playable balance evidence. #784 owns
 executing creature basic attacks from NPC damage/attack speed and applying NPC armor. #785 owns
@@ -517,16 +530,19 @@ data checks separately; never report them as runtime results.
 | Class | #673 | Raw YAML fallback | Assemble all four class kits without YAML; typed refs, role XOR hybrid, equip compatibility, backlinks |
 | Spell/ability | #674 | Experimental existing-file schema form | Recipe templates and every Tier-1 effect; safe oneOf switching; tooltip and typed audiovisual refs |
 | Item variants | #677 plus current Item editor | Item editor available; typed relations partial | Weapon, armor, consumable, quest item, reward, and other templates save valid `item@2` without YAML |
-| NPC vs Mob | #676 | Shared NPC alpha only | Separate create/filter/layout/readiness modes over one entity; switching loses no data |
-| Vendor | #684 | Raw YAML fallback after generic coverage | Tink inventory, zero price, stock validation, item/NPC backlinks, no YAML |
+| NPC vs Mob | #676 tooling; #781 Pippa/Tink; #775 demo mobs | Shared NPC alpha only | Separate create/filter/layout/readiness modes over one entity; author the approved friendly NPC and hostile mob records without YAML |
+| Vendor | #684 tooling; #781 Tink inventory | Raw YAML fallback after generic coverage | Tink inventory, zero price, stock validation, item/NPC backlinks, no YAML |
 | Loot | #683 | Raw YAML fallback after generic coverage | Typed tables, probability preview, deterministic seeded simulation, mob/quest backlinks |
-| Quest chain | #682 | Quests rail placeholder; raw YAML fallback | Graph/form parity, typed edges, cycle/reachability checks, 24 race/class chain simulations |
+| Quest chain | #682 tooling; #782 Chibi chain | Quests rail placeholder; raw YAML fallback | Graph/form parity, approved three-quest data, typed edges, cycle/reachability checks, 24 race/class chain simulations |
 | Spawn-table data | #685 | Raw YAML fallback | Typed weighted entries and stable Forge-facing IDs; constraints and backlinks |
 | Concrete world placement | #26 / #779 | Forge M0 skeleton; raw spawn fallback | Viewport placement/export, reachable layout, deterministic spawn/zone validation |
 | Missing-art inventory | #678 | Validator and manual search | Pack-wide categorized audit with navigation, class checks, provenance/budget/restyle status |
 | Meshy handoff | #680; CLI protocol #679 closed | `python -m meshy`; no Codex UI | Prompt review/terms/credits, mocked UI tests, live operator run, safe resume, pending quarantine |
+| Final Chibi art wiring | #778, consuming #678/#680 | Manual asset-ID wiring | Every demo art ref selects finalized provenance-complete/restyled Chibi art; audit and backlinks clean |
 | Check/diff/build/package | #681 | CLI check/diff/build; package-related commands partly stubbed | Integrated truthful status, provenance gate, artifact paths, two-build/hash proof |
-| Database/runtime/player proof | #783 | DB-load and combat gaps above | Single-pack load, matching client/server hash, complete level 1–3 human E2E |
+| Selected-pack local load | #786, consumed by #783 | `run-local.sh` loads DDL only | Explicit Chibi selection, single-pack SQL load before boot, and matching world/client manifest hash |
+| Database regression coverage | #790 | Five legacy tests omit `--pack` | Every affected DB test emits an explicit pack and no longer fails on valid per-theme roster overlap |
+| Runtime/player proof | #783, consuming #786 and dependencies #784/#785/#787 | Local load and combat gaps above | Matching selected-pack runtime plus complete level 1–3 human E2E |
 
 Any failed row stays failed. A temporary fallback cannot be used to turn a Target row green.
 
@@ -549,7 +565,8 @@ lands; if a new gap is found during #783, add it here and to the tracker.
 | Integrated Build/Check/Diff/Package UI is absent; `mcc pack`, install/uninstall/migrate, and `idmap verify` are stubs | #681 and later packaging work |
 | Existing Chibi pack/zone/items and several asset/provenance files fail `mcc fmt --check` | #774 content stories must clear drift before #783 |
 | Chibi manifest pins Godot 4.6 while the client and Forge projects declare 4.7 | #787 |
-| `run-local.sh` creates the world schema but does not load the Chibi single-pack SQL | #783 requires a supported explicit load path |
+| `run-local.sh` creates the world schema but does not select/load the Chibi single-pack SQL before `worldd` boot | #786; #783 consumes the completed path |
+| Five legacy DB integration tests emit multi-pack SQL without explicit selection and fail on valid per-theme roster overlap | #790; focused `--pack chibi` evidence remains valid |
 | Runtime does not execute NPC basic attacks from authored damage/speed or apply NPC armor | #784 |
 | Runtime does not derive player combat stats from equipment or apply ability coefficients | #785 |
 
@@ -596,6 +613,7 @@ mcc diff classification:
 build 1 artifact hashes:
 build 2 artifact hashes:
 world_manifest == client manifest hash:
+selected-pack local load command/evidence (#786):
 database row and manifest checks:
 
 Runtime
