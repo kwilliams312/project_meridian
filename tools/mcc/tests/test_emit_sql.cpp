@@ -316,6 +316,129 @@ void test_ref_resolution() {
     }
 }
 
+// A two-pack fixture: `alpha` (sorts before core) + `core`, each with one ability
+// so both earn an idmap AND emit a content row. Exercises emit-sql's single-pack
+// selection (--pack <ns>): the manifest gets one row per pack and each pack's
+// ability lands in the `ability` table.
+fs::path make_two_pack_fixture() {
+    const fs::path root = make_scratch("twopack");
+    const fs::path content = root / "content";
+    write_file(content / "alpha" / "pack.yaml",
+               "schema: meridian/pack@1\n"
+               "namespace: alpha\n"
+               "name: Alpha Pack\n"
+               "version: 0.1.0\n"
+               "content_schema_version: 1\n");
+    write_file(content / "alpha" / "abilities" / "bolt.ability.yaml",
+               "schema: meridian/ability@1\n"
+               "id: alpha:ability.bolt\n"
+               "name: Bolt\n"
+               "school: arcane\n"
+               "target: enemy\n"
+               "range_m: 30\n"
+               "cast:\n  time_ms: 1000\n"
+               "cooldown_ms: 5000\n"
+               "effects:\n"
+               "  - kind: damage\n"
+               "    amount: { min: 5, max: 9 }\n");
+    write_file(content / "core" / "pack.yaml",
+               "schema: meridian/pack@1\n"
+               "namespace: core\n"
+               "name: Core Pack\n"
+               "version: 0.1.0\n"
+               "content_schema_version: 1\n");
+    write_file(content / "core" / "abilities" / "zap.ability.yaml",
+               "schema: meridian/ability@1\n"
+               "id: core:ability.zap\n"
+               "name: Zap\n"
+               "school: arcane\n"
+               "target: enemy\n"
+               "range_m: 30\n"
+               "cast:\n  time_ms: 1500\n"
+               "cooldown_ms: 8000\n"
+               "effects:\n"
+               "  - kind: damage\n"
+               "    amount: { min: 10, max: 20 }\n");
+    return content.string();
+}
+
+// Run emit-sql over a content dir with an explicit --pack selection.
+mcc::stages::EmitSqlResult run_emit_select(const std::string& content_dir,
+                                           const std::string& select_ns, bool& ok) {
+    mcc::model::ContentModel model;
+    mcc::stages::discover(content_dir, model);
+    mcc::diag::Diagnostics diags;
+    mcc::stages::parse(model, diags);
+    mcc::stages::validate(model, diags);
+    const mcc::stages::LinkResult linked =
+        mcc::stages::link(model, content_dir, /*allocate=*/true, diags,
+                          /*emit_dangling=*/false);
+    mcc::stages::EmitSqlOptions opts;
+    opts.mcc_version = "test-1.0.0";
+    opts.built_at = "2026-07-06 12:00:00";
+    opts.select_namespace = select_ns;
+    mcc::stages::EmitSqlResult res = mcc::stages::emit_sql(model, linked, opts, diags);
+    ok = diags.ok();
+    return res;
+}
+
+// --pack makes emit-sql produce a single-pack world DB (design §4): one
+// world_manifest row + only that pack's content rows. It must (a) default to the
+// multi-pack dump (every pack's row + all content), (b) emit only the named pack
+// when --pack is given, and (c) fail on an unknown namespace rather than silently
+// emit the wrong (or every) pack.
+void test_multipack_selection() {
+    std::cout << "[multipack] --pack selects a single-pack world DB\n";
+    const std::string content = make_two_pack_fixture();
+
+    bool ok_default = false;
+    const auto def = run_emit_select(content, "", ok_default);
+    report(ok_default && def.manifest_rows == 2,
+           "default emits every pack's world_manifest row (alpha + core)",
+           std::to_string(def.manifest_rows));
+    report(def.sql.find("'alpha'") != std::string::npos &&
+               def.sql.find("'core'") != std::string::npos,
+           "default manifest carries both pack rows");
+    report(def.sql.find("alpha:ability.bolt") == std::string::npos &&
+               def.sql.find("core:ability.zap") == std::string::npos,
+           "content refs resolved to numeric ids (no string ids leak)");
+
+    bool ok_core = false;
+    const auto core = run_emit_select(content, "core", ok_core);
+    report(ok_core && core.manifest_rows == 1,
+           "--pack core emits exactly one world_manifest row",
+           std::to_string(core.manifest_rows));
+    report(core.sql.find("'core'") != std::string::npos &&
+               core.sql.find("'alpha'") == std::string::npos,
+           "--pack core manifest carries only the core row (alpha dropped)");
+
+    bool ok_alpha = false;
+    const auto alpha = run_emit_select(content, "alpha", ok_alpha);
+    report(ok_alpha && alpha.manifest_rows == 1 &&
+               alpha.sql.find("'alpha'") != std::string::npos &&
+               alpha.sql.find("'core'") == std::string::npos,
+           "--pack alpha emits only the alpha row even though alpha sorts first");
+
+    // The core and alpha abilities each occupy exactly one `ability` row; a
+    // single-pack emit must carry ITS pack's ability and drop the other's. The
+    // ability inserts key by numeric id, so count the INSERT INTO ability blocks'
+    // row comment to confirm the content was filtered, not just the manifest.
+    report(core.content_rows == alpha.content_rows && core.content_rows > 0,
+           "each single-pack emit carries its own content rows (symmetric)",
+           "core=" + std::to_string(core.content_rows) +
+               " alpha=" + std::to_string(alpha.content_rows));
+    report(def.content_rows == core.content_rows + alpha.content_rows,
+           "multi-pack content_rows == sum of the two single-pack emits",
+           "def=" + std::to_string(def.content_rows) + " core=" +
+               std::to_string(core.content_rows) + " alpha=" +
+               std::to_string(alpha.content_rows));
+
+    bool ok_missing = true;
+    const auto missing = run_emit_select(content, "nope", ok_missing);
+    report(!ok_missing && !missing.ok,
+           "--pack for an absent namespace is an error, not a silent wrong pick");
+}
+
 }  // namespace
 
 int main() {
@@ -324,6 +447,7 @@ int main() {
     test_emit_wellformed();
     test_determinism();
     test_ref_resolution();
+    test_multipack_selection();
 
     std::cout << "\n" << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
     if (g_failures) {

@@ -244,11 +244,12 @@ jobs:
       # BONUS validation (d): load the world DDL + the mcc-emitted world.sql into
       # the live MariaDB and prove it loads AND populates. The DDL files reference
       # each other across files, so FOREIGN_KEY_CHECKS is disabled for the combined
-      # load (identical to build.yml's worldd-session world-DB load). world_manifest
-      # holds one row per pack (sorted by namespace); we assert the `core` row is
-      # present and its content_hash matches the core client pack — the end-to-end
-      # proof that `YAML → mcc → world DB` carries the same hash the client pack
-      # (IF-5) verifies against (runbook DC-10, zero hand-written SQL).
+      # load (identical to build.yml's worldd-session world-DB load). content-build.sh
+      # emits the CORE single-pack world DB (`--pack core`, story #770), so
+      # world_manifest holds exactly the one `core` row — we assert it is present,
+      # is the ONLY row, and its content_hash matches the core client pack: the
+      # end-to-end proof that `YAML → mcc → world DB` carries the same hash the
+      # client pack (IF-5) verifies against (runbook DC-10, zero hand-written SQL).
       - name: Load emitted world.sql into MariaDB (proves the IF-4 artifact loads)
         run: |
           set -euo pipefail
@@ -271,11 +272,45 @@ jobs:
             echo "DB LOAD FAIL: expected exactly 1 'core' world_manifest row, got $core_rows (total rows: $rows)." >&2
             exit 1
           fi
+          if [ "$rows" != "1" ]; then
+            echo "DB LOAD FAIL: --pack core world DB must be single-pack (1 manifest row), got $rows." >&2
+            exit 1
+          fi
           if [ "$db_hash" != "$pck_hash" ]; then
             echo "DB LOAD FAIL: DB core content_hash ($db_hash) != core pack ($pck_hash)." >&2
             exit 1
           fi
           echo "DB LOAD OK: world.sql loads, the core world_manifest row ties to the client pack hash."
+
+      # STANDALONE CHIBI LOAD (story #770, design §4). The dev realm loads the chibi
+      # pack as its single-pack world DB, so we prove chibi's world DB emits AND
+      # loads on its OWN — in a throwaway database, isolated from core — with no
+      # cross-pack roster_id collision. This is the guarantee that a per-realm
+      # single-pack world DB is always loadable, no matter which pack the realm runs.
+      # Without --pack the two packs' rosters would share one world DB and collide on
+      # the roster_id PK; --pack chibi keeps chibi's rows self-contained.
+      - name: Emit + load the CHIBI single-pack world DB standalone (no collision)
+        run: |
+          set -euo pipefail
+          MDB() { mariadb -h 127.0.0.1 -P 3306 -u root -pci "$@"; }
+          echo "== emit the chibi single-pack world DB (mcc emit-sql --pack chibi) =="
+          ./tools/mcc/build/mcc emit-sql content --pack chibi --out build/chibi-world.sql
+          test -s build/chibi-world.sql || { echo "MISSING/EMPTY chibi world.sql" >&2; exit 1; }
+          echo "== fresh throwaway database (isolated from the core load above) =="
+          MDB -e 'DROP DATABASE IF EXISTS meridian_world_chibi; CREATE DATABASE meridian_world_chibi;'
+          echo "== load world DDL + the chibi world.sql =="
+          ( echo "SET FOREIGN_KEY_CHECKS=0;"; cat schema/sql/world/*.sql ) | MDB meridian_world_chibi
+          MDB meridian_world_chibi < build/chibi-world.sql
+          echo "== assert exactly one manifest row and it is chibi =="
+          rows="$(MDB -N meridian_world_chibi -e 'SELECT COUNT(*) FROM world_manifest')"
+          chibi_rows="$(MDB -N meridian_world_chibi -e "SELECT COUNT(*) FROM world_manifest WHERE pack_namespace='chibi'")"
+          zones="$(MDB -N meridian_world_chibi -e 'SELECT COUNT(*) FROM zone')"
+          echo "world_manifest rows: $rows (chibi rows: $chibi_rows), zones: $zones"
+          if [ "$rows" != "1" ] || [ "$chibi_rows" != "1" ]; then
+            echo "CHIBI LOAD FAIL: expected exactly 1 chibi world_manifest row, got rows=$rows chibi=$chibi_rows." >&2
+            exit 1
+          fi
+          echo "CHIBI LOAD OK: the chibi pack's single-pack world DB emits + loads standalone with no collision."
 
       # Capture the artifacts so downstream (client, deploy DB-init) can consume
       # them: world.sql → the world DB, pck/ → the client (issue #107).

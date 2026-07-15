@@ -8,7 +8,6 @@ SET FOREIGN_KEY_CHECKS = 0;
 INSERT INTO world_manifest
   (pack_namespace, pack_version, id_band, content_hash, schema_version, compatibility_version, mcc_version, built_at)
 VALUES
-  ('chibi', '0.1.0', 1, 'fe8638f41e3b70eb43e986154573a153951ea76d6f833f0dd6cf03d26e7e4bc2', 1, 1, '0.0.0', '1970-01-01 00:00:00'),
   ('core', '0.1.0', 0, '9f90580d23f2989b38810a1019299e3efd7dbba357c82d1e7e8924fc5209bce1', 1, 1, '0.0.0', '1970-01-01 00:00:00');
 
 -- npc_template (8 rows)
@@ -415,24 +414,21 @@ INSERT INTO patrol_waypoint (spawn_point_id, ordinal, pos_x, pos_y, pos_z, wait_
   (1048588, 2, 100, 0, 88, 8),
   (1048588, 3, 105, 0, 80, 0);
 
--- zone (2 rows)
+-- zone (1 rows)
 INSERT INTO zone (id, name, level_min, level_max, start_zone, music_explore_id, music_tension_id, music_combat_id, ambience_id) VALUES
-  (37, 'Emberfall Hollow', 1, 10, TRUE, 23, 24, 22, 3),
-  (1048578, 'Sprout Meadow', 1, 5, TRUE, NULL, NULL, NULL, NULL);
+  (37, 'Emberfall Hollow', 1, 10, TRUE, 23, 24, 22, 3);
 
--- area (6 rows)
+-- area (5 rows)
 INSERT INTO area (zone_id, poi, name, pos_x, pos_y, pos_z, discovery_radius_m, discovery_xp) VALUES
   (37, 'ashvent_overlook', 'Ashvent Overlook', -180, 64, 40, 40, 130),
   (37, 'charter_stone', 'Old Charter Stone', 96, 9, -212, 30, 90),
   (37, 'cinderdeep_mine', 'Cinderdeep Mine', -310, 22, 95, 45, 110),
   (37, 'emberfall_village', 'Emberfall Village', 120, 8.5, -240, 60, 85),
-  (37, 'sunken_gallery', 'Sunken Gallery', -360, -18, 150, 35, 160),
-  (1048578, 'spawn_glade', 'Spawn Glade', 0, 0, 0, 40, 0);
+  (37, 'sunken_gallery', 'Sunken Gallery', -360, -18, 150, 35, 160);
 
--- graveyard (2 rows)
+-- graveyard (1 rows)
 INSERT INTO graveyard (zone_id, ordinal, pos_x, pos_y, pos_z, orientation_deg) VALUES
-  (37, 0, 140, 9, -255, 180),
-  (1048578, 0, 0, 0, 0, 0);
+  (37, 0, 140, 9, -255, 180);
 
 -- gossip (3 rows)
 INSERT INTO gossip (npc_id, `text`) VALUES
