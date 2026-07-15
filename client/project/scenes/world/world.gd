@@ -31,9 +31,14 @@
 
 extends Node3D
 
-# The M0 bootstrap spawn: worldd seeds every session at wire (64, 64, 0) — Godot
-# (x=64, y=height 0, z=64). The local player + camera start here.
-const SPAWN := Vector3(64.0, 0.0, 64.0)
+# The M0 bootstrap spawn: worldd seeds every session at the Zone-01 play-area centre,
+# wire (-320, -320, 0) — Godot (x=-320, y=height 0, z=-320). Kept BYTE-ALIGNED with the
+# server (movement::kZoneSpawnXY = -320, #562) and the headless bot (bot_core.cpp
+# kSpawnWireX/Y = -320) so the very first WASD move lands INSIDE the movement bounds
+# [-512, -128] instead of being rejected out-of-bounds (#805). worldd is Z-UP (wire x/y =
+# ground plane, z = height); Godot is Y-UP, so wire (x, y) -> Godot (x, z) and y = height.
+# The local player + camera start here.
+const SPAWN := Vector3(-320.0, 0.0, -320.0)
 
 # Fixed sim cadence (matches the server 20 Hz / 50 ms tick the controller expects).
 const TICK_MS := 50
@@ -1653,20 +1658,28 @@ func _build_ground() -> void:
 func _build_landmarks() -> void:
 	_build_ground_grid()
 
-	# Cardinal cross around the (64,64) spawn + scattered corner posts. Each row
-	# is (wire_x, wire_y, colour, tag). Godot maps wire (x, y) -> (x, z); y=height.
+	# Cardinal cross around spawn + scattered corner posts, all SPAWN-RELATIVE so they
+	# follow the enter origin (now the -320 Zone-01 centre, #805) instead of the old
+	# hardcoded (64,64). Each row is (offset_east, offset_north, colour, dir) in metres
+	# from spawn; Godot maps wire (x, y) -> (x, z) with y = height. The tag carries the
+	# resolved ABSOLUTE wire coordinate so the posts still line up with the server
+	# MovementState / move-debug the owner reads.
+	var sx := SPAWN.x   # wire east  (Godot x)
+	var sy := SPAWN.z   # wire north (Godot z)
 	var posts := [
-		[54.0, 64.0, Color(0.90, 0.25, 0.25), "W (54,64)"],
-		[74.0, 64.0, Color(0.95, 0.55, 0.15), "E (74,64)"],
-		[64.0, 54.0, Color(0.95, 0.82, 0.20), "S (64,54)"],
-		[64.0, 74.0, Color(0.35, 0.55, 0.95), "N (64,74)"],
-		[44.0, 44.0, Color(0.80, 0.35, 0.85), "(44,44)"],
-		[84.0, 84.0, Color(0.35, 0.80, 0.85), "(84,84)"],
-		[44.0, 84.0, Color(0.55, 0.35, 0.90), "(44,84)"],
-		[84.0, 44.0, Color(0.85, 0.45, 0.55), "(84,44)"],
+		[-10.0, 0.0, Color(0.90, 0.25, 0.25), "W"],
+		[10.0, 0.0, Color(0.95, 0.55, 0.15), "E"],
+		[0.0, -10.0, Color(0.95, 0.82, 0.20), "S"],
+		[0.0, 10.0, Color(0.35, 0.55, 0.95), "N"],
+		[-20.0, -20.0, Color(0.80, 0.35, 0.85), "SW"],
+		[20.0, 20.0, Color(0.35, 0.80, 0.85), "NE"],
+		[-20.0, 20.0, Color(0.55, 0.35, 0.90), "NW"],
+		[20.0, -20.0, Color(0.85, 0.45, 0.55), "SE"],
 	]
 	for p in posts:
-		_add_pillar(float(p[0]), float(p[1]), p[2] as Color, String(p[3]))
+		var wx: float = sx + float(p[0])
+		var wy: float = sy + float(p[1])
+		_add_pillar(wx, wy, p[2] as Color, "%s (%d,%d)" % [String(p[3]), int(wx), int(wy)])
 
 
 func _add_pillar(wire_x: float, wire_y: float, colour: Color, tag: String) -> void:
