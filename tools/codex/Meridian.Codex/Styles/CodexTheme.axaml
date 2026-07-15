@@ -15,19 +15,20 @@
     <Setter Property="Foreground" Value="{DynamicResource CodexMutedTextBrush}" />
   </Style>
   <Style Selector="TextBlock.page-title">
-    <Setter Property="FontSize" Value="24" />
+    <Setter Property="FontSize" Value="26" />
     <Setter Property="FontWeight" Value="SemiBold" />
-    <Setter Property="LineHeight" Value="30" />
+    <Setter Property="LineHeight" Value="32" />
   </Style>
   <Style Selector="TextBlock.section">
-    <Setter Property="FontSize" Value="17" />
+    <Setter Property="FontSize" Value="16" />
     <Setter Property="FontWeight" Value="SemiBold" />
-    <Setter Property="Margin" Value="0,18,0,10" />
+    <Setter Property="Foreground" Value="{DynamicResource CodexFocusBrush}" />
+    <Setter Property="Margin" Value="0,20,0,10" />
   </Style>
   <Style Selector="TextBlock.field">
     <Setter Property="Foreground" Value="{DynamicResource CodexMutedTextBrush}" />
     <Setter Property="VerticalAlignment" Value="Center" />
-    <Setter Property="Margin" Value="0,6,16,6" />
+    <Setter Property="Margin" Value="0,0,4,0" />
     <Setter Property="TextWrapping" Value="Wrap" />
   </Style>
   <Style Selector="TextBlock.validation-error">
@@ -42,6 +43,7 @@
     <Setter Property="Padding" Value="10,7" />
     <Setter Property="Background" Value="{DynamicResource CodexInputBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource CodexBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{DynamicResource CodexRadiusSm}" />
   </Style>
   <Style Selector="ComboBox">
@@ -49,14 +51,23 @@
     <Setter Property="Padding" Value="10,5" />
     <Setter Property="Background" Value="{DynamicResource CodexInputBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource CodexBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{DynamicResource CodexRadiusSm}" />
+  </Style>
+  <Style Selector="NumericUpDown">
+    <Setter Property="MinHeight" Value="{DynamicResource CodexControlHeight}" />
+    <Setter Property="Background" Value="{DynamicResource CodexInputBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource CodexBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{DynamicResource CodexRadiusSm}" />
   </Style>
   <Style Selector="Button">
     <Setter Property="MinHeight" Value="{DynamicResource CodexControlHeight}" />
     <Setter Property="Padding" Value="14,6" />
-    <Setter Property="CornerRadius" Value="{DynamicResource CodexRadiusSm}" />
+    <Setter Property="CornerRadius" Value="6" />
     <Setter Property="Background" Value="{DynamicResource CodexRaisedSurfaceBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource CodexBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
   </Style>
   <Style Selector="Button.primary">
     <Setter Property="Background" Value="{DynamicResource CodexAccentBrush}" />
@@ -113,30 +124,69 @@
     <Setter Property="BorderBrush" Value="{DynamicResource CodexFocusBrush}" />
     <Setter Property="BorderThickness" Value="2" />
   </Style>
+  <Style Selector="ListBox">
+    <Setter Property="Background" Value="{DynamicResource CodexInputBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource CodexBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{DynamicResource CodexRadiusSm}" />
+  </Style>
+  <Style Selector="Grid.form-grid">
+    <Setter Property="Margin" Value="0,0,0,-10" />
+  </Style>
+  <Style Selector="Grid.form-grid > TextBlock.field">
+    <Setter Property="Margin" Value="0,0,12,10" />
+  </Style>
+  <Style Selector="Grid.form-grid > TextBox">
+    <Setter Property="Margin" Value="0,0,0,10" />
+  </Style>
+  <Style Selector="Grid.form-grid > ComboBox">
+    <Setter Property="Margin" Value="0,0,0,10" />
+  </Style>
+  <Style Selector="Grid.form-grid > StackPanel">
+    <Setter Property="Margin" Value="0,0,0,10" />
+  </Style>
+  <Style Selector="Grid.form-grid > CheckBox">
+    <Setter Property="Margin" Value="0,0,0,10" />
+  </Style>
 
   <Style Selector="Border.card">
-    <Setter Property="Padding" Value="20" />
+    <Setter Property="Padding" Value="22" />
     <Setter Property="CornerRadius" Value="{DynamicResource CodexRadiusMd}" />
     <Setter Property="Background" Value="{DynamicResource CodexSurfaceBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource CodexBorderSubtleBrush}" />
     <Setter Property="BorderThickness" Value="1" />
   </Style>
-  <Style Selector="Border.toolbar">
-    <Setter Property="Padding" Value="16,12" />
+  <Style Selector="Border.editor-sheet">
+    <Setter Property="Margin" Value="24" />
+    <Setter Property="Padding" Value="26" />
+    <Setter Property="MaxWidth" Value="960" />
+    <Setter Property="HorizontalAlignment" Value="Stretch" />
+    <Setter Property="CornerRadius" Value="10" />
     <Setter Property="Background" Value="{DynamicResource CodexSurfaceBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource CodexBorderSubtleBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+  <Style Selector="Border.editor-heading">
+    <Setter Property="Padding" Value="0,0,0,18" />
+    <Setter Property="BorderBrush" Value="{DynamicResource CodexBorderSubtleBrush}" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+  </Style>
+  <Style Selector="Border.toolbar">
+    <Setter Property="Padding" Value="20,14" />
+    <Setter Property="Background" Value="{DynamicResource CodexToolbarBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource CodexBorderSubtleBrush}" />
     <Setter Property="BorderThickness" Value="0,0,0,1" />
   </Style>
   <Style Selector="Border.status-bar">
     <Setter Property="Padding" Value="16,8" />
-    <Setter Property="Background" Value="{DynamicResource CodexNavigationBrush}" />
+    <Setter Property="Background" Value="{DynamicResource CodexPreviewBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource CodexBorderSubtleBrush}" />
     <Setter Property="BorderThickness" Value="0,1,0,0" />
   </Style>
   <Style Selector="StackPanel.editor-canvas">
     <Setter Property="Margin" Value="24" />
-    <Setter Property="Spacing" Value="16" />
-    <Setter Property="MaxWidth" Value="900" />
+    <Setter Property="Spacing" Value="18" />
+    <Setter Property="MaxWidth" Value="960" />
     <Setter Property="HorizontalAlignment" Value="Stretch" />
   </Style>
 </Styles>

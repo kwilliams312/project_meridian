@@ -10,7 +10,7 @@
              x:Class="Meridian.Codex.Views.PackWorkspaceView"
              x:DataType="vm:PackWorkspaceViewModel">
   <Grid RowDefinitions="*,Auto">
-    <ScrollViewer Grid.Row="0">
+    <ScrollViewer Grid.Row="0" Background="{DynamicResource CodexWorkspaceBrush}">
       <StackPanel Classes="editor-canvas">
       <StackPanel Spacing="4">
         <TextBlock Classes="page-title" Text="Content Pack Workspace" />
@@ -18,7 +18,7 @@
                    Classes="muted" TextWrapping="Wrap" MaxWidth="720" HorizontalAlignment="Left" />
       </StackPanel>
 
-      <Border Classes="card">
+      <Border x:Name="WorkspaceCard" Classes="card">
         <StackPanel Spacing="10">
           <TextBlock Classes="section" Text="Workspace location" Margin="0,0,0,6" />
           <Grid ColumnDefinitions="*,Auto">
@@ -54,7 +54,7 @@
         </StackPanel>
       </Border>
 
-      <Border Classes="card">
+      <Border x:Name="ManifestCard" Classes="card">
         <StackPanel Spacing="12">
           <TextBlock Classes="section" Text="Manifest" Margin="0,0,0,6" />
           <Grid Classes="form-grid" ColumnDefinitions="176,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">

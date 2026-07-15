@@ -8,7 +8,7 @@
     <ResourceDictionary>
       <!-- Codex visual-system tokens. Keep semantic roles here so every current
            and schema-generated editor inherits the same accessible contract. -->
-      <x:Double x:Key="CodexControlHeight">36</x:Double>
+      <x:Double x:Key="CodexControlHeight">38</x:Double>
       <x:Double x:Key="CodexLabelWidth">176</x:Double>
       <Thickness x:Key="CodexSpaceXs">4</Thickness>
       <Thickness x:Key="CodexSpaceSm">8</Thickness>
@@ -17,24 +17,29 @@
       <CornerRadius x:Key="CodexRadiusSm">4</CornerRadius>
       <CornerRadius x:Key="CodexRadiusMd">8</CornerRadius>
 
-      <SolidColorBrush x:Key="CodexCanvasBrush" Color="#101418" />
-      <SolidColorBrush x:Key="CodexNavigationBrush" Color="#13191E" />
-      <SolidColorBrush x:Key="CodexSurfaceBrush" Color="#182027" />
-      <SolidColorBrush x:Key="CodexRaisedSurfaceBrush" Color="#202A32" />
-      <SolidColorBrush x:Key="CodexInputBrush" Color="#11171C" />
-      <SolidColorBrush x:Key="CodexBorderBrush" Color="#465560" />
-      <SolidColorBrush x:Key="CodexBorderSubtleBrush" Color="#303D46" />
-      <SolidColorBrush x:Key="CodexTextBrush" Color="#F3F6F8" />
-      <SolidColorBrush x:Key="CodexMutedTextBrush" Color="#BBC6CD" />
-      <SolidColorBrush x:Key="CodexDisabledTextBrush" Color="#AAB4BA" />
+      <SolidColorBrush x:Key="CodexCanvasBrush" Color="#090F14" />
+      <SolidColorBrush x:Key="CodexNavigationBrush" Color="#101A23" />
+      <SolidColorBrush x:Key="CodexWorkspaceBrush" Color="#14212B" />
+      <SolidColorBrush x:Key="CodexSurfaceBrush" Color="#1D2D39" />
+      <SolidColorBrush x:Key="CodexRaisedSurfaceBrush" Color="#263A49" />
+      <SolidColorBrush x:Key="CodexToolbarBrush" Color="#192A36" />
+      <SolidColorBrush x:Key="CodexActionBrush" Color="#203543" />
+      <SolidColorBrush x:Key="CodexPreviewBrush" Color="#0C161D" />
+      <SolidColorBrush x:Key="CodexInputBrush" Color="#0D1820" />
+      <SolidColorBrush x:Key="CodexBorderBrush" Color="#607A8D" />
+      <SolidColorBrush x:Key="CodexBorderSubtleBrush" Color="#3B5363" />
+      <SolidColorBrush x:Key="CodexTextBrush" Color="#F4F8FA" />
+      <SolidColorBrush x:Key="CodexMutedTextBrush" Color="#C2CED6" />
+      <SolidColorBrush x:Key="CodexDisabledTextBrush" Color="#B0BBC2" />
       <SolidColorBrush x:Key="CodexAccentBrush" Color="#1476A8" />
-      <SolidColorBrush x:Key="CodexAccentHoverBrush" Color="#1A709A" />
+      <SolidColorBrush x:Key="CodexAccentHoverBrush" Color="#1B84B5" />
       <SolidColorBrush x:Key="CodexAccentPressedBrush" Color="#0E5B82" />
-      <SolidColorBrush x:Key="CodexFocusBrush" Color="#7DC4F2" />
-      <SolidColorBrush x:Key="CodexErrorBrush" Color="#FF9B9B" />
-      <SolidColorBrush x:Key="CodexErrorSurfaceBrush" Color="#3A2023" />
-      <SolidColorBrush x:Key="CodexSuccessBrush" Color="#75D49B" />
-      <SolidColorBrush x:Key="CodexSelectionBrush" Color="#174F73" />
+      <SolidColorBrush x:Key="CodexFocusBrush" Color="#82D5FA" />
+      <SolidColorBrush x:Key="CodexErrorBrush" Color="#FFAAA8" />
+      <SolidColorBrush x:Key="CodexErrorSurfaceBrush" Color="#49272B" />
+      <SolidColorBrush x:Key="CodexSuccessBrush" Color="#78DDA2" />
+      <SolidColorBrush x:Key="CodexWarningBrush" Color="#F3C56D" />
+      <SolidColorBrush x:Key="CodexSelectionBrush" Color="#244B60" />
     </ResourceDictionary>
   </Application.Resources>
 

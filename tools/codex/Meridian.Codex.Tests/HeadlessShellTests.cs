@@ -10,6 +10,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Interactivity;
 using Avalonia.Styling;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Meridian.Codex;
 using Meridian.Codex.Controls;
@@ -29,7 +30,8 @@ public sealed class TestAppBuilder
 {
     public static AppBuilder BuildAvaloniaApp() =>
         AppBuilder.Configure<App>()
-            .UseHeadless(new AvaloniaHeadlessPlatformOptions());
+            .UseSkia()
+            .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false });
 }
 
 /// <summary>
@@ -40,6 +42,60 @@ public sealed class TestAppBuilder
 public class HeadlessShellTests
 {
     [AvaloniaFact]
+    public void Capture_visual_evidence()
+    {
+        var output = Environment.GetEnvironmentVariable("CODEX_VISUAL_EVIDENCE_DIR");
+        if (string.IsNullOrWhiteSpace(output)) return;
+        Directory.CreateDirectory(output);
+        foreach (var editor in new[] { "Pack", "NPCs", "Items" })
+        {
+            CaptureShell(editor, 1440, 900, Path.Combine(output, $"shell-{editor.ToLowerInvariant()}-1440x900.png"));
+            CaptureShell(editor, 760, 700, Path.Combine(output, $"shell-{editor.ToLowerInvariant()}-520-canvas.png"));
+        }
+        CaptureSchema("ability", "content/core/abilities/cleave_strike.ability.yaml", 1440, 900,
+            Path.Combine(output, "schema-ability-1440x900.png"));
+        CaptureSchema("ability", "content/core/abilities/cleave_strike.ability.yaml", 520, 700,
+            Path.Combine(output, "schema-ability-520x700.png"));
+        CaptureSchema("item", "content/core/items/rusty_pickaxe.item.yaml", 1440, 900,
+            Path.Combine(output, "schema-item-1440x900.png"));
+        CaptureSchema("item", "content/core/items/rusty_pickaxe.item.yaml", 520, 700,
+            Path.Combine(output, "schema-item-520x700.png"));
+    }
+
+    private static void CaptureShell(string editor, double width, double height, string output)
+    {
+        var vm = new MainWindowViewModel();
+        vm.SelectedEditor = Assert.Single(vm.Editors, item => item.Name == editor);
+        var window = new MainWindow { Width = width, Height = height, DataContext = vm };
+        window.Show();
+        SaveFrame(window, output);
+        window.Close();
+    }
+
+    private static void CaptureSchema(string schema, string file, double width, double height, string output)
+    {
+        var contentRoot = Environment.GetEnvironmentVariable("CODEX_VISUAL_CONTENT_ROOT");
+        if (!string.IsNullOrWhiteSpace(contentRoot)) file = Path.Combine(contentRoot, file);
+        var vm = SchemaForms.SchemaFormFileViewModel.TryCreate(["--schema-form", schema, file], out var error);
+        Assert.Null(error);
+        var window = new SchemaFormWindow { Width = width, Height = height, DataContext = vm };
+        window.Show();
+        SaveFrame(window, output);
+        window.Close();
+    }
+
+    private static void SaveFrame(Window window, string output)
+    {
+        Dispatcher.UIThread.RunJobs();
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick(2);
+        window.CaptureRenderedFrame();
+        var bitmap = window.GetLastRenderedFrame();
+        Assert.NotNull(bitmap);
+        using var stream = File.Create(output);
+        bitmap!.Save(stream);
+    }
+
+    [AvaloniaFact]
     public void Codex_theme_exposes_semantic_AA_palette_and_shared_control_metrics()
     {
         Assert.True(Application.Current!.TryGetResource("CodexCanvasBrush", ThemeVariant.Dark, out var canvas));
@@ -48,11 +104,48 @@ public class HeadlessShellTests
         Assert.True(Application.Current.TryGetResource("CodexErrorBrush", ThemeVariant.Dark, out var error));
         Assert.True(Application.Current.TryGetResource("CodexControlHeight", ThemeVariant.Dark, out var height));
 
-        Assert.Equal(Color.Parse("#101418"), Assert.IsType<SolidColorBrush>(canvas).Color);
-        Assert.Equal(Color.Parse("#F3F6F8"), Assert.IsType<SolidColorBrush>(text).Color);
+        Assert.Equal(Color.Parse("#090F14"), Assert.IsType<SolidColorBrush>(canvas).Color);
+        Assert.Equal(Color.Parse("#F4F8FA"), Assert.IsType<SolidColorBrush>(text).Color);
         Assert.Equal(Color.Parse("#1476A8"), Assert.IsType<SolidColorBrush>(accent).Color);
-        Assert.Equal(Color.Parse("#FF9B9B"), Assert.IsType<SolidColorBrush>(error).Color);
-        Assert.Equal(36d, height);
+        Assert.Equal(Color.Parse("#FFAAA8"), Assert.IsType<SolidColorBrush>(error).Color);
+        Assert.Equal(38d, height);
+    }
+
+    [AvaloniaFact]
+    public void Rendered_key_zones_have_distinct_surfaces_and_strong_control_boundaries()
+    {
+        var vm = new MainWindowViewModel();
+        var window = new MainWindow { Width = 1440, Height = 900, DataContext = vm };
+        window.Show();
+        var navigation = Assert.IsType<Border>(window.FindControl<Border>("NavigationZone"));
+        var workspace = Assert.IsAssignableFrom<Panel>(window.FindControl<Panel>("WorkspaceZone"));
+        var pack = Assert.Single(window.GetVisualDescendants().OfType<PackWorkspaceView>());
+        var card = Assert.IsType<Border>(pack.FindControl<Border>("ManifestCard"));
+        var input = Assert.Single(card.GetVisualDescendants().OfType<TextBox>(), box => box.Text == "my_pack");
+        var rail = Assert.Single(window.GetVisualDescendants().OfType<ListBox>(), list => list.Classes.Contains("editor-rail"));
+        var selected = Assert.IsType<ListBoxItem>(rail.ContainerFromIndex(0));
+
+        Assert.NotEqual(RenderedColor(navigation.Background), RenderedColor(workspace.Background));
+        Assert.NotEqual(RenderedColor(workspace.Background), RenderedColor(card.Background));
+        Assert.True(ContrastRatio(input.BorderBrush, input.Background) >= 3,
+            $"Input boundary contrast was {ContrastRatio(input.BorderBrush, input.Background):F2}:1.");
+        Assert.Equal(new Thickness(3, 0, 0, 0), selected.BorderThickness);
+        Assert.Equal(Color.Parse("#82D5FA"), RenderedColor(selected.BorderBrush));
+        Assert.True(card.CornerRadius.TopLeft >= 8);
+
+        var npc = new NpcEditorView { DataContext = new NpcEditorViewModel() };
+        var npcWindow = new Window { Width = 1200, Height = 800, Content = npc };
+        npcWindow.Show();
+        var sheet = Assert.IsType<Border>(npc.FindControl<Border>("NpcEditorSheet"));
+        Assert.NotEqual(RenderedColor(workspace.Background), RenderedColor(sheet.Background));
+        Assert.True(sheet.Padding.Left >= 24);
+        var form = sheet.GetVisualDescendants().OfType<Grid>().First(grid => grid.Classes.Contains("form-grid"));
+        var fields = form.GetVisualDescendants().OfType<TextBox>().Take(2).ToList();
+        Assert.Equal(2, fields.Count);
+        Assert.True(fields[1].Bounds.Top - fields[0].Bounds.Bottom >= 9,
+            "Resolved form rows did not retain the shared vertical rhythm.");
+        npcWindow.Close();
+        window.Close();
     }
 
     [AvaloniaFact]
@@ -257,7 +350,7 @@ public class HeadlessShellTests
         split.Measure(new Size(620, 560));
         split.Arrange(new Rect(0, 0, 620, 560));
         Assert.False(split.IsPreviewOpen);
-        Assert.InRange(split.PreviewWidth, 0, 44);
+        Assert.InRange(split.PreviewWidth, 0, 56);
         var showPreview = Assert.Single(split.GetVisualDescendants().OfType<Button>(),
             button => button.Content?.ToString() == "YAML");
         Assert.True(showPreview.IsVisible);
@@ -285,7 +378,7 @@ public class HeadlessShellTests
 
         split.SetPreviewOpen(false);
         Assert.False(split.IsPreviewOpen);
-        Assert.InRange(split.PreviewWidth, 0, 44);
+        Assert.InRange(split.PreviewWidth, 0, 56);
 
         split.SetPreviewOpen(true);
         Assert.True(split.IsPreviewOpen);

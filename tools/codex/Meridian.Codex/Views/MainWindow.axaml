@@ -16,10 +16,16 @@
       <Setter Property="BorderThickness" Value="0" />
     </Style>
     <Style Selector="ListBox.editor-rail ListBoxItem">
-      <Setter Property="MinHeight" Value="42" />
-      <Setter Property="Padding" Value="12,9" />
-      <Setter Property="Margin" Value="0,2" />
-      <Setter Property="CornerRadius" Value="4" />
+      <Setter Property="MinHeight" Value="44" />
+      <Setter Property="Padding" Value="14,9" />
+      <Setter Property="Margin" Value="0,3" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="BorderThickness" Value="3,0,0,0" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBox.editor-rail ListBoxItem:selected">
+      <Setter Property="BorderBrush" Value="{DynamicResource CodexFocusBrush}" />
     </Style>
     <Style Selector="ListBox.editor-rail ListBoxItem:selected /template/ ContentPresenter">
       <Setter Property="Background" Value="{DynamicResource CodexSelectionBrush}" />
@@ -37,7 +43,7 @@
 
   <DockPanel>
 
-    <Menu DockPanel.Dock="Top" Background="{DynamicResource CodexNavigationBrush}">
+    <Menu DockPanel.Dock="Top" Background="{DynamicResource CodexToolbarBrush}">
       <MenuItem Header="_File">
         <MenuItem Header="_New pack" Command="{Binding PackWorkspace.CreateCommand}" />
         <MenuItem Header="_Open pack" Command="{Binding PackWorkspace.OpenCommand}" />
@@ -59,16 +65,16 @@
     </Border>
 
     <!-- Left editor rail + main content. -->
-    <Grid ColumnDefinitions="220,*">
+    <Grid ColumnDefinitions="240,*">
 
-      <Border Grid.Column="0" Padding="12,16"
+      <Border x:Name="NavigationZone" Grid.Column="0" Padding="14,20"
               Background="{DynamicResource CodexNavigationBrush}"
               BorderBrush="{DynamicResource CodexBorderSubtleBrush}" BorderThickness="0,0,1,0">
         <DockPanel>
-          <StackPanel DockPanel.Dock="Top" Margin="8,0,8,14" Spacing="2">
-            <TextBlock Text="MERIDIAN CODEX" FontSize="12" FontWeight="SemiBold"
+          <StackPanel DockPanel.Dock="Top" Margin="8,0,8,18" Spacing="3">
+            <TextBlock Text="MERIDIAN CODEX" FontSize="13" FontWeight="SemiBold"
                        Foreground="{DynamicResource CodexFocusBrush}" />
-            <TextBlock Text="Content editors" Classes="muted" FontSize="12" />
+            <TextBlock Text="Content authoring" Classes="muted" FontSize="12" />
           </StackPanel>
           <ListBox Classes="editor-rail" ItemsSource="{Binding Editors}"
                    SelectedItem="{Binding SelectedEditor}">
@@ -81,7 +87,7 @@
         </DockPanel>
       </Border>
 
-      <Panel Grid.Column="1" Background="{DynamicResource CodexCanvasBrush}">
+      <Panel x:Name="WorkspaceZone" Grid.Column="1" Background="{DynamicResource CodexWorkspaceBrush}">
         <!-- Real editor for the active selection (NPC editor #128); resolved by ViewLocator. -->
         <ContentControl Content="{Binding ActiveEditor}" IsVisible="{Binding ActiveEditor, Converter={x:Static conv:ObjectConverters.IsNotNull}}" />
 

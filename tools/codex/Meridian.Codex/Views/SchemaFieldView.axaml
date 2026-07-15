@@ -87,7 +87,7 @@
                   auto:AutomationProperties.HelpText="{Binding AutomationHelp}" auto:AutomationProperties.AutomationId="{Binding AutomationId}"
                   auto:AutomationProperties.ItemStatus="{Binding AutomationStatus}" auto:AutomationProperties.LabeledBy="{Binding ElementName=FieldLabel}"
                   auto:AutomationProperties.IsRequiredForForm="{Binding IsRequiredForForm}" />
-        <TextBlock Text="{Binding UnsupportedReason}" IsVisible="{Binding IsUnsupported}" Foreground="Orange" TextWrapping="Wrap"
+        <TextBlock Text="{Binding UnsupportedReason}" IsVisible="{Binding IsUnsupported}" Foreground="{DynamicResource CodexWarningBrush}" TextWrapping="Wrap"
                    auto:AutomationProperties.Name="{Binding AutomationName}" auto:AutomationProperties.HelpText="{Binding UnsupportedReason}" />
         <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding IsArrayItem}">
           <Button Content="Move up" Command="{Binding MoveSelfUpCommand}" auto:AutomationProperties.Name="{Binding MoveUpAutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
@@ -101,7 +101,7 @@
             <DataTemplate x:DataType="sf:SchemaFieldViewModel"><views:SchemaFieldView /></DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>
-        <TextBlock Text="{Binding BranchWarning}" Foreground="Orange" TextWrapping="Wrap"
+        <TextBlock Text="{Binding BranchWarning}" Foreground="{DynamicResource CodexWarningBrush}" TextWrapping="Wrap"
                    auto:AutomationProperties.LiveSetting="Polite" />
         <Button Content="Confirm branch change" Command="{Binding ConfirmBranchChangeCommand}"
                 IsVisible="{Binding BranchWarning, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" HorizontalAlignment="Left"

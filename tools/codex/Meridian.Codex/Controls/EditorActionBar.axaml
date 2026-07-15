@@ -7,7 +7,7 @@
   <Border Padding="20,12"
           BorderThickness="0,1,0,0"
           BorderBrush="{DynamicResource CodexBorderBrush}"
-          Background="{DynamicResource CodexRaisedSurfaceBrush}">
+          Background="{DynamicResource CodexActionBrush}">
     <Grid ColumnDefinitions="*,Auto">
       <TextBlock Text="{Binding StateDescription, ElementName=ActionBar}"
                  VerticalAlignment="Center"

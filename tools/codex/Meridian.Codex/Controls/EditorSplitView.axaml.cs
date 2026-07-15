@@ -13,6 +13,7 @@ namespace Meridian.Codex.Controls;
 public sealed partial class EditorSplitView : UserControl
 {
     private const double DefaultPreviewWidth = 340;
+    private const double CollapsedPreviewWidth = 56;
     private const double ResponsiveCollapseWidth = 800;
     private bool _autoCollapsed;
     private bool _userOverride;
@@ -124,8 +125,8 @@ public sealed partial class EditorSplitView : UserControl
             Grid.SetColumnSpan(PreviewPane, 1);
             PreviewPane.BorderThickness = new Thickness(1, 0, 0, 0);
             SplitterColumn.Width = new GridLength(0);
-            PreviewColumn.Width = new GridLength(44);
-            PreviewColumn.MaxWidth = 44;
+            PreviewColumn.Width = new GridLength(CollapsedPreviewWidth);
+            PreviewColumn.MaxWidth = CollapsedPreviewWidth;
             InvalidateLayoutGrid();
             return;
         }

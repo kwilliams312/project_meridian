@@ -31,7 +31,7 @@ public sealed partial class SchemaFormFileViewModel : ObservableObject
     }
 
     public string FilePath { get; }
-    public string Header => $"Experimental schema form — {Path.GetFileName(FilePath)}";
+    public string Header => $"Schema editor — {Path.GetFileName(FilePath)}";
     public SchemaFormDocument Document { get; }
     public SchemaFormViewModel Form { get; }
     public IReadOnlyList<SchemaDiagnostic> Diagnostics { get; private set; } = [];
@@ -47,7 +47,7 @@ public sealed partial class SchemaFormFileViewModel : ObservableObject
         : $"{Diagnostics.Count} validation error{(Diagnostics.Count == 1 ? string.Empty : "s")}. {Diagnostics[0].Message}";
 
     [ObservableProperty] private bool _isDirty;
-    [ObservableProperty] private string _status = "Loaded. This is the internal story #668 renderer preview.";
+    [ObservableProperty] private string _status = "Loaded and validated against the content schema.";
 
     public static SchemaFormFileViewModel? TryCreate(string[]? args, out string? error)
     {

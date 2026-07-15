@@ -13,6 +13,7 @@
 
     <ContentPresenter x:Name="FormPresenter" Grid.Column="0"
                       Content="{Binding FormContent, ElementName=SplitView}"
+                      Background="{DynamicResource CodexWorkspaceBrush}"
                       HorizontalContentAlignment="Stretch"
                       VerticalContentAlignment="Stretch" />
 
@@ -24,7 +25,7 @@
 
     <Border x:Name="PreviewPane"
             Grid.Column="2"
-            Background="{DynamicResource CodexNavigationBrush}"
+            Background="{DynamicResource CodexPreviewBrush}"
             BorderBrush="{DynamicResource CodexBorderSubtleBrush}"
             BorderThickness="1,0,0,0">
       <Grid RowDefinitions="Auto,*">
@@ -49,7 +50,7 @@
     </Border>
 
     <Button x:Name="ShowPreviewButton"
-            Grid.Column="2" Width="44" HorizontalAlignment="Right" VerticalAlignment="Top"
+            Grid.Column="2" Width="56" HorizontalAlignment="Right" VerticalAlignment="Top"
             Margin="0,12,0,0" Padding="6,10" Content="YAML" IsVisible="False"
             Click="ExpandPreview" AutomationProperties.Name="Show YAML preview" />
   </Grid>

@@ -50,8 +50,17 @@
       <controls:EditorSplitView.FormContent>
 
       <!-- Form. -->
-      <ScrollViewer>
-        <StackPanel Classes="editor-canvas">
+      <ScrollViewer Background="{DynamicResource CodexWorkspaceBrush}">
+        <Border x:Name="NpcEditorSheet" Classes="editor-sheet">
+        <StackPanel Spacing="8">
+
+          <Border Classes="editor-heading">
+            <StackPanel Spacing="4">
+              <TextBlock Classes="page-title" Text="NPC editor" />
+              <TextBlock Classes="muted" Text="Identity, combat behavior, interaction, and rewards for one world character."
+                         TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
 
           <TextBlock Classes="section" Text="Identity / display" />
           <Grid Classes="form-grid" ColumnDefinitions="176,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" >
@@ -154,6 +163,7 @@
           </Grid>
 
         </StackPanel>
+        </Border>
       </ScrollViewer>
       </controls:EditorSplitView.FormContent>
     </controls:EditorSplitView>

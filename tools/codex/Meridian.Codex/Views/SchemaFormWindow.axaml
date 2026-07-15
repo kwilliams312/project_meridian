@@ -12,7 +12,8 @@
     <Border DockPanel.Dock="Top" Classes="toolbar">
       <Grid ColumnDefinitions="*">
         <StackPanel Spacing="3">
-          <TextBlock Text="{Binding Header}" FontSize="20" FontWeight="SemiBold" />
+          <TextBlock Text="{Binding Header}" FontSize="22" FontWeight="SemiBold" />
+          <TextBlock Classes="muted" Text="Schema-driven content authoring" FontSize="12" />
           <TextBlock Classes="muted" Text="{Binding FilePath}" FontSize="12" TextTrimming="CharacterEllipsis" />
         </StackPanel>
       </Grid>
