@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Automation;
 using Avalonia.Headless.XUnit;
@@ -720,6 +721,67 @@ public sealed class SchemaFormHeadlessTests
         Assert.True(ToolTip.GetIsOpen(information));
         Assert.True(input.Focus(NavigationMethod.Tab));
         Assert.False(ToolTip.GetIsOpen(information));
+        window.Close();
+    }
+
+    [AvaloniaTheory]
+    [InlineData(1440)]
+    [InlineData(520)]
+    public void Information_icons_are_centered_consistent_and_reserved_from_short_and_long_labels(double width)
+    {
+        var catalog = new SchemaCatalog();
+        var yaml = File.ReadAllText(ContentFixtures.ContentCorePath("items/rusty_pickaxe.item.yaml"));
+        var vm = new SchemaFormViewModel(new SchemaFormDocument(catalog.GetRoot("item.schema.yaml"), yaml));
+        var view = new SchemaFormView { DataContext = vm };
+        var window = new Window { Width = width, Height = 900, Content = view };
+        window.Show();
+
+        var fieldViews = view.GetVisualDescendants().OfType<SchemaFieldView>()
+            .Where(fieldView => fieldView.IsVisible && fieldView.DataContext is SchemaFieldViewModel field && field.HasInformation)
+            .ToArray();
+        Assert.NotEmpty(fieldViews);
+        var representatives = new[]
+        {
+            fieldViews.MinBy(fieldView => ((SchemaFieldViewModel)fieldView.DataContext!).FieldName.Length)!,
+            fieldViews.MaxBy(fieldView => ((SchemaFieldViewModel)fieldView.DataContext!).FieldName.Length)!,
+        }.Distinct().ToArray();
+
+        foreach (var fieldView in representatives)
+        {
+            var field = Assert.IsType<SchemaFieldViewModel>(fieldView.DataContext);
+            var summary = Assert.IsType<Grid>(fieldView.FindControl<Grid>("FieldSummary"));
+            var header = Assert.IsType<Grid>(fieldView.FindControl<Grid>("FieldHeader"));
+            var label = Assert.IsType<TextBlock>(fieldView.FindControl<TextBlock>("FieldLabel"));
+            var information = fieldView.GetVisualDescendants().OfType<Button>()
+                .Single(button => AutomationProperties.GetAutomationId(button) == field.InformationAutomationId);
+            var icon = Assert.IsType<Grid>(information.Content);
+
+            Assert.InRange(information.Bounds.Width, 31.5, 32.5);
+            Assert.InRange(information.Bounds.Height, 31.5, 32.5);
+            Assert.Equal(32, information.MinWidth);
+            Assert.Equal(32, information.MinHeight);
+            Assert.Equal(new CornerRadius(16), information.CornerRadius);
+            Assert.Equal(new Thickness(1), information.BorderThickness);
+            Assert.NotNull(information.Background);
+            Assert.NotNull(information.BorderBrush);
+            Assert.NotNull(information.Foreground);
+
+            Assert.True(information.Bounds.Left >= 0);
+            Assert.True(information.Bounds.Right <= header.Bounds.Width + 0.5);
+            Assert.True(information.Bounds.Top >= 0);
+            Assert.True(information.Bounds.Bottom <= header.Bounds.Height + 0.5);
+            Assert.True(header.Bounds.Right <= summary.Bounds.Width + 0.5);
+            Assert.True(label.Bounds.Bottom <= header.Bounds.Height + 0.5);
+            Assert.True(label.Bounds.Right <= information.Bounds.Left - 7.5);
+
+            var iconOrigin = icon.TranslatePoint(new Point(0, 0), information);
+            Assert.NotNull(iconOrigin);
+            Assert.InRange(iconOrigin.Value.X, 7.5, 8.5);
+            Assert.InRange(iconOrigin.Value.Y, 7.5, 8.5);
+            Assert.InRange(icon.Bounds.Width, 15.5, 16.5);
+            Assert.InRange(icon.Bounds.Height, 15.5, 16.5);
+        }
+
         window.Close();
     }
 
