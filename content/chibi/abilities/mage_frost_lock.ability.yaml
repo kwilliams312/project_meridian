@@ -1,0 +1,19 @@
+# Chibi pack (#757) — Mage control: a ranged root. Tier-1 `cc` primitive (root).
+# Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/ability@1
+id: chibi:ability.mage_frost_lock
+name: Frost Lock
+description: Encases the target's legs in ice, rooting them in place.
+school: frost
+target: enemy
+range_m: 30
+cast:
+  time_ms: 0
+cooldown_ms: 12000
+resource:
+  type: mana
+  amount: 20
+effects:
+  - kind: cc
+    type: root
+    duration_ms: 6000

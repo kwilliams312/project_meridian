@@ -1,0 +1,19 @@
+# Chibi pack (#757) — Warrior control: a melee stun. Tier-1 `cc` primitive (stun).
+# Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/ability@1
+id: chibi:ability.warrior_skullcrack
+name: Skullcrack
+description: A stunning blow to the head that dazes the target for a few seconds.
+school: physical
+target: enemy
+range_m: 5
+cast:
+  time_ms: 0
+cooldown_ms: 15000
+resource:
+  type: rage
+  amount: 20
+effects:
+  - kind: cc
+    type: stun
+    duration_ms: 4000

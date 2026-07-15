@@ -1,0 +1,6 @@
+# Chibi pack (#757) — attribute seed re-authored into the chibi namespace (design §5/§7).
+schema: meridian/attribute@1
+id: chibi:attribute.intellect
+name: Intellect
+kind: primary
+description: Arcane acuity — scales spell power and the mana pool.

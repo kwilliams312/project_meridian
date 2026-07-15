@@ -1,0 +1,13 @@
+# Chibi pack (#757) — Mage talent tree (two-tier row-unlock). Referenced by
+# class.mage. Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/talent_tree@1
+id: chibi:talent_tree.arcane_mastery
+name: Arcane Mastery
+description: The Mage's tiered talent progression.
+tiers:
+  - required_points: 0
+    talents:
+      - chibi:talent.mage_kindling
+  - required_points: 5
+    talents:
+      - chibi:talent.mage_frostwork

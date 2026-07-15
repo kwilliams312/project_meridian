@@ -1,0 +1,22 @@
+# Chibi pack (#757) — Rogue debuff: strips the target's armor. Tier-1 `debuff`
+# primitive over the chibi:attribute.armor id. Re-authored into the chibi
+# namespace (design §5/§7).
+schema: meridian/ability@1
+id: chibi:ability.rogue_weakpoint
+name: Weakpoint
+description: Finds the gaps in the target's guard, weakening its armor.
+school: physical
+target: enemy
+range_m: 5
+cast:
+  time_ms: 0
+cooldown_ms: 10000
+resource:
+  type: energy
+  amount: 25
+effects:
+  - kind: debuff
+    attribute: chibi:attribute.armor
+    amount: -40
+    modifier: flat
+    duration_ms: 15000

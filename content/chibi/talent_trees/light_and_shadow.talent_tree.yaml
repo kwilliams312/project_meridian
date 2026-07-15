@@ -1,0 +1,13 @@
+# Chibi pack (#757) — Priest talent tree (two-tier row-unlock). Referenced by
+# class.priest. Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/talent_tree@1
+id: chibi:talent_tree.light_and_shadow
+name: Light and Shadow
+description: The Priest's tiered talent progression.
+tiers:
+  - required_points: 0
+    talents:
+      - chibi:talent.priest_devotion
+  - required_points: 5
+    talents:
+      - chibi:talent.priest_sanctuary

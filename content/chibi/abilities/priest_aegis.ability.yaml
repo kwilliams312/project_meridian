@@ -1,0 +1,20 @@
+# Chibi pack (#757) — Priest protection: an absorb shield on an ally. Tier-1
+# `shield` primitive. Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/ability@1
+id: chibi:ability.priest_aegis
+name: Aegis
+description: Wraps an ally in holy light, absorbing {amount} incoming damage.
+school: holy
+target: friendly
+range_m: 30
+cast:
+  time_ms: 0
+cooldown_ms: 8000
+resource:
+  type: mana
+  amount: 30
+effects:
+  - kind: shield
+    amount: { min: 100, max: 150 }
+    duration_ms: 12000
+    coefficient: 0.5

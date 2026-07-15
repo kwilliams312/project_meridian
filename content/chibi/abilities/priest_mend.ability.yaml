@@ -1,0 +1,19 @@
+# Chibi pack (#757) — Priest core heal: a direct heal. Tier-1 `heal` primitive.
+# Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/ability@1
+id: chibi:ability.priest_mend
+name: Mend
+description: A prayer that knits wounds, restoring {amount} health.
+school: holy
+target: friendly
+range_m: 30
+cast:
+  time_ms: 1500
+cooldown_ms: 0
+resource:
+  type: mana
+  amount: 25
+effects:
+  - kind: heal
+    amount: { min: 40, max: 60 }
+    coefficient: 0.6

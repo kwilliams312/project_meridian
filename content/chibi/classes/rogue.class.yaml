@@ -1,0 +1,22 @@
+# Chibi pack (#757) — Rogue: the leather melee DPS. roster_id 3 (core copy was 7;
+# chibi roster starts at 1). race_limits omitted = all races. Re-authored into the
+# chibi namespace (design §5/§7). Clean-room original archetype.
+schema: meridian/class@1
+id: chibi:class.rogue
+roster_id: 3
+name: Rogue
+description: A leather-clad skirmisher who strikes from the shadows and bleeds foes dry.
+abilities:
+  - chibi:ability.rogue_ribcut
+  - chibi:ability.rogue_gash
+  - chibi:ability.rogue_veilstep
+  - chibi:ability.rogue_weakpoint
+usable_armor_types:
+  - chibi:equip_type.leather
+usable_weapon_types:
+  - chibi:equip_type.one_hand
+role: dps_melee
+attribute_mods:
+  - attribute: chibi:attribute.agility
+    value: 3
+talent_tree: chibi:talent_tree.shadow_arts

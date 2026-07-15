@@ -1,0 +1,21 @@
+# Chibi pack (#757) — Priest heal-over-time: a lingering renewal. Tier-1 `hot`
+# primitive. Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/ability@1
+id: chibi:ability.priest_renewal
+name: Renewal
+description: A blessing that mends the target for {amount} health each tick.
+school: holy
+target: friendly
+range_m: 30
+cast:
+  time_ms: 0
+cooldown_ms: 0
+resource:
+  type: mana
+  amount: 25
+effects:
+  - kind: hot
+    amount: { min: 8, max: 12 }
+    duration_ms: 12000
+    tick_ms: 3000
+    coefficient: 0.2

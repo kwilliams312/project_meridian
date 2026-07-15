@@ -1,0 +1,15 @@
+# Chibi pack (#757) — Warrior opening talent. Mixed grant: an ABILITY
+# (crushing_blow) + a permanent passive `buff` over stamina. Re-authored into the
+# chibi namespace (design §5/§7).
+schema: meridian/talent@1
+id: chibi:talent.warrior_frontline
+name: Frontline Fury
+description: Unlocks Crushing Blow and permanently toughens your stamina.
+rank_max: 3
+grants:
+  - kind: ability
+    ability: chibi:ability.warrior_crushing_blow
+  - kind: buff
+    attribute: chibi:attribute.stamina
+    amount: 5
+    modifier: flat

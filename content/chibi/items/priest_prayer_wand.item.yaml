@@ -1,0 +1,27 @@
+# Chibi pack (#757) — Priest starter weapon (wand, main_hand). Re-authored into the
+# chibi namespace (design §5/§7). visual.* reuses core placeholder art (FLAGGED).
+schema: meridian/item@2
+id: chibi:item.priest_prayer_wand
+name: Acolyte's Prayer Wand
+flavor_text: A thumb-worn rod of birch, blessed by a hedge-priest for a copper.
+item_class: weapon
+subclass: wand
+equip_type: chibi:equip_type.wand
+slot: main_hand
+rarity: common
+required_level: 1
+item_level: 1
+weapon:
+  damage: { min: 3, max: 6 }
+  speed_ms: 2000
+  school: holy
+stats:
+  - stat: intellect
+    amount: 2
+price:
+  sell: 80
+visual:
+  icon: core:art.icon.item.iron_sword
+  worn:
+    models: [{ model: core:art.item.weapon.iron_sword, mirror: none }]
+    attach: { socket: main_hand, sheath_socket: hip_r }

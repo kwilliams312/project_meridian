@@ -1,0 +1,7 @@
+# Chibi pack (#757) — equip_type re-authored into the chibi namespace (design §5/§7).
+schema: meridian/equip_type@1
+id: chibi:equip_type.one_hand
+name: One-Hand
+description: A single-handed weapon, leaving the off-hand free for a shield or focus.
+category: weapon
+slot_class: main

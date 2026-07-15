@@ -1,0 +1,25 @@
+# Chibi pack (#757) — Priest starter armor (cloth chest). Re-authored into the
+# chibi namespace (design §5/§7). visual.* reuses core placeholder art (FLAGGED).
+schema: meridian/item@2
+id: chibi:item.priest_vestments
+name: Acolyte's Vestments
+flavor_text: Undyed linen, the hem still stiff from the temple's starch.
+item_class: armor
+subclass: cloth
+equip_type: chibi:equip_type.cloth
+slot: chest
+rarity: common
+required_level: 1
+item_level: 1
+armor: 8
+stats:
+  - stat: intellect
+    amount: 2
+price:
+  sell: 50
+visual:
+  icon: core:art.icon.item.warden_crest
+  worn:
+    models: [{ model: core:art.item.armor.warden_chest, mirror: none }]
+    hides: [torso]
+    dye_channels: [primary, secondary]

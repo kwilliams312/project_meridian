@@ -1,0 +1,6 @@
+# Chibi pack (#757) — equip_type re-authored into the chibi namespace (design §5/§7).
+schema: meridian/equip_type@1
+id: chibi:equip_type.plate
+name: Plate
+description: Heavy forged plate. The sturdiest armor, worn by front-line defenders.
+category: armor

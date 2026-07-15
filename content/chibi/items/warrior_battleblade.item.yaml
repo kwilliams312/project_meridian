@@ -1,0 +1,26 @@
+# Chibi pack (#757) — Warrior starter weapon (one_hand). equip_type gates it to the
+# Warrior's usable_weapon_types. Re-authored into the chibi namespace (design
+# §5/§7). visual.* still points at core placeholder art (icon/model) — chibi has no
+# item art yet (out of scope here; C4 does body+materials); a follow-up repoints
+# these once chibi item art lands. FLAGGED to the lead.
+schema: meridian/item@2
+id: chibi:item.warrior_battleblade
+name: Recruit's Battleblade
+flavor_text: Standard-issue steel, blunt at the tip and honest in the swing.
+item_class: weapon
+subclass: sword_1h
+equip_type: chibi:equip_type.one_hand
+slot: main_hand
+rarity: common
+required_level: 1
+item_level: 1
+weapon:
+  damage: { min: 5, max: 9 }
+  speed_ms: 2400
+price:
+  sell: 80
+visual:
+  icon: core:art.icon.item.iron_sword
+  worn:
+    models: [{ model: core:art.item.weapon.iron_sword, mirror: none }]
+    attach: { socket: main_hand, sheath_socket: back }

@@ -1,0 +1,6 @@
+# Chibi pack (#757) — attribute seed re-authored into the chibi namespace (design §5/§7).
+schema: meridian/attribute@1
+id: chibi:attribute.crit
+name: Critical Strike
+kind: derived
+description: Chance for an attack or spell to critically strike for extra damage.

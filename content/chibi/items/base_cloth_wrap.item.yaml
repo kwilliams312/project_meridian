@@ -1,0 +1,29 @@
+# Chibi pack (#757) — the base cloth-wrap "wearing nothing" outfit: the default
+# body covering baked into every chibi's base look (design §5, §8 — "rendering the
+# colored body + base cloth outfit"). A minimal cloth chest wrap (no armor value,
+# no stat bonuses) so a freshly-created chibi is decently covered before any
+# starter gear is equipped. New clean-room item, authored directly in the chibi
+# namespace. visual.* reuses core placeholder cloth art (icon + worn model) until
+# chibi's own base-wrap art lands (C4/C5 wire the real base look) — FLAGGED to the
+# lead, same as the starter items.
+schema: meridian/item@2
+id: chibi:item.base_cloth_wrap
+name: Simple Cloth Wrap
+flavor_text: A plain woven wrap — what every recruit wears before they are outfitted.
+item_class: armor
+subclass: cloth
+equip_type: chibi:equip_type.cloth
+slot: chest
+rarity: poor
+required_level: 1
+item_level: 1
+armor: 0
+binding: on_pickup
+price:
+  sell: 1
+visual:
+  icon: core:art.icon.item.warden_crest
+  worn:
+    models: [{ model: core:art.item.armor.warden_chest, mirror: none }]
+    hides: [torso]
+    dye_channels: [primary]

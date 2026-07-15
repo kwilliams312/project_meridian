@@ -1,0 +1,26 @@
+# Chibi pack (#757) — Mage starter weapon (staff, two_hand). Re-authored into the
+# chibi namespace (design §5/§7). visual.* reuses core placeholder art (FLAGGED).
+schema: meridian/item@2
+id: chibi:item.mage_apprentice_staff
+name: Apprentice's Staff
+flavor_text: A plain ashwood stave, its focus-crystal barely a chip of quartz.
+item_class: weapon
+subclass: staff
+equip_type: chibi:equip_type.staff
+slot: two_hand
+rarity: common
+required_level: 1
+item_level: 1
+weapon:
+  damage: { min: 4, max: 8 }
+  speed_ms: 3000
+stats:
+  - stat: intellect
+    amount: 2
+price:
+  sell: 80
+visual:
+  icon: core:art.icon.item.iron_sword
+  worn:
+    models: [{ model: core:art.item.weapon.iron_sword, mirror: none }]
+    attach: { socket: main_hand, sheath_socket: back }

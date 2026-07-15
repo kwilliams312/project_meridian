@@ -1,0 +1,13 @@
+# Chibi pack (#757) — Rogue talent tree (two-tier row-unlock). Referenced by
+# class.rogue. Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/talent_tree@1
+id: chibi:talent_tree.shadow_arts
+name: Shadow Arts
+description: The Rogue's tiered talent progression.
+tiers:
+  - required_points: 0
+    talents:
+      - chibi:talent.rogue_finesse
+  - required_points: 5
+    talents:
+      - chibi:talent.rogue_cutthroat

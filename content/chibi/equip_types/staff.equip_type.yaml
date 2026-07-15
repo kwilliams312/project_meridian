@@ -1,0 +1,7 @@
+# Chibi pack (#757) — equip_type re-authored into the chibi namespace (design §5/§7).
+schema: meridian/equip_type@1
+id: chibi:equip_type.staff
+name: Staff
+description: A two-handed spellcasting focus favored by mages and healers.
+category: weapon
+slot_class: two_hand

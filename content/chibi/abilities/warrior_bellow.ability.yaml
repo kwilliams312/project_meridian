@@ -1,0 +1,18 @@
+# Chibi pack (#757) — Warrior taunt: forces threat (the tank role hook). Tier-1
+# `threat` primitive. Re-authored into the chibi namespace (design §5/§7).
+schema: meridian/ability@1
+id: chibi:ability.warrior_bellow
+name: Bellow
+description: A defiant bellow that seizes the target's attention.
+school: physical
+target: enemy
+range_m: 5
+cast:
+  time_ms: 0
+cooldown_ms: 8000
+resource:
+  type: rage
+  amount: 10
+effects:
+  - kind: threat
+    amount: 500

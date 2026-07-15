@@ -1,0 +1,20 @@
+# Chibi pack (#757) — Warrior opener: a heavy melee strike. Tier-1 `damage`
+# primitive. Re-authored from the retired core copy into the chibi namespace
+# (design §5/§7). Original clean-room archetype (CONTRIBUTING.md).
+schema: meridian/ability@1
+id: chibi:ability.warrior_crushing_blow
+name: Crushing Blow
+description: A heavy overhead swing that hits for {amount} physical damage.
+school: physical
+target: enemy
+range_m: 5
+cast:
+  time_ms: 0
+cooldown_ms: 6000
+resource:
+  type: rage
+  amount: 15
+effects:
+  - kind: damage
+    amount: { min: 16, max: 24 }
+    coefficient: 0.5

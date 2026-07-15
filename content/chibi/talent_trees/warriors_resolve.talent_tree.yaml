@@ -1,0 +1,15 @@
+# Chibi pack (#757) — Warrior talent tree. Two-tier row-unlock (spec §2.5): the
+# opening row offers Frontline Fury; the second row unlocks at 5 spent points and
+# offers Guardian's Oath. Referenced by class.warrior. Re-authored into the chibi
+# namespace (design §5/§7).
+schema: meridian/talent_tree@1
+id: chibi:talent_tree.warriors_resolve
+name: Warrior's Resolve
+description: The Warrior's tiered talent progression.
+tiers:
+  - required_points: 0
+    talents:
+      - chibi:talent.warrior_frontline
+  - required_points: 5
+    talents:
+      - chibi:talent.warrior_guardian

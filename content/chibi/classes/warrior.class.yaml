@@ -1,0 +1,27 @@
+# Chibi pack (#757) — Warrior: the plate tank. roster_id 1 in the fresh chibi
+# roster (the retired core copy sat at 5; chibi's idmap/roster start clean, so the
+# 4 classes take 1-4). race_limits omitted = all races (chibi races are cosmetic,
+# no gating). Re-authored into the chibi namespace (design §5/§7). Clean-room
+# original archetype.
+schema: meridian/class@1
+id: chibi:class.warrior
+roster_id: 1
+name: Warrior
+description: A plate-clad tank who holds the front line and controls the fight.
+abilities:
+  - chibi:ability.warrior_crushing_blow
+  - chibi:ability.warrior_bellow
+  - chibi:ability.warrior_bulwark
+  - chibi:ability.warrior_skullcrack
+usable_armor_types:
+  - chibi:equip_type.plate
+usable_weapon_types:
+  - chibi:equip_type.two_hand
+  - chibi:equip_type.one_hand
+role: tank
+attribute_mods:
+  - attribute: chibi:attribute.strength
+    value: 2
+  - attribute: chibi:attribute.stamina
+    value: 2
+talent_tree: chibi:talent_tree.warriors_resolve
