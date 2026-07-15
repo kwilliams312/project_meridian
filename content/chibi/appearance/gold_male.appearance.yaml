@@ -1,0 +1,24 @@
+# meridian/appearance_catalog@1 — Chibi Gold / male (#759, C5; design §5/§6, R2).
+# Shared chibi body + rig; race colour via body_material (chibi:dye.gold on the
+# primary/skin channel over the neutral recolor base + skin mask). METALLIC race:
+# metallic 1.0 / roughness 0.30 — the client shader (dye_tint.gdshader) gates
+# metalness by the mask (METALLIC = metallic * max(mask.rgb)), so the SKIN goes
+# metallic while cloth + eyes stay matte. See red_male.appearance.yaml for the
+# model note. presets empty for now.
+schema: meridian/appearance_catalog@1
+id: chibi:appearance.gold.male
+race: gold
+sex: male
+skeleton: chibi:art.chibi_pill_body
+body_model: chibi:art.chibi_pill_body
+body_material:
+  albedo: chibi:art.chibi_pill_body_recolor_base
+  dye_mask: chibi:art.chibi_pill_body_mask
+  metallic: 1.0
+  roughness: 0.30
+  dyes:
+    - { channel: primary, dye: chibi:dye.gold }
+presets:
+  hair: []
+  face: []
+  skin: []

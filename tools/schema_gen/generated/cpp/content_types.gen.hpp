@@ -26,6 +26,7 @@ struct NpcRef { std::string id; };
 struct ZoneRef { std::string id; };
 struct QuestRef { std::string id; };
 struct ItemRef { std::string id; };
+struct DyeRef { std::string id; };
 struct AttributeRef { std::string id; };
 struct RaceRef { std::string id; };
 struct TalentTreeRef { std::string id; };
@@ -328,6 +329,12 @@ enum class RaceName {
     Dolmen,
     Sylvane,
     Emberkin,
+    Red,
+    Green,
+    Blue,
+    Yellow,
+    Gold,
+    Silver,
 };
 
 enum class School {
@@ -837,6 +844,19 @@ struct Asset {
     std::optional<AssetEncode> encode;  // optional
 };
 
+struct AppearanceBodyMaterialDye {
+    DyeChannel channel;
+    DyeRef dye;
+};
+
+struct AppearanceBodyMaterial {
+    ArtRef albedo;  // Recolor-ready base albedo (skin neutralised to grey so a dye reads true).
+    ArtRef dye_mask;  // RGB dye mask — R=primary/skin, G=secondary, B=accent; unmasked texels never tint.
+    std::vector<AppearanceBodyMaterialDye> dyes;  // The race's fixed body dyes, one per RGB dye channel (max 3). Each names a meridian/dye@1 by id (L011-resolved) whose colour tints that channel's masked region. The Chibi colour races use exactly the `primary` channel (skin). Channel↔RGB is the dyeChannel order (primary=R, secondary=G, accent=B).
+    std::optional<double> metallic;  // PBR metalness 0..1 (default 0). Metallic races set 1.0; shader gates it by the mask.
+    std::optional<double> roughness;  // PBR roughness 0..1 (optional; material default when omitted).
+};
+
 struct AppearancePresetsHair {
     std::int64_t id;
     ArtRef model;
@@ -872,6 +892,7 @@ struct Appearance {
     AppearanceSex sex;
     ArtRef skeleton;
     ArtRef body_model;
+    std::optional<AppearanceBodyMaterial> body_material;  // OPTIONAL recolor material for the body (design 2026-07-14-chibi §6, R2). When present, the client renders the body with this material instead of the body model's own baked atlas: it MULTIPLIES the neutral `albedo` texture by each dyed channel's colour through the RGB `dye_mask` (the same dye-mask path the assembler already runs for equipment — dye_tint.gdshader), so only the masked region (skin) recolors and the unmasked texels (eyes, cloth) survive. This is how a Chibi COLOUR race becomes its colour: one shared grey body + per-race dye. Additive and back-compatible — a catalog without `body_material` (e.g. the core races, which bake colour into the body model directly) renders exactly as before. `metallic`/`roughness` feed the material's PBR params; the shader localizes metalness to the mask so a metallic race is metal-skinned but keeps matte cloth/eyes.
     AppearancePresets presets;  // Customization set v1 (art-prd §5): hair meshes, face textures, skin palettes. Each preset entry's `id` is the stable integer the per-character appearance record stores (§5.2) — uniqueness within a list is lint L082.
     std::vector<AppearanceMorph> morphs;  // 0 at M1; ships only if the §2.5 crowd budget allows (A-03/D-32). Capped at 2 entries.
 };

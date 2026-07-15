@@ -19,6 +19,18 @@ map:                         # append-only; local index (SAD §2.4)
   chibi:ability.warrior_bulwark: 25
   chibi:ability.warrior_crushing_blow: 26
   chibi:ability.warrior_skullcrack: 27
+  chibi:appearance.blue.female: 68
+  chibi:appearance.blue.male: 69
+  chibi:appearance.gold.female: 70
+  chibi:appearance.gold.male: 71
+  chibi:appearance.green.female: 72
+  chibi:appearance.green.male: 73
+  chibi:appearance.red.female: 74
+  chibi:appearance.red.male: 75
+  chibi:appearance.silver.female: 76
+  chibi:appearance.silver.male: 77
+  chibi:appearance.yellow.female: 78
+  chibi:appearance.yellow.male: 79
   chibi:art.chibi_pill_body: 3
   chibi:art.chibi_pill_body_mask: 4
   chibi:art.chibi_pill_body_recolor_base: 5
@@ -57,6 +69,12 @@ map:                         # append-only; local index (SAD §2.4)
   chibi:item.rogue_shiv: 53
   chibi:item.warrior_battleblade: 54
   chibi:item.warrior_platemail: 55
+  chibi:race.blue: 80
+  chibi:race.gold: 81
+  chibi:race.green: 82
+  chibi:race.red: 83
+  chibi:race.silver: 84
+  chibi:race.yellow: 85
   chibi:talent.mage_frostwork: 56
   chibi:talent.mage_kindling: 57
   chibi:talent.priest_devotion: 58

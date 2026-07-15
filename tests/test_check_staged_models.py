@@ -84,8 +84,13 @@ def _tree(tmp_path: Path, *, with_source: bool, staged: bool) -> tuple[Path, Pat
     (pack / "assets" / "art" / "plate.asset.yaml").write_text(ARMOR_SIDECAR)
     (pack / "items" / "plate.item.yaml").write_text(ARMOR_ITEM)
     if with_source:
-        (pack / "assets" / "art" / "item" / "armor" / "plate.glb").write_bytes(b"glTF-bytes")
-    staged_dir = tmp_path / "staged"
+        (pack / "assets" / "art" / "item" / "armor" / "plate.glb").write_bytes(
+            b"glTF-bytes"
+        )
+    # The staged mount dir is named after the pack namespace (real layout:
+    # client/project/meridian/<namespace> — ContentDB mounts res://meridian/<ns>),
+    # so the coverage gate scopes to this mount's own pack.
+    staged_dir = tmp_path / "tp"
     if staged:
         dst = staged_dir / "art" / "item" / "armor" / "plate.glb"
         dst.parent.mkdir(parents=True)
@@ -126,8 +131,10 @@ def _npc_tree(tmp_path: Path, *, with_source: bool, staged: bool) -> tuple[Path,
     (pack / "assets" / "art" / "kobold.asset.yaml").write_text(NPC_SIDECAR)
     (pack / "npcs" / "kobold_miner.npc.yaml").write_text(NPC_DOC)
     if with_source:
-        (pack / "assets" / "art" / "char" / "kobold" / "miner.glb").write_bytes(b"glTF-bytes")
-    staged_dir = tmp_path / "staged"
+        (pack / "assets" / "art" / "char" / "kobold" / "miner.glb").write_bytes(
+            b"glTF-bytes"
+        )
+    staged_dir = tmp_path / "tp"  # mount dir == pack namespace (real layout)
     if staged:
         dst = staged_dir / "art" / "char" / "kobold" / "miner.glb"
         dst.parent.mkdir(parents=True)
@@ -155,7 +162,37 @@ def test_npc_placeholder_without_committed_bytes_is_skipped(tmp_path):
 
 
 @pytest.mark.unit
+def test_cross_pack_model_is_scoped_out(tmp_path):
+    # A model referenced by content is owned by ITS pack's mount, not another's.
+    # Here the `tp` pack's item references a model whose sidecar lives in a DIFFERENT
+    # pack (`other`) with committed bytes; checking the `tp` mount must NOT flag it —
+    # the `other` mount owns it (this is the chibi-body-under-core-mount case #759).
+    content = tmp_path / "content"
+    # The tp pack: item references other:art.item.armor.plate.
+    tp = content / "tp"
+    (tp / "items").mkdir(parents=True)
+    (tp / "pack.yaml").write_text(PACK)
+    (tp / "items" / "plate.item.yaml").write_text(
+        ARMOR_ITEM.replace("tp:art.item.armor.plate", "other:art.item.armor.plate")
+    )
+    # The other pack: owns the sidecar + committed bytes, but is NOT the staged mount.
+    other = content / "other"
+    (other / "assets" / "art" / "item" / "armor").mkdir(parents=True)
+    (other / "pack.yaml").write_text(PACK.replace("namespace: tp", "namespace: other"))
+    (other / "assets" / "art" / "plate.asset.yaml").write_text(
+        ARMOR_SIDECAR.replace("tp:art.item.armor.plate", "other:art.item.armor.plate")
+    )
+    (other / "assets" / "art" / "item" / "armor" / "plate.glb").write_bytes(
+        b"glTF-bytes"
+    )
+    # Staged mount is `tp` (dir name == namespace); other:* belongs to the other mount.
+    assert check(content, tmp_path / "tp") == []
+
+
+@pytest.mark.unit
 def test_real_tree_warden_kit_is_covered():
     # The committed repo tree must pass — every Warden plate is staged.
-    failures = check(REPO / "content", REPO / "client" / "project" / "meridian" / "core")
+    failures = check(
+        REPO / "content", REPO / "client" / "project" / "meridian" / "core"
+    )
     assert failures == [], failures

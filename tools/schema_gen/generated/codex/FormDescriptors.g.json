@@ -697,6 +697,36 @@
           }
         },
         {
+          "path": "body_material.albedo",
+          "ui": {
+            "group": "body",
+            "label": "Recolor base albedo",
+            "widget": "asset_picker",
+            "reference_type": "asset:art"
+          },
+          "asset": {
+            "allowed_classes": [
+              "texture_set"
+            ],
+            "eligible_generators": []
+          }
+        },
+        {
+          "path": "body_material.dye_mask",
+          "ui": {
+            "group": "body",
+            "label": "Dye mask",
+            "widget": "asset_picker",
+            "reference_type": "asset:art"
+          },
+          "asset": {
+            "allowed_classes": [
+              "texture_set"
+            ],
+            "eligible_generators": []
+          }
+        },
+        {
           "path": "presets.hair[].model",
           "ui": {
             "group": "customization",

@@ -1,0 +1,20 @@
+# meridian/appearance_catalog@1 — Chibi Green / male (#759, C5; design §5/§6, R2).
+# Shared chibi body + rig; race colour via body_material (chibi:dye.green on the
+# primary/skin channel over the neutral recolor base + skin mask). Flat race:
+# metallic 0.0. See red_male.appearance.yaml for the model note. presets empty.
+schema: meridian/appearance_catalog@1
+id: chibi:appearance.green.male
+race: green
+sex: male
+skeleton: chibi:art.chibi_pill_body
+body_model: chibi:art.chibi_pill_body
+body_material:
+  albedo: chibi:art.chibi_pill_body_recolor_base
+  dye_mask: chibi:art.chibi_pill_body_mask
+  metallic: 0.0
+  dyes:
+    - { channel: primary, dye: chibi:dye.green }
+presets:
+  hair: []
+  face: []
+  skin: []

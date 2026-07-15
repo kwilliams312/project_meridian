@@ -1,0 +1,13 @@
+# Chibi color race (#759, C5; design §5/§6). Cosmetic colour identity over the
+# shared chibi_pill_body; attribute_mods omitted (race.schema.yaml §2.3). roster_id
+# 5 in the fresh chibi roster. METALLIC race — the appearance body_material sets
+# metallic 1.0 (roughness 0.30) and the client shader localizes metalness to the
+# skin mask (dye_tint.gdshader: METALLIC = metallic * max(mask.rgb)); chibi:dye.gold
+# is the metal reflectance tint on the primary channel. See red.race.yaml for the
+# full model note.
+schema: meridian/race@1
+id: chibi:race.gold
+roster_id: 5
+name: Gold
+description: A gleaming gold chibi — the sunmetal-kin, bright as a struck coin.
+appearance: chibi:appearance.gold.male

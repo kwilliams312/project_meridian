@@ -1,0 +1,11 @@
+# Chibi color race (#759, C5; design §5/§6). Cosmetic colour identity over the
+# shared chibi_pill_body; attribute_mods omitted (race.schema.yaml §2.3). roster_id
+# 4 in the fresh chibi roster. Colour wired in the appearance body_material
+# (chibi:dye.yellow on the primary channel). Flat (non-metallic) race. See
+# red.race.yaml for the full model note.
+schema: meridian/race@1
+id: chibi:race.yellow
+roster_id: 4
+name: Yellow
+description: A sunny golden-hued chibi — the lantern-kin of the bright dawn.
+appearance: chibi:appearance.yellow.male

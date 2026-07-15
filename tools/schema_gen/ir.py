@@ -241,6 +241,10 @@ _CONTENT_REF_DEFS = {
     "classId": "content",
     "raceRef": "race",
     "talentTreeRef": "talent_tree",
+    # dye (contract ① §6) — dyeRef lives in common.defs.yaml and is first consumed
+    # by appearance_catalog.body_material.dyes[].dye (chibi colour races, design
+    # 2026-07-14-chibi §6/R2): a race's fixed body dye names a meridian/dye@1 by id.
+    "dyeRef": "dye",
 }
 _ASSET_REF_DEFS = {
     "artRef": "art",
