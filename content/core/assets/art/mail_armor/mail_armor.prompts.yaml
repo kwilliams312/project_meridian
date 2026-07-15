@@ -1,0 +1,10 @@
+task_id: 019f6186-9d77-7ec0-ad4c-2924c3c8ae2e
+model_version: meshy-5
+preview_task_id: 019f6185-de40-72e1-987a-962f11d140c4
+request:
+  mode: preview
+  prompt: chibi silver chainmail mail armor shirt for a pill body; chibi, colored
+    rounded PILL-shaped body, big cute expressive eyes and a friendly face, smooth
+    clay-like toy-like, bright saturated colors, clean readable silhouette, game-ready
+  ai_model: meshy-5
+  target_polycount: 6400

@@ -1,0 +1,10 @@
+task_id: 019f6189-05d8-7f7f-8577-598d8fb51349
+model_version: meshy-5
+preview_task_id: 019f6187-de3c-753c-8c3e-825ca919d7fc
+request:
+  mode: preview
+  prompt: a chibi round leafy storybook bush, chibi, colored rounded pill and clay
+    toy aesthetic, bright saturated colors, big cute and friendly, clean readable
+    silhouette, game-ready, matching a whimsical fairytale pill-mascot village
+  ai_model: meshy-5
+  target_polycount: 16000
