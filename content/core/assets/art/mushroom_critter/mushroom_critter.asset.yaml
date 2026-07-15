@@ -1,0 +1,16 @@
+schema: meridian/asset@1
+id: core:art.mushroom_critter
+class: creature_model
+source: assets/art/mushroom_critter/sk_mushroom_critter.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors:
+  - meridian-contributors
+  origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/019f6151-f266-788b-aaef-cbccf76bb7a0
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: mushroom_critter.prompts.yaml
+budget:
+  lod0_tris: 72945
+restyle_status: pending

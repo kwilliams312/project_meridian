@@ -1,0 +1,10 @@
+task_id: 019f6151-f266-788b-aaef-cbccf76bb7a0
+model_version: meshy-5
+preview_task_id: 019f6150-d0a3-7808-9cde-e334e16dfc97
+request:
+  mode: preview
+  prompt: a chibi walking mushroom creature with a face, chibi, colored rounded pill
+    / clay toy aesthetic, bright saturated colors, big cute friendly, clean readable
+    silhouette, game-ready, matching a whimsical fairytale pill-mascot village
+  ai_model: meshy-5
+  target_polycount: 72000
