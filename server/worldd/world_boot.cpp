@@ -17,12 +17,6 @@ namespace {
 
 constexpr const char* kCat = "worldd";
 
-// The manifest namespace worldd treats as the primary content pack — its
-// identity is logged + propagated in HandshakeOk. "core" is the base pack per
-// the IF-9 namespace convention (schema/sql/world/00_manifest.sql: pack.namespace
-// owns an ID band; "core" is the baseline band). Absent -> use the first row.
-constexpr const char* kPrimaryNamespace = "core";
-
 // A well-formed content hash is exactly kContentHashHexLen lowercase-hex chars.
 // mcc renders BLAKE3 as lowercase hex (world_manifest.content_hash CHAR(64)); a
 // wrong width or a non-hex char means a truncated / corrupt manifest row.
@@ -51,10 +45,14 @@ std::uint32_t cell_u32(const db::Cell& c) {
 
 std::string cell_str(const db::Cell& c) { return c.has_value() ? *c : std::string{}; }
 
-// Pick the primary row: the "core" namespace if present, else the first row.
-const ManifestRow& primary_row(const std::vector<ManifestRow>& rows) {
+// Pick the primary row: the row whose pack_namespace == the realm's selected
+// `theme` if present, else the first row (the historical "core"-or-first-row
+// behaviour, generalised to any theme — the §4 moddable-theme seam). A realm
+// selects `theme` via env MERIDIAN_REALM_THEME (default kDefaultRealmTheme).
+const ManifestRow& primary_row(const std::vector<ManifestRow>& rows,
+                               std::string_view theme) {
     for (const ManifestRow& r : rows) {
-        if (r.pack_namespace == kPrimaryNamespace) return r;
+        if (r.pack_namespace == theme) return r;
     }
     return rows.front();
 }
@@ -79,7 +77,8 @@ const char* boot_verdict_name(BootVerdict v) {
 
 BootReport verify_world_manifest(
     const std::vector<ManifestRow>& rows,
-    const std::optional<std::string>& expected_content_hash) {
+    const std::optional<std::string>& expected_content_hash,
+    std::string_view theme) {
     BootReport rep;
     rep.pack_count = rows.size();
 
@@ -132,8 +131,9 @@ BootReport verify_world_manifest(
     }
 
     // The manifest is present, well-formed, and serveable. Resolve the primary
-    // pack's identity for the log + HandshakeOk.
-    const ManifestRow& primary = primary_row(rows);
+    // pack's identity for the log + HandshakeOk — the row matching the realm's
+    // selected theme (§4 seam), else the first row.
+    const ManifestRow& primary = primary_row(rows, theme);
     rep.content_hash = primary.content_hash;
     rep.content_version = primary.pack_namespace + "@" + primary.pack_version;
     rep.schema_version = primary.schema_version;
@@ -314,12 +314,13 @@ void record_realm_compat_state(db::Connection& char_db,
 BootReport boot_world_db(db::Connection& world_db,
                          const std::optional<std::string>& expected_content_hash,
                          bool require_content,
-                         db::Connection* char_db) {
+                         db::Connection* char_db,
+                         std::string_view theme) {
     BootReport rep;
     std::vector<ManifestRow> rows;
     try {
         rows = read_world_manifest(world_db);
-        rep = verify_world_manifest(rows, expected_content_hash);
+        rep = verify_world_manifest(rows, expected_content_hash, theme);
     } catch (const db::DbError& e) {
         // A read failure — most commonly the world_manifest table does not exist
         // (an un-loaded / not-yet-seeded world DB). Treat as a missing manifest;

@@ -99,6 +99,12 @@ struct WorlddConfig {
     // refuses to boot, as before). Integrity faults hard-fail regardless.
     bool world_db_require_content = false;
 
+    // Realm THEME (env MERIDIAN_REALM_THEME; §4 of the chibi-theme design). Selects
+    // which world_manifest pack_namespace is the PRIMARY content pack at boot — the
+    // one kernel seam that lets a realm serve a different theme pack (e.g. the dev
+    // realm sets "chibi"). Default "core" preserves the historical behaviour exactly.
+    std::string realm_theme{meridian::worldd::kDefaultRealmTheme};
+
     // OPS-05 metrics endpoint (server SAD §8.5; docs/telemetry-architecture.md).
     // Plain-HTTP /metrics on a port SEPARATE from the game TLS port; default 9464
     // (the port the OTel collector scrapes) bound to loopback. 0 disables it.
@@ -140,6 +146,9 @@ void print_help() {
         "                     (e.g. http://otel-collector:4318). Empty = tracing off.\n"
         "  --trace-sample-ratio R  head-sample ratio 0..1 for traces (default 1.0).\n"
         "  --realm NAME       realm label for metrics + logs (default 'reference').\n"
+        "  --realm-theme NS   content theme: the world_manifest pack_namespace to\n"
+        "                     serve as PRIMARY (env MERIDIAN_REALM_THEME; default\n"
+        "                     'core'). A realm selects its theme pack here.\n"
         "  --log-format FMT   log output: json (prod, Loki JSON on stdout) or\n"
         "                     text (dev, readable on stderr). Default json.\n"
         "  --log-level LVL    min log level: trace|debug|info|warn|error (info).\n"
@@ -210,6 +219,7 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--otlp-endpoint") == 0) { c.set("otlp.endpoint", next("--otlp-endpoint"), cl); continue; }
         if (std::strcmp(argv[i], "--trace-sample-ratio") == 0) { c.set("trace.sample_ratio", next("--trace-sample-ratio"), cl); continue; }
         if (std::strcmp(argv[i], "--realm") == 0) { c.set("realm", next("--realm"), cl); continue; }
+        if (std::strcmp(argv[i], "--realm-theme") == 0) { c.set("realm.theme", next("--realm-theme"), cl); continue; }
         if (std::strcmp(argv[i], "--log-format") == 0) { c.set("log.format", next("--log-format"), cl); continue; }
         if (std::strcmp(argv[i], "--log-level") == 0) { c.set("log.level", next("--log-level"), cl); continue; }
         if (std::strncmp(argv[i], "--", 2) == 0 && std::strchr(argv[i], '=') != nullptr) continue;
@@ -276,6 +286,11 @@ int main(int argc, char** argv) {
     // MERIDIAN_WORLDDB_REQUIRE_CONTENT -> "worlddb.require.content" (#485). When
     // truthy, an empty/unseeded world DB hard-fails instead of degrading.
     if (auto v = c.get_bool("worlddb.require.content")) cfg.world_db_require_content = *v;
+    // MERIDIAN_REALM_THEME -> "realm.theme" (§4 seam). Selects the primary content
+    // pack namespace at boot; empty/unset keeps the "core" default. An empty string
+    // is treated as unset (falls back to the default) so a blank env never selects a
+    // nonexistent "" namespace.
+    if (auto v = c.get_string("realm.theme"); v && !v->empty()) cfg.realm_theme = *v;
 
     // MERIDIAN_WORLDD_REALM_ID -> "worldd.realm.id".
     if (auto v = c.get_int("worldd.realm.id")) {
@@ -353,7 +368,7 @@ int main(int argc, char** argv) {
             }
             meridian::worldd::BootReport boot = meridian::worldd::boot_world_db(
                 world_db, expected, cfg.world_db_require_content,
-                char_db ? &*char_db : nullptr);
+                char_db ? &*char_db : nullptr, cfg.realm_theme);
             if (boot.hard_fail) {
                 std::fprintf(stderr,
                              "%s: world-DB boot refused [%s]: %s\n", kDaemonName,
