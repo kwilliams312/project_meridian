@@ -1,0 +1,21 @@
+# Minimal chibi starter zone (C6 / #758). Terrain + a single spawn point —
+# just enough for a chibi character to enter the world and walk. Music,
+# ambience, and encounters/NPCs are intentionally omitted here; theme audio and
+# world population land in later chibi world stories (epic #753; design §5/§11).
+schema: meridian/zone@1
+id: chibi:zone.sprout_meadow
+name: Sprout Meadow
+level_range: { min: 1, max: 5 }
+start_zone: true
+chunk_manifest: null   # reserved — A-08 chunk-format contract (M0 exit)
+pois:
+  - id: spawn_glade
+    name: Spawn Glade
+    position: { x: 0.0, y: 0.0, z: 0.0 }
+    discovery_radius_m: 40
+    discovery_xp: 0
+graveyards:
+  # First entry is the zone default and, for a start_zone, the character's
+  # enter-world spawn point (zone.schema.yaml: "spawn point = first graveyard").
+  - position: { x: 0.0, y: 0.0, z: 0.0 }
+    orientation_deg: 0

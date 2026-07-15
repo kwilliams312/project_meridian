@@ -4,3 +4,4 @@ band: 1                      # assigned once, immutable (SAD §2.4)
 released_watermark: 0      # highest local index frozen by a tagged release
 map:                         # append-only; local index (SAD §2.4)
   chibi:art.ui.theme_preview: 1
+  chibi:zone.sprout_meadow: 2
