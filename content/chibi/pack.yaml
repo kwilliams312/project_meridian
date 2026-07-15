@@ -1,0 +1,17 @@
+schema: meridian/pack@1
+namespace: chibi
+name: Meridian Chibi
+description: >-
+  Chibi theme pack shell (#756). The realm-facing chibi theme lives entirely in
+  its own `chibi` namespace with its own IF-9 id-band; rules-data, characters,
+  and the minimal zone land in the follow-up stories (C3-C6).
+version: 0.1.0
+content_schema_version: 1
+compatibility_version: 1
+engine:
+  godot: "4.6"
+theme:
+  display_name: "Chibi"
+authors:
+  - Meridian contributors
+license: Apache-2.0 (data) / CC-BY-4.0 (referenced original assets)

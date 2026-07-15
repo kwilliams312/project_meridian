@@ -322,31 +322,38 @@ int cmd_emit_sql(const std::vector<std::string>& args) {
 }
 
 // mcc emit-pck [dir] [--out <dir>] [--built-at "<ts>"] [--godot-version <v>]
-//              [--diag-format=...]
+//              [--pack <ns>] [--diag-format=...]
 //   Assemble the IF-5 client pack (Tools SAD §2.7): pack.manifest.json + an M0
 //   directory-manifest pack. Consumes the existing idmap.lock read-only (run
 //   `mcc link` / `mcc build --allocate-ids` first). Without --out, the manifest
 //   goes to stdout (diagnostics to stderr); with --out <dir> the pack is written
 //   under <dir>/meridian/<ns>/. The manifest content_hash equals emit-sql's
-//   world_manifest content_hash (the three-way tie, SAD §2.6).
+//   world_manifest content_hash (the three-way tie, SAD §2.6). emit-pck is
+//   single-pack at M0: `--pack <ns>` selects which pack to emit when the tree
+//   holds several (default: the first pack sorted by namespace).
 int cmd_emit_pck(const std::vector<std::string>& args) {
     std::string out_dir;
     std::string built_at(kDefaultBuiltAt);
     std::string godot_version;
+    std::string select_ns;
     std::vector<std::string> check_args;
     bool expect_out = false;
     bool expect_built = false;
     bool expect_godot = false;
+    bool expect_pack = false;
     for (const auto& a : args) {
         if (expect_out) { out_dir = a; expect_out = false; }
         else if (expect_built) { built_at = a; expect_built = false; }
         else if (expect_godot) { godot_version = a; expect_godot = false; }
+        else if (expect_pack) { select_ns = a; expect_pack = false; }
         else if (a == "--out") expect_out = true;
         else if (a.rfind("--out=", 0) == 0) out_dir = a.substr(std::strlen("--out="));
         else if (a == "--built-at") expect_built = true;
         else if (a.rfind("--built-at=", 0) == 0) built_at = a.substr(std::strlen("--built-at="));
         else if (a == "--godot-version") expect_godot = true;
         else if (a.rfind("--godot-version=", 0) == 0) godot_version = a.substr(std::strlen("--godot-version="));
+        else if (a == "--pack") expect_pack = true;
+        else if (a.rfind("--pack=", 0) == 0) select_ns = a.substr(std::strlen("--pack="));
         else check_args.push_back(a);
     }
     if (expect_out) {
@@ -361,11 +368,16 @@ int cmd_emit_pck(const std::vector<std::string>& args) {
         std::cerr << kProg << " emit-pck: --godot-version requires a version argument\n";
         return 2;
     }
+    if (expect_pack) {
+        std::cerr << kProg << " emit-pck: --pack requires a namespace argument\n";
+        return 2;
+    }
     std::string content_dir;
     mcc::stages::DiagFormat format;
     if (!parse_check_flags("emit-pck", check_args, content_dir, format)) return 2;
     return mcc::stages::emit_pck_content(content_dir, out_dir, MCC_VERSION, built_at,
-                                         godot_version, format, std::cout, std::cerr);
+                                         godot_version, format, std::cout, std::cerr,
+                                         select_ns);
 }
 
 // mcc chunk-emit [--zone <id>] [--grid <N>] [--out <dir>] [--origin-x <m>]

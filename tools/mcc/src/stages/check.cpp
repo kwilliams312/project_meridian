@@ -200,7 +200,8 @@ int emit_sql_content(const std::string& content_dir, const std::string& out_file
 int emit_pck_content(const std::string& content_dir, const std::string& out_dir,
                      const std::string& mcc_version, const std::string& built_at,
                      const std::string& godot_version, DiagFormat format,
-                     std::ostream& out, std::ostream& err) {
+                     std::ostream& out, std::ostream& err,
+                     const std::string& select_namespace) {
     model::ContentModel model;
     if (!discover(content_dir, model)) {
         err << "mcc emit-pck: content directory not found: " << content_dir << '\n';
@@ -222,6 +223,7 @@ int emit_pck_content(const std::string& content_dir, const std::string& out_dir,
         opts.mcc_version = mcc_version;
         opts.built_at = built_at;
         opts.godot_version = godot_version;
+        opts.select_namespace = select_namespace;
         emitted = emit_pck(model, linked, opts, diags);
     }
 

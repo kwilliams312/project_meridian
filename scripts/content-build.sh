@@ -146,7 +146,7 @@ run_build() {  # $1 = scratch dir to build into
   # ${arr[@]:+...} guards the empty-array expansion under `set -u` on bash 3.2 (macOS).
   ( cd "$dir" \
       && "$REPO_ROOT/$MCC" emit-sql "$REPO_ROOT/$CONTENT_DIR" --out build/world.sql ${built_at_args[@]:+"${built_at_args[@]}"} >/dev/null \
-      && "$REPO_ROOT/$MCC" emit-pck "$REPO_ROOT/$CONTENT_DIR" --out build/pck ${built_at_args[@]:+"${built_at_args[@]}"} >/dev/null )
+      && "$REPO_ROOT/$MCC" emit-pck "$REPO_ROOT/$CONTENT_DIR" --pack "$PACK_NS" --out build/pck ${built_at_args[@]:+"${built_at_args[@]}"} >/dev/null )
 }
 
 # `mcc build content` allocates ids (writes idmap.lock) then emits. The committed
@@ -183,9 +183,11 @@ printf '      %s\n' \
   "pck/meridian/${PACK_NS}/pack.data.json       (IF-5 M0 client-render field data, #477)"
 
 # --- 4. Invariant: IF-4 world_manifest hash == IF-5 pack.manifest hash. ------
-# world.sql row is: (pack_namespace, pack_version, id_band, content_hash, ...);
-# content_hash is the sole 64-hex token in the world_manifest INSERT tuple.
-sql_hash="$(grep -A3 'INSERT INTO world_manifest' "$OUT_DIR/world.sql" \
+# Each world_manifest row is: ('<ns>', '<version>', <band>, '<content_hash>', ...).
+# world_manifest can hold several rows (one per pack, sorted by namespace), so
+# select the row for $PACK_NS specifically rather than the first — the tie is
+# per-pack, and emit-pck emitted $PACK_NS above.
+sql_hash="$(grep -F "('${PACK_NS}'," "$OUT_DIR/world.sql" \
              | grep -Eo "'[0-9a-f]{64}'" | head -1 | tr -d "'")"
 pck_hash="$(grep -Eo '"content_hash"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"' \
              "$OUT_DIR/pck/meridian/${PACK_NS}/pack.manifest.json" \
