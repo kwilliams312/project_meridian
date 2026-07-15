@@ -33,6 +33,7 @@
 //      different keys, and the nonce counter advances per seal.
 
 #include "world_dispatch.h"
+#include "db_content_store.h"
 #include "world_session.h"
 
 #include "meridian/db/connection.h"
@@ -52,6 +53,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -216,6 +218,12 @@ Bytes enc_enter_world_request(std::uint64_t character_id) {
     return bytes_of(b);
 }
 
+Bytes enc_clock_sync(std::uint64_t client_time_ms) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateClockSync(b, client_time_ms, /*server_time_ms=*/0));
+    return bytes_of(b);
+}
+
 template <typename T>
 const T* decode(const Bytes& buf) {
     fb::Verifier v(buf.data(), buf.size());
@@ -271,6 +279,9 @@ struct MoveResult {
     bool got_state2 = false;     // the second MovementState (correction) came back
     float state2_x = 0.0f, state2_y = 0.0f, state2_z = 0.0f;
     std::uint32_t ack_seq2 = 0;
+    bool saw_mob_damage = false;
+    bool saw_mob_death = false;
+    std::uint32_t mob_damage_health = 0;
 };
 
 // Decode a MOVEMENT_STATE reply frame into (x,y,z,ack). Returns false if the next
@@ -287,6 +298,7 @@ bool recv_movement_state(Client& c, float& x, float& y, float& z, std::uint32_t&
         if (!ms) return false;
         rf = mw::decode_frame(*ms);
         if (rf && rf->opcode == mn::Opcode::VITALS_UPDATE) continue;
+        if (rf && rf->opcode == mn::Opcode::ENTITY_ENTER) continue;  // installed #784 mob
 
         if (rf && rf->opcode == mn::Opcode::INVENTORY_SNAPSHOT) continue;  // #453 unsolicited bags snapshot
         if (rf && rf->opcode == mn::Opcode::KNOWN_ABILITIES) continue;     // #457 unsolicited spellbook
@@ -356,6 +368,37 @@ MoveResult drive_hello_then_move(std::uint16_t port, std::uint64_t grant_id,
                                                           client_time_ms2)));
         r.got_state2 =
             recv_movement_state(c, r.state2_x, r.state2_y, r.state2_z, r.ack_seq2);
+    }
+
+    // #784 production proof: keep driving harmless clock frames so the session's
+    // IO worker drains MapTick vitals emitted by the world thread. A hostile spawn
+    // installed by the fixture attacks this actual entered character; isolated
+    // MapTick construction cannot satisfy this assertion.
+    for (std::uint64_t i = 0; i < 15 && !r.saw_mob_death; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        c.send_frame(mw::encode_frame(mn::Opcode::CLOCK_SYNC, /*seq=*/10 + i,
+                                      enc_clock_sync(1000 + i)));
+        bool saw_echo = false;
+        while (!saw_echo) {
+            std::optional<Bytes> frame = c.recv_frame();
+            if (!frame) return r;
+            std::optional<mw::Frame> rf = mw::decode_frame(*frame);
+            if (!rf) continue;
+            if (rf->opcode == mn::Opcode::CLOCK_SYNC) {
+                saw_echo = true;
+                continue;
+            }
+            if (rf->opcode != mn::Opcode::VITALS_UPDATE) continue;
+            Bytes pl(rf->payload, rf->payload + rf->payload_len);
+            const auto* vitals = decode<mn::VitalsUpdate>(pl);
+            if (vitals == nullptr || vitals->entity_guid() != character_id ||
+                vitals->health() >= vitals->max_health()) {
+                continue;
+            }
+            r.saw_mob_damage = true;
+            r.saw_mob_death = vitals->health() == 0;
+            r.mob_damage_health = vitals->health();
+        }
     }
     return r;
 }
@@ -613,6 +656,26 @@ int main() {
         wcfg.realm_id = realm_id;  // grants for another realm are rejected
         mw::Dispatcher dispatcher;  // the REAL WORLD_HELLO handler (not overridden)
         mw::WorldServer world(dispatcher, wcfg);
+        mw::SpawnPlacement hostile;
+        hostile.npc_id = 784;
+        hostile.name = "Session Path Scamp";
+        // 8.1m from spawn is outside the authored 8m aggro radius. The legal
+        // +0.2m movement below crosses into 7.9m, so an attack proves the live
+        // MovementIntent position reached MapTick rather than only syncing enter.
+        hostile.pos = {mw::movement::kZoneSpawnXY + 8.1f,
+                       mw::movement::kZoneSpawnXY, mw::movement::kFlatGroundZ, 0.0f};
+        hostile.stats.level = 1;
+        hostile.stats.max_health = 100;
+        hostile.stats.faction = mw::Faction::kHostile;
+        hostile.behavior = mw::CreatureBehavior::kAggressive;
+        hostile.damage_min = 10'000;
+        hostile.damage_max = 10'000;
+        hostile.attack_speed_ms = 50;
+        hostile.aggro_radius_m = 8.0f;
+        hostile.leash_radius_m = 18.0f;
+        hostile.run_speed_mps = 3.0f;
+        hostile.respawn_min = 30;
+        world.install_spawns({hostile});
         world.start();
 
         // Serve six connections: happy, replay, expired, unknown, wrong-realm,
@@ -712,9 +775,17 @@ int main() {
             // NOT the cheated -319.60 — reject + snap-back proven on the live path.
             check("G: illegal move corrected back to last authoritative (~-319.80, not -319.60)",
                   g.got_state2 && g.state2_x > -319.81f && g.state2_x < -319.79f);
+            check("G: installed hostile damages the actual entered session player",
+                  g.saw_mob_damage);
+            check("G: lethal mob vitals/death reaches the actual session wire",
+                  g.saw_mob_death && g.mob_damage_health == 0);
         }
 
         server.join();
+        for (int i = 0; i < 50 && world.map_player_count() != 0; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        check("G: session logout removes the player from live MapTick",
+              world.map_player_count() == 0);
         world.stop();
 
         // --- Cleanup: grants + both realms + account. Deleting the account

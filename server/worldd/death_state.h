@@ -125,6 +125,11 @@ public:
     // call that first.
     ObjectGuid resurrect(ObjectGuid player_guid);
 
+    // Session teardown: discard any death/corpse state for a player leaving this
+    // map. Unlike resurrect(), this is not a gameplay transition and restores no
+    // health; it prevents a reconnect with the same guid inheriting stale state.
+    void forget(ObjectGuid player_guid);
+
     // Health to restore on resurrect for a given `max_health` (config %, clamped to
     // [1, max_health]).
     std::uint32_t resurrect_health(std::uint32_t max_health) const;

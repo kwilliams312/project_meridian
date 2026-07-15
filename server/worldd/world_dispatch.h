@@ -187,6 +187,8 @@ enum class SessionPhase {
     kInWorld,     // spawned via an ENTER_WORLD_RESPONSE(OK)
 };
 
+struct WorldEvent;
+
 struct ConnCtx {
     db::Connection* db = nullptr;        // auth DB (session_grant) — may be null in tests
     db::Connection* char_db = nullptr;   // characters DB — nullable (ENTER_WORLD -> INTERNAL when null)
@@ -217,6 +219,11 @@ struct ConnCtx {
     std::optional<SessionMovementState> movement;  // authoritative movement (#86), post-auth
     MovementIntake intake;                          // ≤ 10/s intent-rate gate (#86)
     ChatIntake chat_intake;                         // chat rate class (OPS-03; #367)
+
+    // Narrow IO-worker -> world-thread simulation ingress (#784). The live
+    // WorldServer installs a callback that enqueues typed player lifecycle and
+    // movement events; directly-built dispatcher tests may leave it empty.
+    std::function<void(WorldEvent)> simulation_enqueue;
 
     // OPS-03b per-opcode RATE CLASSES (#421). The connection-wide anti-flood gate
     // the dispatcher runs at the dispatch entry: every client opcode is assigned a
@@ -446,13 +453,26 @@ private:
 // state, and the world thread drains it each tick.
 // ---------------------------------------------------------------------------
 
-// A unit of work handed from an IO worker to the world thread. At M0 it is a
-// decoded opcode + seq + a copy of the payload (the world thread outlives the
-// frame). Later stories give it a session id and typed, per-map routing.
+enum class WorldEventKind : std::uint8_t {
+    kOpaque = 0,
+    kPlayerEnter,
+    kPlayerMove,
+    kPlayerLeave,
+};
+
+// A unit of work handed from an IO worker to the world thread. The original
+// opaque opcode form remains for scaffold/tests; #784 adds the minimum typed
+// player lifecycle needed to keep the live MapTick authoritative for mob AI.
 struct WorldEvent {
+    WorldEventKind kind = WorldEventKind::kOpaque;
     net::Opcode opcode{};
     std::uint64_t seq = 0;
     Bytes payload;  // owned copy — the frame buffer is gone by drain time
+    ObjectGuid player_guid = 0;
+    SessionToken player_session_token = 0;  // ABA guard for kick/reconnect teardown
+    Position player_pos;
+    UnitStats player_stats;
+    std::uint8_t char_class = 0;
 };
 
 // Route one map tick's events to the quest-kill credit bus (QST-01 event-bus, #396):
@@ -595,6 +615,10 @@ public:
     // authored spawns installed via install_spawns; #486). Lets a boot test assert the
     // world was populated (creature count > 0) after install.
     std::size_t map_creature_count() const;
+
+    // Thread-safe diagnostic count of live session players mirrored into MapTick.
+    // Used by production-path tests to prove enter and logout lifecycle events drain.
+    std::size_t map_player_count() const;
 
     // Replace the read-only ability template store on the LIVE cast path with a
     // world-DB-backed catalog (#481), in place of the M1 placeholder store. Loaded

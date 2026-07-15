@@ -181,6 +181,11 @@ public:
     ObjectGuid add_player(ObjectGuid guid, const Position& pos, const UnitStats& stats,
                           std::uint8_t char_class = 0);
 
+    // Remove a disconnected player and all map-owned transient state. AI drops
+    // stale threat on its next target snapshot; reconnecting the same guid starts
+    // from the new enter event rather than a stale death/cast/request record.
+    void remove_player(ObjectGuid guid);
+
     // Spawn a server creature from `def` via the AI. Returns its assigned guid.
     ObjectGuid add_creature(const CreatureSpawnDef& def);
 

@@ -117,6 +117,13 @@ int main() {
               tick.deaths().phase_of(43) == DeathPhase::kCorpse);
         check("death event attributes the server creature",
               tick.log_text().find("death guid=43 by=") != std::string::npos);
+        tick.remove_player(43);
+        check("session removal clears map player and stale death state",
+              tick.unit_for_guid(43) == nullptr &&
+                  tick.deaths().phase_of(43) == DeathPhase::kAlive);
+        tick.add_player(43, at(30, 0), player);
+        check("same-guid reconnect starts alive instead of inheriting corpse state",
+              tick.unit_for_guid(43) != nullptr && tick.unit_for_guid(43)->is_alive());
     }
 
     // A passive friendly with the same required combat fields never attacks.

@@ -141,6 +141,22 @@ ObjectGuid MapTick::add_player(ObjectGuid guid, const Position& pos, const UnitS
     return guid;
 }
 
+void MapTick::remove_player(ObjectGuid guid) {
+    players_.erase(guid);
+    deaths_.forget(guid);
+    inbound_.erase(std::remove_if(inbound_.begin(), inbound_.end(),
+                                  [guid](const AbilityUseCmd& cmd) {
+                                      return cmd.caster_guid == guid;
+                                  }),
+                   inbound_.end());
+    release_requests_.erase(
+        std::remove(release_requests_.begin(), release_requests_.end(), guid),
+        release_requests_.end());
+    resurrect_requests_.erase(
+        std::remove(resurrect_requests_.begin(), resurrect_requests_.end(), guid),
+        resurrect_requests_.end());
+}
+
 ObjectGuid MapTick::add_creature(const CreatureSpawnDef& def) {
     const ObjectGuid g = ai_.add_spawn(def);
     prev_ai_state_[g] = ai_.state_of(g);  // spawn state (kPatrol) — the transition baseline

@@ -104,6 +104,13 @@ ObjectGuid DeathStateMachine::resurrect(ObjectGuid player_guid) {
     return corpse_guid;
 }
 
+void DeathStateMachine::forget(ObjectGuid player_guid) {
+    auto it = records_.find(player_guid);
+    if (it == records_.end()) return;
+    corpses_.erase(it->second.corpse_guid);
+    records_.erase(it);
+}
+
 std::uint32_t DeathStateMachine::resurrect_health(std::uint32_t max_health) const {
     const std::uint32_t cap = std::max<std::uint32_t>(1, max_health);
     const std::uint64_t hp = static_cast<std::uint64_t>(cap) * cfg_.resurrect_health_pct / 100;
