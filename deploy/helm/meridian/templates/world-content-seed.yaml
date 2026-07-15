@@ -96,12 +96,18 @@ spec:
               # the sync is not deadlocked waiting on this hook.
               [ -f "$SQL_PATH" ] || { echo "WARNING: content DML $SQL_PATH missing from image — skipping world content seed (#492); realm runs degraded until a content-baked image seeds it"; exit 0; }
               mysql() { mariadb -h"$DB_HOST" -u"$DB_USER" "$@"; }
-              # Baked content hash: the sole 64-hex token in the world_manifest INSERT.
-              BAKED=$(grep -A4 'INSERT INTO world_manifest' "$SQL_PATH" \
-                        | grep -Eo '[0-9a-f]{64}' | head -1 || true)
-              # Live hash (empty when the table is missing/unseeded).
+              # world_manifest holds one row per pack (a realm may seed several
+              # packs). The gate compares the SORTED SET of every pack's content_hash
+              # baked-vs-live, so ANY pack added/changed/removed forces a reseed and
+              # an identical set skips — robust for one pack or many (was: head -1 /
+              # LIMIT 1, which picked one arbitrary pack under a multi-pack artifact).
+              # Baked hashes: the 64-hex content_hash tokens in the world_manifest INSERT.
+              BAKED=$(sed -n '/INSERT INTO world_manifest/,/;/p' "$SQL_PATH" \
+                        | grep -Eo "'[0-9a-f]{64}'" | tr -d "'" | sort | tr '\n' ',' || true)
+              # Live hashes (empty when the table is missing/unseeded).
               CURRENT=$(mysql -N -B "$DB_NAME" \
-                          -e "SELECT content_hash FROM world_manifest LIMIT 1" 2>/dev/null || true)
+                          -e "SELECT content_hash FROM world_manifest" 2>/dev/null \
+                          | sort | tr '\n' ',' || true)
               if [ -n "$BAKED" ] && [ "$BAKED" = "$CURRENT" ]; then
                 echo "world content already at $BAKED — nothing to seed"
                 exit 0

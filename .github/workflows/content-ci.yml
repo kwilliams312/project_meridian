@@ -244,10 +244,11 @@ jobs:
       # BONUS validation (d): load the world DDL + the mcc-emitted world.sql into
       # the live MariaDB and prove it loads AND populates. The DDL files reference
       # each other across files, so FOREIGN_KEY_CHECKS is disabled for the combined
-      # load (identical to build.yml's worldd-session world-DB load). We then assert
-      # world_manifest has exactly one row whose content_hash matches the pack — the
-      # end-to-end proof that `YAML → mcc → world DB` carries the same hash the
-      # client pack (IF-5) verifies against (runbook DC-10, zero hand-written SQL).
+      # load (identical to build.yml's worldd-session world-DB load). world_manifest
+      # holds one row per pack (sorted by namespace); we assert the `core` row is
+      # present and its content_hash matches the core client pack — the end-to-end
+      # proof that `YAML → mcc → world DB` carries the same hash the client pack
+      # (IF-5) verifies against (runbook DC-10, zero hand-written SQL).
       - name: Load emitted world.sql into MariaDB (proves the IF-4 artifact loads)
         run: |
           set -euo pipefail
@@ -256,24 +257,25 @@ jobs:
           ( echo "SET FOREIGN_KEY_CHECKS=0;"; cat schema/sql/world/*.sql ) | MDB meridian_world
           echo "== load mcc-emitted world.sql =="
           MDB meridian_world < build/content-out/world.sql
-          echo "== assert world_manifest populated + hash ties to the pack =="
+          echo "== assert the core world_manifest row is present + ties to the pack =="
           rows="$(MDB -N meridian_world -e 'SELECT COUNT(*) FROM world_manifest')"
-          db_hash="$(MDB -N meridian_world -e 'SELECT content_hash FROM world_manifest LIMIT 1')"
+          core_rows="$(MDB -N meridian_world -e "SELECT COUNT(*) FROM world_manifest WHERE pack_namespace='core'")"
+          db_hash="$(MDB -N meridian_world -e "SELECT content_hash FROM world_manifest WHERE pack_namespace='core'")"
           pck_hash="$(python3 -c "import json; print(json.load(open('build/content-out/pck/meridian/core/pack.manifest.json'))['content_hash'])")"
-          echo "world_manifest rows: $rows"
-          echo "world_manifest.content_hash: $db_hash"
+          echo "world_manifest rows: $rows (core rows: $core_rows)"
+          echo "world_manifest[core].content_hash: $db_hash"
           npcs="$(MDB -N meridian_world -e 'SELECT COUNT(*) FROM npc_template')"
           items="$(MDB -N meridian_world -e 'SELECT COUNT(*) FROM item_template')"
           echo "loaded content: npc_template=$npcs item_template=$items"
-          if [ "$rows" != "1" ]; then
-            echo "DB LOAD FAIL: expected exactly 1 world_manifest row, got $rows." >&2
+          if [ "$core_rows" != "1" ]; then
+            echo "DB LOAD FAIL: expected exactly 1 'core' world_manifest row, got $core_rows (total rows: $rows)." >&2
             exit 1
           fi
           if [ "$db_hash" != "$pck_hash" ]; then
-            echo "DB LOAD FAIL: DB content_hash ($db_hash) != pack ($pck_hash)." >&2
+            echo "DB LOAD FAIL: DB core content_hash ($db_hash) != core pack ($pck_hash)." >&2
             exit 1
           fi
-          echo "DB LOAD OK: world.sql loads, world_manifest ties to the client pack hash."
+          echo "DB LOAD OK: world.sql loads, the core world_manifest row ties to the client pack hash."
 
       # Capture the artifacts so downstream (client, deploy DB-init) can consume
       # them: world.sql → the world DB, pck/ → the client (issue #107).
