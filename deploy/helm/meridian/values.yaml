@@ -157,6 +157,23 @@ mariadb:
     enabled: true
     sqlPath: /content/world-content.sql   # path to the baked DML inside meridian-db
 
+  # Character-DB migration runner (#815). The meridian-db first-boot init applies
+  # character migrations ONLY on a FRESH datadir; a PERSISTENT realm keeps its
+  # datadir, so a migration added after first init never lands (worldd's #698 boot
+  # gate needs migration 0004's realm_content_state — a persistent dev DB that
+  # predated it crashlooped worldd). This PreSync hook Job runs the baked runner
+  # (/usr/local/bin/meridian-char-migrate) BEFORE worldd rolls, applying un-applied
+  # *.up.sql additively to meridian_characters (which HAS user data) and tracking
+  # them in schema_migrations. Idempotent: no-op when up to date. Auto-active
+  # whenever the bundled DB is on; set enabled=false to manage schema out-of-band
+  # (e.g. external DB).
+  charMigrate:
+    enabled: true
+    schemasPath: /schemas/characters      # dir of NNNN_*.up.sql baked into meridian-db
+    # Seconds the runner waits for the DB before SKIPPING (a first-install PreSync
+    # runs before MariaDB is up; initdb then owns first-init — never wedge the sync).
+    waitDbTimeout: 60
+
 # ── Dev seed (⚠️ SHORT-TERM — remove once the admin web portal exists) ────────
 # A post-sync Job that idempotently seeds the realm row authd advertises + a set
 # of SRP test accounts, so a fresh ephemeral dev DB is usable immediately. This

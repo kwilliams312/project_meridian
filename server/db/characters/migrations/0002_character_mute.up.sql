@@ -1,5 +1,6 @@
 -- =====================================================================
 -- Project Meridian — characters DB (migration 0002, UP): character_mute (M1)
+-- meridian:applied-probe table:character_mute  -- deploy-time runner backfill sentinel (#815)
 -- Serves: docs/sad/server-sad.md §4.2 (per-character durable state), server PRD
 --         §4-M1 (OPS-02 moderation), story #419 (chat-mute enforcement).
 --
