@@ -1,0 +1,5 @@
+task_id: 019f6262-fc61-7c3c-839e-ec6d2a9a1220
+model_version: meshy-5
+request:
+  image_url: '<data-uri omitted: 2067322 chars, sha256:97ef0f4f8d7041d4af2df7659776d61594b90cbc32716e422d182cf65d72bc07>'
+  ai_model: meshy-5
