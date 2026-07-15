@@ -1266,19 +1266,26 @@ std::vector<SpawnPlacement> load_spawn_points(db::Connection& world_db) {
 }
 
 // =============================================================================
-// load_start_zone_spawn  (zone.start_zone -> graveyard ordinal 0 -> enter spawn)
+// resolve_start_zone_graveyard_spawn  (zone.start_zone -> graveyard ord 0 -> spawn)
 // =============================================================================
-// The enter-world spawn point (C8, #761). zone.schema.yaml makes the START ZONE's
-// FIRST graveyard the enter-world spawn ("start_zone: spawn point = first
-// graveyard"); the emitter stores graveyards[] with ordinal 0 = the first entry
-// (schema/sql/world/80_zone.sql). We JOIN the (one) start zone to its ordinal-0
-// graveyard and convert the position from the DB's Godot Y-up frame to the worldd
-// Z-up runtime frame — the SAME #498 conversion load_spawn_points applies (planar
-// x stays x, Godot planar z -> server planar y, Godot height y -> server height z).
-// ORDER BY z.id keeps it deterministic if a merged DB somehow carried two start
-// zones; the realm world DB is single-pack (content-build.sh) so there is exactly
-// one. No start zone / no graveyard -> nullopt (the handler keeps the placeholder).
-std::optional<EnterSpawn> load_start_zone_spawn(db::Connection& world_db) {
+// The PURE start-zone graveyard resolver (C8, #761). zone.schema.yaml makes the
+// START ZONE's FIRST graveyard the enter-world spawn ("start_zone: spawn point =
+// first graveyard"); the emitter stores graveyards[] with ordinal 0 = the first
+// entry (schema/sql/world/80_zone.sql). We JOIN the (one) start zone to its
+// ordinal-0 graveyard and convert the position from the DB's Godot Y-up frame to
+// the worldd Z-up runtime frame — the SAME #498 conversion load_spawn_points
+// applies (planar x stays x, Godot planar z -> server planar y, Godot height y ->
+// server height z). ORDER BY z.id keeps it deterministic if a merged DB somehow
+// carried two start zones; the realm world DB is single-pack (content-build.sh) so
+// there is exactly one. No start zone / no graveyard -> nullopt.
+//
+// NOTE (#761 M0 gate): this resolver is CORRECT but currently DORMANT — the graveyards
+// are authored in the zone-local content frame (chibi Sprout Meadow = (0,0,0)) with no
+// manifest-origin translation, so its result would land OUTSIDE the server movement
+// bounds [-512,-128] (zone_geometry.h #508/#562 one-origin invariant). load_start_zone_
+// spawn() below therefore does NOT call it yet; it is kept + unit-tested here, ready to
+// activate when A-08 lands a per-zone real-terrain signal. See load_start_zone_spawn().
+std::optional<EnterSpawn> resolve_start_zone_graveyard_spawn(db::Connection& world_db) {
     // Degrees -> radians for the Position facing (movement_validation.h Position:
     // orientation is radians). The graveyard orientation_deg is a yaw [0,360).
     constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
@@ -1303,6 +1310,34 @@ std::optional<EnterSpawn> load_start_zone_spawn(db::Connection& world_db) {
     es.pos.z = as_f32(r[2]);              // pos_y = content.y  (Godot height) -> server height z
     es.pos.orientation = as_f32(r[4]) * kDegToRad;  // graveyard facing (deg) -> radians
     return es;
+}
+
+// =============================================================================
+// load_start_zone_spawn  (M0 GATE, #761 fix — enter-world spawn resolution)
+// =============================================================================
+// The enter-world spawn load_world_content resolves into WorldContent.enter_spawn.
+// C8 (#761) originally returned the start-zone graveyard here; the lead-approved fix
+// GATES that off for the M0 era and returns std::nullopt, so the ENTER_WORLD handler
+// keeps the flat-bootstrap placeholder — the -320 Zone-01 play-area centre
+// (movement::kZoneSpawnXY) the client's flat-bootstrap terrain is built around
+// (client world.gd, aligned to -320 by #805). RATIONALE:
+//   * There is NO per-zone real-terrain signal to gate on yet. zone.chunk_manifest is
+//     RESERVED (A-08) and is NOT emitted to the world DB: schema/sql/world/80_zone.sql
+//     omits the column, and the emitter types it std::monostate (tools/schema_gen/
+//     generated/cpp/content_types.gen.hpp). Every M0 zone (chibi Sprout Meadow, core
+//     zone01) therefore ships no terrain, so the graveyard spawn must stay dormant.
+//   * Returning the graveyard spawn today drops the character OUTSIDE the server
+//     movement bounds [-512,-128] (the graveyards are zone-local content coords — chibi
+//     (0,0,0) — with no manifest-origin translation), so EVERY move is rejected out of
+//     bounds. The -320 placeholder is inside bounds and matches BOTH the client flat-
+//     bootstrap AND the headless bot (client/bot/bot_core.cpp, #562).
+//
+// WHEN A-08 LANDS a real-terrain signal (a zone that ships a chunk_manifest with the
+// manifest origin/extent), gate on THAT here and, for such a zone, return
+// resolve_start_zone_graveyard_spawn(world_db) (kept + unit-tested above) — after it is
+// taught the manifest-origin translation so the graveyard lands inside the real play area.
+std::optional<EnterSpawn> load_start_zone_spawn(db::Connection& /*world_db*/) {
+    return std::nullopt;
 }
 
 // =============================================================================
@@ -1548,7 +1583,7 @@ WorldContent load_world_content(db::Connection& world_db) {
     content.classes = load_db_class_catalog(world_db);
     content.talents = load_db_talents(world_db);
     content.spawns = load_spawn_points(world_db);
-    content.enter_spawn = load_start_zone_spawn(world_db);  // C8 #761 — start-zone spawn
+    content.enter_spawn = load_start_zone_spawn(world_db);  // #761 — M0-gated (nullopt today)
     return content;
 }
 

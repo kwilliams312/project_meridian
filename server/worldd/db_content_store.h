@@ -209,14 +209,24 @@ struct EnterSpawn {
     Position pos;                // graveyard[0] position + facing, in the Z-up runtime frame
 };
 
-// Resolve the enter-world spawn from the world DB (#761): the start zone's first
-// graveyard. Returns std::nullopt when the world DB ships NO start zone with a
-// graveyard (e.g. a content-less / degraded world DB, or a pack that authors no
-// start_zone) — the enter-world handler then keeps the movement::kZoneSpawnXY
-// placeholder. Deterministic (lowest start-zone id wins if a merged DB somehow
-// carries more than one; the realm DB is single-pack so there is exactly one).
-// Throws meridian::db::DbError on a query failure (fail-fast, same policy as the
-// other loaders).
+// PURE resolver (#761): the start zone's first graveyard, converted to the worldd
+// Z-up runtime frame. Returns std::nullopt when the world DB ships NO start zone with
+// a graveyard. Deterministic (lowest start-zone id wins if a merged DB somehow carries
+// more than one; the realm DB is single-pack so there is exactly one). Throws
+// meridian::db::DbError on a query failure (fail-fast, same policy as the other loaders).
+//
+// DORMANT in the M0 era: its result is in the zone-local content frame (no manifest-
+// origin translation), which lands OUTSIDE the server movement bounds [-512,-128], so
+// load_start_zone_spawn() does NOT call it yet. Kept + unit-tested (test/enter_spawn_db_it)
+// and re-activated when A-08 lands a per-zone real-terrain signal. See the .cpp.
+std::optional<EnterSpawn> resolve_start_zone_graveyard_spawn(db::Connection& world_db);
+
+// The enter-world spawn load_world_content installs into WorldContent.enter_spawn (#761).
+// M0 GATE (lead-approved fix): returns std::nullopt today — no zone ships real terrain
+// yet (zone.chunk_manifest is RESERVED/A-08 and not emitted to the world DB), so the
+// ENTER_WORLD handler keeps the movement::kZoneSpawnXY (-320) flat-bootstrap placeholder
+// that the client (world.gd, aligned by #805) and the headless bot (#562) both use.
+// Re-activates resolve_start_zone_graveyard_spawn() when A-08 lands. See the .cpp.
 std::optional<EnterSpawn> load_start_zone_spawn(db::Connection& world_db);
 
 // --- The loaded world content bundle -----------------------------------------

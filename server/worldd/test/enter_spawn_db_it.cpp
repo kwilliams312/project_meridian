@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// worldd — ENTER-WORLD START-ZONE SPAWN load DB-backed integration test (C8
-// enter-as-chibi, story #761, epic #753). The acceptance bar for C8: a character
-// entering the world must spawn at its realm's START ZONE first graveyard (per
-// zone.schema.yaml — "start_zone: spawn point = first graveyard"), NOT the old
-// D-11 PLACEHOLDER (movement::kZoneSpawnXY, the Zone-01 flat-ground centre). This
-// test proves the server-side resolution the enter-world handler now depends on:
+// worldd — ENTER-WORLD START-ZONE SPAWN load DB-backed integration test (#761,
+// epic #753). This test covers TWO seams after the lead-approved M0 gate fix:
 //
-//   load_start_zone_spawn(world_db) resolves the (single) zone whose start_zone is
-//   TRUE, joins it to its ordinal-0 graveyard, converts the position from the DB's
-//   Godot Y-up frame to the worldd Z-up runtime frame (the #498 conversion), and
-//   returns it — so main() installs it (WorldServer::set_enter_spawn) and the
-//   ENTER_WORLD handler spawns the character there instead of the placeholder.
+//   (1) resolve_start_zone_graveyard_spawn(world_db) — the PURE resolver: resolves the
+//       (single) zone whose start_zone is TRUE, joins it to its ordinal-0 graveyard,
+//       converts the position from the DB's Godot Y-up frame to the worldd Z-up runtime
+//       frame (the #498 conversion), and returns it. KEPT + unit-tested here so it is
+//       provably correct for when A-08 re-activates it, even though it is dormant now.
+//
+//   (2) load_start_zone_spawn(world_db) — the M0 GATE load_world_content calls: returns
+//       std::nullopt TODAY (no zone ships real terrain — zone.chunk_manifest is
+//       RESERVED/A-08 and not emitted to the DB), so the ENTER_WORLD handler keeps the
+//       flat-bootstrap placeholder (movement::kZoneSpawnXY = -320, inside the movement
+//       bounds [-512,-128], matching the client flat-bootstrap + the headless bot #562).
+//       Returning the graveyard would drop the character out of bounds -> move rejects.
 //
 // It asserts the full contract:
 //   * SELECTION  — a NON-start zone's graveyard is ignored; only start_zone wins.
@@ -21,9 +24,10 @@
 //                  height), matching load_spawn_points; the graveyard facing
 //                  (orientation_deg) becomes the Position orientation in radians.
 //   * CHIBI      — the real chibi shape (Sprout Meadow graveyard at ORIGIN) resolves
-//                  to a (0,0,0) spawn — the dev chibi realm's enter point.
-//   * DEGRADE    — no start zone (or a start zone with no graveyard) -> std::nullopt,
-//                  so the handler keeps the D-11 placeholder (DB-less / degraded).
+//                  to a (0,0,0) spawn — what the resolver computes for that pack.
+//   * DEGRADE    — no start zone (or a start zone with no graveyard) -> std::nullopt.
+//   * M0 GATE    — even WITH a seeded start zone + graveyard, load_start_zone_spawn()
+//                  returns nullopt today, so the handler falls back to the -320 placeholder.
 //
 // Self-seeded, DB-LEVEL ISOLATED (#707): the loader hard-codes the `zone` /
 // `graveyard` table names, so isolation is at the DATABASE level — the test creates
@@ -162,7 +166,7 @@ int main() {
             "INSERT INTO graveyard (zone_id, ordinal, pos_x, pos_y, pos_z, orientation_deg) "
             "VALUES (5, 0, 999, 0, 999, 0)");
 
-        std::optional<mw::EnterSpawn> es = mw::load_start_zone_spawn(conn);
+        std::optional<mw::EnterSpawn> es = mw::resolve_start_zone_graveyard_spawn(conn);
         check("A: a start-zone spawn is resolved", es.has_value());
         if (es) {
             check("A: SELECTION — the START ZONE is chosen (not the non-start zone)",
@@ -193,7 +197,7 @@ int main() {
         conn.execute(
             "INSERT INTO graveyard (zone_id, ordinal, pos_x, pos_y, pos_z, orientation_deg) "
             "VALUES (1048578, 0, 0, 0, 0, 0)");
-        es = mw::load_start_zone_spawn(conn);
+        es = mw::resolve_start_zone_graveyard_spawn(conn);
         check("B: the chibi start-zone spawn resolves", es.has_value());
         if (es) {
             check("B: chibi Sprout Meadow spawn is the origin (0,0,0)",
@@ -201,6 +205,18 @@ int main() {
                       approx(es->pos.z, 0.0f));
             check("B: chibi spawn resolves the Sprout Meadow zone id", es->zone_id == kStartZone);
         }
+
+        // ---- Scenario B2: M0 GATE — load_start_zone_spawn is nullopt today ------
+        // The chibi start zone + its ordinal-0 graveyard are STILL seeded from B. The
+        // resolver returns a value (proved above), but load_start_zone_spawn() — the
+        // seam load_world_content installs — must return nullopt in the M0 era, so the
+        // ENTER_WORLD handler keeps the movement::kZoneSpawnXY (-320) flat-bootstrap
+        // placeholder instead of the (out-of-bounds) chibi (0,0,0) graveyard. This is
+        // the #761 regression gate: no zone ships real terrain yet (chunk_manifest
+        // RESERVED/A-08), so the graveyard spawn stays dormant.
+        check("B2: M0 GATE — load_start_zone_spawn() is nullopt even with a seeded start "
+              "zone+graveyard (handler keeps the -320 placeholder)",
+              !mw::load_start_zone_spawn(conn).has_value());
 
         // ---- Scenario C: DEGRADE — no start zone (or none with a graveyard) -----
         // (c1) A zone that is NOT a start zone, with a graveyard: the loader must
@@ -212,16 +228,16 @@ int main() {
         conn.execute(
             "INSERT INTO graveyard (zone_id, ordinal, pos_x, pos_y, pos_z, orientation_deg) "
             "VALUES (5, 0, 1, 2, 3, 0)");
-        check("C1: no start zone -> nullopt (handler keeps the D-11 placeholder)",
-              !mw::load_start_zone_spawn(conn).has_value());
+        check("C1: no start zone -> resolver nullopt (handler keeps the D-11 placeholder)",
+              !mw::resolve_start_zone_graveyard_spawn(conn).has_value());
 
         // (c2) A start zone that ships NO graveyard: the JOIN yields nothing -> nullopt.
         truncate_all(conn);
         conn.execute(
             "INSERT INTO zone (id, name, level_min, level_max, start_zone) "
             "VALUES (1048578, 'Sprout Meadow', 1, 5, TRUE)");
-        check("C2: start zone with no graveyard -> nullopt",
-              !mw::load_start_zone_spawn(conn).has_value());
+        check("C2: start zone with no graveyard -> resolver nullopt",
+              !mw::resolve_start_zone_graveyard_spawn(conn).has_value());
 
         // ---- cleanup ----------------------------------------------------------
         conn.execute("DROP DATABASE IF EXISTS " + dbname);
