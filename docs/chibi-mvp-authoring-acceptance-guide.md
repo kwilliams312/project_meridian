@@ -73,6 +73,32 @@ The existing eight class-gear IDs remain unchanged. While #780 is pending, do no
 competing alias in another story. After #780 merges and these IDs are allocated, treat them as
 permanent and route any contract change through the tracker rather than silently renaming them.
 
+### Acceptance dependency order
+
+The execution order below covers every story in the current #774 checklist. Parallel work is
+encouraged only where these blocking edges remain satisfied:
+
+1. **Freeze and document the contract:** #780 owns the canonical IDs, tuning targets, quest
+   rewards, and the physical mitigation formula consumed by #784. #777 owns this executable
+   guide. #776 tunes the four class kits against the frozen contract and requires #784 runtime
+   behavior for its survival benchmark.
+2. **Land required 2D icons before item data:** #800 supplies the five final Chibi icon assets and
+   their IF-8 provenance; #775 may reference them only after #800 merges.
+3. **Land runtime and tooling foundations:** #784 supplies hostile attacks and the binding armor
+   behavior; #799 supplies durable quest XP/level progression; #801 supplies Forge placement and
+   deterministic spawn export; #802 supplies authoritative purchase/equip interaction; #786
+   supplies selected-pack loading; and #787 resolves the Godot compatibility rule.
+4. **Assemble the demo graph:** #781 authors Pippa, Tink, and the vendor; #775 authors items,
+   Sunny Sip, mobs, and loot; #782 authors the quest chain; #779 consumes #801 to place it; and
+   #778 wires finalized art, including #800's icons.
+5. **Prove playability:** #785 consumes #802's authoritative loadout to apply gear stats and
+   ability coefficients. #783 may run the final human E2E only after all preceding blocking rows
+   are green.
+
+Authored records are not substitutes for their runtime owners: a valid vendor file does not prove
+a purchase, a reward-XP field does not prove progression, and a raw spawn file does not prove a
+Forge-authored placement.
+
 ## 1. Prepare and open the workspace
 
 Run all commands from the repository root unless a step says otherwise.
@@ -249,6 +275,13 @@ runtime. The item editor must not confuse a zero price with a missing required p
 Capture the saved weapon, armor, consumable, quest item, and Meadow Medal, plus backlinks from the
 vendor, loot table, quest objective/reward, class equip types, and audiovisual assets.
 
+**Required icon dependency (#800 -> #775):** `item@2` requires `visual.icon`, and the schema
+restricts that reference to asset class `icon` with no eligible generator. #800 must land final,
+pack-local icons for Meadow Token, Gleam Gel, Sunny Sip, Pippa's Meadow Ribbon, and Meadow Medal
+before #775 can land the corresponding item records. Icons are 2D UI art, not Meshy 3D candidates.
+Each icon must carry IF-8 source/prompt and provenance evidence and pass the human Chibi-aesthetic
+gate; a technically valid sidecar or a core placeholder does not satisfy this dependency.
+
 ## 7. Author NPCs and mobs as distinct modes
 
 NPCs and mobs share the single runtime schema `meridian/npc@1`; they are not duplicate records or
@@ -296,6 +329,12 @@ NPC backlink. Every starter item must cost zero copper for this demo.
 **Temporary fallback:** vendor records have no normal editor. #677 must first provide complete
 generic editing; raw YAML under `content/chibi/vendors/` is temporary and cannot satisfy #684.
 
+**Runtime dependency (#802):** a valid Tink vendor record and zero-copper price prove only authored
+data. #802 owns the live client/protocol/server purchase and equip/unequip path, including
+server-authoritative validation, persistence, replacement, snapshots, and wrong-class rejection.
+It must land before #785 can derive combat stats from a real loadout and before #783 can accept the
+free-starter purchase/equip flow.
+
 ### Mob loot
 
 **Target (#683):** create the slime and scamp loot tables with typed item and quest references.
@@ -327,13 +366,21 @@ turn-in backlinks must appear on Pippa and Tink.
 coverage; #682 provides the graph and simulation. Raw quest YAML is a temporary development
 fallback and is forbidden in the #783 authoring proof.
 
+**Runtime dependency (#799):** the current turn-in response surfaces authored reward XP, but
+`server/worldd/world_dispatch.cpp` reports the existing level and does not apply or persist that
+XP. #799 owns
+exactly-once authoritative XP award, durable XP/level state, level-change reporting, and reconnect
+proof. #782's authored rewards and graph may be inspected independently, but the level 1–3 path
+and #783 quest progression stay blocked until #799 lands.
+
 ## 9. Place the experience in Forge
 
 Codex owns the spawn table's **what**; Forge owns concrete **where** placement. Do not conflate a
 weighted spawn-table editor (#685) with positioned instances in the world.
 
-**Target (#26, executed for Chibi by #779):** open the dedicated Forge Godot project, load Sprout
-Meadow, and place Pippa, Tink, slime instances, and scamp instances through typed NPC/mob IDs.
+**Target (#801, part of parent epic #26 and consumed by #779/#783):** open the dedicated Forge
+Godot project, load Sprout Meadow, and create, select, move, duplicate, and delete Pippa, Tink,
+slime, and scamp placements through typed NPC/mob IDs.
 Use viewport gizmos to set position, facing, respawn range, wander radius or patrol, aggro and leash
 context. Export deterministic `meridian/spawn@1` source and validate it with the zone.
 
@@ -362,7 +409,7 @@ cmake --build client/gdextension/forge_core/build -j
 Then open `client/forge/project` in the pinned Godot 4.7 editor. The current dock displays
 **Meridian Forge** and **Zone dock — M0 skeleton (#134)**. A raw
 `content/chibi/spawns/*.spawn.yaml` record is the temporary fallback for parallel data work, not
-Forge or #779 acceptance.
+Forge, #801, or #779 acceptance.
 
 ## 10. Audit and generate missing art
 
@@ -389,6 +436,16 @@ class, license, provenance, budget, import hints, and restyle state.
    accepted final Chibi asset ID, inspect its backlinks, and rerun the pack audit. #778 owns wiring
    finalized, provenance-complete Chibi artwork into the demo records; it does not bypass #678 or
    #680. Never replace an ID reference with a file path.
+
+### Required Chibi item icons
+
+#800 is the concrete asset owner for the five required item icons listed in §6. Because the item
+schema marks `icon` with `eligible_generators: []`, the Meshy 3D path above must never be offered
+for `chibi:art.icon.item.meadow_token`, `chibi:art.icon.item.gleam_gel`,
+`chibi:art.icon.item.sunny_sip`, `chibi:art.icon.item.pippas_meadow_ribbon`, or
+`chibi:art.icon.item.meadow_medal`. #800 must deliver final pack-local icon sources and sidecars, IF-8
+prompt/source/provenance evidence, and recorded human aesthetic approval before #775 references
+them or #778 closes the pack-wide wiring audit.
 
 ### Available temporary CLI intake
 
@@ -499,6 +556,12 @@ that mechanism for the player proof; it does not own repairing the loader itself
    equipping the Meadow Medal.
 7. Prove mob population, aggro/leash, death/loot, and respawn support the quest counts.
 
+This sequence is dependency-bound, not merely narrative. Step 3 requires #781's NPC/vendor data
+and #782's first quest. Step 4 requires #802's live authoritative equipment path before #785 can
+consume the equipped loadout. Quest turn-ins require #799 before XP, level changes, or reconnect
+progression can pass. Population and reachability in step 7 require #801's Forge capability and
+#779's exported Sprout Meadow placements.
+
 The standard runtime commands are:
 
 ```bash
@@ -513,11 +576,28 @@ scripts/dev/run-client.sh
 selection and data loading explicit and verify the running `worldd` booted the same content hash
 the client mounted. #783 may proceed only by consuming that completed path.
 
-**Current combat blockers:** schema/build success is not playable balance evidence. #784 owns
-executing creature basic attacks from NPC damage/attack speed and applying NPC armor. #785 owns
-deriving player combat stats from equipped items and applying authored ability coefficients.
-Until both land, survival, gear-impact, and coefficient-based tuning claims are blocked. Record raw
-data checks separately; never report them as runtime results.
+**Binding physical mitigation dependency (#780 -> #784):** the approved proposed #780 contract,
+once merged, defines the exact physical-only rule that #784 must implement for NPC and player
+targets:
+
+```text
+effective_armor = base_armor + gear_armor
+physical_damage = max(1, floor(raw_damage * 100 /
+                               (100 + max(0, effective_armor))))
+```
+
+The server applies armor, then shields, then health; nonphysical schools bypass armor. Base armor
+comes from the authoritative unit/content profile and gear armor from authoritative equipped
+contributions. #784 acceptance must show this exact calculation and ordering, without a Chibi or
+class special case. The guide does not make #780 authoritative before it merges.
+
+**Current runtime blockers:** schema/build success is not playable balance evidence. #784 owns
+executing creature basic attacks from authored damage/attack speed and the mitigation contract
+above. #802 owns live purchase and equip/unequip protocol/client/server behavior. #785 consumes
+#802's authoritative loadout to derive player combat stats and apply authored ability
+coefficients. #799 owns durable reward XP and level progression. Until they land in dependency
+order, survival, gear-impact, coefficient-based tuning, and level 1–3 claims are blocked. Record
+raw data checks separately; never report them as runtime results.
 
 ## 13. Acceptance matrix
 
@@ -529,20 +609,25 @@ data checks separately; never report them as runtime results.
 | Race + appearance | #672 | Raw YAML fallback | Create/edit race and both catalogs without YAML; preset stability, preview, completeness, missing art |
 | Class | #673 | Raw YAML fallback | Assemble all four class kits without YAML; typed refs, role XOR hybrid, equip compatibility, backlinks |
 | Spell/ability | #674 tooling; #775 Sunny Sip | Experimental existing-file schema form | Recipe templates and every Tier-1 effect; author the approved consumable ability with safe oneOf switching, tooltip, and typed audiovisual refs |
-| Item variants | #677 tooling/current Item editor; #775 demo items | Item editor available; typed relations partial | Weapon, armor, consumable, quest item, reward, and other templates save the approved `item@2` dataset without YAML |
+| Item variants | #677 tooling/current Item editor; #775 demo items; required icons #800 | Item editor available; typed relations partial; final demo icons pending | Weapon, armor, consumable, quest item, reward, and other templates save the approved `item@2` dataset without YAML and reference final pack-local icons |
 | NPC vs Mob | #676 tooling; #781 Pippa/Tink; #775 demo mobs | Shared NPC alpha only | Separate create/filter/layout/readiness modes over one entity; author the approved friendly NPC and hostile mob records without YAML |
 | Vendor | #684 tooling; #781 Tink inventory | Raw YAML fallback after generic coverage | Tink inventory, zero price, stock validation, item/NPC backlinks, no YAML |
 | Loot | #683 tooling; #775 demo loot tables | Raw YAML fallback after generic coverage | Author the approved typed tables; probability preview, deterministic seeded simulation, and mob/quest backlinks pass |
 | Quest chain | #682 tooling; #782 Chibi chain | Quests rail placeholder; raw YAML fallback | Graph/form parity, approved three-quest data, typed edges, cycle/reachability checks, 24 race/class chain simulations |
 | Spawn-table data | #685 | Raw YAML fallback | Typed weighted entries and stable Forge-facing IDs; constraints and backlinks |
-| Concrete world placement | #26 / #779 | Forge M0 skeleton; raw spawn fallback | Viewport placement/export, reachable layout, deterministic spawn/zone validation |
+| Concrete world placement capability | #801, part of #26; consumed by #779/#783 | Forge M0 skeleton; raw spawn fallback | Create/select/move/duplicate/delete typed placements; deterministic `spawn@1` export and validation |
+| Sprout Meadow placement data | #779, consuming #801 | Raw spawn fallback | Pippa, Tink, slime, and scamp placements are reachable, safe, sufficient, and reproducibly exported through Forge |
 | Missing-art inventory | #678 | Validator and manual search | Pack-wide categorized audit with navigation, class checks, provenance/budget/restyle status |
 | Meshy handoff | #680; CLI protocol #679 closed | `python -m meshy`; no Codex UI | Prompt review/terms/credits, mocked UI tests, live operator run, safe resume, pending quarantine |
+| Required Chibi item icons | #800, consumed by #775/#778 | Required `item@2` icons not yet final | Five pack-local `icon` assets, IF-8 sidecars/prompt-source provenance, no Meshy 3D path, and human aesthetic signoff |
 | Final Chibi art wiring | #778, consuming #678/#680 | Manual asset-ID wiring | Every demo art ref selects finalized provenance-complete/restyled Chibi art; audit and backlinks clean |
 | Check/diff/build/package | #681 | CLI check/diff/build; package-related commands partly stubbed | Integrated truthful status, provenance gate, artifact paths, two-build/hash proof |
 | Selected-pack local load | #786, consumed by #783 | `run-local.sh` loads DDL only | Explicit Chibi selection, single-pack SQL load before boot, and matching world/client manifest hash |
 | Database regression coverage | #790 | Five legacy tests omit `--pack` | Every affected DB test emits an explicit pack and no longer fails on valid per-theme roster overlap |
-| Runtime/player proof | #783, consuming #786 and dependencies #784/#785/#787 | Local load and combat gaps above | Matching selected-pack runtime plus complete level 1–3 human E2E |
+| Quest XP and level progression | #799, consumed by #782/#783 | Reward XP surfaced; XP/level not applied or persisted | Exactly-once award, authoritative level change, durable reconnect state, and no duplicate turn-in progression |
+| Purchase/equip interaction | #802, consumed by #785/#783 | Vendor/inventory data exists; no complete live equip action | Server-authoritative buy/equip/unequip/replace, persistence, snapshots, and wrong-class rollback through the client |
+| Physical mitigation | #780 contract; #784 implementation | Contract proposed; authored NPC combat/armor not executed | Exact shared armor formula and armor->shield->health order for NPC/player targets, with seeded evidence |
+| Runtime/player proof | #783, consuming #784/#785/#786/#787/#799/#801/#802 | Local load, progression, placement, interaction, and combat gaps above | Matching selected-pack runtime plus complete level 1–3 human E2E |
 
 Any failed row stays failed. A temporary fallback cannot be used to turn a Target row green.
 
@@ -555,20 +640,23 @@ lands; if a new gap is found during #783, add it here and to the tracker.
 |---|---|
 | No Race rail entry, create flow, or race/appearance schema-form registration | #672 |
 | No Class rail entry, create flow, or class schema-form registration | #673 |
-| Abilities rail is a placeholder; only an internal existing-file schema preview is available | #674 |
 | NPC editor does not distinguish NPC and Mob create flows, layouts, filters, or readiness | #676 |
 | Quests rail is a placeholder; vendor, loot, spawn, and asset-sidecar forms are not registered in the normal shell | #677, then #682–#685 |
 | Typed pickers/backlinks exist in `mcc` but are not integrated into Codex workspace forms | #670 |
 | Released-ID lifecycle actions and compatibility previews are absent | #671 |
 | Missing-art audit and Meshy handoff are CLI/manual rather than a Codex workflow | #678, #680 |
-| Forge is an M0 marker/gizmo/bridge skeleton and cannot place or export NPC/mob spawns | #26 / #779 |
+| Forge is an M0 marker/gizmo/bridge skeleton and cannot place or export NPC/mob spawns | #801 capability (part of #26); #779 consumes it for Chibi placements |
 | Integrated Build/Check/Diff/Package UI is absent; `mcc pack`, install/uninstall/migrate, and `idmap verify` are stubs | #681 and later packaging work |
 | Existing Chibi pack/zone/items and several asset/provenance files fail `mcc fmt --check` | #774 content stories must clear drift before #783 |
 | Chibi manifest pins Godot 4.6 while the client and Forge projects declare 4.7 | #787 |
 | `run-local.sh` creates the world schema but does not select/load the Chibi single-pack SQL before `worldd` boot | #786; #783 consumes the completed path |
 | Five legacy DB integration tests emit multi-pack SQL without explicit selection and fail on valid per-theme roster overlap | #790; focused `--pack chibi` evidence remains valid |
 | Runtime does not execute NPC basic attacks from authored damage/speed or apply NPC armor | #784 |
-| Runtime does not derive player combat stats from equipment or apply ability coefficients | #785 |
+| Quest turn-in surfaces reward XP but does not apply/persist XP or advance durable level state | #799; blocks #782 runtime proof and #783 level 1–3 acceptance |
+| Five required Chibi item icons are not final pack-local IF-8/aesthetic-approved assets; `icon` is not Meshy-eligible | #800; blocks #775 item data and is consumed by #778 |
+| Forge lacks create/select/move/duplicate/delete typed placement and deterministic `spawn@1` export | #801; blocks #779 and #783 |
+| Live client/protocol/server purchase and equip/unequip interaction is incomplete | #802; must precede #785 and #783 |
+| Runtime does not derive player combat stats from authoritative equipment or apply ability coefficients | #785, consuming #802 |
 
 ## 15. Evidence template
 
@@ -595,7 +683,7 @@ Authoring (no raw YAML)
 [ ] Free starter vendor
 [ ] Mob loot + seeded simulation
 [ ] Three-quest graph + 24 race/class walk simulations
-[ ] Forge spawn placement and deterministic export
+[ ] Forge create/select/move/duplicate/delete + deterministic spawn export (#801)
 
 Safety and art
 [ ] Typed picker negative case and diagnostic
@@ -603,6 +691,8 @@ Safety and art
 [ ] Released-ID rename/delete refusal
 [ ] Missing-art audit clean or explicitly quarantined
 [ ] Meshy prompt/terms/provenance evidence (if generated)
+[ ] Five final Chibi item icons + IF-8 prompt/source/provenance evidence (#800)
+[ ] Human aesthetic approval for all five icons; no core placeholder or Meshy 3D substitution
 [ ] Human restyle/import/budget evidence; no pending asset packaged
 
 Build
@@ -619,14 +709,16 @@ database row and manifest checks:
 Runtime
 [ ] 6 races x 4 classes selectable
 [ ] Base cloth entry state
-[ ] Free compatible gear purchase/equip
-[ ] Wrong-class gear rejection
+[ ] Free compatible gear purchased and equipped through authoritative client flow (#802)
+[ ] Equip/unequip/replace persisted across reconnect; snapshots agree (#802)
+[ ] Wrong-class gear rejection leaves inventory/loadout authoritative and unchanged (#802)
 [ ] Four abilities used against both mobs
-[ ] Quest 1 complete
-[ ] Quest 2 complete; consumable used
-[ ] Quest 3 complete; Meadow Medal equipped
-[ ] Mob attack/armor/gear/coefficient behavior proven
-[ ] Population, aggro, leash, loot, and respawn proven
+[ ] Quest 1 complete; XP awarded exactly once and persisted (#799)
+[ ] Quest 2 complete; consumable used; authoritative level change observed (#799)
+[ ] Quest 3 complete; Meadow Medal equipped; progression survives reconnect (#799/#802)
+[ ] Seeded raw damage, effective armor, mitigated damage, shield, and health evidence matches #780/#784 exactly
+[ ] Authoritative gear and coefficient behavior proven (#785 consuming #802)
+[ ] Forge-exported population, reachability, aggro, leash, loot, and respawn proven (#801/#779)
 
 Automated suite:
 Independent QA:
