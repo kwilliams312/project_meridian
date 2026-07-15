@@ -528,11 +528,11 @@ data checks separately; never report them as runtime results.
 | Entity lifecycle and permanent IDs | #671 | Manual discipline + read-only link | Released rename/delete refused; draft delete distinct; duplicate gets new ID; breaking impact matches diff |
 | Race + appearance | #672 | Raw YAML fallback | Create/edit race and both catalogs without YAML; preset stability, preview, completeness, missing art |
 | Class | #673 | Raw YAML fallback | Assemble all four class kits without YAML; typed refs, role XOR hybrid, equip compatibility, backlinks |
-| Spell/ability | #674 | Experimental existing-file schema form | Recipe templates and every Tier-1 effect; safe oneOf switching; tooltip and typed audiovisual refs |
-| Item variants | #677 plus current Item editor | Item editor available; typed relations partial | Weapon, armor, consumable, quest item, reward, and other templates save valid `item@2` without YAML |
+| Spell/ability | #674 tooling; #775 Sunny Sip | Experimental existing-file schema form | Recipe templates and every Tier-1 effect; author the approved consumable ability with safe oneOf switching, tooltip, and typed audiovisual refs |
+| Item variants | #677 tooling/current Item editor; #775 demo items | Item editor available; typed relations partial | Weapon, armor, consumable, quest item, reward, and other templates save the approved `item@2` dataset without YAML |
 | NPC vs Mob | #676 tooling; #781 Pippa/Tink; #775 demo mobs | Shared NPC alpha only | Separate create/filter/layout/readiness modes over one entity; author the approved friendly NPC and hostile mob records without YAML |
 | Vendor | #684 tooling; #781 Tink inventory | Raw YAML fallback after generic coverage | Tink inventory, zero price, stock validation, item/NPC backlinks, no YAML |
-| Loot | #683 | Raw YAML fallback after generic coverage | Typed tables, probability preview, deterministic seeded simulation, mob/quest backlinks |
+| Loot | #683 tooling; #775 demo loot tables | Raw YAML fallback after generic coverage | Author the approved typed tables; probability preview, deterministic seeded simulation, and mob/quest backlinks pass |
 | Quest chain | #682 tooling; #782 Chibi chain | Quests rail placeholder; raw YAML fallback | Graph/form parity, approved three-quest data, typed edges, cycle/reachability checks, 24 race/class chain simulations |
 | Spawn-table data | #685 | Raw YAML fallback | Typed weighted entries and stable Forge-facing IDs; constraints and backlinks |
 | Concrete world placement | #26 / #779 | Forge M0 skeleton; raw spawn fallback | Viewport placement/export, reachable layout, deterministic spawn/zone validation |
