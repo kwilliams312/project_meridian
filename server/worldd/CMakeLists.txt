@@ -890,12 +890,12 @@ add_test(NAME worldd-itm1-chain-load COMMAND worldd-itm1-chain-load-test)
 # --- SP5 CHIBI CLASSES boot->create->equip->cast DB-backed test (#723; epic #722). -
 # The SP2-discipline runtime proof that a whole new class roster ships as PURE PACK
 # DATA on the SP2 kernel with zero engine change. Runs the REAL pipeline like
-# worldd-itm1-chain-load: mcc emit-sql content/core -> throwaway MariaDB (world DDL +
-# emitted DML) -> load_world_content, then drives boot (the 4 chibi classes Warrior/
-# Mage/Rogue/Priest, roster 5-8, load into the Roster + ClassCatalog with the right
-# role + proficiencies), create (an Ardent/Warrior character validated vs the DB
-# roster), equip (gate_equip accepts each class's starter items, rejects a wrong-type
-# item), and cast (the chibi abilities execute through the MapTick ability engine —
+# worldd-itm1-chain-load: mcc emit-sql content --pack chibi -> throwaway MariaDB
+# (world DDL + emitted DML) -> load_world_content, then drives boot (the 4 chibi
+# classes Warrior/Mage/Rogue/Priest, roster 1-4, load into the Roster + ClassCatalog
+# with the right role + proficiencies), create (a Blue/Warrior character validated
+# vs the DB roster), equip (gate_equip accepts each class's starter items, rejects a
+# wrong-type item), and cast (the chibi abilities execute through MapTick —
 # Warrior Crushing Blow damages + Bulwark shields, Mage Cinderburn burns, Priest Mend
 # heals). Links meridian::characters for the create-vs-roster path. Same TOOL-/ENV-
 # guards (MERIDIAN_WORLDDB_*/MERIDIAN_DB_* + a mariadb/mysql client + an mcc binary);

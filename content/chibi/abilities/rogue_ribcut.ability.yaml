@@ -12,7 +12,7 @@ cast:
 cooldown_ms: 6000
 resource:
   type: energy
-  amount: 35
+  amount: 25
 effects:
   - kind: damage
     amount: { min: 20, max: 28 }

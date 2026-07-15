@@ -13,7 +13,7 @@ cast:
 cooldown_ms: 10000
 resource:
   type: energy
-  amount: 25
+  amount: 20
 effects:
   - kind: debuff
     attribute: chibi:attribute.armor
