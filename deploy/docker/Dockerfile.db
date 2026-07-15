@@ -66,6 +66,16 @@ COPY server/db/auth/migrations/          /schemas/auth/
 COPY server/db/characters/migrations/    /schemas/characters/
 COPY schema/sql/world/                    /schemas/world/
 
+# The deploy-time character-DB migration runner (#815). initdb (02-characters.sql)
+# applies + tracks every migration on a FRESH datadir; but a PERSISTENT realm's
+# datadir survives, so a migration added after first init never lands there. The
+# Helm PreSync hook Job (deploy/helm/meridian/templates/characters-db-migrate.yaml)
+# runs THIS script — before worldd rolls — to apply the un-applied *.up.sql from
+# /schemas/characters to an already-initialized meridian_characters, additively,
+# tracked in schema_migrations. mariadb client is already present in the base image.
+COPY deploy/docker/char-migrate.sh /usr/local/bin/meridian-char-migrate
+RUN chmod +x /usr/local/bin/meridian-char-migrate
+
 # The mcc-emitted world CONTENT DML (#482) — applied to meridian_world by the
 # Helm content-seed Job on deploy (NOT auto-loaded on first boot, so the same
 # image serves both the ephemeral dev DB and the persistent PTR/Prod DBs; the

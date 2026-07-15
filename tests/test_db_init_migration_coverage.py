@@ -68,6 +68,69 @@ def test_characters_wrapper_applies_the_appearance_migration() -> None:
     )
 
 
+CHARACTERS_MIGRATIONS = REPO / "server" / "db" / "characters" / "migrations"
+
+
+def _version_of(up_filename: str) -> str:
+    """The leading numeric token of an NNNN_name.up.sql migration (e.g. '0004')."""
+    m = re.match(r"^(\d+)_", up_filename)
+    assert m, f"migration {up_filename} does not start with an NNNN_ version token"
+    return m.group(1)
+
+
+def _recorded_versions_in_wrapper(wrapper: Path) -> list[str]:
+    """Versions the wrapper seeds into schema_migrations (the INSERT VALUES list)."""
+    text = wrapper.read_text()
+    block = re.search(
+        r"INSERT\s+(?:IGNORE\s+)?INTO\s+schema_migrations.*?;",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not block:
+        return []
+    return re.findall(r"\(\s*'([^']+)'\s*\)", block.group(0))
+
+
+def test_characters_wrapper_seeds_schema_migrations_for_every_up_migration() -> None:
+    """#815 single-source-of-truth: the fresh-init wrapper OWNS first-init of the
+    schema_migrations tracker, so it must record exactly the versions it SOURCEs.
+    If they drift, the deploy-time runner would re-run or skip the wrong migration
+    on a persistent realm."""
+    wrapper = DB_INIT / "02-characters.sql"
+    sourced_versions = sorted(
+        _version_of(p.name) for p in CHARACTERS_MIGRATIONS.glob("*.up.sql")
+    )
+    assert sourced_versions, "no *.up.sql migrations found"
+    recorded = sorted(_recorded_versions_in_wrapper(wrapper))
+    assert recorded == sourced_versions, (
+        "02-characters.sql must seed schema_migrations with every migration version "
+        "it SOURCEs (#815).\n"
+        f"  versions on disk:      {sourced_versions}\n"
+        f"  wrapper records:       {recorded}\n"
+        f"  missing from tracker:  {sorted(set(sourced_versions) - set(recorded))}\n"
+        f"  stale in tracker:      {sorted(set(recorded) - set(sourced_versions))}"
+    )
+
+
+def test_every_character_migration_declares_an_applied_probe() -> None:
+    """#815: the deploy-time runner backfills legacy (pre-tracker) DBs by probing
+    each migration's sentinel object. Every *.up.sql must declare its own
+    `-- meridian:applied-probe <table:...|column:...>` directive so the backfill
+    records exactly what is applied — a migration without one breaks the runner."""
+    directive = re.compile(
+        r"^--\s*meridian:applied-probe\s+((?:table|column):\S+)", re.MULTILINE
+    )
+    missing = []
+    for up in sorted(CHARACTERS_MIGRATIONS.glob("*.up.sql")):
+        if not directive.search(up.read_text()):
+            missing.append(up.name)
+    assert not missing, (
+        "these character migrations lack a `-- meridian:applied-probe "
+        "table:<name>|column:<table>.<col>` directive the runner needs (#815): "
+        f"{missing}"
+    )
+
+
 def test_world_wrapper_sources_every_ddl_file_in_numeric_order() -> None:
     expected = sorted(p.name for p in WORLD_DDL_DIR.glob("[0-9]*.sql"))
     assert expected, f"no numbered DDL found in {WORLD_DDL_DIR}"

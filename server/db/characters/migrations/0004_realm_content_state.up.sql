@@ -1,5 +1,6 @@
 -- =====================================================================
 -- Project Meridian — characters DB migration 0004 (UP): realm_content_state
+-- meridian:applied-probe table:realm_content_state  -- deploy-time runner backfill sentinel (#815)
 -- Serves: docs/superpowers/specs/2026-07-13-sp2-kernel-class-character-system-
 --         design.md §2.5 (boot-time compat/migration gate) + the umbrella
 --         2026-07-13-moddable-theme-platform-design.md §6.5 (a realm records

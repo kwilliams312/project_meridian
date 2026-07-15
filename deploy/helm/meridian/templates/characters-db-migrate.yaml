@@ -1,0 +1,87 @@
+{{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
+{{- /*
+  Character-DB migration runner (#815, part B of #813).
+
+  Character migrations (server/db/characters/migrations/NNNN_*.up.sql) are applied
+  ONLY by the meridian-db first-boot init (deploy/docker/db-init/02-characters.sql)
+  on a FRESH datadir. A PERSISTENT realm (PTR/Prod, and dev's own DB between
+  redeploys) keeps its datadir, so initdb never re-runs and any migration added
+  AFTER first init never lands. That is exactly how worldd's #698 boot gate broke
+  on dev: migration 0004 adds meridian_characters.realm_content_state, the
+  persistent DB predated it, worldd's boot gate hard-failed on the missing table
+  -> CrashLoopBackOff.
+
+  This PRE-SYNC (helm pre-install/pre-upgrade -> ArgoCD PreSync) hook Job runs the
+  baked runner (/usr/local/bin/meridian-char-migrate) BEFORE the release's worldd
+  rolls, so worldd always sees the migrated schema. Unlike the world CONTENT seed
+  (PostSync, TRUNCATE+reload of a read-only mcc artifact), the characters DB HAS
+  USER DATA: the runner is ADDITIVE — it only SOURCEs forward *.up.sql it has not
+  recorded in schema_migrations, in order, each in a transaction. It is idempotent
+  (no-op when up to date) and backfills legacy DBs that predate the tracker.
+
+  FIRST-INIT OWNERSHIP: initdb owns a FRESH DB (02-characters.sql applies AND
+  records every migration; this runner then no-ops). This Job only does real work
+  on a persistent DB that drifted behind the image's migration set. On a first
+  install MariaDB is not up yet when PreSync runs; the runner waits WAIT_DB_TIMEOUT
+  then SKIPS (exit 0) rather than wedge the sync (#492) — initdb applies everything
+  when MariaDB comes up in the Sync phase.
+
+  Gated on the bundled DB being enabled (a realm overlay turns it on). Skipped for
+  external-DB installs, where schema is managed out-of-band.
+*/ -}}
+{{- if and .Values.mariadb.enabled .Values.mariadb.charMigrate.enabled }}
+{{- $full := include "meridian.fullname" . -}}
+{{- $img := printf "%s/%s:%s" .Values.mariadb.image.registry .Values.mariadb.image.repository .Values.mariadb.image.tag -}}
+{{- $db := .Values.db.names.characters -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $full }}-characters-db-migrate
+  labels:
+    {{- include "meridian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: characters-db-migrate
+  annotations:
+    # PreSync: runs before the Sync-phase worldd rolls, so worldd sees the
+    # migrated schema. Low weight orders it early among any PreSync hooks.
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 4
+  template:
+    metadata:
+      labels:
+        {{- include "meridian.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: characters-db-migrate
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        # meridian-db image carries /schemas/characters/*.up.sql, the runner
+        # (/usr/local/bin/meridian-char-migrate), and the mariadb client.
+        - name: characters-db-migrate
+          image: {{ $img | quote }}
+          imagePullPolicy: {{ .Values.mariadb.image.pullPolicy }}
+          env:
+            - name: MYSQL_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "meridian.dbSecretName" . }}
+                  key: {{ include "meridian.dbSecretKey" . }}
+            - name: DB_HOST
+              value: {{ include "meridian.db.host" . | quote }}
+            - name: DB_PORT
+              value: {{ .Values.db.port | quote }}
+            - name: DB_USER
+              value: {{ .Values.db.user | quote }}
+            - name: DB_NAME
+              value: {{ $db | quote }}
+            - name: SCHEMAS_DIR
+              value: {{ .Values.mariadb.charMigrate.schemasPath | quote }}
+            - name: WAIT_DB_TIMEOUT
+              value: {{ .Values.mariadb.charMigrate.waitDbTimeout | quote }}
+          command: ["/usr/local/bin/meridian-char-migrate"]
+{{- end }}

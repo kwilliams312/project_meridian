@@ -1,5 +1,6 @@
 -- =====================================================================
 -- Project Meridian — characters DB schema v1 (migration 0001, UP)
+-- meridian:applied-probe table:character  -- deploy-time runner backfill sentinel (#815)
 -- Serves: docs/sad/server-sad.md §4.2 (characters DB field list — authoritative),
 --         §4.4 (cross-DB reference rule), §4.7 (save_epoch ownership fence).
 --

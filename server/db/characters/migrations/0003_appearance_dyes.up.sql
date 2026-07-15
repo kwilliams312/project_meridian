@@ -1,5 +1,6 @@
 -- =====================================================================
 -- Project Meridian — characters DB migration 0003 (UP): appearance + dyes
+-- meridian:applied-probe column:character.appearance  -- deploy-time runner backfill sentinel (#815)
 -- Serves: contract ① §5.2 (per-character appearance record) + §6 (reserved
 --         dye state). Additive to the 0001 base — no existing column changes.
 --
