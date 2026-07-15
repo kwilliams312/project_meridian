@@ -35,6 +35,7 @@ Unit::Unit(ObjectGuid guid, ObjectType type, const Position& pos, const UnitStat
       faction_(stats.faction),
       max_health_(std::max<std::uint32_t>(1, stats.max_health)),
       health_(std::max<std::uint32_t>(1, stats.max_health)),
+      effective_armor_(stats.armor),
       resource_type_(stats.resource_type),
       max_resource_(stats.resource_type == ResourceType::kNone ? 0 : stats.max_resource),
       resource_(stats.resource_type == ResourceType::kNone ? 0 : stats.max_resource),

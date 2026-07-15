@@ -173,6 +173,7 @@ AuraApplyResult AuraContainer::apply(const Ability& ability, std::uint32_t effec
     aura.effect_index = effect_index;
     aura.caster_guid = caster_guid;
     aura.kind = e.kind;
+    aura.school = ability.school;
     aura.max_stacks = e.max_stacks == 0 ? 1 : e.max_stacks;  // clamp a bad 0 to 1
     aura.dispel_type = dispel_type;  // CMB-04 classification, fixed at first apply
     aura.stacks = 1;
@@ -263,15 +264,17 @@ AuraTickResult AuraContainer::tick(std::uint32_t dt_ms, CombatRng& rng) {
 
                 const std::uint32_t rolled =
                     rng.roll_amount(a.periodic_amount_min, a.periodic_amount_max);
-                const std::uint32_t amount =
+                const std::uint32_t raw_amount =
                     rolled * static_cast<std::uint32_t>(a.stacks);  // scale by stacks
 
                 if (a.periodic_kind == PeriodicKind::kDamage) {
+                    const std::uint32_t amount =
+                        mitigate_damage(raw_amount, a.school, host_.effective_armor());
                     const DamageResult dr = host_.apply_damage(amount);
                     result.periodic_damage += dr.applied;
                     result.host_died = result.host_died || dr.lethal;
                 } else {  // PeriodicKind::kHeal
-                    result.periodic_healing += host_.apply_healing(amount);
+                    result.periodic_healing += host_.apply_healing(raw_amount);
                 }
                 ++result.ticks_fired;
             }

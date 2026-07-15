@@ -56,6 +56,7 @@
 #include "effective_stats.h"  // meridian::worldd::AttributeCatalog — DB-loaded attribute framework (#694)
 #include "talent_catalog.h"   // meridian::worldd::TalentCatalog — DB-loaded talents/trees (#697)
 #include "combat_unit.h"      // meridian::worldd::UnitStats / Faction / Position (spawn stats, #486)
+#include "creature_ai.h"      // CreatureBehavior — authored NPC AI profile (#784)
 #include "item_template.h"    // meridian::items::TemplateStore / ItemTemplate
 #include "loot_table.h"       // meridian::loot::LootTableStore / LootTable
 #include "npc_def.h"          // meridian::npc::NpcStore / NpcDef
@@ -176,6 +177,13 @@ struct SpawnPlacement {
     Position pos;                      // spawn_point.pos_{x,y,z} (zone-local m); AoI position + spawn_home
     float orientation_deg = 0.0f;      // spawn_point.orientation_deg [0,360)
     UnitStats stats;                   // resolved from npc_template: level, max_health, resource, faction
+    CreatureBehavior behavior = CreatureBehavior::kDefensive;
+    std::uint32_t damage_min = 0;
+    std::uint32_t damage_max = 0;
+    std::uint32_t attack_speed_ms = 0;
+    float aggro_radius_m = 0.0f;
+    float leash_radius_m = 0.0f;
+    float run_speed_mps = 0.0f;
     std::string name;                  // npc_template.name (the #430 vitals + nameplate name)
     std::uint32_t respawn_min = 0;     // spawn_point.respawn_min (seconds)
     std::uint32_t respawn_max = 0;     // spawn_point.respawn_max (seconds)

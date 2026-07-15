@@ -62,7 +62,8 @@ const char* env(const char* k) { return std::getenv(k); }
 
 // The content ids the fixture seeds.
 constexpr std::uint32_t kGossipNpc = 100;   // friendly quest-giver NPC (GOSSIP_HELLO target)
-constexpr std::uint32_t kWolfNpc   = 200;   // hostile creature (a kill objective)
+constexpr std::uint32_t kDewdropNpc = 200;  // synthetic chibi:npc.dewdrop_slime
+constexpr std::uint32_t kSproutcapNpc = 201; // synthetic chibi:npc.sproutcap_scamp
 constexpr std::uint32_t kGiverQuest = 300;  // the quest kGossipNpc gives (so gossip is non-empty)
 
 // The tables load_world_content SELECTs from. Created WITHOUT foreign keys (the stores
@@ -160,6 +161,11 @@ void create_tables(db::Connection& c) {
         "  loot_money_max BIGINT UNSIGNED NULL, level_min SMALLINT UNSIGNED NOT NULL DEFAULT 1,"
         "  faction ENUM('friendly','neutral','hostile') NOT NULL DEFAULT 'neutral',"
         "  stat_health INT UNSIGNED NOT NULL DEFAULT 1, stat_mana INT UNSIGNED NULL,"
+        "  stat_armor INT UNSIGNED NULL, stat_damage_min INT UNSIGNED NULL,"
+        "  stat_damage_max INT UNSIGNED NULL, stat_attack_speed_ms INT UNSIGNED NOT NULL DEFAULT 2000,"
+        "  ai_behavior ENUM('aggressive','defensive','passive') NULL DEFAULT 'defensive',"
+        "  ai_aggro_radius_m FLOAT NULL DEFAULT 20, ai_leash_radius_m FLOAT NULL DEFAULT 60,"
+        "  move_run_speed_mps FLOAT NULL DEFAULT 7,"
         "  PRIMARY KEY (id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
     c.execute(
         "CREATE TABLE npc_trainer (npc_id INT UNSIGNED NOT NULL, PRIMARY KEY (npc_id))"
@@ -277,26 +283,35 @@ void drop_tables(db::Connection& c) {
     for (const char* d : drops) c.execute(d);
 }
 
-// Seed a friendly quest-giver NPC (100) that gives quest 300, a hostile wolf (200),
-// and one spawn_point for each. The spawn_point rows are authored in the DB's Godot
-// Y-UP convention (schema/sql/world/70_spawn.sql: pos_{x,y,z} = position.{x,y,z}
+// Seed a friendly quest-giver NPC (100) that gives quest 300, two hostile mobs
+// (200/201), and one spawn_point for each. The spawn_point rows are authored in the
+// DB's Godot Y-UP convention (schema/sql/world/70_spawn.sql:
+// pos_{x,y,z} = position.{x,y,z}
 // verbatim, "Y-up, X east, -Z north"): the horizontal plane is (pos_x, pos_z) and
 // pos_y is the HEIGHT. A DISTINCT non-zero height is seeded so the test proves the
 // #498 axis conversion — load_spawn_points must map the Godot height (pos_y) to the
 // server HEIGHT (Position.z) and the Godot planar-north (pos_z) to the server planar
 // Y (Position.y), NOT leak the height into planar Y. Server-planar targets: the giver
-// at (-320,-320), the wolf at (-314,-318) — both well inside the 90 m production AoI
-// enter radius (#562) of a session entering at (-320,-320), so both must fire an
-// ENTITY_ENTER.
+// at (-320,-320), Dewdrop at (-314,-318), and Sproutcap at (-312,-316) — all well
+// inside the 90 m production AoI enter radius (#562) of a session entering at
+// (-320,-320), so all must fire an ENTITY_ENTER.
 void seed_fixture(db::Connection& c) {
     c.execute(
         "INSERT INTO npc_template (id, name, vendor_ref_id, loot_table_ref_id, loot_money_min, "
-        "loot_money_max, level_min, faction, stat_health, stat_mana) "
-        "VALUES (100, 'Marshal Bren', NULL, NULL, NULL, NULL, 5, 'friendly', 200, 150)");
+        "loot_money_max, level_min, faction, stat_health, stat_mana, stat_armor, "
+        "stat_damage_min, stat_damage_max, stat_attack_speed_ms, ai_behavior, "
+        "ai_aggro_radius_m, ai_leash_radius_m, move_run_speed_mps) "
+        "VALUES (100, 'Pippa Patch', NULL, NULL, NULL, NULL, 1, 'friendly', 100, NULL, 0, "
+        "1, 1, 2000, 'passive', 0, 0, 0)");
     c.execute(
         "INSERT INTO npc_template (id, name, vendor_ref_id, loot_table_ref_id, loot_money_min, "
-        "loot_money_max, level_min, faction, stat_health, stat_mana) "
-        "VALUES (200, 'Gray Wolf', NULL, NULL, NULL, NULL, 3, 'hostile', 80, NULL)");
+        "loot_money_max, level_min, faction, stat_health, stat_mana, stat_armor, "
+        "stat_damage_min, stat_damage_max, stat_attack_speed_ms, ai_behavior, "
+        "ai_aggro_radius_m, ai_leash_radius_m, move_run_speed_mps) VALUES "
+        "(200, 'Dewdrop Slime', NULL, NULL, NULL, NULL, 1, 'hostile', 100, NULL, 0, "
+        "3, 5, 2400, 'aggressive', 8, 18, 3),"
+        "(201, 'Sproutcap Scamp', NULL, NULL, NULL, NULL, 2, 'hostile', 140, NULL, 5, "
+        "5, 8, 2200, 'aggressive', 10, 22, 4)");
     // Quest 300, given by NPC 100 — so DbNpcStore marks 100 a quest giver and the
     // gossip planner surfaces a quest option (a non-empty menu).
     c.execute(
@@ -304,10 +319,9 @@ void seed_fixture(db::Connection& c) {
         "reward_xp, reward_money) VALUES (300, 'Thin the Pack', 3, 1, 100, NULL, 100, 50)");
     c.execute(
         "INSERT INTO quest_objective (quest_id, ordinal, type, target_npc_id, item_id, to_npc_id, "
-        "zone_ref_id, poi, count) VALUES (300, 0, 'kill', 200, NULL, NULL, NULL, NULL, 5)");
+        "zone_ref_id, poi, count) VALUES (300, 0, 'kill', 200, NULL, NULL, NULL, NULL, 3)");
     // spawn_point rows in Godot Y-up (pos_x, pos_y=HEIGHT, pos_z=planar): the giver at
-    // planar (-320,-320) height 12.5; the wolf at planar (-314,-318) height 5. After the
-    // #498 conversion the server positions are (x=-320, y=-320, z=12.5) and (x=-314, y=-318, z=5).
+    // planar (-320,-320) height 12.5; the mobs at nearby planar coordinates.
     // respawn 30-45 s.
     c.execute(
         "INSERT INTO spawn_point (id, zone_ref_id, npc_id, pos_x, pos_y, pos_z, orientation_deg, "
@@ -315,6 +329,9 @@ void seed_fixture(db::Connection& c) {
     c.execute(
         "INSERT INTO spawn_point (id, zone_ref_id, npc_id, pos_x, pos_y, pos_z, orientation_deg, "
         "respawn_min, respawn_max, wander_radius_m) VALUES (2, 20, 200, -314, 5, -318, 0, 30, 45, 8)");
+    c.execute(
+        "INSERT INTO spawn_point (id, zone_ref_id, npc_id, pos_x, pos_y, pos_z, orientation_deg, "
+        "respawn_min, respawn_max, wander_radius_m) VALUES (3, 20, 201, -312, 5, -316, 0, 30, 45, 10)");
 }
 
 const mw::SpawnPlacement* find_spawn(const std::vector<mw::SpawnPlacement>& spawns,
@@ -361,20 +378,21 @@ int main() {
 
         // ---- 1. LOAD: spawn_point resolved against npc_template ---------------
         mw::WorldContent content = mw::load_world_content(conn);
-        check("two spawn placements loaded", content.spawns.size() == 2);
+        check("three spawn placements loaded", content.spawns.size() == 3);
 
         const mw::SpawnPlacement* giver = find_spawn(content.spawns, kGossipNpc);
-        const mw::SpawnPlacement* wolf = find_spawn(content.spawns, kWolfNpc);
+        const mw::SpawnPlacement* dewdrop = find_spawn(content.spawns, kDewdropNpc);
+        const mw::SpawnPlacement* sproutcap = find_spawn(content.spawns, kSproutcapNpc);
         check("gossip NPC placement loaded", giver != nullptr);
-        check("hostile creature placement loaded", wolf != nullptr);
+        check("Dewdrop Slime placement loaded", dewdrop != nullptr);
+        check("Sproutcap Scamp placement loaded", sproutcap != nullptr);
         if (giver) {
-            check("gossip NPC name resolved from npc_template", giver->name == "Marshal Bren");
+            check("gossip NPC name resolved from npc_template", giver->name == "Pippa Patch");
             check("gossip NPC is friendly", giver->stats.faction == mw::Faction::kFriendly);
-            check("gossip NPC level from level_min", giver->stats.level == 5);
-            check("gossip NPC health from stat_health", giver->stats.max_health == 200);
-            check("gossip NPC has a mana pool (caster)",
-                  giver->stats.resource_type == mw::ResourceType::kMana &&
-                      giver->stats.max_resource == 150);
+            check("friendly NPC authored passive combat profile loaded",
+                  giver->behavior == mw::CreatureBehavior::kPassive &&
+                      giver->damage_min == 1 && giver->damage_max == 1 &&
+                      giver->attack_speed_ms == 2000);
             // AXIS-CORRECT (#498): the authored Godot Y-up row (pos_x=-320, pos_y=12.5
             // height, pos_z=-320 planar) must load as server Z-up (x=-320 planar, y=-320
             // planar from pos_z, z=12.5 height from pos_y). Critically pos.y == -320 (the
@@ -383,31 +401,38 @@ int main() {
             check("gossip NPC position is axis-correct (Godot Y-up -> server Z-up)",
                   giver->pos.x == -320.0f && giver->pos.y == -320.0f && giver->pos.z == 12.5f);
         }
-        if (wolf) {
-            check("hostile creature is hostile (a kill objective)",
-                  wolf->stats.faction == mw::Faction::kHostile);
-            check("hostile creature name + health resolved",
-                  wolf->name == "Gray Wolf" && wolf->stats.max_health == 80);
-            check("hostile creature has no mana pool",
-                  wolf->stats.resource_type == mw::ResourceType::kNone);
-            check("hostile creature carries its wander radius",
-                  wolf->wander_radius_m.has_value() && *wolf->wander_radius_m == 8.0f);
-            check("hostile creature position is axis-correct (Godot Y-up -> server Z-up)",
-                  wolf->pos.x == -314.0f && wolf->pos.y == -318.0f && wolf->pos.z == 5.0f);
+        if (dewdrop) {
+            check("Dewdrop authored combat profile loaded",
+                  dewdrop->stats.level == 1 && dewdrop->stats.max_health == 100 &&
+                      dewdrop->stats.armor == 0 && dewdrop->damage_min == 3 &&
+                      dewdrop->damage_max == 5 && dewdrop->attack_speed_ms == 2400 &&
+                      dewdrop->behavior == mw::CreatureBehavior::kAggressive &&
+                      dewdrop->aggro_radius_m == 8.0f && dewdrop->leash_radius_m == 18.0f &&
+                      dewdrop->run_speed_mps == 3.0f);
+            check("Dewdrop position is axis-correct (Godot Y-up -> server Z-up)",
+                  dewdrop->pos.x == -314.0f && dewdrop->pos.y == -318.0f && dewdrop->pos.z == 5.0f);
+        }
+        if (sproutcap) {
+            check("Sproutcap authored combat profile loaded",
+                  sproutcap->stats.level == 2 && sproutcap->stats.max_health == 140 &&
+                      sproutcap->stats.armor == 5 && sproutcap->damage_min == 5 &&
+                      sproutcap->damage_max == 8 && sproutcap->attack_speed_ms == 2200 &&
+                      sproutcap->behavior == mw::CreatureBehavior::kAggressive &&
+                      sproutcap->aggro_radius_m == 10.0f && sproutcap->leash_radius_m == 22.0f &&
+                      sproutcap->run_speed_mps == 4.0f);
         }
 
         // ---- 2. INSTALL: spawn into the live world ----------------------------
         mw::Dispatcher dispatcher;
         mw::WorldServer world(dispatcher, mw::WorldServerConfig{});
         world.install_spawns(content.spawns);
-        check("both spawns exist in the map tick (creature count > 0)",
-              world.map_creature_count() == 2);
-        check("both spawns are AoI entities", world.world_state().world_entity_count() == 2);
+        check("all spawns exist in the map tick", world.map_creature_count() == 3);
+        check("all spawns are AoI entities", world.world_state().world_entity_count() == 3);
 
         // ---- 3. VISIBILITY: a session entering AoI sees the nearby spawns ------
         // Capture every s2c frame the relay sends the entering session. After the #498
-        // axis conversion the two spawns sit at server planar (64,64)/(70,66), well
-        // within the AoI enter radius of a session spawning at (64,64), so both fire an
+        // axis conversion the three spawns sit at nearby server-planar coordinates, well
+        // within the AoI enter radius of a session spawning at (64,64), so all fire an
         // ENTITY_ENTER on enter. (Before the fix the authored height leaked into planar
         // Y — the giver landed at planar (-320,12.5), ~332 m away, outside the 90 m enter
         // radius — so no ENTITY_ENTER arrived and the greybox was empty.)
@@ -427,23 +452,24 @@ int main() {
 
         // Decode every ENTITY_ENTER and match it to a spawn (guid in the world-entity
         // band; name + level from the resolved npc_template vitals).
-        bool saw_gossip_enter = false, saw_wolf_enter = false;
+        bool saw_gossip_enter = false, saw_dewdrop_enter = false, saw_sproutcap_enter = false;
         std::uint64_t gossip_guid = 0;
         for (const auto& [op, payload] : frames) {
             if (op != mn::Opcode::ENTITY_ENTER) continue;
             const auto* ee = fb::GetRoot<mn::EntityEnter>(payload.data());
             if (ee == nullptr) continue;
             const std::string name = ee->name() ? ee->name()->str() : std::string();
-            if (name == "Marshal Bren" && ee->level() == 5 && ee->max_health() == 200) {
+            if (name == "Pippa Patch" && ee->level() == 1 && ee->max_health() == 100) {
                 saw_gossip_enter = true;
                 gossip_guid = ee->entity_guid();
             }
-            if (name == "Gray Wolf" && ee->max_health() == 80) saw_wolf_enter = true;
+            if (name == "Dewdrop Slime" && ee->max_health() == 100) saw_dewdrop_enter = true;
+            if (name == "Sproutcap Scamp" && ee->max_health() == 140) saw_sproutcap_enter = true;
         }
         check("entering AoI delivers ENTITY_ENTER for the spawned gossip NPC (with vitals+name)",
               saw_gossip_enter);
-        check("entering AoI delivers ENTITY_ENTER for the spawned hostile creature",
-              saw_wolf_enter);
+        check("entering AoI delivers ENTITY_ENTER for Dewdrop Slime", saw_dewdrop_enter);
+        check("entering AoI delivers ENTITY_ENTER for Sproutcap Scamp", saw_sproutcap_enter);
         check("spawned entity guid is in the world-entity band (not a template id)",
               gossip_guid >= mw::kWorldEntityGuidBase);
 
@@ -475,6 +501,59 @@ int main() {
         for (const auto& s : content.spawns)
             if (s.stats.faction == mw::Faction::kHostile) hostile_present = true;
         check("a hostile creature is present for a kill objective", hostile_present);
+
+        // ---- 5. AUTHORED COMBAT: DB profiles execute in the live MapTick -------
+        auto combat_def = [](const mw::SpawnPlacement& sp) {
+            mw::CreatureSpawnDef d;
+            d.template_id = sp.npc_id;
+            d.level = sp.stats.level;
+            d.faction = sp.stats.faction;
+            d.authored_stats = sp.stats;
+            d.behavior = sp.behavior;
+            d.damage_min = sp.damage_min;
+            d.damage_max = sp.damage_max;
+            d.attack_speed_ms = sp.attack_speed_ms;
+            d.home = sp.pos;
+            d.aggro_base_radius = sp.aggro_radius_m;
+            d.leash_radius = sp.leash_radius_m;
+            d.move_speed = sp.run_speed_mps;
+            d.respawn_ms = sp.respawn_min * 1000u;
+            return d;
+        };
+        auto profile_attacks = [&](const mw::SpawnPlacement& sp, std::uint64_t seed) {
+            mw::AbilityStore abilities = mw::load_placeholder_ability_store();
+            mw::MapTick tick(abilities, seed, /*dt_ms=*/100);
+            mw::UnitStats player_stats;
+            player_stats.level = 1;
+            player_stats.max_health = 1000;
+            player_stats.armor = 100;  // proves the shared armor path is exercised
+            player_stats.faction = mw::Faction::kPlayer;
+            tick.add_player(/*guid=*/4242, sp.pos, player_stats);
+            tick.add_creature(combat_def(sp));
+            tick.advance(/*ticks=*/60);  // covers >2 authored attack periods
+            const mw::Unit* player = tick.unit_for_guid(4242);
+            return player != nullptr && player->health() < player->max_health() &&
+                   tick.log_text().find("basic_attack attacker=") != std::string::npos;
+        };
+        check("DB-backed Dewdrop Slime executes authored basic attacks",
+              dewdrop != nullptr && profile_attacks(*dewdrop, 784));
+        check("DB-backed Sproutcap Scamp executes authored basic attacks",
+              sproutcap != nullptr && profile_attacks(*sproutcap, 785));
+
+        if (giver) {
+            mw::AbilityStore abilities = mw::load_placeholder_ability_store();
+            mw::MapTick tick(abilities, /*seed=*/786, /*dt_ms=*/100);
+            mw::UnitStats player_stats;
+            player_stats.max_health = 100;
+            player_stats.faction = mw::Faction::kPlayer;
+            tick.add_player(/*guid=*/4242, giver->pos, player_stats);
+            tick.add_creature(combat_def(*giver));
+            tick.advance(/*ticks=*/60);
+            const mw::Unit* player = tick.unit_for_guid(4242);
+            check("DB-backed friendly passive NPC never attacks",
+                  player != nullptr && player->health() == 100 &&
+                      tick.log_text().find("basic_attack attacker=") == std::string::npos);
+        }
 
         drop_tables(conn);
     } catch (const db::DbError& e) {

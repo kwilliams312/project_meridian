@@ -118,6 +118,7 @@ struct ActiveAura {
     // hosts. Drives the extension handling on apply/expiry beyond the shared
     // duration/periodic/stat machinery below.
     EffectKind    kind = EffectKind::kAura;
+    School        school = School::kPhysical;
     std::uint32_t duration_ms = 0;    // full duration; a refresh resets remaining to this
     std::uint16_t max_stacks = 1;     // 1 = refresh-only; > 1 = stack-count aura
     PeriodicKind  periodic_kind = PeriodicKind::kNone;
@@ -244,7 +245,8 @@ public:
 
     // Advance every aura by `dt_ms`, firing due periodic ticks into the host and
     // expiring auras whose duration has elapsed. Periodic amounts are rolled from
-    // the seeded `rng` (× stack count); a damage tick uses Unit::apply_damage (and
+    // the seeded `rng` (× stack count); a damage tick applies the source ability's
+    // school through the shared armor contract before Unit::apply_damage (and
     // reports host death), a heal tick Unit::apply_healing. Cadence is accumulator-
     // based, so the result is independent of the `dt_ms` granularity (a single
     // dt = N·tick fires N ticks, matching N steps of dt = tick). Once the host is

@@ -34,9 +34,10 @@
 //                        an entity guid + Position).
 //
 // OUT OF SCOPE (owned elsewhere, deliberately absent here): the combat resolver /
-// GCD / attack tables (#344/#345 — this module NEVER rolls damage; it only decides
-// WHO to fight and WHERE to stand, and receives threat from the resolver via
-// add_threat), auras (#346), the ability-use handler + world.fbs wire schema, and
+// GCD / attack tables (#344/#345 — this module NEVER rolls damage; it decides WHO
+// to fight, WHERE to stand, and WHEN an authored basic attack is due, then emits an
+// intent for MapTick's resolver), auras (#346), the ability-use handler + world.fbs
+// wire schema, and
 // the tick loop / golden scenarios (#349 — the tick CALLS this module; it is not
 // built here). The AI holds NO wire types and NO locks: a map is single-threaded
 // by construction (SAD §2.5/§6 — "the tick owns entity state"), so the tick
@@ -51,6 +52,7 @@
 #define MERIDIAN_WORLDD_CREATURE_AI_H
 
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -72,6 +74,12 @@ enum class PatrolMode : std::uint8_t {
     kPingPong = 2,    // … → w[n-1] → w[n-2] → …       (reverse at each end)
 };
 
+enum class CreatureBehavior : std::uint8_t {
+    kPassive = 0,
+    kDefensive = 1,
+    kAggressive = 2,
+};
+
 // The AI finite-state of one creature (its FSM position). Transitions are driven
 // only by tick() (and add_threat, which can pull kPatrol → kCombat).
 enum class AiState : std::uint8_t {
@@ -88,6 +96,13 @@ struct CreatureSpawnDef {
     std::uint32_t template_id = 0;
     std::uint16_t level = 1;
     Faction faction = Faction::kHostile;
+
+    // Compiled npc_template stats replace the placeholder level curve when set.
+    std::optional<UnitStats> authored_stats;
+    CreatureBehavior behavior = CreatureBehavior::kAggressive;
+    std::uint32_t damage_min = 0;       // 0/0 keeps legacy synthetic spawns non-attacking
+    std::uint32_t damage_max = 0;
+    std::uint32_t attack_speed_ms = 0;
 
     Position home;                     // spawn anchor AND the leash centre
     float aggro_base_radius = 0.0f;    // metres, at EQUAL level (level-delta scaled)
@@ -107,15 +122,24 @@ struct CreatureMove {
     Position pos;
 };
 
+struct CreatureBasicAttack {
+    ObjectGuid attacker_guid = 0;
+    ObjectGuid target_guid = 0;
+    std::uint32_t damage_min = 0;
+    std::uint32_t damage_max = 0;
+};
+
 // The effect set the AI phase produces for ONE tick, for the tick to apply to the
 // AoI relay:
 //   • moves     — creatures whose position changed  → EntityUpdate.
+//   • attacks   — in-range cadence intents; the map combat phase resolves them.
 //   • spawned   — creatures that (re)entered the world this tick → EntityEnter.
 //   • despawned — creatures that DIED this tick → EntityLeave{DIED}.
 // (A spawned creature is reported ONLY in `spawned`, not also in `moves`: the
 // EntityEnter already carries its position.)
 struct CreatureAiTickResult {
     std::vector<CreatureMove> moves;
+    std::vector<CreatureBasicAttack> attacks;
     std::vector<ObjectGuid> spawned;
     std::vector<ObjectGuid> despawned;
 };
@@ -151,6 +175,7 @@ inline constexpr float kAggroRadiusPerLevel = 1.0f;
 inline constexpr float kAggroRadiusBonusCap = 5.0f;
 // Planar distance (metres) at/under which a moving creature is "arrived".
 inline constexpr float kArriveEpsilonM = 0.05f;
+inline constexpr float kCreatureBasicAttackRangeM = 5.0f;
 // Threat granted by proximity aggro, so the newly-aggroed target enters the threat
 // table as the (initial) leader. Small — a single resolver hit outweighs it.
 inline constexpr float kProximityAggroThreat = 1.0f;
@@ -171,7 +196,8 @@ public:
     CreatureAi& operator=(const CreatureAi&) = delete;
 
     // Spawn a creature from `def`. Returns its assigned guid. It starts kPatrol,
-    // alive, at full health from placeholder_creature_stats(def.level, def.faction),
+    // alive, at full health from authored_stats when supplied, otherwise from
+    // placeholder_creature_stats(def.level, def.faction),
     // positioned at def.home. (The returned guid is what add_threat / the AoI relay
     // key on.)
     ObjectGuid add_spawn(const CreatureSpawnDef& def);
@@ -227,6 +253,7 @@ private:
         std::unordered_map<ObjectGuid, float> threat{};  // attacker guid → threat
         ObjectGuid target = 0;                          // current chase/threat target
         std::uint32_t respawn_remaining_ms = 0;         // kDead countdown
+        std::uint32_t attack_remaining_ms = 0;          // 0 = immediate swing in range
         std::size_t wp_index = 0;                       // waypoint being headed TO
         int wp_dir = 1;                                 // +1/-1 (ping-pong direction)
         bool was_dead = false;                          // death-edge detector

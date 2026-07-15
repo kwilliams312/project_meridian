@@ -181,6 +181,11 @@ public:
     ObjectGuid add_player(ObjectGuid guid, const Position& pos, const UnitStats& stats,
                           std::uint8_t char_class = 0);
 
+    // Remove a disconnected player and all map-owned transient state. AI drops
+    // stale threat on its next target snapshot; reconnecting the same guid starts
+    // from the new enter event rather than a stale death/cast/request record.
+    void remove_player(ObjectGuid guid);
+
     // Spawn a server creature from `def` via the AI. Returns its assigned guid.
     ObjectGuid add_creature(const CreatureSpawnDef& def);
 
@@ -430,6 +435,7 @@ private:
     std::unordered_map<ObjectGuid, std::unique_ptr<PlayerCombatant>> players_;
     std::unordered_map<ObjectGuid, std::unique_ptr<AuraContainer>> creature_auras_;
     std::unordered_map<ObjectGuid, AiState> prev_ai_state_;  // AI transition edges
+    std::vector<CreatureBasicAttack> pending_creature_attacks_;  // AI -> combat phase
     std::vector<AbilityUseCmd> inbound_;
     std::vector<ObjectGuid> release_requests_;    // C→S RELEASE_REQUEST queue (#359)
     std::vector<ObjectGuid> resurrect_requests_;  // C→S RESURRECT_REQUEST queue (#359)

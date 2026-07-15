@@ -64,6 +64,10 @@ int main() {
         AdmitResult r = reg.admit(kAcctA, [&kicks]() { ++kicks; });
         check("A: fresh admit does not kick", !r.kicked_previous && kicks == 0);
         check("A: admit returns a non-zero token", r.token != 0);
+        check("A: admit returns a non-zero monotonic generation",
+              r.generation != 0);
+        check("A: admitted token/generation is the authoritative holder",
+              reg.is_current(kAcctA, r.token, r.generation));
         check("A: account is now active", reg.is_active(kAcctA));
         check("A: exactly one active account", reg.active_count() == 1);
     }
@@ -84,6 +88,11 @@ int main() {
               reg.active_count() == 1 && reg.is_active(kAcctA));
         check("B: the two admissions have distinct tokens",
               first.token != second.token);
+        check("B: replacement generation advances monotonically",
+              second.generation > first.generation);
+        check("B: stale generation is not current and replacement is current",
+              !reg.is_current(kAcctA, first.token, first.generation) &&
+                  reg.is_current(kAcctA, second.token, second.generation));
     }
 
     // ===== C. TOKEN GUARD: kicked-old release() must not evict the new holder =

@@ -250,6 +250,64 @@ int main() {
               hc.is_heal && wounded.health() == 200);  // 180 + 60 clamped to 200
     }
 
+    // === E2. approved armor contract + basic attacks =======================
+    {
+        check("E2: zero armor leaves physical damage unchanged",
+              mitigate_damage(100, School::kPhysical, 0) == 100);
+        check("E2: 100 armor halves physical damage",
+              mitigate_damage(100, School::kPhysical, 100) == 50);
+        check("E2: physical mitigation floors integer division",
+              mitigate_damage(10, School::kPhysical, 50) == 6);
+        check("E2: non-zero physical hits have a one-damage floor",
+              mitigate_damage(1, School::kPhysical, 2'000'000'000) == 1);
+        check("E2: negative effective armor clamps to zero",
+              mitigate_damage(100, School::kPhysical, -50) == 100);
+        check("E2: non-physical schools bypass armor",
+              mitigate_damage(100, School::kFire, 1000) == 100);
+
+        Player caster = make_caster();
+        UnitStats armored_stats;
+        armored_stats.max_health = 200;
+        armored_stats.armor = 100;
+        armored_stats.faction = Faction::kHostile;
+        Creature armored(2, at(0, 0), armored_stats, 1);
+        armored.add_absorb(20);
+        CombatRng rng(1);
+        ResolveResult physical = apply_outcome(
+            make_damage(100), caster, armored, AttackOutcome::kHit, rng);
+        check("E2: armor applies before shields then health",
+              physical.absorbed == 20 && physical.amount == 30 &&
+                  armored.absorb() == 0 && armored.health() == 170);
+
+        Ability fire = make_damage(100);
+        fire.school = School::kFire;
+        Creature elemental(3, at(0, 0), armored_stats, 1);
+        ResolveResult magic = apply_outcome(
+            fire, caster, elemental, AttackOutcome::kHit, rng);
+        check("E2: non-physical ability bypasses target armor",
+              magic.amount == 100 && elemental.health() == 100);
+
+        // Full basic-attack path: same seed means the same outcome/raw/applied
+        // result, and the target's effective armor is honored.
+        UnitStats player_stats;
+        player_stats.max_health = 500;
+        player_stats.armor = 100;
+        player_stats.faction = Faction::kPlayer;
+        Player ta(10, at(0, 0), player_stats, 1, 1, "A");
+        Player tb(11, at(0, 0), player_stats, 1, 1, "B");
+        UnitStats mob_stats;
+        mob_stats.max_health = 100;
+        mob_stats.faction = Faction::kHostile;
+        Creature ma(20, at(0, 0), mob_stats, 1);
+        Creature mb(21, at(0, 0), mob_stats, 1);
+        CombatRng ra(784), rb(784);
+        BasicAttackResult ba = resolve_basic_attack(ma, ta, 5, 8, ra);
+        BasicAttackResult bb = resolve_basic_attack(mb, tb, 5, 8, rb);
+        check("E2: seeded basic attacks are deterministic",
+              ba.outcome == bb.outcome && ba.raw_amount == bb.raw_amount &&
+                  ba.amount == bb.amount && ta.health() == tb.health());
+    }
+
     // === F. seeded RNG: every outcome reachable + reproducible ==============
     {
         Ability dmg = make_damage(10);

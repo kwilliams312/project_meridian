@@ -90,7 +90,8 @@ float effective_aggro_radius(float base_radius, int creature_level, int target_l
 // ---------------------------------------------------------------------------
 ObjectGuid CreatureAi::add_spawn(const CreatureSpawnDef& def) {
     const ObjectGuid guid = next_guid_++;
-    const UnitStats stats = placeholder_creature_stats(def.level, def.faction);
+    const UnitStats stats = def.authored_stats.value_or(
+        placeholder_creature_stats(def.level, def.faction));
 
     Instance inst{Creature(guid, def.home, stats, def.template_id), def};
     inst.unit.spawn();  // full health/resource, alive, at home
@@ -174,6 +175,9 @@ void CreatureAi::add_threat(ObjectGuid creature_guid, ObjectGuid attacker_guid,
     if (it == instances_.end()) return;
     Instance& inst = it->second;
 
+    if (inst.unit.faction() != Faction::kHostile ||
+        inst.def.behavior == CreatureBehavior::kPassive) return;
+
     // A dead creature accrues nothing; an evading (immune) creature has dropped its
     // threat and is not fighting — being outside its leash, it ignores new threat.
     if (inst.state == AiState::kDead || inst.state == AiState::kEvade) return;
@@ -184,6 +188,7 @@ void CreatureAi::add_threat(ObjectGuid creature_guid, ObjectGuid attacker_guid,
     if (inst.state == AiState::kPatrol) {
         inst.state = AiState::kCombat;
         inst.target = attacker_guid;
+        inst.attack_remaining_ms = 0;
     }
 }
 
@@ -215,6 +220,7 @@ CreatureAiTickResult CreatureAi::tick(std::uint32_t dt_ms,
             inst.respawn_remaining_ms = inst.def.respawn_ms;
             inst.threat.clear();
             inst.target = 0;
+            inst.attack_remaining_ms = 0;
             inst.was_dead = true;
             out.despawned.push_back(guid);
             continue;  // no movement the tick it dies
@@ -251,6 +257,7 @@ void CreatureAi::tick_dead(Instance& inst, std::uint32_t dt_ms, CreatureAiTickRe
     inst.state = AiState::kPatrol;
     inst.target = 0;
     inst.threat.clear();
+    inst.attack_remaining_ms = 0;
     inst.wp_index = 0;
     inst.wp_dir = 1;
     inst.was_dead = false;
@@ -261,6 +268,7 @@ void CreatureAi::enter_evade(Instance& inst) {
     inst.state = AiState::kEvade;
     inst.target = 0;
     inst.threat.clear();
+    inst.attack_remaining_ms = 0;
     // Full-heal happens on ARRIVAL home (tick_evade), so a chased-down creature is
     // healed only once it has actually leashed back.
 }
@@ -328,15 +336,42 @@ void CreatureAi::tick_combat(
         return;
     }
 
-    // Chase the target's current position (the resolver handles the actual attack
-    // once in range; the AI only closes the distance).
+    // Close only to melee range; never overlap the target. Once in range, emit
+    // attack intents at the authored cadence. The map combat phase performs the
+    // seeded attack-table roll and authoritative damage mutation.
     const AiTargetView* tv = by_guid.at(target);
     const Position before = inst.unit.position();
-    const float budget = step_budget(inst.def.move_speed, dt_ms);
-    const StepResult s = step_towards(before, tv->pos, budget);
+    const float before_dist = planar_dist(before, tv->pos);
+    if (before_dist > kCreatureBasicAttackRangeM) {
+        const float budget = std::min(step_budget(inst.def.move_speed, dt_ms),
+                                      before_dist - kCreatureBasicAttackRangeM);
+        const StepResult s = step_towards(before, tv->pos, budget);
+        inst.unit.set_position(s.pos);
+        if (moved(before, s.pos)) out.moves.push_back({inst.unit.guid(), s.pos});
+    }
 
-    inst.unit.set_position(s.pos);
-    if (moved(before, s.pos)) out.moves.push_back({inst.unit.guid(), s.pos});
+    if (planar_dist(inst.unit.position(), tv->pos) > kCreatureBasicAttackRangeM)
+        return;
+    if (inst.def.attack_speed_ms == 0 || inst.def.damage_max == 0)
+        return;
+
+    auto swing = [&]() {
+        out.attacks.push_back({inst.unit.guid(), target,
+                               inst.def.damage_min, inst.def.damage_max});
+    };
+
+    if (inst.attack_remaining_ms == 0) {
+        swing();
+        inst.attack_remaining_ms = inst.def.attack_speed_ms;
+        return;
+    }
+    std::uint32_t elapsed = dt_ms;
+    while (elapsed >= inst.attack_remaining_ms) {
+        elapsed -= inst.attack_remaining_ms;
+        swing();
+        inst.attack_remaining_ms = inst.def.attack_speed_ms;
+    }
+    inst.attack_remaining_ms -= elapsed;
 }
 
 void CreatureAi::tick_patrol(Instance& inst, std::uint32_t dt_ms,
@@ -346,24 +381,28 @@ void CreatureAi::tick_patrol(Instance& inst, std::uint32_t dt_ms,
     // aggro radius pulls the creature into combat. Ties by ascending guid.
     ObjectGuid aggro = 0;
     float aggro_dist = 0.0f;
-    for (const AiTargetView& t : targets) {
-        if (!t.alive) continue;
-        if (t.faction == inst.unit.faction()) continue;  // same side — not hostile
-        const float radius =
-            effective_aggro_radius(inst.def.aggro_base_radius, inst.unit.level(), t.level);
-        if (radius <= 0.0f) continue;
-        const float d = planar_dist(inst.unit.position(), t.pos);
-        if (d > radius) continue;
-        if (aggro == 0 || d < aggro_dist || (d == aggro_dist && t.guid < aggro)) {
-            aggro = t.guid;
-            aggro_dist = d;
+    if (inst.unit.faction() == Faction::kHostile &&
+        inst.def.behavior == CreatureBehavior::kAggressive) {
+        for (const AiTargetView& t : targets) {
+            if (!t.alive) continue;
+            if (t.faction == inst.unit.faction()) continue;  // same side — not hostile
+            const float radius = effective_aggro_radius(
+                inst.def.aggro_base_radius, inst.unit.level(), t.level);
+            if (radius <= 0.0f) continue;
+            const float d = planar_dist(inst.unit.position(), t.pos);
+            if (d > radius) continue;
+            if (aggro == 0 || d < aggro_dist || (d == aggro_dist && t.guid < aggro)) {
+                aggro = t.guid;
+                aggro_dist = d;
+            }
         }
-    }
-    if (aggro != 0) {
-        inst.threat[aggro] += kProximityAggroThreat;
-        inst.state = AiState::kCombat;
-        inst.target = aggro;
-        return;  // begin chasing next tick
+        if (aggro != 0) {
+            inst.threat[aggro] += kProximityAggroThreat;
+            inst.state = AiState::kCombat;
+            inst.target = aggro;
+            inst.attack_remaining_ms = 0;
+            return;  // begin chasing next tick
+        }
     }
 
     // No aggro → advance the patrol route (linear waypoint following, #348).

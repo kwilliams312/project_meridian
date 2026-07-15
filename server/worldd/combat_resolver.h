@@ -168,6 +168,13 @@ bool can_assist(Faction caster, Faction target);
 using LineOfSightFn = std::function<bool(const Position&, const Position&)>;
 bool flat_map_los(const Position& from, const Position& to);
 
+// Approved #784 armor contract. Physical damage is reduced by
+// floor(raw * 100 / (100 + max(0, effective armor))), with a one-damage floor
+// for a non-zero hit. Non-physical schools bypass armor. Armor mitigation is
+// computed before Unit::apply_damage, so shields absorb the mitigated result.
+std::uint32_t mitigate_damage(std::uint32_t raw_damage, School school,
+                              std::int64_t effective_armor);
+
 // ---------------------------------------------------------------------------
 // Pure attack-table classifiers — map a d10000 roll to an outcome. Split out so
 // each band is unit-testable at its boundary WITHOUT guessing RNG output.
@@ -204,6 +211,22 @@ struct ResolveResult {
     ObjectGuid    moved_guid = 0;   // whose position changed (caster for dash, else target)
     Position      moved_to;         // its new position after the displacement
 };
+
+// One server-authored hostile basic attack. It uses the same attack table and
+// seeded CombatRng as abilities, is always physical, applies armor before shields,
+// and mutates only the authoritative target Unit.
+struct BasicAttackResult {
+    AttackOutcome outcome = AttackOutcome::kMiss;
+    std::uint32_t raw_amount = 0;
+    std::uint32_t amount = 0;
+    std::uint32_t absorbed = 0;
+    std::uint32_t target_health = 0;
+    bool target_died = false;
+};
+
+BasicAttackResult resolve_basic_attack(Unit& attacker, Unit& target,
+                                       std::uint32_t damage_min,
+                                       std::uint32_t damage_max, CombatRng& rng);
 
 // Validate target legality + range + line-of-sight for `ability` cast by `caster`
 // at `target` (SAD §3.3). `target` may be null (no such entity). Returns kNone

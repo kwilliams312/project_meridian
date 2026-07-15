@@ -443,6 +443,47 @@ int main() {
         check("F: world thread drained the enqueued event",
               world.drained_count() >= 1);
 
+        // ===== H. PREEMPTED ENTER ABA ORDERING (#784 re-QA) ================
+        // Deterministically enqueue the replacement t2 first, then the delayed
+        // stale t1 enter + teardown, then a live t2 move. The stale generation
+        // must neither replace nor remove t2, and t2 movement must still apply.
+        constexpr std::uint64_t account = 78401;
+        constexpr mw::ObjectGuid guid = 78402;
+        const mw::AdmitResult t1 = world.active_sessions().admit(account, [] {});
+        const mw::AdmitResult t2 = world.active_sessions().admit(account, [] {});
+        mw::UnitStats stats;
+        stats.max_health = 100;
+        stats.faction = mw::Faction::kPlayer;
+        auto lifecycle = [&](mw::WorldEventKind kind, const mw::AdmitResult& holder,
+                             float x) {
+            mw::WorldEvent ev;
+            ev.kind = kind;
+            ev.player_guid = guid;
+            ev.player_account_id = account;
+            ev.player_session_token = holder.token;
+            ev.player_session_generation = holder.generation;
+            ev.player_pos = {x, 0.0f, 0.0f, 0.0f};
+            ev.player_stats = stats;
+            return ev;
+        };
+        const std::uint64_t before_aba = world.drained_count();
+        world.enqueue(lifecycle(mw::WorldEventKind::kPlayerEnter, t2, 20.0f));
+        world.enqueue(lifecycle(mw::WorldEventKind::kPlayerEnter, t1, 10.0f));
+        world.enqueue(lifecycle(mw::WorldEventKind::kPlayerLeave, t1, 10.0f));
+        world.enqueue(lifecycle(mw::WorldEventKind::kPlayerMove, t2, 25.0f));
+        for (int i = 0; i < 100 && world.drained_count() < before_aba + 4; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        const std::optional<mw::Position> live = world.map_player_position(guid);
+        check("H: stale enter/leave cannot replace or remove newer session",
+              world.map_player_count() == 1 && live.has_value());
+        check("H: newer session movement remains authoritative",
+              live.has_value() && live->x == 25.0f);
+
+        world.enqueue(lifecycle(mw::WorldEventKind::kPlayerLeave, t2, 25.0f));
+        for (int i = 0; i < 100 && world.map_player_count() != 0; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        world.active_sessions().release(account, t2.token);
+
         world.stop();
     } catch (const std::exception& e) {
         std::printf("  FAIL  exception: %s\n", e.what());
