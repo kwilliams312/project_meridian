@@ -534,11 +534,12 @@ Run the build twice from identical source with the fixed default timestamp. Comp
 artifact byte-for-byte and confirm the SQL `world_manifest` hash equals the Chibi client manifest
 hash. A wall-clock timestamp is not allowed in determinism evidence.
 
-For database evidence, always emit one explicit selected pack. #790 tracks five legacy integration
-tests that omit `--pack`, produce multi-pack SQL, and fail when separate themes reuse valid
-per-pack roster IDs. A focused `emit-sql content --pack chibi` result remains valid. Until #790
-lands, a failure in those five full-DB tests is a known harness regression, not permission to omit
-the selected-pack proof or to weaken roster isolation.
+For database evidence, always emit one explicit selected pack. [#798](https://github.com/kwilliams312/project_meridian/issues/798)
+and [PR #803](https://github.com/kwilliams312/project_meridian/pull/803) resolved the five legacy
+DB and MCC harness failures: Core-focused harnesses emit with `--pack core`, while the
+Chibi-specific class harness and this guide's focused proof emit with `--pack chibi`. This is a
+binding one-pack-per-runtime rule; green Core coverage is not permission to emit a multi-pack
+runtime database or to weaken per-pack roster isolation.
 
 ### Database and playable target
 
@@ -625,7 +626,7 @@ raw data checks separately; never report them as runtime results.
 | Final Chibi art wiring | #778, consuming #678/#680 | Manual asset-ID wiring | Every demo art ref selects finalized provenance-complete/restyled Chibi art; audit and backlinks clean |
 | Check/diff/build/package | #681 | CLI check/diff/build; package-related commands partly stubbed | Integrated truthful status, provenance gate, artifact paths, two-build/hash proof |
 | Selected-pack local load | #786, consumed by #783 | `run-local.sh` loads DDL only | Explicit Chibi selection, single-pack SQL load before boot, and matching world/client manifest hash |
-| Database regression coverage | #790 | Five legacy tests omit `--pack` | Every affected DB test emits an explicit pack and no longer fails on valid per-theme roster overlap |
+| Explicit-pack DB harnesses | [#798](https://github.com/kwilliams312/project_meridian/issues/798) / [PR #803](https://github.com/kwilliams312/project_meridian/pull/803) (closed) | Core harnesses use `--pack core`; the Chibi class harness uses `--pack chibi` | Keep every runtime DB emit explicitly pinned to exactly one theme pack |
 | Quest XP and level progression | #799, consumed by #782/#783 | Reward XP surfaced; XP/level not applied or persisted | Exactly-once award, authoritative level change, durable reconnect state, and no duplicate turn-in progression |
 | Purchase/equip interaction | #802, consumed by #785/#783 | Vendor/inventory data exists; no complete live equip action | Server-authoritative buy/equip/unequip/replace, persistence, snapshots, and wrong-class rollback through the client |
 | Physical mitigation | #780 contract; #784 implementation | Verify the #780 contract file in the target branch; authored NPC combat/armor not executed | Exact shared armor formula and armor->shield->health order for NPC/player targets, with seeded evidence |
@@ -653,7 +654,6 @@ lands; if a new gap is found during #783, add it here and to the tracker.
 | Existing Chibi pack/zone/items and several asset/provenance files fail `mcc fmt --check` | #774 content stories must clear drift before #783 |
 | Chibi manifest pins Godot 4.6 while the client and Forge projects declare 4.7 | #787 |
 | `run-local.sh` creates the world schema but does not select/load the Chibi single-pack SQL before `worldd` boot | #786; #783 consumes the completed path |
-| Five legacy DB integration tests emit multi-pack SQL without explicit selection and fail on valid per-theme roster overlap | #790; focused `--pack chibi` evidence remains valid |
 | Runtime does not execute NPC basic attacks from authored damage/speed or apply NPC armor | #784 |
 | Quest turn-in surfaces reward XP but does not apply/persist XP or advance durable level state | #799; blocks #782 runtime proof and #783 level 1–3 acceptance |
 | Five required Chibi item icons are not final pack-local IF-8/aesthetic-approved assets; `icon` is not Meshy-eligible | #800; blocks #775 item data and is consumed by #778 |
