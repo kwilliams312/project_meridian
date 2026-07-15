@@ -8,8 +8,24 @@ additionalProperties: false
 required: [schema, id, name, target, school, effects]
 properties:
   schema: { const: "meridian/ability@1" }
-  id: { $ref: "#/$defs/contentId" }
-  name: { $ref: "#/$defs/displayName" }
+  id:
+    $ref: "#/$defs/contentId"
+    x-meridian-ui:
+      group: identity
+      label: Ability ID
+      widget: single_line
+      help: Permanent fully qualified ID referenced by classes, NPC rotations, and items.
+      example: emberfall:ability.ash_burst
+      constraint: Use namespace:ability.name with lowercase dot-separated segments.
+      documentation: schema/content/README.md
+  name:
+    $ref: "#/$defs/displayName"
+    x-meridian-ui:
+      group: identity
+      label: Display name
+      widget: single_line
+      help: Ability name shown in tooltips and combat interfaces.
+      example: Ash Burst
   description:
     description: Tooltip text. Supports {amount} substitution from the first effect.
     type: string
@@ -23,7 +39,14 @@ properties:
     minimum: 0
     maximum: 60
     default: 5
-    x-meridian-ui: { group: targeting, label: Cast range, widget: number, unit: m }
+    x-meridian-ui:
+      group: targeting
+      label: Cast range
+      widget: number
+      unit: m
+      help: Maximum distance from caster to target; use 5 for melee reach.
+      example: 5
+      constraint: 0-60 meters.
   cast:
     type: object
     additionalProperties: false
@@ -34,7 +57,14 @@ properties:
         minimum: 0
         maximum: 10000
         default: 0
-        x-meridian-ui: { group: timing, label: Cast time, widget: number, unit: ms }
+        x-meridian-ui:
+          group: timing
+          label: Cast time
+          widget: number
+          unit: ms
+          help: Time before the ability resolves; zero means instant.
+          example: 0
+          constraint: 0-10,000 milliseconds.
       channel_ms:
         type: integer
         minimum: 0
@@ -44,7 +74,15 @@ properties:
     type: integer
     minimum: 0
     default: 0
-    x-meridian-ui: { group: timing, label: Cooldown, widget: number, unit: ms }
+    x-meridian-ui:
+      group: timing
+      label: Cooldown
+      widget: number
+      unit: ms
+      help: Time after use before this ability can be used again.
+      example: 6000
+      constraint: Zero or more milliseconds.
+      documentation: schema/content/README.md
   triggers_gcd:
     description: Client may start GCD presentation optimistically; server rollback per sync decision D-10.
     type: boolean

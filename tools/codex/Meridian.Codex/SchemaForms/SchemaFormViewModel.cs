@@ -14,6 +14,7 @@ public sealed partial class SchemaFormViewModel : ObservableObject
     {
         Document = document;
         Root = new SchemaFieldViewModel(document.Schema, document, Refresh);
+        document.Changed += (_, _) => Root.NotifyRequirementStateChanged();
     }
 
     public SchemaFormDocument Document { get; }
@@ -54,11 +55,73 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
 
     public SchemaField Field { get; }
     public string Path { get; }
-    public string Label => Field.Title + (Field.IsRequired ? " *" : " (optional)");
-    public string? Help => Field.Description;
-    public string AutomationName => Label;
-    public string AutomationHelp => Help ?? $"Edit {Field.Title}.";
-    public string AddOptionalAutomationName => $"Add optional {Field.Title}";
+    public string FieldName => Field.Ui?.Label ?? Field.Title;
+    public string Label => FieldName + (IsRequiredForForm ? " *" : string.Empty);
+    public string RequirementText => Field.Constant is not null
+        ? "Fixed by schema; read-only"
+        : ActiveConditionalRequirement is { } activeRequirement
+            ? $"Required because {activeRequirement.Description}"
+            : Field.ConditionalRequirements.Count > 0
+                ? $"Optional now; required when {ConditionalRequirementDescription}"
+            : Field.IsRequired
+                ? Field.AvailabilityCondition is { } availability
+                    ? $"Required when {availability}"
+                    : "Required"
+                : Field.Default is not null
+                    ? "Optional; a default is provided"
+                    : "Optional";
+    public string RequirementStateText => Field.Constant is not null
+        ? "Fixed"
+        : IsRequiredForForm
+            ? "Required"
+            : Field.Default is not null
+                ? "Optional (default)"
+                : "Optional";
+    public string Help => Field.Ui?.Help ?? Field.Description ?? KindHelp;
+    public string? ExampleText => Field.Ui?.Example is { } example ? $"Example: {Display(example)}" : null;
+    public string? UnitText => Field.Ui?.Unit is { } unit ? $"Unit: {UnitName(unit)}" : null;
+    public string? DefaultText => Field.Default is { } value && Field.Constant is null ? $"Default: {Display(value)}" : null;
+    public string? ConstraintText => Field.Ui?.Constraint ?? DerivedConstraint;
+    public string? DocumentationText => Field.Ui?.Documentation is { } documentation ? $"Learn more: {documentation}" : null;
+    public string? Watermark => Field.Ui?.Example is { } example ? Display(example) : null;
+    public bool HasExample => ExampleText is not null;
+    public bool HasUnit => UnitText is not null;
+    public bool HasDefault => DefaultText is not null;
+    public bool HasConstraint => ConstraintText is not null;
+    public bool HasDocumentation => DocumentationText is not null;
+    public bool HasAvailability => Field.AvailabilityCondition is not null;
+    public string? AvailabilityText => Field.AvailabilityCondition is { } condition
+        ? $"Shown because {condition}. Values from other types are preserved when you switch back."
+        : Field.Kind == SchemaFieldKind.OneOf
+            ? "Choose a type to show its fields. Switching type preserves earlier values and asks before removing active fields."
+            : null;
+    public bool HasAvailabilityText => AvailabilityText is not null;
+    public string InformationText => string.Join(" ", new[]
+    {
+        RequirementText != RequirementStateText ? RequirementText + "." : null,
+        Help,
+        UnitText,
+        DefaultText,
+        ExampleText,
+        ConstraintText is { } constraint ? $"Constraint: {constraint}" : null,
+        AvailabilityText,
+        DocumentationText,
+    }.Where(value => !string.IsNullOrWhiteSpace(value)));
+    public bool HasInformation => !string.IsNullOrWhiteSpace(InformationText);
+    public string InformationAutomationName => $"More information about {FieldName}";
+    public string InformationAutomationId => "SchemaFieldInfo_" + Path.Replace('.', '_').Replace('[', '_').Replace("]", string.Empty, StringComparison.Ordinal);
+    public string AutomationName => FieldName;
+    public string AutomationHelp => string.Join(" ", new[]
+    {
+        RequirementStateText + ".",
+        InformationText,
+        HasDiagnostic ? $"Error: {DiagnosticText}" : null,
+    }.Where(value => !string.IsNullOrWhiteSpace(value)));
+    public string AutomationId => "SchemaField_" + Path.Replace('.', '_').Replace('[', '_').Replace("]", string.Empty, StringComparison.Ordinal);
+    public string AutomationStatus => HasDiagnostic ? $"Invalid: {DiagnosticText}" : RequirementText;
+    public bool IsRequiredForForm => Field.IsRequired || ActiveConditionalRequirement is not null;
+    public string AddFieldActionText => IsRequiredForForm ? "Add required field" : "Add optional field";
+    public string AddOptionalAutomationName => $"Add {(IsRequiredForForm ? "required" : "optional")} {Field.Title}";
     public string RemoveOptionalAutomationName => $"Remove optional {Field.Title}";
     public string AddItemAutomationName => $"Add item to {Field.Title}";
     public string MoveUpAutomationName => $"Move {Field.Title} up";
@@ -76,8 +139,8 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
     public bool IsUnsupported => Field.Kind == SchemaFieldKind.Unsupported;
     public bool IsArrayItem => _arrayPath is not null;
     public bool HasVariants => IsPresent && Field.Variants.Count > 0;
-    public bool CanAddOptional => !Field.IsRequired && !IsPresent && CanEdit;
-    public bool CanRemoveOptional => !Field.IsRequired && IsPresent && CanEdit && !IsArrayItem;
+    public bool CanAddOptional => !IsPresent && CanEdit;
+    public bool CanRemoveOptional => !IsRequiredForForm && IsPresent && CanEdit && !IsArrayItem;
     public bool ShowScalar => IsPresent && IsScalar;
     public bool ShowNumeric => IsPresent && IsNumeric;
     public bool ShowBoolean => IsPresent && IsBoolean;
@@ -88,6 +151,65 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
     public IReadOnlyList<string> Choices => Field.Choices;
     public ObservableCollection<SchemaFieldViewModel> Children { get; } = [];
     public IReadOnlyList<string> VariantChoices => Field.Variants.Select(variant => variant.Key).ToArray();
+
+    private string KindHelp => Field.Ui?.ReferenceType switch
+    {
+        "content:ability" => "Enter an ability ID such as core:ability.cleave_strike.",
+        { } reference when reference.StartsWith("content:", StringComparison.Ordinal) => "Enter a content ID using namespace:type.name format.",
+        { } reference when reference.StartsWith("asset:", StringComparison.Ordinal) => "Enter an asset-registry ID using namespace:asset_type.name format.",
+        _ when Field.Kind == SchemaFieldKind.OneOf => "Choose the value type, then complete the fields that appear.",
+        _ when Field.Kind == SchemaFieldKind.Array => "Add, remove, or reorder entries in this list.",
+        _ when Field.Kind == SchemaFieldKind.Object => "Complete the related fields in this group.",
+        _ => $"Enter {FieldName.ToLowerInvariant()}.",
+    };
+
+    private SchemaConditionalRequirement? ActiveConditionalRequirement => Field.ConditionalRequirements.FirstOrDefault(requirement =>
+        requirement.Conditions.All(condition => string.Equals(
+            _document.Get(condition.Path)?.ToString(),
+            condition.ExpectedValue,
+            StringComparison.Ordinal)));
+
+    private string ConditionalRequirementDescription => string.Join(" or ", Field.ConditionalRequirements.Select(requirement => requirement.Description));
+
+    private string? DerivedConstraint
+    {
+        get
+        {
+            if (Field.Choices.Count > 0) return $"Choose one of: {string.Join(", ", Field.Choices)}.";
+            if (Field.Minimum is { } minimum && Field.Maximum is { } maximum)
+                return $"{(Field.HasExclusiveMinimum ? "Greater than" : "At least")} {minimum} and {(Field.HasExclusiveMaximum ? "less than" : "at most")} {maximum}.";
+            if (Field.Minimum is { } lower) return $"{(Field.HasExclusiveMinimum ? "Greater than" : "At least")} {lower}.";
+            if (Field.Maximum is { } upper) return $"{(Field.HasExclusiveMaximum ? "Less than" : "At most")} {upper}.";
+            if (Field.MinimumLength is { } minLength && Field.MaximumLength is { } maxLength) return $"Use {minLength}-{maxLength} characters.";
+            if (Field.MinimumLength is { } minimumLength) return $"Use at least {minimumLength} character{(minimumLength == 1 ? string.Empty : "s")}.";
+            if (Field.MaximumLength is { } maximumLength) return $"Use at most {maximumLength} characters.";
+            if (Field.Pattern is not null) return "Use the required ID or value format shown in the example.";
+            return null;
+        }
+    }
+
+    private string RepairHint
+    {
+        get
+        {
+            if (ConstraintText is { } constraint) return $"Fix: {constraint}";
+            if (ExampleText is { } example) return $"Fix: follow the format in {example.ToLowerInvariant()}.";
+            return $"Fix: enter a valid value for {FieldName}.";
+        }
+    }
+
+    private static string UnitName(string unit) => unit switch
+    {
+        "ms" => "milliseconds (ms)",
+        "m" => "meters (m)",
+        "mps" => "meters per second (m/s)",
+        "percent" => "percent (%)",
+        "copper" => "copper (100 copper = 1 silver; 10,000 copper = 1 gold)",
+        "scale" => "model scale multiplier",
+        _ => unit,
+    };
+
+    private static string Display(JsonNode value) => value.ToString();
 
     [ObservableProperty] private string? _branchWarning;
 
@@ -243,11 +365,43 @@ public sealed partial class SchemaFieldViewModel : ObservableObject
 
     internal void SetDiagnostics(IReadOnlyList<SchemaDiagnostic> diagnostics)
     {
-        var messages = diagnostics.Where(diagnostic => diagnostic.Path == Path).Select(diagnostic => diagnostic.Message).Distinct().ToArray();
-        DiagnosticText = messages.Length == 0 ? null : string.Join(Environment.NewLine, messages);
+        var messages = diagnostics
+            .Where(diagnostic => diagnostic.Path == Path)
+            .Select(diagnostic => $"{diagnostic.Message} {RepairHint}")
+            .ToList();
+        if (IsRequiredForForm && !IsPresent)
+            messages.Add($"This field is {RequirementText.ToLowerInvariant()}. Fix: add the required field and choose a value.");
+        var distinctMessages = messages.Distinct().ToArray();
+        DiagnosticText = distinctMessages.Length == 0 ? null : string.Join(Environment.NewLine, distinctMessages);
         OnPropertyChanged(nameof(DiagnosticText));
         OnPropertyChanged(nameof(HasDiagnostic));
+        OnPropertyChanged(nameof(AutomationHelp));
+        OnPropertyChanged(nameof(AutomationStatus));
         foreach (var child in Children) child.SetDiagnostics(diagnostics);
+    }
+
+    internal void NotifyRequirementStateChanged()
+    {
+        OnPropertyChanged(nameof(Label));
+        OnPropertyChanged(nameof(RequirementText));
+        OnPropertyChanged(nameof(RequirementStateText));
+        OnPropertyChanged(nameof(InformationText));
+        OnPropertyChanged(nameof(HasInformation));
+        OnPropertyChanged(nameof(AutomationHelp));
+        OnPropertyChanged(nameof(AutomationStatus));
+        OnPropertyChanged(nameof(IsRequiredForForm));
+        OnPropertyChanged(nameof(AddFieldActionText));
+        OnPropertyChanged(nameof(AddOptionalAutomationName));
+        OnPropertyChanged(nameof(IsPresent));
+        OnPropertyChanged(nameof(CanAddOptional));
+        OnPropertyChanged(nameof(CanRemoveOptional));
+        OnPropertyChanged(nameof(ShowScalar));
+        OnPropertyChanged(nameof(ShowNumeric));
+        OnPropertyChanged(nameof(ShowBoolean));
+        OnPropertyChanged(nameof(ShowEnum));
+        OnPropertyChanged(nameof(ShowChildren));
+        OnPropertyChanged(nameof(CanAddArrayItem));
+        foreach (var child in Children) child.NotifyRequirementStateChanged();
     }
 
 }

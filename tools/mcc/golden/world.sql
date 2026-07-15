@@ -8,7 +8,6 @@ SET FOREIGN_KEY_CHECKS = 0;
 INSERT INTO world_manifest
   (pack_namespace, pack_version, id_band, content_hash, schema_version, compatibility_version, mcc_version, built_at)
 VALUES
-  ('chibi', '0.1.0', 1, '6efd8e3b09735b64d60aa4d3938e51ed944c7eb79990f5d1e46ed143a3833fc0', 1, 1, '0.0.0', '1970-01-01 00:00:00'),
   ('core', '0.1.0', 0, '9f90580d23f2989b38810a1019299e3efd7dbba357c82d1e7e8924fc5209bce1', 1, 1, '0.0.0', '1970-01-01 00:00:00');
 
 -- npc_template (8 rows)
@@ -37,7 +36,7 @@ INSERT INTO npc_trainer_ability (npc_id, ability_id, cost_copper, required_class
   (64, 1, 500, NULL, 4),
   (64, 2, 1200, 'vanguard', 8);
 
--- equip_type (16 rows)
+-- equip_type (8 rows)
 INSERT INTO equip_type (content_id, equip_ref, name, category, slot_class) VALUES
   (118, 'core:equip_type.cloth', 'Cloth', 'armor', NULL),
   (119, 'core:equip_type.leather', 'Leather', 'armor', NULL),
@@ -46,17 +45,9 @@ INSERT INTO equip_type (content_id, equip_ref, name, category, slot_class) VALUE
   (122, 'core:equip_type.plate', 'Plate', 'armor', NULL),
   (123, 'core:equip_type.staff', 'Staff', 'weapon', 'two_hand'),
   (124, 'core:equip_type.two_hand', 'Two-Hand', 'weapon', 'two_hand'),
-  (125, 'core:equip_type.wand', 'Wand', 'weapon', 'main'),
-  (1048605, 'chibi:equip_type.cloth', 'Cloth', 'armor', NULL),
-  (1048606, 'chibi:equip_type.leather', 'Leather', 'armor', NULL),
-  (1048607, 'chibi:equip_type.mail', 'Mail', 'armor', NULL),
-  (1048608, 'chibi:equip_type.one_hand', 'One-Hand', 'weapon', 'main'),
-  (1048609, 'chibi:equip_type.plate', 'Plate', 'armor', NULL),
-  (1048610, 'chibi:equip_type.staff', 'Staff', 'weapon', 'two_hand'),
-  (1048611, 'chibi:equip_type.two_hand', 'Two-Hand', 'weapon', 'two_hand'),
-  (1048612, 'chibi:equip_type.wand', 'Wand', 'weapon', 'main');
+  (125, 'core:equip_type.wand', 'Wand', 'weapon', 'main');
 
--- item_template (37 rows)
+-- item_template (28 rows)
 INSERT INTO item_template (id, name, flavor_text, item_class, subclass, slot, equip_type_id, rarity, required_level, item_level, is_unique, binding, stack_size, weapon_damage_min, weapon_damage_max, weapon_speed_ms, weapon_school, armor, effect_on_use_id, price_sell, price_buy, visual_icon_id, visual_model_id) VALUES
   (16, 'Bren''s Signet', 'The quartermaster''s seal, good for a discount he''ll deny offering.', 'armor', 'misc', 'finger', NULL, 'uncommon', 4, 9, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, NULL, NULL, 380, NULL, 12, NULL),
   (17, 'Kobold Ear', 'Proof of a culling. Bren doesn''t ask how you got it.', 'quest', NULL, NULL, NULL, 'common', 1, 1, FALSE, 'on_pickup', 20, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 8, NULL),
@@ -85,18 +76,9 @@ INSERT INTO item_template (id, name, flavor_text, item_class, subclass, slot, eq
   (168, 'Recruit''s Leathers', 'Supple, quiet, and cut close so nothing snags in the dark.', 'armor', 'leather', 'chest', 119, 'common', 1, 1, FALSE, 'none', 1, NULL, NULL, NULL, NULL, 20, NULL, 55, NULL, 48, NULL),
   (169, 'Recruit''s Shiv', 'A ground-down file with a leather grip. Deniable, and quick.', 'weapon', 'dagger', 'main_hand', 121, 'common', 1, 1, FALSE, 'none', 1, 4, 7, 1800, NULL, NULL, NULL, 80, NULL, 112, NULL),
   (170, 'Recruit''s Battleblade', 'Standard-issue steel, blunt at the tip and honest in the swing.', 'weapon', 'sword_1h', 'main_hand', 121, 'common', 1, 1, FALSE, 'none', 1, 5, 9, 2400, NULL, NULL, NULL, 80, NULL, 112, NULL),
-  (171, 'Recruit''s Platemail', 'Dented drill plate, re-issued more times than anyone can count.', 'armor', 'plate', 'chest', 122, 'common', 1, 1, FALSE, 'none', 1, NULL, NULL, NULL, NULL, 40, NULL, 60, NULL, 48, NULL),
-  (1048613, 'Simple Cloth Wrap', 'A plain woven wrap — what every recruit wears before they are outfitted.', 'armor', 'cloth', 'chest', 1048605, 'poor', 1, 1, FALSE, 'on_pickup', 1, NULL, NULL, NULL, NULL, 0, NULL, 1, NULL, 48, NULL),
-  (1048614, 'Apprentice''s Robe', 'Coarse-woven wool, singed at the cuffs from too-eager practice.', 'armor', 'cloth', 'chest', 1048605, 'common', 1, 1, FALSE, 'none', 1, NULL, NULL, NULL, NULL, 8, NULL, 50, NULL, 48, NULL),
-  (1048615, 'Apprentice''s Staff', 'A plain ashwood stave, its focus-crystal barely a chip of quartz.', 'weapon', 'staff', 'two_hand', 1048610, 'common', 1, 1, FALSE, 'none', 1, 4, 8, 3000, NULL, NULL, NULL, 80, NULL, 112, NULL),
-  (1048616, 'Acolyte''s Prayer Wand', 'A thumb-worn rod of birch, blessed by a hedge-priest for a copper.', 'weapon', 'wand', 'main_hand', 1048612, 'common', 1, 1, FALSE, 'none', 1, 3, 6, 2000, 'holy', NULL, NULL, 80, NULL, 112, NULL),
-  (1048617, 'Acolyte''s Vestments', 'Undyed linen, the hem still stiff from the temple''s starch.', 'armor', 'cloth', 'chest', 1048605, 'common', 1, 1, FALSE, 'none', 1, NULL, NULL, NULL, NULL, 8, NULL, 50, NULL, 48, NULL),
-  (1048618, 'Recruit''s Leathers', 'Supple, quiet, and cut close so nothing snags in the dark.', 'armor', 'leather', 'chest', 1048606, 'common', 1, 1, FALSE, 'none', 1, NULL, NULL, NULL, NULL, 20, NULL, 55, NULL, 48, NULL),
-  (1048619, 'Recruit''s Shiv', 'A ground-down file with a leather grip. Deniable, and quick.', 'weapon', 'dagger', 'main_hand', 1048608, 'common', 1, 1, FALSE, 'none', 1, 4, 7, 1800, NULL, NULL, NULL, 80, NULL, 112, NULL),
-  (1048620, 'Recruit''s Battleblade', 'Standard-issue steel, blunt at the tip and honest in the swing.', 'weapon', 'sword_1h', 'main_hand', 1048608, 'common', 1, 1, FALSE, 'none', 1, 5, 9, 2400, NULL, NULL, NULL, 80, NULL, 112, NULL),
-  (1048621, 'Recruit''s Platemail', 'Dented drill plate, re-issued more times than anyone can count.', 'armor', 'plate', 'chest', 1048609, 'common', 1, 1, FALSE, 'none', 1, NULL, NULL, NULL, NULL, 40, NULL, 60, NULL, 48, NULL);
+  (171, 'Recruit''s Platemail', 'Dented drill plate, re-issued more times than anyone can count.', 'armor', 'plate', 'chest', 122, 'common', 1, 1, FALSE, 'none', 1, NULL, NULL, NULL, NULL, 40, NULL, 60, NULL, 48, NULL);
 
--- item_stat (29 rows)
+-- item_stat (22 rows)
 INSERT INTO item_stat (item_id, stat, amount) VALUES
   (16, 'intellect', 2),
   (16, 'spirit', 2),
@@ -119,16 +101,9 @@ INSERT INTO item_stat (item_id, stat, amount) VALUES
   (167, 'intellect', 2),
   (168, 'agility', 2),
   (169, 'agility', 2),
-  (171, 'stamina', 2),
-  (1048614, 'intellect', 2),
-  (1048615, 'intellect', 2),
-  (1048616, 'intellect', 2),
-  (1048617, 'intellect', 2),
-  (1048618, 'agility', 2),
-  (1048619, 'agility', 2),
-  (1048621, 'stamina', 2);
+  (171, 'stamina', 2);
 
--- ability (38 rows)
+-- ability (22 rows)
 INSERT INTO ability (id, name, description, school, target, range_m, cast_time_ms, cast_channel_ms, cooldown_ms, triggers_gcd, resource_type, resource_amount, av_cast_anim, av_cast_vfx_id, av_cast_sfx_id, av_impact_vfx_id, av_impact_sfx_id, effects_json) VALUES
   (1, 'Minor Healing', 'Restores {amount} health.', 'holy', 'self', 0, 0, NULL, 60000, FALSE, NULL, NULL, NULL, 14, 33, NULL, NULL, '[{"amount":{"max":60,"min":40},"kind":"heal"}]'),
   (2, 'Pickaxe Slam', 'Slams the target for {amount} physical damage and leaves them bleeding.', 'physical', 'enemy', 5, 0, NULL, 10000, TRUE, 'energy', 20, 'attack_overhead', NULL, NULL, 15, 32, '[{"amount":{"max":13,"min":8},"kind":"damage"},{"duration_ms":9000,"kind":"aura","periodic":{"amount":{"max":3,"min":2},"kind":"damage","tick_ms":3000}}]'),
@@ -151,25 +126,9 @@ INSERT INTO ability (id, name, description, school, target, range_m, cast_time_m
   (156, 'Bulwark', 'Braces behind raised guard, absorbing {amount} incoming damage.', 'physical', 'self', 0, 0, NULL, 20000, FALSE, 'rage', 10, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":120,"min":80},"coefficient":0.4,"duration_ms":10000,"kind":"shield"}]'),
   (157, 'Bellow', 'A defiant bellow that seizes the target''s attention.', 'physical', 'enemy', 5, 0, NULL, 8000, TRUE, 'rage', 10, NULL, NULL, NULL, NULL, NULL, '[{"amount":500,"kind":"threat"}]'),
   (158, 'Crushing Blow', 'A heavy overhead swing that hits for {amount} physical damage.', 'physical', 'enemy', 5, 0, NULL, 6000, TRUE, 'rage', 15, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":24,"min":16},"coefficient":0.5,"kind":"damage"}]'),
-  (159, 'Skullcrack', 'A stunning blow to the head that dazes the target for a few seconds.', 'physical', 'enemy', 5, 0, NULL, 15000, TRUE, 'rage', 20, NULL, NULL, NULL, NULL, NULL, '[{"duration_ms":4000,"kind":"cc","type":"stun"}]'),
-  (1048578, 'Arcane Bolt', 'A bolt of raw arcane force striking for {amount} damage.', 'arcane', 'enemy', 30, 1500, NULL, 0, TRUE, 'mana', 20, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":26,"min":18},"coefficient":0.6,"kind":"damage"}]'),
-  (1048579, 'Arcane Storm', 'A crashing wave of arcane energy that hits for {amount} damage.', 'arcane', 'enemy', 30, 2000, NULL, 8000, TRUE, 'mana', 40, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":30,"min":22},"coefficient":0.7,"kind":"damage"}]'),
-  (1048580, 'Cinderburn', 'Sets the target ablaze, searing them for {amount} fire damage each tick.', 'fire', 'enemy', 30, 0, NULL, 6000, TRUE, 'mana', 25, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":9,"min":6},"coefficient":0.2,"duration_ms":12000,"kind":"dot","tick_ms":3000}]'),
-  (1048581, 'Frost Lock', 'Encases the target''s legs in ice, rooting them in place.', 'frost', 'enemy', 30, 0, NULL, 12000, TRUE, 'mana', 20, NULL, NULL, NULL, NULL, NULL, '[{"duration_ms":6000,"kind":"cc","type":"root"}]'),
-  (1048582, 'Aegis', 'Wraps an ally in holy light, absorbing {amount} incoming damage.', 'holy', 'friendly', 30, 0, NULL, 8000, TRUE, 'mana', 30, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":150,"min":100},"coefficient":0.5,"duration_ms":12000,"kind":"shield"}]'),
-  (1048583, 'Mend', 'A prayer that knits wounds, restoring {amount} health.', 'holy', 'friendly', 30, 1500, NULL, 0, TRUE, 'mana', 25, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":60,"min":40},"coefficient":0.6,"kind":"heal"}]'),
-  (1048584, 'Purge', 'Scours the target with holy fire, sapping its strength.', 'holy', 'enemy', 30, 0, NULL, 8000, TRUE, 'mana', 20, NULL, NULL, NULL, NULL, NULL, '[{"amount":-10,"attribute":"chibi:attribute.strength","duration_ms":10000,"kind":"debuff","modifier":"flat"}]'),
-  (1048585, 'Renewal', 'A blessing that mends the target for {amount} health each tick.', 'holy', 'friendly', 30, 0, NULL, 0, TRUE, 'mana', 25, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":12,"min":8},"coefficient":0.2,"duration_ms":12000,"kind":"hot","tick_ms":3000}]'),
-  (1048586, 'Gash', 'A ragged cut that bleeds the target for {amount} damage each tick.', 'physical', 'enemy', 5, 0, NULL, 6000, TRUE, 'energy', 30, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":8,"min":5},"coefficient":0.15,"duration_ms":12000,"kind":"dot","tick_ms":3000}]'),
-  (1048587, 'Ribcut', 'A precise thrust to a vital point for {amount} physical damage.', 'physical', 'enemy', 5, 0, NULL, 6000, TRUE, 'energy', 35, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":28,"min":20},"coefficient":0.5,"kind":"damage"}]'),
-  (1048588, 'Veilstep', 'Slips forward through the veiling shadows, closing the gap.', 'shadow', 'self', 0, 0, NULL, 15000, FALSE, 'energy', 25, NULL, NULL, NULL, NULL, NULL, '[{"distance_m":15,"kind":"movement","motion":"dash"}]'),
-  (1048589, 'Weakpoint', 'Finds the gaps in the target''s guard, weakening its armor.', 'physical', 'enemy', 5, 0, NULL, 10000, TRUE, 'energy', 25, NULL, NULL, NULL, NULL, NULL, '[{"amount":-40,"attribute":"chibi:attribute.armor","duration_ms":15000,"kind":"debuff","modifier":"flat"}]'),
-  (1048590, 'Bellow', 'A defiant bellow that seizes the target''s attention.', 'physical', 'enemy', 5, 0, NULL, 8000, TRUE, 'rage', 10, NULL, NULL, NULL, NULL, NULL, '[{"amount":500,"kind":"threat"}]'),
-  (1048591, 'Bulwark', 'Braces behind raised guard, absorbing {amount} incoming damage.', 'physical', 'self', 0, 0, NULL, 20000, FALSE, 'rage', 10, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":120,"min":80},"coefficient":0.4,"duration_ms":10000,"kind":"shield"}]'),
-  (1048592, 'Crushing Blow', 'A heavy overhead swing that hits for {amount} physical damage.', 'physical', 'enemy', 5, 0, NULL, 6000, TRUE, 'rage', 15, NULL, NULL, NULL, NULL, NULL, '[{"amount":{"max":24,"min":16},"coefficient":0.5,"kind":"damage"}]'),
-  (1048593, 'Skullcrack', 'A stunning blow to the head that dazes the target for a few seconds.', 'physical', 'enemy', 5, 0, NULL, 15000, TRUE, 'rage', 20, NULL, NULL, NULL, NULL, NULL, '[{"duration_ms":4000,"kind":"cc","type":"stun"}]');
+  (159, 'Skullcrack', 'A stunning blow to the head that dazes the target for a few seconds.', 'physical', 'enemy', 5, 0, NULL, 15000, TRUE, 'rage', 20, NULL, NULL, NULL, NULL, NULL, '[{"duration_ms":4000,"kind":"cc","type":"stun"}]');
 
--- attribute (14 rows)
+-- attribute (7 rows)
 INSERT INTO attribute (attr_ref, content_id, name, kind) VALUES
   ('core:attribute.agility', 126, 'Agility', 'primary'),
   ('core:attribute.armor', 127, 'Armor', 'derived'),
@@ -177,28 +136,17 @@ INSERT INTO attribute (attr_ref, content_id, name, kind) VALUES
   ('core:attribute.haste', 129, 'Haste', 'derived'),
   ('core:attribute.intellect', 130, 'Intellect', 'primary'),
   ('core:attribute.stamina', 131, 'Stamina', 'primary'),
-  ('core:attribute.strength', 132, 'Strength', 'primary'),
-  ('chibi:attribute.agility', 1048594, 'Agility', 'primary'),
-  ('chibi:attribute.armor', 1048595, 'Armor', 'derived'),
-  ('chibi:attribute.crit', 1048596, 'Critical Strike', 'derived'),
-  ('chibi:attribute.haste', 1048597, 'Haste', 'derived'),
-  ('chibi:attribute.intellect', 1048598, 'Intellect', 'primary'),
-  ('chibi:attribute.stamina', 1048599, 'Stamina', 'primary'),
-  ('chibi:attribute.strength', 1048600, 'Strength', 'primary');
+  ('core:attribute.strength', 132, 'Strength', 'primary');
 
 -- race (2 rows)
 INSERT INTO race (roster_id, content_id, name, description) VALUES
   (1, 139, 'Ardent', 'Resilient folk of the central realm.'),
   (2, 140, 'Dolmen', 'Stoic mountain folk hewn from the deep stone.');
 
--- class (10 rows)
+-- class (6 rows)
 INSERT INTO class (roster_id, content_id, name, description, talent_tree_id) VALUES
-  (1, 1048604, 'Warrior', 'A plate-clad tank who holds the front line and controls the fight.', 1048633),
   (1, 137, 'Vanguard', 'A front-line melee defender who holds the line.', 143),
-  (2, 1048601, 'Mage', 'A cloth-robed spellcaster who burns and controls foes from range.', 1048630),
-  (3, 1048603, 'Rogue', 'A leather-clad skirmisher who strikes from the shadows and bleeds foes dry.', 1048632),
   (3, 138, 'Warden', 'A ranged hybrid who mends allies and burns foes at distance.', NULL),
-  (4, 1048602, 'Priest', 'A cloth-robed healer who mends allies, shields them, and purges foes.', 1048631),
   (5, 163, 'Warrior', 'A plate-clad tank who holds the front line and controls the fight.', 183),
   (6, 160, 'Mage', 'A cloth-robed spellcaster who burns and controls foes from range.', 180),
   (7, 162, 'Rogue', 'A leather-clad skirmisher who strikes from the shadows and bleeds foes dry.', 182),
@@ -209,27 +157,16 @@ INSERT INTO class_race_limit (class_roster_id, race_roster_id) VALUES
   (1, 1),
   (1, 2);
 
--- class_usable_equip_type (30 rows)
+-- class_usable_equip_type (19 rows)
 INSERT INTO class_usable_equip_type (class_roster_id, equip_type_id, list) VALUES
-  (1, 1048608, 'weapon'),
-  (1, 1048609, 'armor'),
-  (1, 1048611, 'weapon'),
   (1, 120, 'armor'),
   (1, 121, 'weapon'),
   (1, 122, 'armor'),
   (1, 124, 'weapon'),
-  (2, 1048605, 'armor'),
-  (2, 1048610, 'weapon'),
-  (2, 1048612, 'weapon'),
-  (3, 1048606, 'armor'),
-  (3, 1048608, 'weapon'),
   (3, 119, 'armor'),
   (3, 120, 'armor'),
   (3, 121, 'weapon'),
   (3, 123, 'weapon'),
-  (4, 1048605, 'armor'),
-  (4, 1048610, 'weapon'),
-  (4, 1048612, 'weapon'),
   (5, 121, 'weapon'),
   (5, 122, 'armor'),
   (5, 124, 'weapon'),
@@ -242,31 +179,21 @@ INSERT INTO class_usable_equip_type (class_roster_id, equip_type_id, list) VALUE
   (8, 123, 'weapon'),
   (8, 125, 'weapon');
 
--- class_role (11 rows)
+-- class_role (7 rows)
 INSERT INTO class_role (class_roster_id, role) VALUES
   (1, 'tank'),
-  (1, 'tank'),
-  (2, 'dps_ranged'),
-  (3, 'dps_melee'),
   (3, 'dps_ranged'),
   (3, 'healer'),
-  (4, 'healer'),
   (5, 'tank'),
   (6, 'dps_ranged'),
   (7, 'dps_melee'),
   (8, 'healer');
 
--- class_attribute_mod (15 rows)
+-- class_attribute_mod (9 rows)
 INSERT INTO class_attribute_mod (class_roster_id, attr_ref, value) VALUES
-  (1, 'chibi:attribute.stamina', 2),
-  (1, 'chibi:attribute.strength', 2),
   (1, 'core:attribute.stamina', 1),
   (1, 'core:attribute.strength', 2),
-  (2, 'chibi:attribute.intellect', 3),
-  (3, 'chibi:attribute.agility', 3),
   (3, 'core:attribute.agility', 2),
-  (4, 'chibi:attribute.intellect', 2),
-  (4, 'chibi:attribute.stamina', 1),
   (5, 'core:attribute.stamina', 2),
   (5, 'core:attribute.strength', 2),
   (6, 'core:attribute.intellect', 3),
@@ -274,7 +201,7 @@ INSERT INTO class_attribute_mod (class_roster_id, attr_ref, value) VALUES
   (8, 'core:attribute.intellect', 2),
   (8, 'core:attribute.stamina', 1);
 
--- talent (18 rows)
+-- talent (10 rows)
 INSERT INTO talent (content_id, talent_ref, name, rank_max) VALUES
   (141, 'core:talent.battle_fury', 'Battle Fury', 3),
   (142, 'core:talent.warding_grace', 'Warding Grace', 1),
@@ -285,17 +212,9 @@ INSERT INTO talent (content_id, talent_ref, name, rank_max) VALUES
   (176, 'core:talent.rogue_cutthroat', 'Cutthroat', 1),
   (177, 'core:talent.rogue_finesse', 'Finesse', 3),
   (178, 'core:talent.warrior_frontline', 'Frontline Fury', 3),
-  (179, 'core:talent.warrior_guardian', 'Guardian''s Oath', 1),
-  (1048622, 'chibi:talent.mage_frostwork', 'Frostwork', 1),
-  (1048623, 'chibi:talent.mage_kindling', 'Kindling', 3),
-  (1048624, 'chibi:talent.priest_devotion', 'Devotion', 3),
-  (1048625, 'chibi:talent.priest_sanctuary', 'Sanctuary', 1),
-  (1048626, 'chibi:talent.rogue_cutthroat', 'Cutthroat', 1),
-  (1048627, 'chibi:talent.rogue_finesse', 'Finesse', 3),
-  (1048628, 'chibi:talent.warrior_frontline', 'Frontline Fury', 3),
-  (1048629, 'chibi:talent.warrior_guardian', 'Guardian''s Oath', 1);
+  (179, 'core:talent.warrior_guardian', 'Guardian''s Oath', 1);
 
--- talent_grant (36 rows)
+-- talent_grant (20 rows)
 INSERT INTO talent_grant (talent_id, ordinal, kind, ability_id, attribute_ref, amount, modifier, duration_ms, max_stacks) VALUES
   (141, 0, 'ability', 133, NULL, NULL, NULL, NULL, NULL),
   (141, 1, 'buff', NULL, 'core:attribute.strength', 5, 'flat', NULL, 1),
@@ -316,37 +235,17 @@ INSERT INTO talent_grant (talent_id, ordinal, kind, ability_id, attribute_ref, a
   (178, 0, 'ability', 158, NULL, NULL, NULL, NULL, NULL),
   (178, 1, 'buff', NULL, 'core:attribute.stamina', 5, 'flat', NULL, 1),
   (179, 0, 'ability', 156, NULL, NULL, NULL, NULL, NULL),
-  (179, 1, 'buff', NULL, 'core:attribute.strength', 3, 'flat', NULL, 1),
-  (1048622, 0, 'ability', 1048581, NULL, NULL, NULL, NULL, NULL),
-  (1048622, 1, 'buff', NULL, 'chibi:attribute.crit', 2, 'flat', NULL, 1),
-  (1048623, 0, 'ability', 1048580, NULL, NULL, NULL, NULL, NULL),
-  (1048623, 1, 'buff', NULL, 'chibi:attribute.intellect', 5, 'flat', NULL, 1),
-  (1048624, 0, 'ability', 1048585, NULL, NULL, NULL, NULL, NULL),
-  (1048624, 1, 'buff', NULL, 'chibi:attribute.intellect', 5, 'flat', NULL, 1),
-  (1048625, 0, 'ability', 1048582, NULL, NULL, NULL, NULL, NULL),
-  (1048625, 1, 'buff', NULL, 'chibi:attribute.stamina', 3, 'flat', NULL, 1),
-  (1048626, 0, 'ability', 1048586, NULL, NULL, NULL, NULL, NULL),
-  (1048626, 1, 'buff', NULL, 'chibi:attribute.crit', 2, 'flat', NULL, 1),
-  (1048627, 0, 'ability', 1048587, NULL, NULL, NULL, NULL, NULL),
-  (1048627, 1, 'buff', NULL, 'chibi:attribute.agility', 5, 'flat', NULL, 1),
-  (1048628, 0, 'ability', 1048592, NULL, NULL, NULL, NULL, NULL),
-  (1048628, 1, 'buff', NULL, 'chibi:attribute.stamina', 5, 'flat', NULL, 1),
-  (1048629, 0, 'ability', 1048591, NULL, NULL, NULL, NULL, NULL),
-  (1048629, 1, 'buff', NULL, 'chibi:attribute.strength', 3, 'flat', NULL, 1);
+  (179, 1, 'buff', NULL, 'core:attribute.strength', 3, 'flat', NULL, 1);
 
--- talent_tree (9 rows)
+-- talent_tree (5 rows)
 INSERT INTO talent_tree (content_id, tree_ref, name, description) VALUES
   (143, 'core:talent_tree.vanguard_path', 'Vanguard Path', 'The Vanguard''s tiered talent progression.'),
   (180, 'core:talent_tree.arcane_mastery', 'Arcane Mastery', 'The Mage''s tiered talent progression.'),
   (181, 'core:talent_tree.light_and_shadow', 'Light and Shadow', 'The Priest''s tiered talent progression.'),
   (182, 'core:talent_tree.shadow_arts', 'Shadow Arts', 'The Rogue''s tiered talent progression.'),
-  (183, 'core:talent_tree.warriors_resolve', 'Warrior''s Resolve', 'The Warrior''s tiered talent progression.'),
-  (1048630, 'chibi:talent_tree.arcane_mastery', 'Arcane Mastery', 'The Mage''s tiered talent progression.'),
-  (1048631, 'chibi:talent_tree.light_and_shadow', 'Light and Shadow', 'The Priest''s tiered talent progression.'),
-  (1048632, 'chibi:talent_tree.shadow_arts', 'Shadow Arts', 'The Rogue''s tiered talent progression.'),
-  (1048633, 'chibi:talent_tree.warriors_resolve', 'Warrior''s Resolve', 'The Warrior''s tiered talent progression.');
+  (183, 'core:talent_tree.warriors_resolve', 'Warrior''s Resolve', 'The Warrior''s tiered talent progression.');
 
--- talent_tree_tier (18 rows)
+-- talent_tree_tier (10 rows)
 INSERT INTO talent_tree_tier (talent_tree_id, tier_ordinal, required_points) VALUES
   (143, 0, 0),
   (143, 1, 5),
@@ -357,17 +256,9 @@ INSERT INTO talent_tree_tier (talent_tree_id, tier_ordinal, required_points) VAL
   (182, 0, 0),
   (182, 1, 5),
   (183, 0, 0),
-  (183, 1, 5),
-  (1048630, 0, 0),
-  (1048630, 1, 5),
-  (1048631, 0, 0),
-  (1048631, 1, 5),
-  (1048632, 0, 0),
-  (1048632, 1, 5),
-  (1048633, 0, 0),
-  (1048633, 1, 5);
+  (183, 1, 5);
 
--- talent_tree_tier_talent (18 rows)
+-- talent_tree_tier_talent (10 rows)
 INSERT INTO talent_tree_tier_talent (talent_tree_id, tier_ordinal, ordinal, talent_id) VALUES
   (143, 0, 0, 141),
   (143, 1, 0, 142),
@@ -378,15 +269,7 @@ INSERT INTO talent_tree_tier_talent (talent_tree_id, tier_ordinal, ordinal, tale
   (182, 0, 0, 177),
   (182, 1, 0, 176),
   (183, 0, 0, 178),
-  (183, 1, 0, 179),
-  (1048630, 0, 0, 1048623),
-  (1048630, 1, 0, 1048622),
-  (1048631, 0, 0, 1048624),
-  (1048631, 1, 0, 1048625),
-  (1048632, 0, 0, 1048627),
-  (1048632, 1, 0, 1048626),
-  (1048633, 0, 0, 1048628),
-  (1048633, 1, 0, 1048629);
+  (183, 1, 0, 179);
 
 -- quest_template (10 rows)
 INSERT INTO quest_template (id, name, summary, offer_text, completion_text, level, required_level, zone_ref_id, giver_npc_id, turn_in_npc_id, reward_xp, reward_money) VALUES

@@ -45,6 +45,9 @@ uniform float use_secondary : hint_range(0.0, 1.0) = 0.0;
 uniform float use_accent : hint_range(0.0, 1.0) = 0.0;
 
 uniform float roughness : hint_range(0.0, 1.0) = 0.8;
+// Per-piece metalness. Applied only to the piece's DYEABLE region (masked by the
+// dye mask's coverage in fragment()), so unmasked texels stay matte — see the
+// METALLIC line below.
 uniform float metallic : hint_range(0.0, 1.0) = 0.0;
 
 void fragment() {
@@ -59,8 +62,18 @@ void fragment() {
 	col = mix(col, col * dye_secondary.rgb, mask.g * use_secondary);
 	col = mix(col, col * dye_accent.rgb, mask.b * use_accent);
 
+	// Metalness is LOCALIZED to the dyeable region (⑤/C4, #755): gate the
+	// per-piece `metallic` by the mask's coverage (max of the R/G/B channels) so
+	// unmasked texels stay matte. On the chibi body only R (skin) is painted, so a
+	// metallic race (Gold/Silver) makes the SKIN metallic while the eyes + cloth
+	// wrap (mask 0) stay matte. Armor masks cover their full surface with no gaps
+	// (max == 1 everywhere) so whole-piece metalness is unchanged; a flat piece
+	// (metallic 0) is a no-op. `metallic` keeps its whole-material meaning — the
+	// mask only says WHERE it applies.
+	float metallic_region = max(mask.r, max(mask.g, mask.b));
+
 	ALBEDO = col;
 	ROUGHNESS = roughness;
-	METALLIC = metallic;
+	METALLIC = metallic * metallic_region;
 	ALPHA = base.a;
 }

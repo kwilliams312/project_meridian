@@ -254,6 +254,8 @@ def test_form_descriptor_manifest_covers_authoring_asset_contract():
         )
 
     assert field("pack.schema.yaml", "namespace")["ui"]["widget"] == "slug"
+    assert field("pack.schema.yaml", "namespace")["ui"]["documentation"] == "schema/content/README.md"
+    assert field("ability.schema.yaml", "cooldown_ms")["ui"]["help"].startswith("Time after use")
     assert field("pack.schema.yaml", "theme.preview_asset")["asset"]["allowed_classes"] == ["icon", "ui_art"]
     assert field("npc.schema.yaml", "visual.model")["asset"] == {
         "allowed_classes": ["creature_model"],
@@ -309,6 +311,23 @@ def test_descriptor_emitter_rejects_unknown_annotation_keys(tmp_path):
     fixture.write_text(yaml.safe_dump(schema, sort_keys=False), encoding="utf-8")
 
     with pytest.raises(SchemaError, match=r"widget\.schema\.yaml:name:.*unknown key.*gropu"):
+        generate.render(tmp_path)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "documentation",
+    ["README.md", "docs/../secret.md", "file:///tmp/guide", "http://example.test/guide", "https://"],
+)
+def test_descriptor_emitter_rejects_non_repository_or_insecure_documentation(tmp_path, documentation):
+    for source in FIXTURE_DIR.glob("*.yaml"):
+        shutil.copy2(source, tmp_path / source.name)
+    fixture = tmp_path / "widget.schema.yaml"
+    schema = yaml.safe_load(fixture.read_text(encoding="utf-8"))
+    schema["properties"]["name"]["x-meridian-ui"] = {"documentation": documentation}
+    fixture.write_text(yaml.safe_dump(schema, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(SchemaError, match=r"documentation must be a repository docs path or HTTPS URL"):
         generate.render(tmp_path)
 
 

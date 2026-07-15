@@ -48,6 +48,15 @@ struct EmitSqlOptions {
     // wall clock — a fixed default keeps double-build output byte-identical; a real
     // nightly build passes its own value via --built-at (documented in the CLI).
     std::string built_at = "1970-01-01 00:00:00";
+    // Single-pack selection (--pack <ns>): when non-empty, emit ONE pack's world DB
+    // — that pack's world_manifest row + only that pack's content rows. This is how
+    // a realm gets a self-contained, single-pack world DB (design §4): the roster
+    // (class/race) tables key on the per-pack roster_id (1-4), so two packs' rosters
+    // collide in one world DB. One pack per realm sidesteps the collision. Empty =
+    // the back-compat multi-pack dump (every pack's manifest row + all content). A
+    // named-but-absent namespace is an error, never a silent wrong pick (mirrors
+    // emit-pck's --pack, SAD §2.6/§2.7).
+    std::string select_namespace = "";
 };
 
 // The result of an emit-sql run: the SQL text plus row/table counts for the

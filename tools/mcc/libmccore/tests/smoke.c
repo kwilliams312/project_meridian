@@ -11,7 +11,7 @@
  *   - open/close lifecycle
  *   - validate  -> asserts {"ok": true}
  *   - index     -> asserts the meridian/id-index@1 schema + expected ids
- *   - pickable  -> asserts itemRef yields count:28 / ok:true
+ *   - pickable  -> asserts itemRef yields count:37 / ok:true
  *   - backlinks -> asserts core:item.kobold_ear has referrer_count:2
  *   - resolve   -> asserts kobold_ear -> numeric_id 17, type "item"
  *   - alloc/free discipline: every returned string is mccore_free()'d; a bulk
@@ -109,7 +109,7 @@ int main(void) {
     check(idx != NULL && st == MCCORE_OK, "mccore_index_json() returns the index");
     check(contains(idx, "\"schema\": \"meridian/id-index@1\""),
           "index carries the meridian/id-index@1 schema");
-    check(contains(idx, "\"id_count\": 185"), "index reports id_count 185 (matches mcc index)");
+    check(contains(idx, "\"id_count\": 251"), "index reports id_count 251 (matches mcc index)");
     check(contains(idx, "core:item.kobold_ear"), "index contains core:item.kobold_ear");
     mccore_free(idx);
 
@@ -122,7 +122,7 @@ int main(void) {
           "pickable carries the meridian/pickable@1 schema");
     check(contains(pick, "\"type\": \"item\""), "pickable normalized itemRef -> type item");
     check(contains(pick, "\"ok\": true"), "pickable ok:true");
-    check(contains(pick, "\"count\": 28"), "pickable itemRef count is 28 (matches mcc pickable)");
+    check(contains(pick, "\"count\": 37"), "pickable itemRef count is 37 (matches mcc pickable)");
     mccore_free(pick);
 
     /* An unknown ref type is a valid answer (ok:false), NOT an error. */

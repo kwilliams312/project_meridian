@@ -1,0 +1,39 @@
+# IF-8 sidecar (meridian/asset@1). Chibi pill-body base — the keystone SP5 chibi
+# character base (epic #722), migrated into the `chibi` namespace (story #755,
+# spec §7). This is the re-authored copy of the #746 body: the SAME restyled glb
+# + prompts sibling, with only the id prefix rewritten core: -> chibi: and a
+# fresh id allocated in chibi's IF-9 band. The legacy `core:art.chibi_pill_body`
+# copy is left in place as retired legacy (follow-up #765) — no active realm
+# loads `core`, so this migration is purely ADDITIVE to the chibi pack.
+#
+# Provenance is carried over unchanged from #746: a real stylized low-poly mesh
+# generated with Meshy (image-to-3D from an operator-supplied chibi reference,
+# model meshy-5; the prompts sibling pins the submitted image's SHA-256) and
+# restyled to the canonical Meridian rig per the tools/blender/README.md restyle
+# procedure (spec ⑤/S4) under the `chibi` proportion profile (story #745):
+# fitted to rig scale + T-pose stance, budget-cleaned to the Art PRD §2.1
+# player-body band with an authored LOD0-3 chain, cut into the 8
+# geo_<region>_lod<N> geosets, and skinned to the canonical 63-bone armature
+# (<=4 influences, normalized). source_tier: ai — the restyle pass is complete,
+# so restyle_status: done (the #525 quarantine lint blocks 'pending').
+schema: meridian/asset@1
+id: chibi:art.chibi_pill_body
+class: character_model
+source: assets/art/chibi_pill_body/sk_chibi_pill_body.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors: [meridian-contributors]
+  origin_url: https://api.meshy.ai/openapi/v1/image-to-3d/019f6262-fc61-7c3c-839e-ec6d2a9a1220
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: chibi_pill_body.prompts.yaml
+budget:
+  # 8 geoset regions × LOD0, summed. Inside the 45-60k player-body band, under
+  # the 60k character_model ceiling (validate_content L070).
+  lod0_tris: 51999
+import_hints:
+  # Real body ships an authored LOD0-3 chain per geoset region (I023 — no
+  # 'single' exemption, which only the greybox blockout used).
+  lod_policy: authored
+restyle_status: done
