@@ -212,8 +212,13 @@ int main() {
     // --- 1. mcc emit-sql content/core -> world.sql. ----------------------------
     const fs::path world_sql = scratch / "world.sql";
     {
+        // --pack core: emit a SINGLE-pack world DB (one pack per realm, design §4).
+        // The chibi CLASSES this test exercises are authored in the core pack; the
+        // chibi RACES are a separate pack. Without --pack the merged content/ tree
+        // emits both packs' per-pack roster_id 1-N rows into one DB and the `race`/
+        // class PRIMARY key collides on load (#798).
         std::string cmd = "\"" + mcc + "\" emit-sql \"" + std::string(CHIBI_CONTENT_DIR) +
-                          "\" --out \"" + world_sql.string() + "\" >" +
+                          "\" --pack core --out \"" + world_sql.string() + "\" >" +
                           (scratch / "emit.log").string() + " 2>&1";
         const int rc = std::system(cmd.c_str());
         check("mcc emit-sql produced world.sql", rc == 0 && fs::exists(world_sql));

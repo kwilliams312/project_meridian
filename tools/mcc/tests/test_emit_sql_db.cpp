@@ -135,12 +135,17 @@ int main() {
     fs::create_directories(scratch);
 
     // 1. Emit the world DB SQL for the sample content into a file.
+    //    --pack "core": emit a SINGLE-pack world DB (one pack per realm, design §4).
+    //    MCC_SAMPLE_CONTENT_DIR is the merged repo content/ tree (core + the chibi
+    //    races pack); without a pack selection both packs' per-pack roster_id 1-N
+    //    rows land in one DB and the `race`/class PRIMARY key collides on load (#798).
     const fs::path world_sql = scratch / "world.sql";
     {
         std::ofstream sink(scratch / "diag.txt");
         const int rc = mcc::stages::emit_sql_content(
             MCC_SAMPLE_CONTENT_DIR, world_sql.string(), "test-db-1.0.0",
-            "2026-07-06 12:00:00", mcc::stages::DiagFormat::Text, sink, sink);
+            "2026-07-06 12:00:00", mcc::stages::DiagFormat::Text, sink, sink,
+            /*select_namespace=*/"core");
         check("emit-sql produced world.sql", rc == 0 && fs::exists(world_sql));
         if (rc != 0) {
             std::printf("FAIL: emit-sql returned %d; aborting DB test\n", rc);
