@@ -1114,7 +1114,9 @@ void drain_forced_move(net::Session& sess, ConnCtx& ctx) {
         WorldEvent ev;
         ev.kind = WorldEventKind::kPlayerMove;
         ev.player_guid = ctx.movement->entity_guid();
+        ev.player_account_id = ctx.account_id;
         ev.player_session_token = ctx.session_token;
+        ev.player_session_generation = ctx.session_generation;
         ev.player_pos = *dest;
         ctx.simulation_enqueue(std::move(ev));
     }
@@ -1764,7 +1766,9 @@ void Dispatcher::register_m0_stubs() {
                 WorldEvent ev;
                 ev.kind = WorldEventKind::kPlayerMove;
                 ev.player_guid = ctx.movement->entity_guid();
+                ev.player_account_id = ctx.account_id;
                 ev.player_session_token = ctx.session_token;
+                ev.player_session_generation = ctx.session_generation;
                 ev.player_pos = auth;
                 ctx.simulation_enqueue(std::move(ev));
             }
@@ -2308,6 +2312,7 @@ void Dispatcher::register_m0_stubs() {
                            .inc();
                    });
                ctx.session_token = admitted.token;
+               ctx.session_generation = admitted.generation;
                ctx.admitted = true;
                if (admitted.kicked_previous) {
                    log::info(kCat,
@@ -2327,7 +2332,9 @@ void Dispatcher::register_m0_stubs() {
                WorldEvent ev;
                ev.kind = WorldEventKind::kPlayerEnter;
                ev.player_guid = ctx.movement->entity_guid();
+               ev.player_account_id = ctx.account_id;
                ev.player_session_token = ctx.session_token;
+               ev.player_session_generation = ctx.session_generation;
                ev.player_pos = ctx.movement->authoritative();
                ev.player_stats = stats;
                ev.char_class = pc.class_id;
@@ -2534,7 +2541,9 @@ void Dispatcher::register_m0_stubs() {
                     WorldEvent ev;
                     ev.kind = WorldEventKind::kPlayerMove;
                     ev.player_guid = ctx.movement->entity_guid();
+                    ev.player_account_id = ctx.account_id;
                     ev.player_session_token = ctx.session_token;
+                    ev.player_session_generation = ctx.session_generation;
                     ev.player_pos = dest;
                     ctx.simulation_enqueue(std::move(ev));
                 }
@@ -3532,10 +3541,18 @@ struct WorldServer::Impl {
     // (mirrors WorldState::combat_rng_; the MapKey-derived seed is a map-manager
     // concern). Declared AFTER `abilities` so its ctor can borrow it.
     MapTick map{abilities, 0x9E3779B97F4A7C15ULL, kTickDtMs};
-    // World-thread-only lifecycle token per simulated player. A kicked session's
-    // delayed leave cannot erase the replacement that already entered with a new
-    // ActiveSessionRegistry token.
-    std::unordered_map<ObjectGuid, SessionToken> map_player_tokens;
+    struct MapPlayerOwner {
+        std::uint64_t account_id = 0;
+        SessionToken token = 0;
+        SessionGeneration generation = 0;
+    };
+    // World-thread-only current owner and persistent admission high-water. The
+    // high-water is deliberately retained after leave: a delayed old enter must
+    // never resurrect a session generation that has already been superseded.
+    std::unordered_map<ObjectGuid, MapPlayerOwner> map_player_owners;
+    std::unordered_map<ObjectGuid, SessionGeneration> map_player_high_water;
+    mutable std::mutex map_player_diag_mtx;
+    std::unordered_map<ObjectGuid, Position> map_player_positions;
 };
 
 WorldServer::WorldServer(const Dispatcher& dispatcher, WorldServerConfig cfg)
@@ -3679,6 +3696,13 @@ std::size_t WorldServer::map_player_count() const {
     return impl_->simulated_player_count.load();
 }
 
+std::optional<Position> WorldServer::map_player_position(ObjectGuid guid) const {
+    std::lock_guard<std::mutex> lk(impl_->map_player_diag_mtx);
+    auto it = impl_->map_player_positions.find(guid);
+    if (it == impl_->map_player_positions.end()) return std::nullopt;
+    return it->second;
+}
+
 void WorldServer::set_abilities(AbilityStore store) {
     // Move-assign into the store MapTick + every ConnCtx already reference by address
     // (impl_->abilities). The object's address is unchanged by a move-assign, so the
@@ -3748,31 +3772,57 @@ void WorldServer::world_thread_main() {
         // scaffold events remain accounting-only.
         for (const WorldEvent& ev : batch) {
             switch (ev.kind) {
-                case WorldEventKind::kPlayerEnter:
+                case WorldEventKind::kPlayerEnter: {
+                    const SessionGeneration high =
+                        impl_->map_player_high_water[ev.player_guid];
+                    if (ev.player_session_generation <= high ||
+                        !impl_->active_sessions.is_current(
+                            ev.player_account_id, ev.player_session_token,
+                            ev.player_session_generation)) {
+                        break;
+                    }
+                    impl_->map_player_high_water[ev.player_guid] =
+                        ev.player_session_generation;
                     impl_->map.remove_player(ev.player_guid);
                     impl_->map.add_player(ev.player_guid, ev.player_pos,
                                           ev.player_stats, ev.char_class);
-                    impl_->map_player_tokens[ev.player_guid] =
-                        ev.player_session_token;
+                    impl_->map_player_owners[ev.player_guid] = {
+                        ev.player_account_id, ev.player_session_token,
+                        ev.player_session_generation};
+                    {
+                        std::lock_guard<std::mutex> lk(impl_->map_player_diag_mtx);
+                        impl_->map_player_positions[ev.player_guid] = ev.player_pos;
+                    }
                     impl_->simulated_player_count.store(
-                        impl_->map_player_tokens.size());
+                        impl_->map_player_owners.size());
                     break;
+                }
                 case WorldEventKind::kPlayerMove: {
-                    auto it = impl_->map_player_tokens.find(ev.player_guid);
-                    if (it != impl_->map_player_tokens.end() &&
-                        it->second == ev.player_session_token) {
+                    auto it = impl_->map_player_owners.find(ev.player_guid);
+                    if (it != impl_->map_player_owners.end() &&
+                        it->second.account_id == ev.player_account_id &&
+                        it->second.token == ev.player_session_token &&
+                        it->second.generation == ev.player_session_generation) {
                         impl_->map.set_player_position(ev.player_guid, ev.player_pos);
+                        std::lock_guard<std::mutex> lk(impl_->map_player_diag_mtx);
+                        impl_->map_player_positions[ev.player_guid] = ev.player_pos;
                     }
                     break;
                 }
                 case WorldEventKind::kPlayerLeave: {
-                    auto it = impl_->map_player_tokens.find(ev.player_guid);
-                    if (it != impl_->map_player_tokens.end() &&
-                        it->second == ev.player_session_token) {
+                    auto it = impl_->map_player_owners.find(ev.player_guid);
+                    if (it != impl_->map_player_owners.end() &&
+                        it->second.account_id == ev.player_account_id &&
+                        it->second.token == ev.player_session_token &&
+                        it->second.generation == ev.player_session_generation) {
                         impl_->map.remove_player(ev.player_guid);
-                        impl_->map_player_tokens.erase(it);
+                        impl_->map_player_owners.erase(it);
+                        {
+                            std::lock_guard<std::mutex> lk(impl_->map_player_diag_mtx);
+                            impl_->map_player_positions.erase(ev.player_guid);
+                        }
                         impl_->simulated_player_count.store(
-                            impl_->map_player_tokens.size());
+                            impl_->map_player_owners.size());
                     }
                     break;
                 }
@@ -3982,7 +4032,9 @@ void WorldServer::serve_connection(net::Session sess) {
         WorldEvent ev;
         ev.kind = WorldEventKind::kPlayerLeave;
         ev.player_guid = ctx.movement->entity_guid();
+        ev.player_account_id = ctx.account_id;
         ev.player_session_token = ctx.session_token;
+        ev.player_session_generation = ctx.session_generation;
         ctx.simulation_enqueue(std::move(ev));
     }
     // QST-01 event-bus (#396): drop this session from the quest-kill credit bus so no

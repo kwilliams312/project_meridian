@@ -370,6 +370,7 @@ struct ConnCtx {
     // account displaces THIS session — the serve loop notices it and closes.
     ActiveSessionRegistry* active_sessions = nullptr;
     SessionToken session_token = 0;
+    SessionGeneration session_generation = 0;
     bool admitted = false;
     std::shared_ptr<std::atomic<bool>> kicked;
 
@@ -469,7 +470,9 @@ struct WorldEvent {
     std::uint64_t seq = 0;
     Bytes payload;  // owned copy — the frame buffer is gone by drain time
     ObjectGuid player_guid = 0;
+    std::uint64_t player_account_id = 0;
     SessionToken player_session_token = 0;  // ABA guard for kick/reconnect teardown
+    SessionGeneration player_session_generation = 0;  // monotonic high-water guard
     Position player_pos;
     UnitStats player_stats;
     std::uint8_t char_class = 0;
@@ -619,6 +622,9 @@ public:
     // Thread-safe diagnostic count of live session players mirrored into MapTick.
     // Used by production-path tests to prove enter and logout lifecycle events drain.
     std::size_t map_player_count() const;
+
+    // Thread-safe diagnostic position for one player mirrored into MapTick.
+    std::optional<Position> map_player_position(ObjectGuid guid) const;
 
     // Replace the read-only ability template store on the LIVE cast path with a
     // world-DB-backed catalog (#481), in place of the M1 placeholder store. Loaded

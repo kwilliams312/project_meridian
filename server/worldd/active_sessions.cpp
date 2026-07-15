@@ -15,17 +15,20 @@ AdmitResult ActiveSessionRegistry::admit(std::uint64_t account_id, KickFn kick) 
     {
         std::lock_guard<std::mutex> lk(mtx_);
         const SessionToken token = next_token_++;
+        const SessionGeneration generation = next_generation_++;
         result.token = token;
+        result.generation = generation;
         auto it = by_account_.find(account_id);
         if (it != by_account_.end()) {
             // An account already in-world: take over the slot (kick-old) and hand
             // the previous holder's kick out to fire below, off the lock.
             displaced = std::move(it->second.kick);
             it->second.token = token;
+            it->second.generation = generation;
             it->second.kick = std::move(kick);
             result.kicked_previous = true;
         } else {
-            by_account_.emplace(account_id, Entry{token, std::move(kick)});
+            by_account_.emplace(account_id, Entry{token, generation, std::move(kick)});
         }
     }
     // Evict the displaced session OUTSIDE the lock: its kick may write a Disconnect
@@ -33,6 +36,14 @@ AdmitResult ActiveSessionRegistry::admit(std::uint64_t account_id, KickFn kick) 
     // under the registry mutex (deadlock-free by construction — file header).
     if (displaced) displaced();
     return result;
+}
+
+bool ActiveSessionRegistry::is_current(std::uint64_t account_id, SessionToken token,
+                                       SessionGeneration generation) const {
+    std::lock_guard<std::mutex> lk(mtx_);
+    auto it = by_account_.find(account_id);
+    return it != by_account_.end() && it->second.token == token &&
+           it->second.generation == generation;
 }
 
 bool ActiveSessionRegistry::release(std::uint64_t account_id, SessionToken token) {

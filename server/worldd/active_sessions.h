@@ -21,8 +21,8 @@
 // vs. option (a) reject-new is documented in the PR.
 //
 // SINGLE-SESSION GUARANTEE (the CAS/token design): admit() hands each admitted
-// session a UNIQUE, monotonically-increasing SessionToken and stores it as the
-// account's current holder. release() is a COMPARE-AND-REMOVE: it drops the
+// session a UNIQUE SessionToken plus a monotonic SessionGeneration and stores both
+// as the account's current holder. release() is a COMPARE-AND-REMOVE: it drops the
 // account's entry ONLY if the stored token still equals the caller's token. So a
 // session that was already kicked (its token has been overwritten by the session
 // that replaced it) can NEVER, on its own later teardown, evict the session that
@@ -45,10 +45,14 @@
 
 namespace meridian::worldd {
 
-// A per-admission identity. Unique for the process lifetime and monotonically
-// increasing, so a re-admitted account gets a DIFFERENT token than the session it
-// displaced — release() uses it as a generation guard (see the file header).
+// A per-admission opaque identity. Unique for the process lifetime; release() uses
+// equality only. Async consumers that must ORDER admissions use SessionGeneration
+// instead of inferring order from this token.
 using SessionToken = std::uint64_t;
+// Authoritative monotonic admission order, allocated under the same registry lock
+// that installs the current holder. World-thread ingress keeps a per-player
+// high-water mark so delayed older enters cannot replace a newer admitted session.
+using SessionGeneration = std::uint64_t;
 
 // Invoked by admit() (OUTSIDE the registry lock) to evict the account's currently
 // live session when a newer login displaces it. Implemented by the serve loop as
@@ -61,6 +65,7 @@ using KickFn = std::function<void()>;
 // Outcome of an admit().
 struct AdmitResult {
     SessionToken token = 0;         // this session's holder identity (for release)
+    SessionGeneration generation = 0;  // monotonic admission order for async consumers
     bool kicked_previous = false;   // true iff a live session for the account was evicted
 };
 
@@ -93,6 +98,11 @@ public:
     // teardown therefore NEVER evicts the session that replaced it.
     bool release(std::uint64_t account_id, SessionToken token);
 
+    // Authoritative current-holder check for asynchronous simulation ingress.
+    // Both opaque identity and monotonic generation must still match the account.
+    bool is_current(std::uint64_t account_id, SessionToken token,
+                    SessionGeneration generation) const;
+
     // Test/diagnostic: number of accounts with a live session.
     std::size_t active_count() const;
 
@@ -102,12 +112,14 @@ public:
 private:
     struct Entry {
         SessionToken token = 0;
+        SessionGeneration generation = 0;
         KickFn kick;
     };
 
     mutable std::mutex mtx_;
     std::unordered_map<std::uint64_t, Entry> by_account_;
     SessionToken next_token_ = 1;
+    SessionGeneration next_generation_ = 1;
 };
 
 }  // namespace meridian::worldd
