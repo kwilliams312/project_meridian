@@ -116,18 +116,19 @@ func _build() -> void:
 	world_root.add_child(cam)
 
 
-# Mount an AssembledCharacter for (race, appearance) into the preview, replacing
-# whatever was there. On a content miss (no catalog for the race — assemble() false,
+# Mount an AssembledCharacter for (race, sex, appearance) into the preview, replacing
+# whatever was there. On a content miss (no catalog for the race/sex — assemble() false,
 # spec §6) the tinted-capsule fallback stands in. Builds the viewport lazily if a
-# caller drives it before _ready (order-independent).
-func set_appearance(race: int, appearance: Dictionary, equipment: Array) -> void:
+# caller drives it before _ready (order-independent). `sex` defaults to 0 (male) so the
+# existing roster-preview callers stay source-compatible; char-create passes the picked sex.
+func set_appearance(race: int, appearance: Dictionary, equipment: Array, sex: int = 0) -> void:
 	if _preview_root == null:
 		_build()
 	for child in _preview_root.get_children():
 		child.free()
 	var assembled = AssembledCharacterScript.new()
 	assembled.name = "PreviewBody"
-	var ok: bool = assembled.assemble(race, 0, appearance, equipment)
+	var ok: bool = assembled.assemble(race, sex, appearance, equipment)
 	if ok:
 		_preview_root.add_child(assembled)
 		return

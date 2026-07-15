@@ -47,6 +47,8 @@ func _initialize() -> void:
 	_verify_dye(db)
 	_verify_model_path(db)
 	_verify_sentinels(db)
+	_verify_roster_fallback(db)
+	_verify_theme_roster(db)
 	_verify_content_missing(db)
 
 	db.free()  # plain Node, never entered the tree
@@ -145,6 +147,71 @@ func _verify_sentinels(db) -> void:
 	_check("model_path(unknown id) → ''", db.model_path("core:art.nope") == "")
 	_check("model_path(unknown numeric) → ''", db.model_path(999999999) == "")
 	_check("numeric_id_for(unknown) → 0", db.numeric_id_for("core:nope.nope") == 0)
+
+
+# --- roster: compiled fallback for a pack that ships none (core, #760) --------
+# The staged core pack declares NO `theme` block, so emit-pck omits the race/class roster
+# arrays — races()/classes() are empty and the effective roster falls back to the compiled
+# MeridianRoster (design §8/R3). This is the seam that keeps core char-create unchanged.
+func _verify_roster_fallback(db) -> void:
+	print(" roster (core ships none → compiled MeridianRoster fallback):")
+	db.load_from("res://meridian/core")
+	_check("core pack ships no race/class roster (races()/classes() empty)",
+		db.races().is_empty() and db.classes().is_empty())
+	_check("effective_races falls back to the compiled roster",
+		db.effective_races().size() == MeridianRoster.RACES.size())
+	_check("race_display_name falls back to the compiled name",
+		db.race_display_name(1) == MeridianRoster.race_name(1))
+	_check("is_valid_race falls back to the compiled range",
+		db.is_valid_race(1) and not db.is_valid_race(99))
+
+
+# --- roster: a THEME pack drives the pickers (chibi-shape, #760) ---------------
+# A pack that ships a race/class roster (a theme pack) makes races()/classes() the source
+# of truth: the effective roster IS the pack's, the catalog key resolves by the pack's race
+# name, and the appearance carries body_material — proving content_db's pack-driven read.
+func _verify_theme_roster(db) -> void:
+	print(" roster (theme pack ships a roster → pack-driven):")
+	var dir := "user://content_db_theme_fixture"
+	DirAccess.make_dir_recursive_absolute(dir)
+	var f := FileAccess.open(dir + "/pack.data.json", FileAccess.WRITE)
+	f.store_string(JSON.stringify({
+		"schema": "meridian/pack-data@1", "namespace": "chibi",
+		"appearance": [{
+			"id": "chibi:appearance.gold.male", "numeric_id": 2001,
+			"race": "gold", "sex": "male",
+			"skeleton": "chibi:art.body", "body_model": "chibi:art.body",
+			"body_material": {"albedo": "chibi:art.recolor", "dye_mask": "chibi:art.mask",
+				"metallic": 1.0, "roughness": 0.3,
+				"dyes": [{"channel": "primary", "dye": "chibi:dye.gold"}]},
+			"presets": {"hair": [], "face": [], "skin": []},
+		}],
+		"class": [{"id": "chibi:class.warrior", "numeric_id": 3001, "roster_id": 1, "name": "Warrior"},
+			{"id": "chibi:class.mage", "numeric_id": 3002, "roster_id": 2, "name": "Mage"}],
+		"dye": [], "item": [],
+		"race": [{"id": "chibi:race.red", "numeric_id": 1001, "roster_id": 1, "name": "Red"},
+			{"id": "chibi:race.gold", "numeric_id": 1005, "roster_id": 5, "name": "Gold"}],
+	}, "  "))
+	f.close()
+	db.load_from(dir)
+
+	_check("races() returns the pack roster (ordered by roster_id)",
+		db.races().size() == 2 and int(db.races()[0]["id"]) == 1 and int(db.races()[1]["id"]) == 5
+		and String(db.races()[1]["name"]) == "Gold")
+	_check("classes() returns the pack roster", db.classes().size() == 2)
+	_check("effective_races IS the pack roster (not the compiled one)",
+		db.effective_races().size() == 2)
+	_check("race_display_name reads the pack name (roster_id 5 → Gold)",
+		db.race_display_name(5) == "Gold")
+	_check("is_valid_race honours the pack roster (5 valid, 2 not offered)",
+		db.is_valid_race(5) and not db.is_valid_race(2))
+	# The catalog key resolves by the pack's race NAME (roster_id 5 → 'gold'), and the
+	# appearance carries the additive body_material recolor.
+	var cat: Dictionary = db.catalog(5, 0)
+	_check("catalog(5,0) resolves via the pack race name ('gold|male')", not cat.is_empty())
+	_check("catalog carries the additive body_material",
+		cat.has("body_material") and String(cat["body_material"]["albedo"]) == "chibi:art.recolor"
+		and float(cat["body_material"]["metallic"]) == 1.0)
 
 
 # --- content-missing path (a pack dir with no artifacts) ----------------------

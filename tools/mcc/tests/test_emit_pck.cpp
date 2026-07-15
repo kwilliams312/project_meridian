@@ -430,11 +430,101 @@ void test_data_json() {
     report(d.find("\"sheath_socket\": \"\"") == std::string::npos,
            "no empty-string sheath_socket anywhere in the data file");
 
+    // A NON-theme pack (no `theme` block in pack.yaml) omits the roster entirely —
+    // no top-level `class`/`race` arrays, no `roster_id` key (story #760: the roster
+    // emission is additive and gated on a theme pack, so core stays byte-identical).
+    report(d.find("\"roster_id\"") == std::string::npos,
+           "non-theme pack omits the roster (no roster_id key)");
+    report(d.find("\"class\": [") == std::string::npos &&
+               d.find("\"race\": [") == std::string::npos,
+           "non-theme pack omits the top-level class/race roster arrays");
+
     // Determinism: a second independent build emits a byte-identical data file.
     bool ok2 = false;
     const std::string d2 = run_emit_pck(make_data_fixture(), ok2).data_json;
     report(d == d2, "same content -> byte-identical pack.data.json",
            d == d2 ? "" : "data files differ");
+}
+
+// -- (f) theme-pack roster (story #760, design 2026-07-14-chibi §8/R3) ---------
+// A THEME pack (one that declares a `theme` block in pack.yaml) additionally emits its
+// playable ROSTER — top-level `race` and `class` arrays keyed by roster_id + display name,
+// ordered by roster_id — so the client's char-create is pack-driven. The fixture ships two
+// colour races (roster_id 2 then 1, to prove the emit re-orders by roster_id) + one class.
+fs::path make_theme_fixture() {
+    const fs::path root = make_scratch("themefix");
+    const fs::path pack = root / "content" / "chibi";
+    write_file(pack / "pack.yaml",
+               "schema: meridian/pack@1\n"
+               "namespace: chibi\n"
+               "name: Theme Pack\n"
+               "version: 1.0.0\n"
+               "content_schema_version: 1\n"
+               "engine:\n  godot: \"4.6\"\n"
+               "theme:\n  display_name: \"Chibi\"\n");
+    // Two colour races (declared green=2 BEFORE red=1 so the emit's roster_id sort is proven).
+    write_file(pack / "races" / "green.race.yaml",
+               "schema: meridian/race@1\n"
+               "id: chibi:race.green\n"
+               "roster_id: 2\n"
+               "name: Green\n"
+               "appearance: chibi:appearance.green.male\n");
+    write_file(pack / "races" / "red.race.yaml",
+               "schema: meridian/race@1\n"
+               "id: chibi:race.red\n"
+               "roster_id: 1\n"
+               "name: Red\n"
+               "appearance: chibi:appearance.red.male\n");
+    // A class (the roster's class list source).
+    write_file(pack / "classes" / "warrior.class.yaml",
+               "schema: meridian/class@1\n"
+               "id: chibi:class.warrior\n"
+               "roster_id: 1\n"
+               "name: Warrior\n"
+               "abilities: [chibi:ability.smash]\n"
+               "usable_armor_types: [chibi:equip_type.plate]\n"
+               "usable_weapon_types: [chibi:equip_type.two_hand]\n"
+               "role: tank\n");
+    // The appearances the races point at (so at least one entity per type links cleanly).
+    for (const char* rn : {"red", "green"}) {
+        write_file(pack / "appearance" / (std::string(rn) + ".appearance.yaml"),
+                   "schema: meridian/appearance_catalog@1\n"
+                   "id: chibi:appearance." + std::string(rn) + ".male\n"
+                   "race: " + rn + "\n"
+                   "sex: male\n"
+                   "skeleton: chibi:art.body\n"
+                   "body_model: chibi:art.body\n"
+                   "presets:\n  hair: []\n  face: []\n  skin: []\n");
+    }
+    return (root / "content").string();
+}
+
+void test_theme_roster() {
+    std::cout << "test_theme_roster (theme-pack race/class roster, #760)\n";
+    bool ok = false;
+    const std::string d = run_emit_pck(make_theme_fixture(), ok).data_json;
+
+    // Top-level roster arrays present, alphabetical among the type keys (…class…race).
+    report(d.find("\"class\": [") != std::string::npos, "theme pack emits a top-level class array");
+    report(d.find("\"race\": [") != std::string::npos, "theme pack emits a top-level race array");
+    // Each race row carries roster_id + display name.
+    report(d.find("\"roster_id\": 1, \"name\": \"Red\"") != std::string::npos,
+           "race row carries roster_id + name (Red = 1)");
+    report(d.find("\"roster_id\": 2, \"name\": \"Green\"") != std::string::npos,
+           "race row carries roster_id + name (Green = 2)");
+    report(d.find("\"roster_id\": 1, \"name\": \"Warrior\"") != std::string::npos,
+           "class row carries roster_id + name (Warrior = 1)");
+    // The race array is ORDERED by roster_id (Red=1 before Green=2), NOT declaration order.
+    const std::size_t race_arr = d.find("\"race\": [");
+    const std::size_t red = d.find("\"name\": \"Red\"", race_arr);
+    const std::size_t green = d.find("\"name\": \"Green\"", race_arr);
+    report(red != std::string::npos && green != std::string::npos && red < green,
+           "race roster is ordered by roster_id (Red before Green)");
+
+    // Determinism.
+    bool ok2 = false;
+    const std::string d2 = run_emit_pck(make_theme_fixture(), ok2).data_json;
+    report(d == d2, "same theme content -> byte-identical pack.data.json");
 }
 
 }  // namespace
@@ -530,6 +620,7 @@ int main() {
     test_determinism();
     test_entry_coverage();
     test_data_json();
+    test_theme_roster();
     test_multipack_selection();
 
     std::cout << "\n" << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";

@@ -397,8 +397,18 @@ EmitPckResult emit_pck(const model::ContentModel& model, const LinkResult& linke
         std::uint32_t numeric_id;
         std::string id;
         std::string body;   // the type-specific JSON tail (after id/numeric_id)
+        std::uint32_t roster_id = 0;  // race/class rows: the append-only roster id (sort key)
     };
-    std::vector<DataRow> appearance_rows, dye_rows, item_rows;
+    std::vector<DataRow> appearance_rows, dye_rows, item_rows, race_rows, class_rows;
+
+    // A THEME pack (one that declares a `theme` block in pack.yaml — the chibi realm
+    // theme, design 2026-07-14-chibi §5) additionally emits its playable ROSTER
+    // (race + class, keyed by roster_id + display name) into pack.data.json, so the
+    // client's char-create is PACK-DRIVEN off the mounted theme's own races/classes
+    // (design §8/R3) instead of the compiled MeridianRoster fallback. A non-theme pack
+    // (core) omits these keys entirely, keeping its pack.data.json byte-identical — the
+    // client falls back to the compiled roster for it (content_db.gd races()/classes()).
+    const bool is_theme_pack = has(pack.root, "theme");
 
     // ---- Build the entry list: every content entity + asset sidecar in this
     // namespace, with its IF-9 numeric id, res:// path, and per-resource hash.
@@ -445,6 +455,25 @@ EmitPckResult emit_pck(const model::ContentModel& model, const LinkResult& linke
                 std::string worn = render_worn(pf.root);
                 if (!worn.empty())
                     item_rows.push_back({numeric, pf.id, "\"worn\": " + worn});
+            } else if (is_theme_pack && (pf.file.file_type == "race" ||
+                                         pf.file.file_type == "class")) {
+                // Theme-pack roster (design §8/R3): roster_id + display name, so the
+                // client picker offers the theme's own races/classes with the ids the
+                // server (roster-from-pack) validates. Only roster_id + name are consumed
+                // client-side; the rest of the race/class rules-data stays server-only.
+                const std::uint32_t roster_id =
+                    has(pf.root, "roster_id")
+                        ? static_cast<std::uint32_t>(as_int(pf.root["roster_id"], 0))
+                        : 0;
+                const std::string name = has(pf.root, "name") ? as_str(pf.root["name"]) : "";
+                DataRow row{numeric, pf.id,
+                            "\"roster_id\": " + std::to_string(roster_id) +
+                                ", \"name\": " + json_quote(name),
+                            roster_id};
+                if (pf.file.file_type == "race")
+                    race_rows.push_back(row);
+                else
+                    class_rows.push_back(row);
             }
         }
         result.entries.push_back(std::move(e));
@@ -508,6 +537,14 @@ EmitPckResult emit_pck(const model::ContentModel& model, const LinkResult& linke
     std::sort(appearance_rows.begin(), appearance_rows.end(), by_numeric);
     std::sort(dye_rows.begin(), dye_rows.end(), by_numeric);
     std::sort(item_rows.begin(), item_rows.end(), by_numeric);
+    // race/class rows are KEYED and ORDERED by roster_id (mirrors emit_sql's roster
+    // tables, SP2.5), ties broken by string id for determinism.
+    auto by_roster = [](const DataRow& a, const DataRow& b) {
+        if (a.roster_id != b.roster_id) return a.roster_id < b.roster_id;
+        return a.id < b.id;
+    };
+    std::sort(race_rows.begin(), race_rows.end(), by_roster);
+    std::sort(class_rows.begin(), class_rows.end(), by_roster);
 
     auto render_array = [](std::ostringstream& os, const std::vector<DataRow>& rows) {
         os << "[";
@@ -523,12 +560,22 @@ EmitPckResult emit_pck(const model::ContentModel& model, const LinkResult& linke
     d << "{\n";
     d << "  \"schema\": \"meridian/pack-data@1\",\n";
     d << "  \"namespace\": " << json_quote(ns) << ",\n";
+    // Top-level type keys stay alphabetical for byte-determinism: appearance, [class,]
+    // dye, item, [race]. class/race are present only for a theme pack (see is_theme_pack).
     d << "  \"appearance\": ";
     render_array(d, appearance_rows);
+    if (is_theme_pack) {
+        d << ",\n  \"class\": ";
+        render_array(d, class_rows);
+    }
     d << ",\n  \"dye\": ";
     render_array(d, dye_rows);
     d << ",\n  \"item\": ";
     render_array(d, item_rows);
+    if (is_theme_pack) {
+        d << ",\n  \"race\": ";
+        render_array(d, race_rows);
+    }
     d << "\n}\n";
     result.data_json = d.str();
 

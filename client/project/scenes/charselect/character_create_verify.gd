@@ -37,12 +37,143 @@ func _check(name: String, ok: bool) -> void:
 		_fails += 1
 
 
+const CHIBI_FIXTURE_DIR: String = "user://charcreate_chibi_fixture"
+
+
 func _initialize() -> void:
 	print("meridian character-create view RUNTIME verify (#639)")
 	await _verify_view()
 	await _verify_world_isolation()
+	await _verify_chibi_pack_driven()
 	print("\n%s" % ("ALL RUNTIME CHECKS PASS" if _fails == 0 else "%d RUNTIME FAILURE(S)" % _fails))
 	quit(0 if _fails == 0 else 1)
+
+
+# --- Chibi pack-driven char-create (story #760, design §8) --------------------
+# The C7 proof in the REAL creation view: with a theme pack (6 colour races × 4 classes +
+# appearance body_material) mounted, the race/class/sex pickers are PACK-DRIVEN (not the
+# compiled MeridianRoster), the race picker IS the colour choice, and selecting a colour
+# race assembles the COLOURED body (body_material dye applied) — no capsule fallback. The
+# fixture reuses the real staged core body + masks + russet dye so the preview loads real
+# bytes; the human UI-E2E covers the actual chibi art.
+func _verify_chibi_pack_driven() -> void:
+	print(" chibi pack-driven char-create (#760, design §8):")
+	_write_chibi_fixture()
+	# Mount the theme pack into the shared ContentDB the view reads (restored to core below).
+	var db = ContentDbScript.instance()
+	var loaded: bool = db.load_from(CHIBI_FIXTURE_DIR)
+	_check("chibi-shape theme pack mounts", loaded and db.races().size() == 6)
+
+	var packed: PackedScene = load("res://scenes/charselect/character_create.tscn")
+	root.size = Vector2i(1728, 972)
+	var view := packed.instantiate()
+	root.add_child(view)
+	await process_frame
+	await process_frame
+
+	var race_opt: OptionButton = view.find_child("RaceOption", true, false)
+	var class_opt: OptionButton = view.find_child("ClassOption", true, false)
+	var sex_opt: OptionButton = view.find_child("SexOption", true, false)
+
+	# Pickers are pack-driven: 6 colour races (ids 1..6), 4 classes, male/female sex.
+	_check("race picker is PACK-DRIVEN (6 colour races, not the compiled 4)",
+		race_opt != null and race_opt.item_count == 6)
+	_check("race picker items carry roster ids 1..6 with colour names",
+		race_opt != null and race_opt.get_item_id(0) == 1 and race_opt.get_item_id(5) == 6
+		and race_opt.get_item_text(0) == "Red" and race_opt.get_item_text(4) == "Gold")
+	_check("class picker is pack-driven (4 classes)", class_opt != null and class_opt.item_count == 4)
+	_check("sex picker offers male/female", sex_opt != null and sex_opt.item_count == 2)
+
+	# The default selection assembles a real coloured body (the FIRST colour race, Red).
+	var default_body: Node = view.find_child("PreviewBody", true, false)
+	_check("default colour race assembles an AssembledCharacter (no capsule fallback)",
+		default_body != null and default_body.has_method("body_skeleton"))
+
+	# The race picker IS the colour choice: select Gold (id 5, the metallic race) and the
+	# preview re-assembles the coloured body with the dye ShaderMaterial on its geosets.
+	race_opt.select(race_opt.get_item_index(5))
+	race_opt.item_selected.emit(race_opt.get_item_index(5))
+	await process_frame
+	var gold_body: Node = view.find_child("PreviewBody", true, false)
+	_check("selecting a colour race assembles the coloured body (AssembledCharacter)",
+		gold_body != null and gold_body.has_method("body_geosets"))
+	var dyed := false
+	if gold_body != null and gold_body.has_method("body_geosets"):
+		for g in gold_body.body_geosets():
+			if g is MeshInstance3D and g.material_override is ShaderMaterial \
+					and (g.material_override as ShaderMaterial).shader != null \
+					and (g.material_override as ShaderMaterial).shader.resource_path \
+						== "res://characters/dye_tint.gdshader":
+				dyed = true
+				break
+	_check("the coloured body carries the body_material dye shader on its geosets", dyed)
+
+	view.queue_free()
+	# Restore the staged core pack so nothing after this verify sees the fixture.
+	db.load_from("res://meridian/core")
+
+
+# Write the chibi-shape theme pack: 6 colour races + 4 classes + per-race appearance
+# body_material, reusing the real staged core body + masks + russet dye (same reuse pattern
+# as assembled_character_verify) so the preview loads real bytes.
+func _write_chibi_fixture() -> void:
+	DirAccess.make_dir_recursive_absolute(CHIBI_FIXTURE_DIR)
+	var contents: PackedStringArray = [
+		JSON.stringify({"id": "core:art.char.ardent.male.base", "numeric_id": 81,
+			"resource": "res://meridian/core/art/char/ardent/male/base.scn", "hash": ""}),
+		JSON.stringify({"id": "core:art.item.armor.warden_chest_mask", "numeric_id": 91,
+			"resource": "res://meridian/core/art/item/armor/warden_chest_mask.res", "hash": ""}),
+		JSON.stringify({"id": "core:art.item.armor.warden_head_mask", "numeric_id": 97,
+			"resource": "res://meridian/core/art/item/armor/warden_head_mask.res", "hash": ""}),
+		JSON.stringify({"id": "core:dye.russet", "numeric_id": 78,
+			"resource": "res://meridian/core/tables/dye.bin", "hash": ""}),
+	]
+	var jsonl := FileAccess.open(CHIBI_FIXTURE_DIR + "/pack.contents.jsonl", FileAccess.WRITE)
+	jsonl.store_string("\n".join(contents) + "\n")
+	jsonl.close()
+
+	var race_names: Array = ["Red", "Green", "Blue", "Yellow", "Gold", "Silver"]
+	var race_rows: Array = []
+	var appearance_rows: Array = []
+	for i in range(6):
+		var rid: int = i + 1
+		var rname: String = String(race_names[i]).to_lower()
+		var metallic: float = 1.0 if rid >= 5 else 0.0
+		race_rows.append({"id": "chibi:race.%s" % rname, "numeric_id": 1000 + rid,
+			"roster_id": rid, "name": race_names[i]})
+		var bm: Dictionary = {
+			"albedo": "core:art.item.armor.warden_head_mask",
+			"dye_mask": "core:art.item.armor.warden_chest_mask",
+			"metallic": metallic,
+			"dyes": [{"channel": "primary", "dye": "core:dye.russet"}],
+		}
+		# Both sexes share the body (design §8) — emit male + female, same body_material.
+		for sex_name in ["male", "female"]:
+			appearance_rows.append({
+				"id": "chibi:appearance.%s.%s" % [rname, sex_name],
+				"numeric_id": 1100 + rid * 2 + (0 if sex_name == "male" else 1),
+				"race": rname, "sex": sex_name,
+				"skeleton": "core:art.char.ardent.male.base",
+				"body_model": "core:art.char.ardent.male.base",
+				"body_material": bm,
+				"presets": {"hair": [], "face": [], "skin": []},
+			})
+
+	var class_names: Array = ["Warrior", "Mage", "Rogue", "Priest"]
+	var class_rows: Array = []
+	for i in range(4):
+		class_rows.append({"id": "chibi:class.%s" % String(class_names[i]).to_lower(),
+			"numeric_id": 1200 + i + 1, "roster_id": i + 1, "name": class_names[i]})
+
+	var data: Dictionary = {
+		"schema": "meridian/pack-data@1", "namespace": "chibi",
+		"appearance": appearance_rows, "class": class_rows,
+		"dye": [{"id": "core:dye.russet", "numeric_id": 78, "color": "#8a4b2d"}],
+		"item": [], "race": race_rows,
+	}
+	var json := FileAccess.open(CHIBI_FIXTURE_DIR + "/pack.data.json", FileAccess.WRITE)
+	json.store_string(JSON.stringify(data, "  "))
+	json.close()
 
 
 # #643 BLEED REGRESSION LOCK: mounting TWO paperdolls at once (the roster view's + the

@@ -96,9 +96,18 @@ var _res_by_numeric: Dictionary = {}
 var _numeric_by_id: Dictionary = {}
 
 # The field data (from pack.data.json), keyed for the wire lookups.
-var _catalog_by_race_sex: Dictionary = {}   # "ardent|male" -> {body_model, skeleton, presets}
+var _catalog_by_race_sex: Dictionary = {}   # "ardent|male" -> {body_model, skeleton, presets, [body_material]}
 var _worn_by_numeric: Dictionary = {}       # item_template numeric -> worn dict
 var _dye_by_numeric: Dictionary = {}        # dye numeric -> Color
+
+# The pack roster (design 2026-07-14-chibi §8 / R3): the playable race + class lists a
+# theme pack ships, so char-create's pickers are PACK-DRIVEN, not the compiled
+# MeridianRoster (which stays the fallback for a pack that omits a roster). Each entry
+# is {id: <roster_id int>, name: <display String>}, ordered by roster_id. Empty when
+# the mounted pack ships no roster (then callers fall back to the compiled roster).
+var _races: Array = []                       # [{id, name}] ordered by roster_id
+var _classes: Array = []                     # [{id, name}] ordered by roster_id
+var _race_name_by_id: Dictionary = {}        # roster_id -> lower-case race name (catalog key source)
 
 
 ## The process-wide MeridianContentDB: the `ContentDB` autoload when the app is
@@ -200,8 +209,96 @@ func pack_dir() -> String:
 ## fallback + "content missing" pickers, spec §6). `race` is the MeridianRoster id
 ## (1 = Ardent); `sex` is 0 = male, 1 = female (M1 ships male only). Returned dict:
 ## {body_model, skeleton, presets:{hair:[{id,model}], face:[{id,model}], skin:[{id,model}]}}.
+## A chibi colour race also carries `body_material` (§6/R2) — the additive recolor
+## material {albedo, dye_mask, metallic, [roughness], dyes:[{channel,dye}]} the
+## assembler applies to the body geosets (skin recolor via the equipment dye path).
 func catalog(race: int, sex: int) -> Dictionary:
 	return _catalog_by_race_sex.get(_race_sex_key(race, sex), {})
+
+
+## The pack's playable races as [{id: roster_id, name}] ordered by roster_id, or [] when
+## the mounted pack ships no roster (design §8/R3 — char-create is pack-driven, falling
+## back to the compiled MeridianRoster only when this is empty).
+func races() -> Array:
+	return _races
+
+
+## The pack's playable classes as [{id: roster_id, name}] ordered by roster_id, or [].
+func classes() -> Array:
+	return _classes
+
+
+# --- Effective roster (pack-driven with the compiled MeridianRoster fallback) ---
+# char-create's pickers and char-select's labels/validation read the roster through
+# THESE so a theme pack (chibi) drives them from its own races/classes, while a pack
+# that ships no roster (core) transparently falls back to the compiled roster (design
+# §8/R3 — "pack-driven, not compiled", with the compiled set as the documented fallback).
+
+## The playable races as [{id, name}]: the mounted pack's roster when it ships one, else
+## the compiled MeridianRoster. Ordered by roster_id (pack) or declaration order (compiled).
+func effective_races() -> Array:
+	if not _races.is_empty():
+		return _races
+	return _compiled_roster(MeridianRoster.RACES)
+
+
+## The playable classes as [{id, name}]: the pack roster when present, else the compiled one.
+func effective_classes() -> Array:
+	if not _classes.is_empty():
+		return _classes
+	return _compiled_roster(MeridianRoster.CLASSES)
+
+
+## Display name for a race id: the pack roster's name when pack-driven, else the compiled
+## MeridianRoster name ("" for an unknown id). Used for char-list labels.
+func race_display_name(id: int) -> String:
+	if not _races.is_empty():
+		return _roster_name(_races, id)
+	return MeridianRoster.race_name(id)
+
+
+## Display name for a class id: the pack roster's name when pack-driven, else the compiled one.
+func class_display_name(id: int) -> String:
+	if not _classes.is_empty():
+		return _roster_name(_classes, id)
+	return MeridianRoster.class_name_for(id)
+
+
+## True iff `id` is a valid playable race in the effective roster (pack membership when
+## pack-driven, else MeridianRoster's frozen range). char-create validates against this.
+func is_valid_race(id: int) -> bool:
+	if not _races.is_empty():
+		return _roster_has(_races, id)
+	return MeridianRoster.is_valid_race(id)
+
+
+## True iff `id` is a valid playable class in the effective roster.
+func is_valid_class(id: int) -> bool:
+	if not _classes.is_empty():
+		return _roster_has(_classes, id)
+	return MeridianRoster.is_valid_class(id)
+
+
+# MeridianRoster.RACES/CLASSES ([{id, name, ...}] consts) -> [{id, name}] (drop extra keys).
+func _compiled_roster(rows: Array) -> Array:
+	var out: Array = []
+	for r in rows:
+		out.append({"id": int(r["id"]), "name": String(r["name"])})
+	return out
+
+
+func _roster_name(roster: Array, id: int) -> String:
+	for r in roster:
+		if int(r["id"]) == id:
+			return String(r["name"])
+	return ""
+
+
+func _roster_has(roster: Array, id: int) -> bool:
+	for r in roster:
+		if int(r["id"]) == id:
+			return true
+	return false
 
 
 ## The `visual.worn` block for an item template (the IF-9 numeric id the wire
@@ -249,6 +346,9 @@ func _clear() -> void:
 	_catalog_by_race_sex.clear()
 	_worn_by_numeric.clear()
 	_dye_by_numeric.clear()
+	_races.clear()
+	_classes.clear()
+	_race_name_by_id.clear()
 
 
 # pack.contents.jsonl — one JSON object per line: {id, numeric_id, resource, hash}.
@@ -290,15 +390,30 @@ func _load_data(path: String) -> bool:
 	if typeof(parsed) != TYPE_DICTIONARY:
 		return false
 
+	# The pack roster FIRST (race/class arrays, design §8/R3): char-create's pickers
+	# read this, and it feeds the wire-id -> race-name map the catalog key uses, so a
+	# theme pack whose races differ from the compiled MeridianRoster (chibi's colour
+	# races) resolves its own catalogs. Absent (a pack that ships no roster) → the
+	# lists stay empty and callers fall back to the compiled roster.
+	_races = _load_roster(parsed.get("race", []))
+	_classes = _load_roster(parsed.get("class", []))
+	for r in _races:
+		_race_name_by_id[int(r.get("id", 0))] = String(r.get("name", "")).to_lower()
+
 	for entry in parsed.get("appearance", []):
 		if typeof(entry) != TYPE_DICTIONARY:
 			continue
 		var key := _race_sex_name_key(String(entry.get("race", "")), String(entry.get("sex", "")))
-		_catalog_by_race_sex[key] = {
+		var cat := {
 			"body_model": String(entry.get("body_model", "")),
 			"skeleton": String(entry.get("skeleton", "")),
 			"presets": entry.get("presets", {"hair": [], "face": [], "skin": []}),
 		}
+		# body_material is emitted ONLY for recolor (chibi) races (emit_pck additive) —
+		# carry it through verbatim when present so the assembler can dye the body.
+		if entry.has("body_material") and typeof(entry["body_material"]) == TYPE_DICTIONARY:
+			cat["body_material"] = entry["body_material"]
+		_catalog_by_race_sex[key] = cat
 
 	for entry in parsed.get("item", []):
 		if typeof(entry) != TYPE_DICTIONARY:
@@ -318,10 +433,33 @@ func _load_data(path: String) -> bool:
 	return true
 
 
-# race id + sex id -> the "<race>|<sex>" key the catalog is stored under. Maps the
-# wire ids to the catalog's names via MeridianRoster (the single race-id source).
+# A pack roster array ([{roster_id, name, ...}]) -> [{id, name}] ordered by roster_id.
+# Tolerant of missing/extra fields (only roster_id + name are consumed); rows without a
+# positive roster_id are dropped (0 is the reserved unset id).
+func _load_roster(rows) -> Array:
+	if typeof(rows) != TYPE_ARRAY:
+		return []
+	var out: Array = []
+	for entry in rows:
+		if typeof(entry) != TYPE_DICTIONARY:
+			continue
+		var id := int(entry.get("roster_id", 0))
+		var display := String(entry.get("name", ""))
+		if id <= 0 or display.is_empty():
+			continue
+		out.append({"id": id, "name": display})
+	out.sort_custom(func(a, b): return int(a["id"]) < int(b["id"]))
+	return out
+
+
+# race id + sex id -> the "<race>|<sex>" key the catalog is stored under. Prefers the
+# MOUNTED PACK's roster name for the wire race id (so a theme pack's own races resolve),
+# falling back to the compiled MeridianRoster when the pack ships no roster (design §8/R3).
 func _race_sex_key(race: int, sex: int) -> String:
-	return _race_sex_name_key(MeridianRoster.race_name(race).to_lower(), _sex_name(sex))
+	var name: String = _race_name_by_id.get(race, "")
+	if name.is_empty():
+		name = MeridianRoster.race_name(race).to_lower()
+	return _race_sex_name_key(name, _sex_name(sex))
 
 
 func _race_sex_name_key(race_name: String, sex_name: String) -> String:
