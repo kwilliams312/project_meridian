@@ -53,9 +53,10 @@ The approved demo contains:
 - reachable placements in `chibi:zone.sprout_meadow` supporting level 1–3 play without waiting
   for respawns or involuntary multi-pulls.
 
-The following IDs are the **approved proposed contract** from #780. They are included so parallel
-stories converge, but #780 has not merged into `dev` yet; this table is not a landed registry.
-#780 becomes authoritative only when it merges:
+The following IDs are defined by #780. Before treating this table as authoritative, verify that
+`docs/superpowers/specs/2026-07-15-chibi-sprout-meadow-starter-contract.md` exists in the target
+branch. If that file is absent, these IDs remain proposed and non-authoritative; once it is
+present, they are the authoritative permanent contract:
 
 | Kind | Canonical IDs |
 |---|---|
@@ -69,8 +70,8 @@ stories converge, but #780 has not merged into `dev` yet; this table is not a la
 | Forge spawn groups | `chibi:spawn.sprout_meadow_guides`, `chibi:spawn.sprout_meadow_dewdrop_slimes`, `chibi:spawn.sprout_meadow_sproutcap_scamps` |
 | Zone | `chibi:zone.sprout_meadow` |
 
-The existing eight class-gear IDs remain unchanged. While #780 is pending, do not allocate a
-competing alias in another story. After #780 merges and these IDs are allocated, treat them as
+The existing eight class-gear IDs remain unchanged. Do not allocate a competing alias while the
+#780 contract file is absent. Once it is present and these IDs are allocated, treat them as
 permanent and route any contract change through the tracker rather than silently renaming them.
 
 ### Acceptance dependency order
@@ -576,9 +577,9 @@ scripts/dev/run-client.sh
 selection and data loading explicit and verify the running `worldd` booted the same content hash
 the client mounted. #783 may proceed only by consuming that completed path.
 
-**Binding physical mitigation dependency (#780 -> #784):** the approved proposed #780 contract,
-once merged, defines the exact physical-only rule that #784 must implement for NPC and player
-targets:
+**Binding physical mitigation dependency (#780 -> #784):** when the #780 contract file named
+above exists in the target branch, it defines the exact physical-only rule that #784 must
+implement for NPC and player targets:
 
 ```text
 effective_armor = base_armor + gear_armor
@@ -589,7 +590,8 @@ physical_damage = max(1, floor(raw_damage * 100 /
 The server applies armor, then shields, then health; nonphysical schools bypass armor. Base armor
 comes from the authoritative unit/content profile and gear armor from authoritative equipped
 contributions. #784 acceptance must show this exact calculation and ordering, without a Chibi or
-class special case. The guide does not make #780 authoritative before it merges.
+class special case. If the #780 contract file is absent, this formula remains proposed and cannot
+be used as authoritative acceptance evidence.
 
 **Current runtime blockers:** schema/build success is not playable balance evidence. #784 owns
 executing creature basic attacks from authored damage/attack speed and the mitigation contract
@@ -626,7 +628,7 @@ raw data checks separately; never report them as runtime results.
 | Database regression coverage | #790 | Five legacy tests omit `--pack` | Every affected DB test emits an explicit pack and no longer fails on valid per-theme roster overlap |
 | Quest XP and level progression | #799, consumed by #782/#783 | Reward XP surfaced; XP/level not applied or persisted | Exactly-once award, authoritative level change, durable reconnect state, and no duplicate turn-in progression |
 | Purchase/equip interaction | #802, consumed by #785/#783 | Vendor/inventory data exists; no complete live equip action | Server-authoritative buy/equip/unequip/replace, persistence, snapshots, and wrong-class rollback through the client |
-| Physical mitigation | #780 contract; #784 implementation | Contract proposed; authored NPC combat/armor not executed | Exact shared armor formula and armor->shield->health order for NPC/player targets, with seeded evidence |
+| Physical mitigation | #780 contract; #784 implementation | Verify the #780 contract file in the target branch; authored NPC combat/armor not executed | Exact shared armor formula and armor->shield->health order for NPC/player targets, with seeded evidence |
 | Runtime/player proof | #783, consuming #784/#785/#786/#787/#799/#801/#802 | Local load, progression, placement, interaction, and combat gaps above | Matching selected-pack runtime plus complete level 1–3 human E2E |
 
 Any failed row stays failed. A temporary fallback cannot be used to turn a Target row green.
