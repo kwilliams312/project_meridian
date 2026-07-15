@@ -640,6 +640,7 @@ lands; if a new gap is found during #783, add it here and to the tracker.
 |---|---|
 | No Race rail entry, create flow, or race/appearance schema-form registration | #672 |
 | No Class rail entry, create flow, or class schema-form registration | #673 |
+| Abilities rail is a placeholder; only an internal existing-file schema preview is available | #674 |
 | NPC editor does not distinguish NPC and Mob create flows, layouts, filters, or readiness | #676 |
 | Quests rail is a placeholder; vendor, loot, spawn, and asset-sidecar forms are not registered in the normal shell | #677, then #682–#685 |
 | Typed pickers/backlinks exist in `mcc` but are not integrated into Codex workspace forms | #670 |
