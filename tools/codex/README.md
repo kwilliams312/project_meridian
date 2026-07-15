@@ -4,6 +4,11 @@ CST-preserving YAML layer for the **Codex** content editor, per
 [`docs/sad/tools-sad.md` §6.2](../../docs/sad/tools-sad.md) (the editor's content-editing model).
 Issue #126.
 
+The user-facing acceptance contract for building the linked Chibi demo across Codex, Forge,
+Meshy intake, `mcc`, and the runtime is
+[`docs/chibi-mvp-authoring-acceptance-guide.md`](../../docs/chibi-mvp-authoring-acceptance-guide.md).
+It labels current capabilities and temporary fallbacks separately from the completed-tool target.
+
 ## Why a CST, not a normal parse → re-emit
 
 `mcc fmt` (#155, `tools/mcc/src/stages/format.cpp`) is a **canonical formatter**: it parses
