@@ -439,6 +439,90 @@ void test_data_json() {
 
 }  // namespace
 
+// A two-pack fixture: `alpha` (sorts before core) + `core`, each with one asset
+// so both get an idmap. Exercises emit-pck's single-pack selection (--pack <ns>).
+fs::path make_two_pack_fixture() {
+    const fs::path root = make_scratch("twopack");
+    const fs::path content = root / "content";
+    write_file(content / "alpha" / "pack.yaml",
+               "schema: meridian/pack@1\n"
+               "namespace: alpha\n"
+               "name: Alpha Pack\n"
+               "version: 0.1.0\n"
+               "content_schema_version: 1\n"
+               "engine:\n  godot: \"4.6\"\n");
+    write_file(content / "alpha" / "assets" / "icon_a.asset.yaml",
+               "schema: meridian/asset@1\n"
+               "id: alpha:art.icon.a\n"
+               "class: icon\n"
+               "source: assets/art/icon/a.png\n"
+               "license: CC-BY-4.0\n"
+               "provenance:\n  source_tier: original\n  authors: [test]\n");
+    write_file(content / "core" / "pack.yaml",
+               "schema: meridian/pack@1\n"
+               "namespace: core\n"
+               "name: Core Pack\n"
+               "version: 0.1.0\n"
+               "content_schema_version: 1\n"
+               "engine:\n  godot: \"4.6\"\n");
+    write_file(content / "core" / "assets" / "icon_c.asset.yaml",
+               "schema: meridian/asset@1\n"
+               "id: core:art.icon.c\n"
+               "class: icon\n"
+               "source: assets/art/icon/c.png\n"
+               "license: CC-BY-4.0\n"
+               "provenance:\n  source_tier: original\n  authors: [test]\n");
+    return content.string();
+}
+
+// Run emit-pck over a content dir with an explicit pack selection.
+mcc::stages::EmitPckResult run_emit_pck_select(const std::string& content_dir,
+                                               const std::string& select_ns, bool& ok) {
+    mcc::model::ContentModel model;
+    mcc::stages::discover(content_dir, model);
+    mcc::diag::Diagnostics diags;
+    mcc::stages::parse(model, diags);
+    mcc::stages::validate(model, diags);
+    const mcc::stages::LinkResult linked =
+        mcc::stages::link(model, content_dir, /*allocate=*/true, diags,
+                          /*emit_dangling=*/false);
+    mcc::stages::EmitPckOptions opts;
+    opts.mcc_version = "test-1.0.0";
+    opts.built_at = "2026-07-06 12:00:00";
+    opts.select_namespace = select_ns;
+    mcc::stages::EmitPckResult res = mcc::stages::emit_pck(model, linked, opts, diags);
+    ok = diags.ok();
+    return res;
+}
+
+// emit-pck is single-pack at M0; with several packs present it must (a) default to
+// the first sorted by namespace, (b) emit the named pack when --pack is given, and
+// (c) fail on an unknown namespace rather than silently emit the wrong pack.
+void test_multipack_selection() {
+    std::cout << "[multipack] --pack selects which pack emit-pck emits\n";
+    const std::string content = make_two_pack_fixture();
+
+    bool ok_default = false;
+    const auto def = run_emit_pck_select(content, "", ok_default);
+    report(ok_default && def.pack_namespace == "alpha",
+           "default emits the first pack sorted by namespace (alpha)", def.pack_namespace);
+
+    bool ok_core = false;
+    const auto core = run_emit_pck_select(content, "core", ok_core);
+    report(ok_core && core.pack_namespace == "core",
+           "--pack core emits core even though alpha sorts first", core.pack_namespace);
+
+    bool ok_alpha = false;
+    const auto alpha = run_emit_pck_select(content, "alpha", ok_alpha);
+    report(ok_alpha && alpha.pack_namespace == "alpha",
+           "--pack alpha emits alpha", alpha.pack_namespace);
+
+    bool ok_missing = true;
+    const auto missing = run_emit_pck_select(content, "nope", ok_missing);
+    report(!ok_missing && !missing.ok,
+           "--pack for an absent namespace is an error, not a silent wrong pick");
+}
+
 int main() {
     std::cout << "mcc emit-pck (IF-5 client pack + pack.manifest.json) unit tests\n\n";
     test_manifest_wellformed();
@@ -446,6 +530,7 @@ int main() {
     test_determinism();
     test_entry_coverage();
     test_data_json();
+    test_multipack_selection();
 
     std::cout << "\n" << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
     if (g_failures) {

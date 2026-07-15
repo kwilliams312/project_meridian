@@ -184,6 +184,94 @@ def test_dolmen_sockets_ride_the_profiles_hand():
 
 
 # ---------------------------------------------------------------------------
+# Chibi profile (spec ⑤ chibi theme, epic #722 / story #745). The keystone body
+# is a compact rounded PILL: the reference ardent_male arm span reaches far
+# outside that little volume, leaving the arm/hand geosets uncovered and forcing
+# floating proxy-box fallbacks. The chibi map pulls every limb joint inside the
+# pill. It is still just one more per-profile point transform, so the same
+# shared-skeleton invariants (identical 63 names + hierarchy) must hold.
+# ---------------------------------------------------------------------------
+def test_valid_profiles_includes_chibi():
+    assert "chibi" in bones.VALID_PROFILES
+
+
+def test_chibi_profile_returns_full_63_bone_table():
+    assert len(bones.for_profile("chibi")) == 63
+
+
+def test_chibi_bone_names_identical_to_ardent():
+    """Shared-skeleton invariant: bone NAMES (and order) match ardent exactly."""
+    assert bones.bone_names("chibi") == bones.bone_names("ardent_male")
+
+
+def test_chibi_hierarchy_identical_to_ardent():
+    """Shared-skeleton invariant: every bone's parent matches ardent exactly."""
+    assert bones.hierarchy("chibi") == bones.hierarchy("ardent_male")
+
+
+def test_chibi_rest_transforms_actually_differ_from_ardent():
+    """Proportions really changed: at least one joint sits at a new position."""
+    ardent = {b.name: b for b in bones.for_profile("ardent_male")}
+    chibi = {b.name: b for b in bones.for_profile("chibi")}
+    assert any(
+        chibi[name].head_m != ardent[name].head_m
+        or chibi[name].tail_m != ardent[name].tail_m
+        for name in ardent
+    )
+
+
+def test_chibi_arm_span_materially_smaller_than_ardent():
+    """The bug + the fix: ardent's hands reach out near a full human arm-span, far
+    outside the pill; chibi tucks them in. The hand-bone |X| must shrink a lot --
+    the whole reason the arm/hand geosets stop falling back to floating proxy
+    boxes."""
+    ardent = {b.name: b for b in bones.for_profile("ardent_male")}
+    chibi = {b.name: b for b in bones.for_profile("chibi")}
+    ard_hand_x = abs(ardent["RightHand"].tail_m[0])
+    chi_hand_x = abs(chibi["RightHand"].tail_m[0])
+    assert chi_hand_x < ard_hand_x
+    # "Materially" smaller: well under half ardent's full human reach — the chibi
+    # hand reaches only out to the pill's little stubby T-pose arms, not human
+    # arm-span, which is what keeps the arm/hand geosets off the proxy fallback.
+    assert chi_hand_x < 0.45 * ard_hand_x
+
+
+def test_chibi_is_much_more_compact_than_ardent():
+    """Compact all round: shorter overall AND far narrower total span than ardent."""
+    assert _max_height("chibi") < _max_height("ardent_male")
+    assert _max_half_width("chibi") < 0.5 * _max_half_width("ardent_male")
+
+
+def test_chibi_stays_a_valid_rest_pose():
+    """No joint sinks below the floor, and the +/-X mirror survives the transform."""
+    chibi = {b.name: b for b in bones.for_profile("chibi")}
+    assert min(b.head_m[1] for b in chibi.values()) >= 0.0
+    for right, left in (("RightHand", "LeftHand"), ("RightUpperLeg", "LeftUpperLeg")):
+        rh, lh = chibi[right].head_m, chibi[left].head_m
+        assert rh[0] == pytest.approx(-lh[0]) and rh[1:] == lh[1:]
+
+
+def test_chibi_arm_and_leg_chains_stay_monotonic():
+    """No kinked/crossed joints: the arm still runs outward in X and the leg still
+    runs downward in Y, monotonically, after the compaction transform."""
+    chibi = {b.name: b for b in bones.for_profile("chibi")}
+    arm = ["RightShoulder", "RightUpperArm", "RightLowerArm", "RightHand"]
+    arm_x = [chibi[n].head_m[0] for n in arm] + [chibi[arm[-1]].tail_m[0]]
+    assert all(b >= a for a, b in zip(arm_x, arm_x[1:])), arm_x
+    leg = ["RightUpperLeg", "RightLowerLeg", "RightFoot", "RightToes"]
+    leg_y = [chibi[n].head_m[1] for n in leg] + [chibi[leg[-1]].tail_m[1]]
+    assert all(b <= a for a, b in zip(leg_y, leg_y[1:])), leg_y
+
+
+def test_chibi_sockets_ride_the_profiles_hand():
+    """Shared sockets follow the compacted proportions (not stuck at ardent reach)."""
+    specs = {b.name: b for b in bones.for_profile("chibi")}
+    assert specs["socket_main_hand"].head_m == specs["RightHand"].tail_m
+    ard = {b.name: b for b in bones.for_profile("ardent_male")}
+    assert specs["socket_main_hand"].head_m != ard["socket_main_hand"].head_m
+
+
+# ---------------------------------------------------------------------------
 # generate_rig — pure argument/path helpers (importable without bpy).
 # ---------------------------------------------------------------------------
 def test_yup_to_blender_maps_gltf_yup_to_blender_zup():

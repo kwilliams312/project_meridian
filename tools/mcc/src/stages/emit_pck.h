@@ -64,6 +64,12 @@ struct EmitPckOptions {
     // pack built for a different engine. Sourced from the pack's engine.godot
     // when present; overridable so a build can pin it explicitly.
     std::string godot_version = "";
+    // Which pack to emit when the content tree holds more than one pack manifest
+    // (emit-pck is single-pack at M0). Empty = the first pack sorted by namespace
+    // (back-compat default); set to a namespace to emit that pack specifically —
+    // an unknown namespace is an error. Lets a multi-pack repo pin the pack a gate
+    // cares about (e.g. `--pack core`) instead of relying on sort order.
+    std::string select_namespace = "";
 };
 
 // One resource entry in the pack: a content/asset id, its IF-9 numeric runtime

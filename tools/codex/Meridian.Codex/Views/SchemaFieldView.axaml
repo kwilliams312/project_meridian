@@ -7,32 +7,86 @@
              x:Class="Meridian.Codex.Views.SchemaFieldView"
              x:DataType="sf:SchemaFieldViewModel"
              auto:AutomationProperties.Name="{Binding AutomationName}"
-             auto:AutomationProperties.HelpText="{Binding AutomationHelp}">
+             auto:AutomationProperties.HelpText="{Binding AutomationHelp}"
+             auto:AutomationProperties.ItemStatus="{Binding AutomationStatus}">
+  <UserControl.Styles>
+    <Style Selector="Button.field-info">
+      <Setter Property="Width" Value="32" />
+      <Setter Property="Height" Value="32" />
+      <Setter Property="MinWidth" Value="32" />
+      <Setter Property="MinHeight" Value="32" />
+      <Setter Property="Padding" Value="7" />
+      <Setter Property="CornerRadius" Value="16" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.field-info:focus-visible">
+      <Setter Property="ToolTip.IsOpen" Value="True" />
+    </Style>
+  </UserControl.Styles>
   <Border Margin="0,0,0,10"
           auto:AutomationProperties.Name="{Binding AutomationName}"
-          auto:AutomationProperties.HelpText="{Binding AutomationHelp}">
-    <Grid ColumnDefinitions="180,*">
-      <StackPanel Grid.Column="0" Margin="0,4,16,0">
-        <TextBlock Text="{Binding Label}" FontWeight="SemiBold" TextWrapping="Wrap" />
-        <TextBlock Text="{Binding Help}" Opacity="0.72" FontSize="12" TextWrapping="Wrap" />
-      </StackPanel>
+          auto:AutomationProperties.HelpText="{Binding AutomationHelp}"
+          auto:AutomationProperties.ItemStatus="{Binding AutomationStatus}">
+    <Grid x:Name="FieldLayout" ColumnDefinitions="180,*">
+      <Grid x:Name="FieldSummary" Grid.Column="0" Margin="0,4,16,0" RowDefinitions="Auto,Auto">
+        <Grid x:Name="FieldHeader" Grid.Row="0" ColumnDefinitions="*,40">
+          <TextBlock x:Name="FieldLabel" Grid.Column="0" Text="{Binding Label}" FontWeight="SemiBold"
+                     TextWrapping="Wrap" VerticalAlignment="Center" />
+          <Button x:Name="FieldInformation" Grid.Column="1" Classes="field-info" VerticalAlignment="Center" HorizontalAlignment="Right"
+                  Focusable="True" IsTabStop="True"
+                  IsVisible="{Binding HasInformation}" ToolTip.ShowDelay="250"
+                  auto:AutomationProperties.Name="{Binding InformationAutomationName}"
+                  auto:AutomationProperties.HelpText="{Binding InformationText}"
+                  auto:AutomationProperties.AutomationId="{Binding InformationAutomationId}">
+            <Grid x:Name="InformationIcon" Width="16" Height="16" IsHitTestVisible="False">
+              <Ellipse Width="15" Height="15" StrokeThickness="1.5"
+                       Stroke="{ReflectionBinding Foreground, ElementName=FieldInformation}" />
+              <Ellipse Width="2" Height="2" Margin="0,3,0,0" VerticalAlignment="Top"
+                       Fill="{ReflectionBinding Foreground, ElementName=FieldInformation}" />
+              <Rectangle Width="2" Height="6" Margin="0,7,0,0" VerticalAlignment="Top" RadiusX="1" RadiusY="1"
+                         Fill="{ReflectionBinding Foreground, ElementName=FieldInformation}" />
+            </Grid>
+            <ToolTip.Tip>
+              <TextBlock Text="{ReflectionBinding DataContext.InformationText, ElementName=FieldInformation}" MaxWidth="380" TextWrapping="Wrap" />
+            </ToolTip.Tip>
+          </Button>
+        </Grid>
+        <TextBlock Grid.Row="1" Text="{Binding RequirementStateText}" Opacity="0.82" FontSize="12"
+                   FontWeight="SemiBold" TextWrapping="Wrap" />
+      </Grid>
       <StackPanel Grid.Column="1" Spacing="6">
-        <Button Content="Add optional field" Command="{Binding AddOptionalCommand}" IsVisible="{Binding CanAddOptional}" HorizontalAlignment="Left"
+        <Button Content="{Binding AddFieldActionText}" Command="{Binding AddOptionalCommand}" IsVisible="{Binding CanAddOptional}" HorizontalAlignment="Left"
                 auto:AutomationProperties.Name="{Binding AddOptionalAutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
         <Button Content="Remove optional field" Command="{Binding RemoveOptionalCommand}" IsVisible="{Binding CanRemoveOptional}" HorizontalAlignment="Left"
                 auto:AutomationProperties.Name="{Binding RemoveOptionalAutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
-        <TextBox Text="{Binding TextValue}" IsVisible="{Binding ShowScalar}" IsEnabled="{Binding CanEdit}"
-                 auto:AutomationProperties.Name="{Binding AutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
+        <TextBox Text="{Binding TextValue}" Watermark="{Binding Watermark}" IsVisible="{Binding ShowScalar}" IsEnabled="{Binding CanEdit}"
+                 auto:AutomationProperties.Name="{Binding AutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}"
+                 auto:AutomationProperties.AutomationId="{Binding AutomationId}" auto:AutomationProperties.ItemStatus="{Binding AutomationStatus}"
+                 auto:AutomationProperties.LabeledBy="{Binding ElementName=FieldLabel}"
+                 auto:AutomationProperties.IsRequiredForForm="{Binding IsRequiredForForm}" />
         <NumericUpDown Value="{Binding NumericValue}" Minimum="{Binding NumericMinimum}" Maximum="{Binding NumericMaximum}"
                        Increment="{Binding NumericIncrement}" IsVisible="{Binding ShowNumeric}" IsEnabled="{Binding CanEdit}"
-                       auto:AutomationProperties.Name="{Binding AutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
+                       auto:AutomationProperties.Name="{Binding AutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}"
+                       auto:AutomationProperties.AutomationId="{Binding AutomationId}" auto:AutomationProperties.ItemStatus="{Binding AutomationStatus}"
+                       auto:AutomationProperties.LabeledBy="{Binding ElementName=FieldLabel}"
+                       auto:AutomationProperties.IsRequiredForForm="{Binding IsRequiredForForm}" />
         <CheckBox IsChecked="{Binding BoolValue}" IsVisible="{Binding ShowBoolean}" IsEnabled="{Binding CanEdit}"
-                  auto:AutomationProperties.Name="{Binding AutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
+                  auto:AutomationProperties.Name="{Binding AutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}"
+                  auto:AutomationProperties.AutomationId="{Binding AutomationId}" auto:AutomationProperties.ItemStatus="{Binding AutomationStatus}"
+                  auto:AutomationProperties.LabeledBy="{Binding ElementName=FieldLabel}"
+                  auto:AutomationProperties.IsRequiredForForm="{Binding IsRequiredForForm}" />
         <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding SelectedChoice}" IsVisible="{Binding ShowEnum}" IsEnabled="{Binding CanEdit}"
-                  auto:AutomationProperties.Name="{Binding AutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
+                  auto:AutomationProperties.Name="{Binding AutomationName}" auto:AutomationProperties.HelpText="{Binding AutomationHelp}"
+                  auto:AutomationProperties.AutomationId="{Binding AutomationId}" auto:AutomationProperties.ItemStatus="{Binding AutomationStatus}"
+                  auto:AutomationProperties.LabeledBy="{Binding ElementName=FieldLabel}"
+                  auto:AutomationProperties.IsRequiredForForm="{Binding IsRequiredForForm}" />
         <ComboBox ItemsSource="{Binding VariantChoices}" SelectedItem="{Binding SelectedVariant}"
                   IsVisible="{Binding HasVariants}" auto:AutomationProperties.Name="{Binding AutomationName}"
-                  auto:AutomationProperties.HelpText="{Binding AutomationHelp}" />
+                  auto:AutomationProperties.HelpText="{Binding AutomationHelp}" auto:AutomationProperties.AutomationId="{Binding AutomationId}"
+                  auto:AutomationProperties.ItemStatus="{Binding AutomationStatus}" auto:AutomationProperties.LabeledBy="{Binding ElementName=FieldLabel}"
+                  auto:AutomationProperties.IsRequiredForForm="{Binding IsRequiredForForm}" />
         <TextBlock Text="{Binding UnsupportedReason}" IsVisible="{Binding IsUnsupported}" Foreground="Orange" TextWrapping="Wrap"
                    auto:AutomationProperties.Name="{Binding AutomationName}" auto:AutomationProperties.HelpText="{Binding UnsupportedReason}" />
         <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding IsArrayItem}">
@@ -47,13 +101,15 @@
             <DataTemplate x:DataType="sf:SchemaFieldViewModel"><views:SchemaFieldView /></DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>
-        <TextBlock Text="{Binding BranchWarning}" Foreground="Orange" TextWrapping="Wrap" />
+        <TextBlock Text="{Binding BranchWarning}" Foreground="Orange" TextWrapping="Wrap"
+                   auto:AutomationProperties.LiveSetting="Polite" />
         <Button Content="Confirm branch change" Command="{Binding ConfirmBranchChangeCommand}"
                 IsVisible="{Binding BranchWarning, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" HorizontalAlignment="Left"
                 auto:AutomationProperties.Name="{Binding ConfirmBranchAutomationName}" auto:AutomationProperties.HelpText="{Binding BranchWarning}" />
         <TextBlock Text="{Binding DiagnosticText}" IsVisible="{Binding HasDiagnostic}"
                    Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}" TextWrapping="Wrap"
-                   auto:AutomationProperties.Name="{Binding AutomationName}" auto:AutomationProperties.HelpText="{Binding DiagnosticText}" />
+                   auto:AutomationProperties.Name="{Binding AutomationName, StringFormat='Error for {0}'}" auto:AutomationProperties.HelpText="{Binding DiagnosticText}"
+                   auto:AutomationProperties.LiveSetting="Assertive" />
       </StackPanel>
     </Grid>
   </Border>

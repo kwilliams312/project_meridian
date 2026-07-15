@@ -21,7 +21,9 @@
               Content="{Binding ActionText, ElementName=ActionBar}"
               Command="{Binding ActionCommand, ElementName=ActionBar}"
               IsEnabled="{Binding IsActionEnabled, ElementName=ActionBar}"
+              AutomationProperties.Name="{Binding ActionText, ElementName=ActionBar}"
               AutomationProperties.HelpText="{Binding StateDescription, ElementName=ActionBar}"
+              AutomationProperties.ItemStatus="{Binding StateDescription, ElementName=ActionBar}"
               AutomationProperties.AutomationId="EditorPrimaryAction" />
     </Grid>
   </Border>

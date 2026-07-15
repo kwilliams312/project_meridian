@@ -8,7 +8,8 @@ SET FOREIGN_KEY_CHECKS = 0;
 INSERT INTO world_manifest
   (pack_namespace, pack_version, id_band, content_hash, schema_version, compatibility_version, mcc_version, built_at)
 VALUES
-  ('core', '0.1.0', 0, '350ad36c418a6629d3cf7b355bc6e69f9c381223da58cc24a8e55a2c5caeab7a', 1, 1, '0.0.0', '1970-01-01 00:00:00');
+  ('chibi', '0.1.0', 1, '5f40d3502dd5c36b6e6110bef291f61ed2e06d8327696b64b1af70a9eab8b6aa', 1, 1, '0.0.0', '1970-01-01 00:00:00'),
+  ('core', '0.1.0', 0, '9f90580d23f2989b38810a1019299e3efd7dbba357c82d1e7e8924fc5209bce1', 1, 1, '0.0.0', '1970-01-01 00:00:00');
 
 -- npc_template (8 rows)
 INSERT INTO npc_template (id, name, subtitle, level_min, level_max, creature_type, `rank`, faction, stat_health, stat_mana, stat_armor, stat_damage_min, stat_damage_max, stat_attack_speed_ms, ai_behavior, ai_aggro_radius_m, ai_leash_radius_m, ai_call_for_help_radius_m, ai_flee_at_health_pct, move_walk_speed_mps, move_run_speed_mps, vendor_ref_id, loot_table_ref_id, loot_money_min, loot_money_max, visual_model_id, visual_scale, visual_sound_set_id) VALUES
@@ -414,21 +415,24 @@ INSERT INTO patrol_waypoint (spawn_point_id, ordinal, pos_x, pos_y, pos_z, wait_
   (1048588, 2, 100, 0, 88, 8),
   (1048588, 3, 105, 0, 80, 0);
 
--- zone (1 rows)
+-- zone (2 rows)
 INSERT INTO zone (id, name, level_min, level_max, start_zone, music_explore_id, music_tension_id, music_combat_id, ambience_id) VALUES
-  (37, 'Emberfall Hollow', 1, 10, TRUE, 23, 24, 22, 3);
+  (37, 'Emberfall Hollow', 1, 10, TRUE, 23, 24, 22, 3),
+  (1048578, 'Sprout Meadow', 1, 5, TRUE, NULL, NULL, NULL, NULL);
 
--- area (5 rows)
+-- area (6 rows)
 INSERT INTO area (zone_id, poi, name, pos_x, pos_y, pos_z, discovery_radius_m, discovery_xp) VALUES
   (37, 'ashvent_overlook', 'Ashvent Overlook', -180, 64, 40, 40, 130),
   (37, 'charter_stone', 'Old Charter Stone', 96, 9, -212, 30, 90),
   (37, 'cinderdeep_mine', 'Cinderdeep Mine', -310, 22, 95, 45, 110),
   (37, 'emberfall_village', 'Emberfall Village', 120, 8.5, -240, 60, 85),
-  (37, 'sunken_gallery', 'Sunken Gallery', -360, -18, 150, 35, 160);
+  (37, 'sunken_gallery', 'Sunken Gallery', -360, -18, 150, 35, 160),
+  (1048578, 'spawn_glade', 'Spawn Glade', 0, 0, 0, 40, 0);
 
--- graveyard (1 rows)
+-- graveyard (2 rows)
 INSERT INTO graveyard (zone_id, ordinal, pos_x, pos_y, pos_z, orientation_deg) VALUES
-  (37, 0, 140, 9, -255, 180);
+  (37, 0, 140, 9, -255, 180),
+  (1048578, 0, 0, 0, 0, 0);
 
 -- gossip (3 rows)
 INSERT INTO gossip (npc_id, `text`) VALUES

@@ -29,6 +29,9 @@
 //      fails regardless of the degrade policy).
 //   6. Re-seed valid but pin a DIFFERENT expected hash -> kSoftWarn, bootable
 //      (the advisory content-hash tie).
+//   8. Realm theme seam (#754, §4): a 2-row (core+chibi) manifest; boot_world_db
+//      with theme="chibi" resolves the chibi row as primary; default -> core; an
+//      absent theme -> first-row fallback.
 //
 // The test creates + drops the table it owns, so it is idempotent against a DB
 // that also has the auth schema loaded (it touches only world_manifest).
@@ -286,6 +289,51 @@ int main() {
             BootReport r = boot_world_db(conn, std::nullopt, false, nullptr);
             check("gate: no char_db -> gate skipped, boots (kOk)",
                   r.verdict == BootVerdict::kOk && !r.hard_fail);
+        }
+
+        // -------------------------------------------------------------------
+        // 8. Realm theme-selection seam (#754, chibi-theme design §4), DB-backed
+        //    end to end. A 2-row manifest (core + chibi); boot_world_db resolves
+        //    the PRIMARY pack by the realm's selected theme. No char_db (nullptr)
+        //    so the compat gate is skipped — this isolates the theme resolution.
+        // -------------------------------------------------------------------
+        {
+            conn.execute("DELETE FROM world_manifest");
+            conn.execute(
+                "INSERT INTO world_manifest "
+                "(pack_namespace, pack_version, id_band, content_hash, schema_version, "
+                " compatibility_version, mcc_version, built_at) VALUES "
+                "('chibi', '2.0.0', 2000, ?, ?, 1, 'mcc-0.1.0', '2026-07-14 00:00:00'),"
+                "('core',  '1.0.0', 1000, ?, ?, 1, 'mcc-0.1.0', '2026-07-06 00:00:00')",
+                {db::Param{kOtherHash},
+                 db::Param{static_cast<std::int64_t>(kSupportedContentSchemaVersion)},
+                 db::Param{kGoodHash},
+                 db::Param{static_cast<std::int64_t>(kSupportedContentSchemaVersion)}});
+
+            // Default theme (unset) -> "core" primary, historical behaviour intact.
+            BootReport def = boot_world_db(conn, std::nullopt, false, nullptr);
+            check("theme: default -> core primary (unchanged)",
+                  def.verdict == BootVerdict::kOk &&
+                      def.content_version == "core@1.0.0" &&
+                      def.content_hash == kGoodHash);
+
+            // theme="chibi" -> the chibi manifest row is resolved as primary.
+            BootReport chibi =
+                boot_world_db(conn, std::nullopt, false, nullptr, "chibi");
+            check("theme: MERIDIAN_REALM_THEME=chibi -> chibi primary",
+                  chibi.verdict == BootVerdict::kOk &&
+                      chibi.content_version == "chibi@2.0.0" &&
+                      chibi.content_hash == kOtherHash);
+            check("theme: chibi realm still bootable + 2 packs seen",
+                  !chibi.hard_fail && chibi.pack_count == 2);
+
+            // A selected theme with no matching row -> first-row fallback (the
+            // existing behaviour, generalised); "chibi" sorts before "core".
+            BootReport absent =
+                boot_world_db(conn, std::nullopt, false, nullptr, "nonesuch");
+            check("theme: absent theme -> first-row fallback",
+                  absent.verdict == BootVerdict::kOk &&
+                      absent.content_version == "chibi@2.0.0");
         }
 
         // Cleanup — drop the tables this test owns.

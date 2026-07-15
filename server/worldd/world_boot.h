@@ -35,6 +35,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "meridian/db/connection.h"
@@ -54,6 +55,16 @@ inline constexpr std::uint32_t kSupportedContentSchemaVersion = 1;
 // CHAR(64); a value that is not exactly 64 hex chars is malformed (a truncated
 // or non-hex hash means a corrupt / partial manifest row).
 inline constexpr std::size_t kContentHashHexLen = 64;
+
+// The realm's default THEME — the `world_manifest.pack_namespace` worldd treats as
+// the PRIMARY content pack when the operator does not select one (env
+// MERIDIAN_REALM_THEME unset). "core" is the baseline pack per the IF-9 namespace
+// convention (schema/sql/world/00_manifest.sql). A realm points itself at a
+// different theme pack (e.g. the chibi realm sets MERIDIAN_REALM_THEME=chibi) to
+// serve that pack's roster/appearance as primary — the one kernel seam for the
+// moddable-theme platform (2026-07-14-chibi-theme-pack-realm-selection-design §4).
+// Absent from the manifest -> the resolver falls back to the first row.
+inline constexpr std::string_view kDefaultRealmTheme = "core";
 
 // One row of `world_manifest` (schema/sql/world/00_manifest.sql). One row per
 // content pack merged into the world DB; worldd reads every row at boot. Field
@@ -126,11 +137,15 @@ struct BootReport {
 // 64 hex chars to be a meaningful pin; a malformed pin is ignored (treated as no
 // pin) rather than failing boot, since it is operator config, not content.
 //
-// The "primary" pack is the row whose namespace is "core" if present, otherwise
+// The "primary" pack is the row whose namespace == `theme` if present, otherwise
 // the first row — its identity is what worldd logs and propagates in HandshakeOk.
+// `theme` is the realm's selected theme (env MERIDIAN_REALM_THEME; kDefaultRealmTheme
+// = "core" when unset) — the moddable-theme seam (§4 of the chibi-theme design):
+// a realm points itself at a different theme pack by selecting its namespace here.
 BootReport verify_world_manifest(
     const std::vector<ManifestRow>& rows,
-    const std::optional<std::string>& expected_content_hash = std::nullopt);
+    const std::optional<std::string>& expected_content_hash = std::nullopt,
+    std::string_view theme = kDefaultRealmTheme);
 
 // Read every `world_manifest` row from the connected world DB. Thin SELECT over
 // meridian::db::Connection (parameterless; the whole table is read). Throws
@@ -228,11 +243,18 @@ void record_realm_compat_state(db::Connection& char_db,
 // gate — the daemon still boots, exactly like the auth-DB-less grant path. The
 // gate never runs on a degraded / missing / malformed manifest (no content to
 // gate).
+//
+// `theme` is the realm's selected content theme (env MERIDIAN_REALM_THEME; §4 of
+// the chibi-theme design). It selects which manifest namespace is the PRIMARY pack
+// (the one whose identity worldd logs + propagates in HandshakeOk). Default
+// kDefaultRealmTheme ("core") preserves the historical behaviour exactly; a realm
+// sets it (e.g. "chibi") to serve a different theme pack as primary.
 BootReport boot_world_db(
     db::Connection& world_db,
     const std::optional<std::string>& expected_content_hash = std::nullopt,
     bool require_content = false,
-    db::Connection* char_db = nullptr);
+    db::Connection* char_db = nullptr,
+    std::string_view theme = kDefaultRealmTheme);
 
 // Human-readable name for a verdict (logs / test diagnostics).
 const char* boot_verdict_name(BootVerdict v);

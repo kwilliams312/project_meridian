@@ -50,6 +50,7 @@ map:                         # append-only; local index (SAD §2.4)
   core:art.char.human.male.quartermaster: 4
   core:art.char.kobold.digmaster: 5
   core:art.char.kobold.miner: 6
+  core:art.chibi_pill_body: 184
   core:art.env.zone01.kit.wall_stone_a: 7
   core:art.icon.item.charred_totem: 42
   core:art.icon.item.cinder_heart: 43

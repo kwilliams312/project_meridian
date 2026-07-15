@@ -6,7 +6,7 @@
         xmlns:auto="using:Avalonia.Automation"
         x:Class="Meridian.Codex.Views.SchemaFormWindow"
         x:DataType="sf:SchemaFormFileViewModel"
-        Width="1100" Height="800" MinWidth="720" MinHeight="520"
+        Width="1100" Height="800" MinWidth="520" MinHeight="520"
         Title="{Binding Header}">
   <DockPanel>
     <Border DockPanel.Dock="Top" Classes="toolbar">
@@ -22,13 +22,17 @@
         <StackPanel Spacing="3">
           <TextBlock Text="{Binding Status}" />
           <TextBlock Classes="validation-error" Text="{Binding ValidationSummary}"
-                     auto:AutomationProperties.Name="Validation summary" auto:AutomationProperties.HelpText="{Binding ValidationSummary}" />
+                     auto:AutomationProperties.Name="Validation summary" auto:AutomationProperties.HelpText="{Binding ValidationSummary}"
+                     auto:AutomationProperties.LiveSetting="Assertive" />
         </StackPanel>
       </Border>
       <controls:EditorActionBar ActionText="Save content file"
                                 ActionCommand="{Binding SaveCommand}"
                                 IsActionEnabled="{Binding CanSave}"
-                                StateDescription="{Binding SaveStateDescription}" />
+                                StateDescription="{Binding SaveStateDescription}"
+                                auto:AutomationProperties.Name="Save content file"
+                                auto:AutomationProperties.HelpText="{Binding SaveStateDescription}"
+                                auto:AutomationProperties.ItemStatus="{Binding SaveStateDescription}" />
     </StackPanel>
     <views:SchemaFormView DataContext="{Binding Form}" />
   </DockPanel>

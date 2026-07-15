@@ -38,8 +38,10 @@ public sealed partial class SchemaFormFileViewModel : ObservableObject
     public bool IsValid => Diagnostics.Count == 0;
     public bool CanSave => IsDirty && IsValid;
     public string SaveStateDescription => !IsValid
-        ? "Fix the validation errors before saving."
-        : IsDirty ? "Valid changes are ready to save." : "No unsaved changes.";
+        ? "Save unavailable. Fix the field errors described in the form."
+        : !IsDirty
+            ? "Save unavailable. There are no unsaved changes."
+            : "Save is available. Valid changes are ready to write.";
     public string? ValidationSummary => IsValid
         ? null
         : $"{Diagnostics.Count} validation error{(Diagnostics.Count == 1 ? string.Empty : "s")}. {Diagnostics[0].Message}";

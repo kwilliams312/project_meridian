@@ -13,8 +13,10 @@
 // What it proves:
 //   1. The world DDL + the mcc-emitted SQL load together WITHOUT error (FK
 //      ordering handled by the emitted FOREIGN_KEY_CHECKS bracket).
-//   2. world_manifest has exactly one 'core' row with schema_version=1 and a
-//      64-hex content_hash — the shape worldd's boot (#89) accepts.
+//   2. world_manifest is populated and has exactly one 'core' row with
+//      schema_version=1 and a 64-hex content_hash — the shape worldd's boot (#89)
+//      accepts. The sample tree may carry several packs (one row each), so the
+//      assertions target the 'core' row rather than assuming a single row.
 //   3. Content tables (npc_template, item_template, ability, zone, ...) are
 //      populated, keyed by IF-9 numeric ids.
 //   4. A ref column resolved to a numeric id points at a real row (referential
@@ -183,12 +185,16 @@ int main() {
     check("mcc-emitted world.sql loads without error",
           run_sql_file(client, flags, db, world_sql) == 0);
 
-    // 4. world_manifest is populated with the worldd-accepted shape.
-    check("world_manifest has exactly one row",
-          query_scalar(client, flags, db, "SELECT COUNT(*) FROM world_manifest;", scratch) == "1");
-    check("world_manifest primary pack is 'core'",
+    // 4. world_manifest is populated with the worldd-accepted shape. The sample
+    // tree may hold several packs (one row each), so assert it is populated and
+    // has exactly one 'core' row rather than assuming a single row.
+    check("world_manifest is populated (>= 1 pack row)",
+          std::stoi("0" + query_scalar(client, flags, db,
+                    "SELECT COUNT(*) FROM world_manifest;", scratch)) >= 1);
+    check("world_manifest has exactly one 'core' row",
           query_scalar(client, flags, db,
-                       "SELECT pack_namespace FROM world_manifest LIMIT 1;", scratch) == "core");
+                       "SELECT COUNT(*) FROM world_manifest WHERE pack_namespace='core';",
+                       scratch) == "1");
     check("world_manifest schema_version = 1 (worldd's supported major)",
           query_scalar(client, flags, db,
                        "SELECT schema_version FROM world_manifest WHERE pack_namespace='core';",
