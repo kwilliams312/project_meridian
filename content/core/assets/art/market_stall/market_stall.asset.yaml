@@ -1,0 +1,16 @@
+schema: meridian/asset@1
+id: core:art.market_stall
+class: prop
+source: assets/art/market_stall/sm_market_stall.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors:
+  - meridian-contributors
+  origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/019f616c-c360-73bb-8264-8889656eb8e0
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: market_stall.prompts.yaml
+budget:
+  lod0_tris: 2415
+restyle_status: pending

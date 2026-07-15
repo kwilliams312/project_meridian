@@ -1,0 +1,10 @@
+task_id: 019f617b-fa3c-7157-b35c-1179ac1dc3ec
+model_version: meshy-5
+preview_task_id: 019f617b-62bd-79d0-a79b-1b64b57a0abe
+request:
+  mode: preview
+  prompt: a chibi wooden signpost, chibi, colored rounded pill / clay toy aesthetic,
+    bright saturated colors, big cute friendly, clean readable silhouette, game-ready,
+    matching a whimsical fairytale pill-mascot village
+  ai_model: meshy-5
+  target_polycount: 2400

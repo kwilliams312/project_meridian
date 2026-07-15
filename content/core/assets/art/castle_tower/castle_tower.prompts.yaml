@@ -1,0 +1,11 @@
+task_id: 019f6163-3ed6-701f-b5eb-ee5246cd7a61
+model_version: meshy-5
+preview_task_id: 019f6161-dacb-7784-bafc-da0700ff34d5
+request:
+  mode: preview
+  prompt: a chibi fairytale castle tower with a blue conical roof, chibi, colored
+    rounded pill / clay toy aesthetic, bright saturated colors, big cute friendly,
+    clean readable silhouette, game-ready, matching a whimsical fairytale pill-mascot
+    village
+  ai_model: meshy-5
+  target_polycount: 16000

@@ -1,0 +1,10 @@
+task_id: 019f617a-3a2f-7ee4-a510-ac3c1c837b1a
+model_version: meshy-5
+preview_task_id: 019f6179-10e2-7916-a45e-021eb0b638a8
+request:
+  mode: preview
+  prompt: a chibi glowing street lantern, chibi, colored rounded pill / clay toy aesthetic,
+    bright saturated colors, big cute friendly, clean readable silhouette, game-ready,
+    matching a whimsical fairytale pill-mascot village
+  ai_model: meshy-5
+  target_polycount: 2400

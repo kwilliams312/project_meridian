@@ -1,0 +1,10 @@
+task_id: 019f6160-4d3b-7cb1-812e-e10be889f742
+model_version: meshy-5
+preview_task_id: 019f615f-4063-796c-b651-ed1f1325512a
+request:
+  mode: preview
+  prompt: a chibi storybook cottage with a round roof, chibi, colored rounded pill
+    / clay toy aesthetic, bright saturated colors, big cute friendly, clean readable
+    silhouette, game-ready, matching a whimsical fairytale pill-mascot village
+  ai_model: meshy-5
+  target_polycount: 16000

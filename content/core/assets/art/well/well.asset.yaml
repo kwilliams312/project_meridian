@@ -1,0 +1,16 @@
+schema: meridian/asset@1
+id: core:art.well
+class: prop
+source: assets/art/well/sm_well.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors:
+  - meridian-contributors
+  origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/019f6172-c2ef-7593-aa84-61cdaafb2692
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: well.prompts.yaml
+budget:
+  lod0_tris: 2480
+restyle_status: pending

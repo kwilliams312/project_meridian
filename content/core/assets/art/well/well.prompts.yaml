@@ -1,0 +1,10 @@
+task_id: 019f6172-c2ef-7593-aa84-61cdaafb2692
+model_version: meshy-5
+preview_task_id: 019f616e-77e8-748d-bf12-35656ff85ee4
+request:
+  mode: preview
+  prompt: a chibi stone wishing well, chibi, colored rounded pill / clay toy aesthetic,
+    bright saturated colors, big cute friendly, clean readable silhouette, game-ready,
+    matching a whimsical fairytale pill-mascot village
+  ai_model: meshy-5
+  target_polycount: 2400

@@ -1,0 +1,16 @@
+schema: meridian/asset@1
+id: core:art.lantern
+class: prop
+source: assets/art/lantern/sm_lantern.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors:
+  - meridian-contributors
+  origin_url: https://api.meshy.ai/openapi/v2/text-to-3d/019f617a-3a2f-7ee4-a510-ac3c1c837b1a
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: lantern.prompts.yaml
+budget:
+  lod0_tris: 2504
+restyle_status: pending
