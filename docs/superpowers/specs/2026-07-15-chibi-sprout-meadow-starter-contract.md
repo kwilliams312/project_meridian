@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Chibi Sprout Meadow Starter content and art contract
 
-**Status:** binding MVP contract  
-**Stories:** #780, part of #774 and follow-on to #753  
-**Pack:** `content/chibi` (`chibi` namespace)  
+**Status:** binding MVP contract
+**Stories:** #780, part of #774 and follow-on to #753
+**Pack:** `content/chibi` (`chibi` namespace)
 **Zone:** `chibi:zone.sprout_meadow`
 
 This contract freezes the narrative, permanent IDs, reference graph, ownership,
@@ -158,10 +158,12 @@ Pippa --Meadow Token--> Tink --free starter gear--> player
              -> Caps Off! --4 Scamps/1 Ribbon--> Meadow Medal
 ```
 
-Kill XP uses the current clean-room leveling curve in addition to quest XP. The
-three level-1 and four level-2 kills plus 60 quest XP take a new level-1 character
-through levels 1, 2, and 3 under the current thresholds (50 XP and 120 XP). #782
-must retain a runtime assertion for this result rather than relying on the prose.
+The intended path combines kill XP with 60 authored quest XP and crosses the
+current level-1 and level-2 thresholds (50 XP and 120 XP). This is a target, not a
+current runtime claim: the server surfaces authored quest reward XP but does not
+yet apply or persist it. #799 must land before #782 can verify this combined path,
+and #783 must retain a reconnect-safe runtime assertion rather than relying on the
+arithmetic in this contract.
 
 ## 4. Entity targets
 
@@ -199,15 +201,40 @@ The new item targets are:
 - Meadow Medal: `item_class: armor`, `subclass: trinket`, `slot: trinket`, uncommon,
   required level 2, non-visible, and grants `stamina: 1`. It has no `visual.worn`.
 
-### Verified runtime seam
+### 4.1 Binding physical mitigation contract
+
+#784 implements one mitigation rule for both NPCs and players. For physical
+damage only:
+
+```text
+effective_armor = base_armor + gear_armor
+physical_damage = max(1, floor(raw_damage * 100 /
+                               (100 + max(0, effective_armor))))
+```
+
+`base_armor` comes from the authoritative unit/content profile and `gear_armor`
+is the sum of authoritative equipped contributions. The server applies armor
+first, then shields, then health. The same calculation and ordering apply when
+the target is an NPC or a player. Nonphysical schools bypass armor and continue
+through shields, then health. No class, item, mob, or Chibi ID is special-cased.
+
+### 4.2 Verified runtime blockers
 
 At contract time, the world runtime does not yet feed authored NPC basic-attack
 damage/speed/armor or equipped item stats into combat, Creature AI does not roll
-basic attacks, and ability coefficients are parsed but not applied. Therefore the
-survival/equipment half of #776's DB-backed benchmark is a real implementation
-dependency, not evidence that can be fabricated by data-only tests. Data authors
-still use the frozen values above; #776/#783 must either land the required runtime
-seam under tracked scope or record the blocker before claiming that acceptance.
+basic attacks, and ability coefficients are parsed but not applied. #784 owns the
+authored hostile basic-attack loop and the mitigation contract above. #785 owns
+equipped-stat and coefficient application.
+
+Equip-type validation exists as a kernel/test seam, but there is no live
+client/protocol action to equip, unequip, or replace an owned item. #802 must land
+before #785 can consume an authoritative loadout and before #783 can test starter
+gear, Meadow Medal, or wrong-class rejection through the client.
+
+The survival/equipment half of #776's DB-backed benchmark is therefore blocked on
+#784, #802, and #785. These are implementation dependencies, not evidence that
+may be fabricated by data-only tests. Data authors still use the frozen values
+above; #776 and #783 may claim full combat acceptance only after those seams land.
 
 ## 5. Canonical art handoff
 
@@ -252,6 +279,10 @@ Each stem expands to `<stem>.prompts.yaml`. Icon and model sidecars are separate
 IF-8 records even if both are derived from one approved visual brief.
 
 ### 5.3 New item icons
+
+#800 owns these required assets and must merge before #775. Unlike optional NPC
+and mob models, `meridian/item@2` requires `visual.icon`, so #775 cannot validate
+the five new item records by deferring icon creation to #778.
 
 | Content item | Permanent asset ID | Class | Prompt record | Required readiness |
 |---|---|---|---|---|
@@ -298,9 +329,12 @@ and package/build. It may show spawn-readiness diagnostics, but it does not choo
 world coordinates.
 
 Forge owns spatial placement: positions, orientations, wander radii, patrols, and
-the three `meridian/spawn@1` files. #779 places Pippa and Tink near the entry, a
-safe slime field next, and a distinct Sproutcap field beyond it. Forge exports
-zone-local coordinates; it must not create or rename content entities.
+the three `meridian/spawn@1` files. #801 must first implement the concrete
+placement-node authoring, round-trip, and deterministic export workflow. Only
+then may #779 use that workflow to place Pippa and Tink near the entry, a safe
+slime field next, and a distinct Sproutcap field beyond it. Forge exports
+zone-local coordinates; it must not create or rename content entities. Raw-YAML
+placement is not acceptable evidence for #779 or #783.
 
 This boundary is intentional. “Mob editor” means combat entity authoring in
 Codex; it is not the future weighted spawn-table editor, and it is not Forge's
@@ -311,21 +345,36 @@ placement gizmo.
 | Story | Exclusive file/entity ownership in this epic | Depends on |
 |---|---|---|
 | #780 | This contract only; no content data | merged #753 foundations |
-| #776 | Existing Chibi class/ability tuning and benchmark fixtures only | #780 profiles; runtime seam noted above |
-| #775 | Two mobs, five items, two loot tables, and the Sunny Sip ability | #780 |
+| #800 | Five required new-item icon assets and IF-8 records | #780 art IDs; human provenance/style gates |
+| #775 | Two mobs, five items, two loot tables, and the Sunny Sip ability | #780 and merged #800 icons |
 | #781 | Pippa, Tink, vendor; no quest/spawn files | #780; merged classes/items |
-| #782 | Three quest files and narrative implementation only | merged #775 and #781 |
+| #784 | Authored hostile attacks/stats and the binding physical mitigation rule | #780 profiles |
+| #802 | Authoritative client/server equip, unequip, replace, and rejection flow | existing inventory/equip seams |
+| #785 | Equipped stat and ability-coefficient application | #784 and #802 authoritative loadout |
+| #776 | Existing Chibi class/ability tuning and benchmark fixtures only | #780, #784, #802, and #785 for full proof |
+| #799 | Apply and persist authored quest XP exactly once | #780 XP contract |
+| #782 | Three quest files and narrative implementation only | merged #775, #781, and #799 |
+| #801 | Forge placement-node authoring and deterministic spawn export | #780 spatial boundary |
+| #779 | Three spawn files and Forge placement evidence only | merged #801, #775, and #781 |
 | #768 + art-track PRs | IF-8 assets for the permanent section-5 IDs | #780 manifest; human provenance/restyle gates |
 | #778 | Replace content visual placeholders/omissions with merged section-5 IDs | merged content plus approved art |
-| #779 | Three spawn files and Forge placement evidence only | merged #775 and #781 |
 | #777 | Executable Codex/Forge acceptance guide; no content | #780 terminology and graph |
-| #783 | Deterministic build, DB/runtime proof, creator-tools proof, human E2E | #753 C9 and every story above |
+| #783 | Deterministic build, DB/runtime proof, creator-tools proof, human E2E | #753 C9 and every blocker/story above |
 
-#775 and #781 may run in parallel. #776 and art creation may also run in parallel
-because they communicate only through this contract. Content branches do not
-copy art binaries or invent temporary IDs. A branch may omit an optional NPC
-visual until #778, but a required item icon must resolve before that content can
-claim final pack acceptance.
+#800 and #781 may run in parallel. #775 starts only after #800's five required
+icons merge; it is not independent of the art track. #768 and other optional/final
+visual work may proceed in parallel with runtime foundations, while #778 remains
+the later consumer-wiring story. Content branches do not copy art binaries or
+invent temporary IDs. A branch may omit an optional NPC visual until #778, but
+every required item icon must already resolve when #775 merges.
+
+The blocking order is explicit:
+
+1. #800 -> #775 -> #782 -> #783 for required icons and linked content.
+2. #799 -> #782 -> #783 for authoritative quest XP and the level path.
+3. #801 -> #779 -> #783 for Forge-authored spawn placement/export.
+4. #784 -> #785 and #802 -> #785 -> full #776 proof -> #783 for combat and gear.
+5. Approved art assets/content -> #778 -> #783 for final visual wiring.
 
 The content-file ownership is exact:
 
@@ -339,8 +388,12 @@ The content-file ownership is exact:
   `content/chibi/quests/{a_pack_for_the_path,a_little_less_goo,caps_off}.quest.yaml`.
 - #779 owns
   `content/chibi/spawns/{sprout_meadow_guides,sprout_meadow_dewdrop_slimes,sprout_meadow_sproutcap_scamps}.spawn.yaml`.
-- The art track owns IF-8 records and their sources/prompts. #778 owns only the
-  content-record edits that wire approved asset IDs into consumers.
+- #800 owns the five section-5.3 IF-8 icon records and sources/prompts. The wider
+  art track owns the other section-5 IF-8 records and their sources/prompts. #778
+  owns only content-record edits that wire already-approved asset IDs into
+  consumers.
+- #784, #785, #799, #801, and #802 own their tracked runtime/tooling changes and
+  tests; content stories do not absorb those gaps opportunistically.
 
 ## 9. Validation and provenance gates
 
