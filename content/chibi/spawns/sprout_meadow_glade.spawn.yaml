@@ -1,0 +1,36 @@
+# meridian/spawn@1 — Sprout Meadow's ambient population (#817, epic #816). First
+# world life in the chibi realm: before this, the chibi pack shipped zero NPCs, so
+# worldd booted the chibi world with "0 npcs" and the glade was empty on
+# enter-world. Normally exported by Forge's spawn gizmos (TLS-02); hand-authored
+# here like core's zone01_emberfall_village.spawn.yaml.
+#
+# M0 PLACEMENT: the chibi start-zone graveyard spawn is M0-gated
+# (worldd load_start_zone_spawn returns nullopt until A-08 terrain), so the
+# enter-world spawn is the flat-bootstrap placeholder movement::kZoneSpawnXY —
+# server-planar (-320,-320), inside the movement bounds [-512,-128]
+# (worldd main.cpp #761 / movement_constants.h). Positions here are Godot Y-up
+# (schema common.defs: horizontal plane is (x, z), y is height); worldd converts
+# (x, z) -> its Z-up planar grid on load, so authored (x, z) == server-planar.
+# The four ambients therefore ring the player's enter point a few metres out —
+# visible and in-bounds the instant a chibi enters the world.
+schema: meridian/spawn@1
+id: chibi:spawn.sprout_meadow_glade
+zone: chibi:zone.sprout_meadow
+spawns:
+  - npc: chibi:npc.tansy_dewhollow
+    position: { x: -314.0, y: 0.0, z: -312.0 }
+    orientation_deg: 225
+    respawn_seconds: { min: 60, max: 60 }
+  - npc: chibi:npc.bram_cloverfoot
+    position: { x: -330.0, y: 0.0, z: -320.0 }
+    orientation_deg: 90
+    respawn_seconds: { min: 60, max: 60 }
+  - npc: chibi:npc.mardle_puffcap
+    position: { x: -322.0, y: 0.0, z: -332.0 }
+    orientation_deg: 0
+    respawn_seconds: { min: 60, max: 60 }
+  - npc: chibi:npc.nib_the_fernhopper
+    position: { x: -308.0, y: 0.0, z: -326.0 }
+    orientation_deg: 45
+    respawn_seconds: { min: 30, max: 45 }
+    wander_radius_m: 6

@@ -1,0 +1,29 @@
+# meridian/npc@1 — ambient chibi critter (#817, epic #816). A tiny, harmless
+# meadow creature that hops between the ferns near the spawn glade — pure ambience
+# / world life, never hostile. Original Meridian lore (clean-room). Reuses the
+# shared chibi body mesh (chibi:art.chibi_pill_body) at a small scale as a
+# placeholder critter body; no net-new art (a dedicated critter model is the
+# separate follow-up noted in the epic). faction=neutral with a passive AI so it
+# never engages; the spawn gives it a small wander so it drifts through the ferns.
+schema: meridian/npc@1
+id: chibi:npc.nib_the_fernhopper
+name: Nib
+subtitle: Meadow Fernhopper
+level: { min: 1, max: 1 }
+creature_type: critter
+rank: normal
+faction: neutral
+stats:
+  health: 20
+  damage: { min: 1, max: 1 }
+  attack_speed_ms: 2000
+ai:
+  behavior: passive
+  aggro_radius_m: 0
+  leash_radius_m: 20
+movement:
+  walk_speed_mps: 1.8
+  run_speed_mps: 3.5
+visual:
+  model: chibi:art.chibi_pill_body
+  scale: 0.55

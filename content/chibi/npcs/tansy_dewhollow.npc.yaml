@@ -1,0 +1,27 @@
+# meridian/npc@1 — ambient chibi villager (#817, epic #816). Sprout Meadow's
+# greeter: the first friendly face a freshly-sprouted chibi meets on enter-world.
+# Original Meridian lore (clean-room, CONTRIBUTING.md §clean-room) — no franchise
+# lookalike. Reuses the shared chibi body mesh (chibi:art.chibi_pill_body) as its
+# visual.model, exactly as core's villagers reuse the human character_model body
+# (warden_sela / quartermaster_bren); no net-new art. Per-NPC dye recolor is an
+# NPC-visual@2 concern (npc.schema.yaml visual RESERVED note) — not expressible on
+# a visual@1 NPC, so every ambient chibi shares the one body for this first slice.
+schema: meridian/npc@1
+id: chibi:npc.tansy_dewhollow
+name: Tansy Dewhollow
+subtitle: Sprout Meadow Greeter
+level: { min: 2, max: 2 }
+creature_type: humanoid
+faction: friendly
+stats:
+  health: 240
+  armor: 40
+  damage: { min: 3, max: 5 }
+  attack_speed_ms: 2000
+interaction:
+  gossip_text: >-
+    Welcome to the Meadow, little sprout! Everything green here woke the same
+    morning you did. Mind the dewponds, wave to the fernhoppers, and if you
+    wander past the lanterns, old Mardle will steer you home.
+visual:
+  model: chibi:art.chibi_pill_body
