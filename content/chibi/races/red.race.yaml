@@ -1,0 +1,15 @@
+# Chibi color race (#759, C5; design §5/§6). The 6 chibi races ARE colors: the
+# race identity is a skin colour applied to the shared chibi_pill_body, not a
+# distinct body/skeleton. COSMETIC — attribute_mods omitted (the tuning capability
+# exists but the Chibi theme zeroes it, race.schema.yaml §2.3). roster_id 1 in the
+# FRESH chibi roster (independent of core's roster.h — the chibi realm loads its
+# roster from pack data, design §4/§7). The colour is wired in the appearance's
+# body_material (chibi:dye.red on the body's primary dye channel over the neutral
+# recolor base + skin mask), not here — the race just names the identity and points
+# at its default (male) appearance catalog. Flat (non-metallic) race.
+schema: meridian/race@1
+id: chibi:race.red
+roster_id: 1
+name: Red
+description: A warm crimson chibi — the ember of the six colour kin.
+appearance: chibi:appearance.red.male

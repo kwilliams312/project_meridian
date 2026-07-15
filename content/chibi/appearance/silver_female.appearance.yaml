@@ -1,0 +1,21 @@
+# meridian/appearance_catalog@1 — Chibi Silver / female (#759, C5; design §5/§6, R2).
+# Shares body + rig + body_material with silver_male. METALLIC race: metallic 1.0 /
+# roughness 0.35 (shader localizes metalness to the skin mask). See
+# red_male.appearance.yaml for the model note. presets empty.
+schema: meridian/appearance_catalog@1
+id: chibi:appearance.silver.female
+race: silver
+sex: female
+skeleton: chibi:art.chibi_pill_body
+body_model: chibi:art.chibi_pill_body
+body_material:
+  albedo: chibi:art.chibi_pill_body_recolor_base
+  dye_mask: chibi:art.chibi_pill_body_mask
+  metallic: 1.0
+  roughness: 0.35
+  dyes:
+    - { channel: primary, dye: chibi:dye.silver }
+presets:
+  hair: []
+  face: []
+  skin: []

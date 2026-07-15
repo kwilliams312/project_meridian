@@ -15,10 +15,20 @@ $defs:
     enum: [primary, secondary, accent]
   raceName:
     description: >-
-      MUST mirror server/characters/src/roster.h Race enum names, lowercased, in
-      roster id order (that file is the single canonical M0-frozen source —
-      append-only, ids never renumber). Do not hardcode independently of it.
-    enum: [ardent, dolmen, sylvane, emberkin]
+      The canonical machine race-name vocabulary — the lowercased key the client
+      builds its appearance catalog lookup from (ContentDB `<race>|<sex>`) and the
+      appearance_catalog `race` field / item `race_overrides` keys reference.
+      APPEND-ONLY: a shipped name never changes meaning or is removed.
+      Two sources feed it, so it is a UNION, not a single-roster mirror:
+        * the M0/core roster.h Race enum names (ardent, dolmen, sylvane, emberkin),
+          in roster id order — roster.h stays the canonical source for those; and
+        * pack-authored race machine-names that live purely in pack data with their
+          own per-pack roster (the Chibi theme's 6 colour races, roster_ids 1–6 in
+          the chibi roster — design 2026-07-14-chibi §4/§7). These are NOT in
+          roster.h (the chibi realm loads its roster from pack data, #695/#708);
+          they are appended here so their appearance catalogs validate.
+      Do not invent a name with no backing race record (core enum OR a pack race).
+    enum: [ardent, dolmen, sylvane, emberkin, red, green, blue, yellow, gold, silver]
   boneName:
     description: >-
       Canonical humanoid bone names (≤120 incl. face, art-prd §2.1). POPULATED BY

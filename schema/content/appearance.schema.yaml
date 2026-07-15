@@ -35,6 +35,72 @@ properties:
     x-meridian-asset:
       allowed_classes: [character_model]
       eligible_generators: [meshy]
+  body_material:
+    description: >-
+      OPTIONAL recolor material for the body (design 2026-07-14-chibi §6, R2). When
+      present, the client renders the body with this material instead of the body
+      model's own baked atlas: it MULTIPLIES the neutral `albedo` texture by each
+      dyed channel's colour through the RGB `dye_mask` (the same dye-mask path the
+      assembler already runs for equipment — dye_tint.gdshader), so only the masked
+      region (skin) recolors and the unmasked texels (eyes, cloth) survive. This is
+      how a Chibi COLOUR race becomes its colour: one shared grey body + per-race
+      dye. Additive and back-compatible — a catalog without `body_material` (e.g.
+      the core races, which bake colour into the body model directly) renders exactly
+      as before. `metallic`/`roughness` feed the material's PBR params; the shader
+      localizes metalness to the mask so a metallic race is metal-skinned but keeps
+      matte cloth/eyes.
+    type: object
+    additionalProperties: false
+    required: [albedo, dye_mask, dyes]
+    properties:
+      albedo:
+        description: Recolor-ready base albedo (skin neutralised to grey so a dye reads true).
+        $ref: "#/$defs/artRef"
+        x-meridian-ui:
+          group: body
+          label: Recolor base albedo
+          widget: asset_picker
+          reference_type: asset:art
+        x-meridian-asset:
+          allowed_classes: [texture_set]
+          eligible_generators: []
+      dye_mask:
+        description: RGB dye mask — R=primary/skin, G=secondary, B=accent; unmasked texels never tint.
+        $ref: "#/$defs/artRef"
+        x-meridian-ui:
+          group: body
+          label: Dye mask
+          widget: asset_picker
+          reference_type: asset:art
+        x-meridian-asset:
+          allowed_classes: [texture_set]
+          eligible_generators: []
+      dyes:
+        description: >-
+          The race's fixed body dyes, one per RGB dye channel (max 3). Each names a
+          meridian/dye@1 by id (L011-resolved) whose colour tints that channel's
+          masked region. The Chibi colour races use exactly the `primary` channel
+          (skin). Channel↔RGB is the dyeChannel order (primary=R, secondary=G, accent=B).
+        type: array
+        minItems: 1
+        maxItems: 3
+        items:
+          type: object
+          additionalProperties: false
+          required: [channel, dye]
+          properties:
+            channel: { $ref: "#/$defs/dyeChannel" }
+            dye: { $ref: "#/$defs/dyeRef" }
+      metallic:
+        description: PBR metalness 0..1 (default 0). Metallic races set 1.0; shader gates it by the mask.
+        type: number
+        minimum: 0
+        maximum: 1
+      roughness:
+        description: PBR roughness 0..1 (optional; material default when omitted).
+        type: number
+        minimum: 0
+        maximum: 1
   presets:
     description: >-
       Customization set v1 (art-prd §5): hair meshes, face textures, skin

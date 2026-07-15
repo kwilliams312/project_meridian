@@ -1,0 +1,25 @@
+# meridian/appearance_catalog@1 — Chibi Red / male (#759, C5; design §5/§6, R2).
+# All 6 chibi colour races share ONE body (chibi:art.chibi_pill_body) and ONE rig
+# (the same glb carries the canonical 63-bone armature — there is no separate chibi
+# skeleton asset, so `skeleton` points at the body). Male + female share the body
+# for now (differentiation via hair/makeup is later, design §8 non-goal). The RACE
+# COLOUR lives in body_material: the client multiplies the neutral recolor base by
+# chibi:dye.red through the skin mask (primary channel), so only the skin recolors
+# and the atlas eyes + cloth survive (rides the equipment dye path). Flat race:
+# metallic 0.0. presets empty for now (design §5) — hair/face/skin land later.
+schema: meridian/appearance_catalog@1
+id: chibi:appearance.red.male
+race: red
+sex: male
+skeleton: chibi:art.chibi_pill_body
+body_model: chibi:art.chibi_pill_body
+body_material:
+  albedo: chibi:art.chibi_pill_body_recolor_base
+  dye_mask: chibi:art.chibi_pill_body_mask
+  metallic: 0.0
+  dyes:
+    - { channel: primary, dye: chibi:dye.red }
+presets:
+  hair: []
+  face: []
+  skin: []

@@ -178,15 +178,49 @@ std::string render_presets(const YAML::Node& list, const char* art_key) {
     return out;
 }
 
+// appearance body_material (chibi colour races, design 2026-07-14-chibi §6/R2) ->
+// the optional recolor-material object `{ albedo, dye_mask, metallic, roughness?,
+// dyes:[{channel,dye}] }`. The client multiplies the neutral `albedo` by each
+// dyed channel's colour through `dye_mask` (the equipment dye path applied to the
+// body), so a colour race becomes its colour. metallic/roughness are emitted as
+// the raw validated YAML scalar (already a well-formed JSON number literal — no
+// locale float formatting, so the emit stays byte-deterministic); roughness is
+// omitted when unset. Emitted ONLY when the catalog declares body_material, so a
+// catalog without it (the core races bake colour into the body model) is
+// byte-identical to before — additive.
+std::string render_body_material(const YAML::Node& bm) {
+    std::string out = "{ \"albedo\": " + json_quote(has(bm, "albedo") ? as_str(bm["albedo"]) : "");
+    out += ", \"dye_mask\": " + json_quote(has(bm, "dye_mask") ? as_str(bm["dye_mask"]) : "");
+    out += ", \"metallic\": " + std::string(has(bm, "metallic") ? as_str(bm["metallic"]) : "0");
+    if (has(bm, "roughness"))
+        out += ", \"roughness\": " + as_str(bm["roughness"]);
+    out += ", \"dyes\": [";
+    const YAML::Node dyes = bm["dyes"];
+    bool first = true;
+    if (dyes && dyes.IsSequence()) {
+        for (const auto& d : dyes) {
+            out += first ? "" : ", ";
+            first = false;
+            out += "{ \"channel\": " + json_quote(has(d, "channel") ? as_str(d["channel"]) : "");
+            out += ", \"dye\": " + json_quote(has(d, "dye") ? as_str(d["dye"]) : "") + " }";
+        }
+    }
+    out += "] }";
+    return out;
+}
+
 // appearance_catalog -> the field tail `"race":..., "sex":..., "skeleton":...,
-// "body_model":..., "presets":{hair,face,skin}` (no outer braces — the caller
-// wraps it in the row object alongside id/numeric_id, mirroring dye/item bodies).
+// "body_model":..., [body_material,] "presets":{hair,face,skin}` (no outer braces
+// — the caller wraps it in the row object alongside id/numeric_id, mirroring
+// dye/item bodies). body_material is present only for the recolor (chibi) races.
 std::string render_appearance(const YAML::Node& n) {
     std::string out;
     out += "\"race\": " + json_quote(has(n, "race") ? as_str(n["race"]) : "");
     out += ", \"sex\": " + json_quote(has(n, "sex") ? as_str(n["sex"]) : "");
     out += ", \"skeleton\": " + json_quote(has(n, "skeleton") ? as_str(n["skeleton"]) : "");
     out += ", \"body_model\": " + json_quote(has(n, "body_model") ? as_str(n["body_model"]) : "");
+    if (has(n, "body_material"))
+        out += ", \"body_material\": " + render_body_material(n["body_material"]);
     const YAML::Node presets = n["presets"];
     out += ", \"presets\": { \"hair\": " + render_presets(presets ? presets["hair"] : YAML::Node(), "model");
     out += ", \"face\": " + render_presets(presets ? presets["face"] : YAML::Node(), "texture");

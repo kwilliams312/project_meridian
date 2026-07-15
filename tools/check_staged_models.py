@@ -113,8 +113,19 @@ def _referenced_model_ids(content_dir: Path) -> set[str]:
 def check(content_dir: Path, staged_dir: Path) -> list[str]:
     """Return a list of failure messages (empty == pass)."""
     sources = _asset_source_index(content_dir)
+    # This gate polices ONE staged mount (client/project/meridian/<ns>), and each
+    # pack mounts under its own res://meridian/<namespace> (ContentDB.DEFAULT_PACK_DIR
+    # is per-pack). So a model referenced by content in ANOTHER pack belongs to that
+    # pack's mount, not this one — requiring a chibi body under the core mount would
+    # be wrong (the client resolves chibi ids under res://meridian/chibi, set up by
+    # its own staging in a later story). Scope the coverage to models whose namespace
+    # matches the staged mount's (its dir name), so cross-pack refs are that pack's
+    # mount's responsibility. Same-pack (core→core) behaviour is unchanged.
+    staged_ns = staged_dir.name
     failures: list[str] = []
     for asset_id in sorted(_referenced_model_ids(content_dir)):
+        if asset_id.split(":", 1)[0] != staged_ns:
+            continue  # a different pack's mount owns this model (see note above)
         entry = sources.get(asset_id)
         if entry is None:
             continue  # unresolved ref — validate_content/L020 owns that report

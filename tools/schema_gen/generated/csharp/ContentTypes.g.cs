@@ -20,6 +20,7 @@ public readonly record struct NpcRef(string Id);
 public readonly record struct ZoneRef(string Id);
 public readonly record struct QuestRef(string Id);
 public readonly record struct ItemRef(string Id);
+public readonly record struct DyeRef(string Id);
 public readonly record struct AttributeRef(string Id);
 public readonly record struct RaceRef(string Id);
 public readonly record struct TalentTreeRef(string Id);
@@ -360,6 +361,12 @@ public enum RaceName
     Dolmen,
     Sylvane,
     Emberkin,
+    Red,
+    Green,
+    Blue,
+    Yellow,
+    Gold,
+    Silver,
 }
 
 public enum School
@@ -1038,6 +1045,26 @@ public sealed record Asset
     public AssetEncode? Encode { get; init; }
 }
 
+public sealed record AppearanceBodyMaterialDye
+{
+    public required DyeChannel Channel { get; init; }
+    public required DyeRef Dye { get; init; }
+}
+
+public sealed record AppearanceBodyMaterial
+{
+    /// <summary>Recolor-ready base albedo (skin neutralised to grey so a dye reads true).</summary>
+    public required ArtRef Albedo { get; init; }
+    /// <summary>RGB dye mask — R=primary/skin, G=secondary, B=accent; unmasked texels never tint.</summary>
+    public required ArtRef DyeMask { get; init; }
+    /// <summary>The race's fixed body dyes, one per RGB dye channel (max 3). Each names a meridian/dye@1 by id (L011-resolved) whose colour tints that channel's masked region. The Chibi colour races use exactly the `primary` channel (skin). Channel↔RGB is the dyeChannel order (primary=R, secondary=G, accent=B).</summary>
+    public required IReadOnlyList<AppearanceBodyMaterialDye> Dyes { get; init; }
+    /// <summary>PBR metalness 0..1 (default 0). Metallic races set 1.0; shader gates it by the mask.</summary>
+    public double? Metallic { get; init; }
+    /// <summary>PBR roughness 0..1 (optional; material default when omitted).</summary>
+    public double? Roughness { get; init; }
+}
+
 public sealed record AppearancePresetsHair
 {
     public required long Id { get; init; }
@@ -1080,6 +1107,8 @@ public sealed record Appearance
     public required AppearanceSex Sex { get; init; }
     public required ArtRef Skeleton { get; init; }
     public required ArtRef BodyModel { get; init; }
+    /// <summary>OPTIONAL recolor material for the body (design 2026-07-14-chibi §6, R2). When present, the client renders the body with this material instead of the body model's own baked atlas: it MULTIPLIES the neutral `albedo` texture by each dyed channel's colour through the RGB `dye_mask` (the same dye-mask path the assembler already runs for equipment — dye_tint.gdshader), so only the masked region (skin) recolors and the unmasked texels (eyes, cloth) survive. This is how a Chibi COLOUR race becomes its colour: one shared grey body + per-race dye. Additive and back-compatible — a catalog without `body_material` (e.g. the core races, which bake colour into the body model directly) renders exactly as before. `metallic`/`roughness` feed the material's PBR params; the shader localizes metalness to the mask so a metallic race is metal-skinned but keeps matte cloth/eyes.</summary>
+    public AppearanceBodyMaterial? BodyMaterial { get; init; }
     /// <summary>Customization set v1 (art-prd §5): hair meshes, face textures, skin palettes. Each preset entry's `id` is the stable integer the per-character appearance record stores (§5.2) — uniqueness within a list is lint L082.</summary>
     public required AppearancePresets Presets { get; init; }
     /// <summary>0 at M1; ships only if the §2.5 crowd budget allows (A-03/D-32). Capped at 2 entries.</summary>
