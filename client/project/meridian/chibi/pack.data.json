@@ -15,6 +15,12 @@
     { "id": "chibi:appearance.yellow.female", "numeric_id": 1048654, "race": "yellow", "sex": "female", "skeleton": "chibi:art.chibi_pill_body", "body_model": "chibi:art.chibi_pill_body", "body_material": { "albedo": "chibi:art.chibi_pill_body_recolor_base", "dye_mask": "chibi:art.chibi_pill_body_mask", "metallic": 0.0, "dyes": [{ "channel": "primary", "dye": "chibi:dye.yellow" }] }, "presets": { "hair": [], "face": [], "skin": [] } },
     { "id": "chibi:appearance.yellow.male", "numeric_id": 1048655, "race": "yellow", "sex": "male", "skeleton": "chibi:art.chibi_pill_body", "body_model": "chibi:art.chibi_pill_body", "body_material": { "albedo": "chibi:art.chibi_pill_body_recolor_base", "dye_mask": "chibi:art.chibi_pill_body_mask", "metallic": 0.0, "dyes": [{ "channel": "primary", "dye": "chibi:dye.yellow" }] }, "presets": { "hair": [], "face": [], "skin": [] } }
   ],
+  "class": [
+    { "id": "chibi:class.warrior", "numeric_id": 1048614, "roster_id": 1, "name": "Warrior" },
+    { "id": "chibi:class.mage", "numeric_id": 1048611, "roster_id": 2, "name": "Mage" },
+    { "id": "chibi:class.rogue", "numeric_id": 1048613, "roster_id": 3, "name": "Rogue" },
+    { "id": "chibi:class.priest", "numeric_id": 1048612, "roster_id": 4, "name": "Priest" }
+  ],
   "dye": [
     { "id": "chibi:dye.blue", "numeric_id": 1048582, "color": "#3a9fe6" },
     { "id": "chibi:dye.gold", "numeric_id": 1048583, "color": "#d4af37" },
@@ -33,5 +39,13 @@
     { "id": "chibi:item.rogue_shiv", "numeric_id": 1048629, "worn": { "models": [{ "model": "core:art.item.weapon.iron_sword", "mirror": "none" }], "hides": [], "attach": { "socket": "main_hand", "sheath_socket": "hip_l" }, "dye_channels": [], "race_overrides": {} } },
     { "id": "chibi:item.warrior_battleblade", "numeric_id": 1048630, "worn": { "models": [{ "model": "core:art.item.weapon.iron_sword", "mirror": "none" }], "hides": [], "attach": { "socket": "main_hand", "sheath_socket": "back" }, "dye_channels": [], "race_overrides": {} } },
     { "id": "chibi:item.warrior_platemail", "numeric_id": 1048631, "worn": { "models": [{ "model": "core:art.item.armor.warden_chest", "mirror": "none" }], "hides": ["torso"], "attach": {}, "dye_channels": ["primary", "secondary"], "race_overrides": {} } }
+  ],
+  "race": [
+    { "id": "chibi:race.red", "numeric_id": 1048659, "roster_id": 1, "name": "Red" },
+    { "id": "chibi:race.green", "numeric_id": 1048658, "roster_id": 2, "name": "Green" },
+    { "id": "chibi:race.blue", "numeric_id": 1048656, "roster_id": 3, "name": "Blue" },
+    { "id": "chibi:race.yellow", "numeric_id": 1048661, "roster_id": 4, "name": "Yellow" },
+    { "id": "chibi:race.gold", "numeric_id": 1048657, "roster_id": 5, "name": "Gold" },
+    { "id": "chibi:race.silver", "numeric_id": 1048660, "roster_id": 6, "name": "Silver" }
   ]
 }

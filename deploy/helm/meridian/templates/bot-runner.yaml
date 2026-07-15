@@ -224,6 +224,16 @@ spec:
         - name: bot
           image: {{ $botImg | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- /* No MERIDIAN_REALM_THEME here: meridian-bot is the ENGINE-FREE load
+                 bot (client -DMERIDIAN_BOT=ON, no Godot — deploy/docker/Dockerfile.bot),
+                 so it mounts no res://meridian/<theme> pack and reads no theme env. It
+                 is theme-AGNOSTIC by construction on a chibi realm (C9/#762): its
+                 WorldHello carries no content_hash to negotiate, and it self-provisions
+                 with roster-position race=1/char_class=1 (bot_core.cpp), which resolves
+                 to a valid chibi race+class (roster_id 1 = Red/Warrior) exactly as it
+                 resolves to core's roster_id 1. The theme-driven client mount (#791)
+                 is for the GODOT client the human drives locally (run-local sets
+                 MERIDIAN_REALM_THEME), not this load bot. */}}
           env:
             - name: POD_NAME
               valueFrom:
