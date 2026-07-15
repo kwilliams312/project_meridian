@@ -1199,6 +1199,26 @@ EmitSqlResult emit_sql(const model::ContentModel& model, const LinkResult& linke
     std::map<std::string, Table> tables = make_tables();
     Ctx cx{tables, resolver, diags, {}};
 
+    // Single-pack selection (--pack <ns>, design §4). When set, this run emits ONE
+    // pack's world DB: only its content rows + only its world_manifest row. Verify
+    // the named pack exists up front — a named-but-absent namespace is an error, not
+    // a silent fall-through to every pack (mirrors emit-pck's --pack).
+    const std::string& select_ns = opts.select_namespace;
+    if (!select_ns.empty()) {
+        const bool present = std::any_of(
+            model.files.begin(), model.files.end(), [&](const model::ParsedFile& pf) {
+                return pf.parsed && pf.file.kind == model::FileKind::Pack &&
+                       pf.namespace_ == select_ns;
+            });
+        if (!present) {
+            diags.error("E002", "content/", "",
+                        "emit-sql: no pack with namespace '" + select_ns +
+                            "' found under the content tree");
+            result.ok = false;
+            return result;
+        }
+    }
+
     // Pre-pass: map every race content-id -> its roster_id, so emit_class can lower
     // a class's race_limits[] refs to race roster ids (#696). Races are their own
     // content family, emitted independently; this is the only cross-entity lookup
@@ -1216,9 +1236,12 @@ EmitSqlResult emit_sql(const model::ContentModel& model, const LinkResult& linke
     // from kMaxLocalIndex so they never collide with the append-only file ids
     // growing UP from 1. (Deterministic: source order within a pack.)
     // We use the primary pack's band for all spawns (single-pack content today).
+    // Under --pack, the selected pack IS the primary — key spawns to its band so
+    // chibi's placements land in chibi's id space, not core's.
     std::uint32_t spawn_band = 0;
+    const std::string spawn_pack = !select_ns.empty() ? select_ns : std::string("core");
     for (const auto& [ns, m] : linked.idmaps) {
-        if (ns == "core") { spawn_band = m.band; break; }
+        if (ns == spawn_pack) { spawn_band = m.band; break; }
     }
     if (linked.idmaps.size() == 1) spawn_band = linked.idmaps.begin()->second.band;
     SpawnCounter spawn_counter{idmap::numeric_id(spawn_band, idmap::kMaxLocalIndex)};
@@ -1229,6 +1252,9 @@ EmitSqlResult emit_sql(const model::ContentModel& model, const LinkResult& linke
         if (!pf.parsed) continue;
         if (pf.file.kind != model::FileKind::Content) continue;
         if (pf.id.empty()) continue;
+        // Under --pack, keep only the selected pack's content — its rows are the
+        // whole world DB, so a cross-pack roster_id collision is impossible.
+        if (!select_ns.empty() && ns_of(pf.id) != select_ns) continue;
         content.push_back(&pf);
     }
     std::sort(content.begin(), content.end(),
@@ -1304,6 +1330,9 @@ EmitSqlResult emit_sql(const model::ContentModel& model, const LinkResult& linke
     std::vector<PackRow> packs;
     for (const auto& pf : model.files) {
         if (!pf.parsed || pf.file.kind != model::FileKind::Pack) continue;
+        // Under --pack, the world_manifest carries ONLY the selected pack's row —
+        // a single-pack world DB has exactly one manifest row for worldd to read.
+        if (!select_ns.empty() && pf.namespace_ != select_ns) continue;
         PackRow pr;
         pr.ns = pf.namespace_;
         pr.version = has(pf.root, "version") ? as_str(pf.root["version"]) : "0.0.0";

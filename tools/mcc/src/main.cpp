@@ -285,25 +285,35 @@ int cmd_refs(const std::vector<std::string>& args) {
     return mcc::stages::refs_content(content_dir, pos[0], as_json, std::cout, std::cerr);
 }
 
-// mcc emit-sql [dir] [--out <file>] [--built-at "<ts>"] [--diag-format=...]
+// mcc emit-sql [dir] [--out <file>] [--built-at "<ts>"] [--pack <ns>]
+//              [--diag-format=...]
 //   Emit the world DB DML (IF-4): content-table inserts + the world_manifest row
 //   worldd reads at boot (Tools SAD §2.6). Consumes the existing idmap.lock
 //   read-only (run `mcc link`/`mcc build --allocate-ids` first to allocate ids).
 //   Without --out the SQL goes to stdout (diagnostics to stderr); with --out the
-//   SQL is written to the file (diagnostics to stdout).
+//   SQL is written to the file (diagnostics to stdout). `--pack <ns>` emits a
+//   single-pack world DB — that pack's world_manifest row + only that pack's
+//   content rows (design §4: one pack per realm, so the per-pack roster_id keys
+//   can't collide across packs). Default (no --pack): the multi-pack dump. An
+//   unknown namespace is an error (mirrors emit-pck's --pack).
 int cmd_emit_sql(const std::vector<std::string>& args) {
     std::string out_file;
     std::string built_at(kDefaultBuiltAt);
+    std::string select_ns;
     std::vector<std::string> check_args;
     bool expect_out = false;
     bool expect_built = false;
+    bool expect_pack = false;
     for (const auto& a : args) {
         if (expect_out) { out_file = a; expect_out = false; }
         else if (expect_built) { built_at = a; expect_built = false; }
+        else if (expect_pack) { select_ns = a; expect_pack = false; }
         else if (a == "--out") expect_out = true;
         else if (a.rfind("--out=", 0) == 0) out_file = a.substr(std::strlen("--out="));
         else if (a == "--built-at") expect_built = true;
         else if (a.rfind("--built-at=", 0) == 0) built_at = a.substr(std::strlen("--built-at="));
+        else if (a == "--pack") expect_pack = true;
+        else if (a.rfind("--pack=", 0) == 0) select_ns = a.substr(std::strlen("--pack="));
         else check_args.push_back(a);
     }
     if (expect_out) {
@@ -314,11 +324,15 @@ int cmd_emit_sql(const std::vector<std::string>& args) {
         std::cerr << kProg << " emit-sql: --built-at requires a timestamp argument\n";
         return 2;
     }
+    if (expect_pack) {
+        std::cerr << kProg << " emit-sql: --pack requires a namespace argument\n";
+        return 2;
+    }
     std::string content_dir;
     mcc::stages::DiagFormat format;
     if (!parse_check_flags("emit-sql", check_args, content_dir, format)) return 2;
     return mcc::stages::emit_sql_content(content_dir, out_file, MCC_VERSION, built_at,
-                                         format, std::cout, std::cerr);
+                                         format, std::cout, std::cerr, select_ns);
 }
 
 // mcc emit-pck [dir] [--out <dir>] [--built-at "<ts>"] [--godot-version <v>]
@@ -651,7 +665,7 @@ const Command kCommands[] = {
     {"index",     "list the ID index: all ids by type + IF-9 numeric id (--json)",              cmd_index},
     {"pickable",  "typed ref picker: valid target ids for a ref type (pickable <type> --json)", cmd_pickable},
     {"refs",      "find-usages / backlinks for an id (refs <id> --json)",                        cmd_refs},
-    {"emit-sql",  "emit IF-4 world DB SQL + world_manifest (--out <file>, --built-at)",         cmd_emit_sql},
+    {"emit-sql",  "emit IF-4 world DB SQL + world_manifest (--out <file>, --built-at, --pack <ns>)", cmd_emit_sql},
     {"emit-pck",  "emit IF-5 client pack + pack.manifest.json (--out <dir>, --built-at)",       cmd_emit_pck},
     {"chunk-emit","emit a procedural N×N chunk fixture pack (IF-6) (--zone, --grid, --out)",     cmd_chunk_emit},
     {"fmt",       "canonically format /content YAML; --check for CI/pre-commit",       cmd_fmt},
@@ -728,6 +742,12 @@ void print_help() {
            "  --built-at \"<ts>\"    world_manifest.built_at DATETIME (default a fixed\n"
            "                       epoch for reproducible output; pass a real build\n"
            "                       timestamp for a nightly build).\n"
+           "  --pack <ns>          emit a SINGLE-pack world DB: that pack's\n"
+           "                       world_manifest row + only its content rows (one\n"
+           "                       pack per realm, design §4 — keeps per-pack\n"
+           "                       roster_id keys from colliding across packs).\n"
+           "                       Default (no --pack): the multi-pack dump. An\n"
+           "                       unknown namespace is an error.\n"
            "                       Consumes the existing idmap.lock read-only — run\n"
            "                       'mcc link' / 'mcc build' first to allocate ids.\n\n"
            "EMIT-PCK OPTIONS (IF-5, SAD §2.7):\n"
