@@ -28,6 +28,12 @@ WORKDIR /src
 # emit-sql resolves ids against read-only.
 COPY tools/mcc/ ./tools/mcc/
 COPY content/   ./content/
+# mcc's CMake resolves schema/chunk/chunk.fbs (flatc --cpp -> chunk_generated.h,
+# a hard dep of the mcc target) plus schema/sql/world + schema/chunk/
+# chunk-manifest.schema.yaml at configure time (tools/mcc/CMakeLists.txt). Copy
+# the whole schema/ dir — it is the in-repo schema source-of-truth and small
+# (#811); without it the mcc build fails on the missing chunk.fbs.
+COPY schema/    ./schema/
 RUN cmake -S tools/mcc -B tools/mcc/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
     && cmake --build tools/mcc/build --target mcc
 # Emit the world-DB content DML (IF-4 world_manifest + the content INSERTs).
