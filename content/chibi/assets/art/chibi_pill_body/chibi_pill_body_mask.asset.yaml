@@ -1,0 +1,30 @@
+# IF-8 sidecar (meridian/asset@1). Chibi body SKIN dye-mask (story #755, C4;
+# design ① §6 dye model). RGB mask over the shared chibi_pill_body UV: the RED
+# (primary) channel marks the recolorable SKIN region; G=B=0. Eyes, pupils,
+# highlights and the cloth-wrap read 0, so the dye-mask shader (dye_tint.gdshader)
+# never tints them — they keep the atlas exactly. This is the KEY asset that lets
+# a race colour recolor only the skin while the painted face + wraps survive.
+#
+# The id is the body model id + "_mask" on purpose: the client assembler resolves
+# a piece's dye mask as `model_id + "_mask"` (AssembledCharacter._load_mask_texture),
+# so C5 gets skin dyeing for free once it declares the body dye-channels + wires a
+# race dye onto the primary channel.
+#
+# Derived deterministically from the body atlas by tools/art/generate_chibi_skin_mask.py
+# (fixed HSV threshold: skin = saturated warm/yellow texels). Carries no atlas
+# imagery — just a region map — so source_tier: original (as the Warden dye masks).
+schema: meridian/asset@1
+id: chibi:art.chibi_pill_body_mask
+class: texture_set
+source: assets/art/chibi_pill_body/chibi_pill_body_mask.png
+license: CC-BY-4.0
+provenance:
+  source_tier: original
+  authors: [meridian-contributors]
+  transform_notes: >-
+    Region map derived from chibi:art.chibi_pill_body's diffuse atlas by
+    tools/art/generate_chibi_skin_mask.py — R = skin (recolorable), eyes/cloth = 0.
+budget:
+  # 1024² — under the 2048 Art PRD §2.3 player-character-body texture_set cap.
+  texture_max_px: 1024
+tags: [body_color, skin_mask]

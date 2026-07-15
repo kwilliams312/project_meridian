@@ -1,0 +1,11 @@
+# meridian/dye@1. Chibi Red — the Chibi Red colour race's SKIN colour (story #755, C4;
+# design §5/§6). The 6 colour races reuse the dye MECHANISM as race identity: C5
+# wires each race's appearance to this dye on the body's primary dye channel, and
+# the dye-mask shader multiplies it into the neutralised skin of
+# chibi:art.chibi_pill_body_recolor_base (through chibi:art.chibi_pill_body_mask),
+# so only the skin recolors — eyes + cloth stay from the atlas. Flat (non-metallic) race.
+schema: meridian/dye@1
+id: chibi:dye.red
+name: Chibi Red
+color: "#e23b3b"
+rarity: common

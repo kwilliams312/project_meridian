@@ -6,6 +6,10 @@
   masks — I021 bind-conformance per plate (via the real import validator, no
   Blender), the Art PRD §2.1 budget band (3-8k per piece, ≤40k outfit), mask
   presence/validity, ≤4 normalized influences, and byte-determinism.
+- generate_chibi_skin_mask.py (story #755, C4): the skin classifier +
+  neutralisation + deterministic PNG writer that derive the chibi body skin
+  dye-mask and recolor-ready base albedo. The atlas decode (Pillow/pygltflib) is
+  lazy in main(); these tests cover the PURE stdlib logic only.
 
 Every tools/art/ generator makes the same determinism guarantee (mirrors
 generate_pickaxe_blockout.py).
@@ -25,6 +29,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "tools" / "art"))
 
+import generate_chibi_skin_mask as gcsm  # noqa: E402
 import generate_face_skin as gfs  # noqa: E402
 from tools.art import generate_warden_kit as gwk  # noqa: E402
 from validate_imports import check_gltf_rig, load_skeleton_defs  # noqa: E402
@@ -107,6 +112,55 @@ def test_face_and_skin_dims_match_module_constants() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# C4 — generate_chibi_skin_mask.py (story #755): pure logic (no Pillow/glb).
+# --------------------------------------------------------------------------- #
+def test_chibi_is_skin_classifies_measured_atlas_clusters() -> None:
+    # Skin = saturated warm/yellow (measured atlas clusters) -> recolorable.
+    for c in [(234, 191, 57), (232, 185, 48), (214, 174, 74), (233, 193, 65)]:
+        assert gcsm.is_skin(*c), f"{c} should be skin"
+    # Cloth (low saturation warm grey), brown eye (dark), white highlight,
+    # and any COOL saturated hue must NOT be classified as skin.
+    for c in [
+        (181, 164, 147),
+        (173, 156, 138),
+        (115, 91, 63),
+        (245, 245, 245),
+        (52, 152, 219),
+    ]:
+        assert not gcsm.is_skin(*c), f"{c} should not be skin"
+
+
+def test_chibi_neutralize_is_light_neutral_grey() -> None:
+    r, g, b = gcsm.neutralize(233, 189, 57)  # typical skin texel
+    assert r == g == b, "neutralised skin must be a neutral grey"
+    lum = round(0.299 * 233 + 0.587 * 189 + 0.114 * 57)
+    assert r >= lum, "neutralisation lifts toward white so dyes read"
+    assert r <= 255
+
+
+def test_chibi_encode_rgb_png_valid_and_deterministic() -> None:
+    rows = bytes((10, 20, 30)) * (4 * 4)  # 4x4 solid
+    a = gcsm.encode_rgb_png(4, 4, rows)
+    b = gcsm.encode_rgb_png(4, 4, rows)
+    assert a == b, "PNG encode is byte-deterministic"
+    assert _ihdr_dims(a) == (4, 4)
+
+
+def test_chibi_build_mask_and_base_recolors_only_skin() -> None:
+    # 2x1 atlas: texel 0 = yellow skin, texel 1 = brown eye (keep).
+    skin = (233, 189, 57)
+    eye = (115, 91, 63)
+    atlas = bytes(skin) + bytes(eye)
+    mask, base = gcsm.build_mask_and_base(atlas, 2, 1)
+    # Mask: R=255 on skin, 0 on eye; G=B always 0 (primary channel only).
+    assert mask[0:3] == bytes((255, 0, 0))
+    assert mask[3:6] == bytes((0, 0, 0))
+    # Base: skin neutralised (R==G==B), eye kept byte-for-byte.
+    assert base[0] == base[1] == base[2]
+    assert base[3:6] == bytes(eye)
+
+
+# --------------------------------------------------------------------------- #
 # S2 — generate_warden_kit.py
 # --------------------------------------------------------------------------- #
 @pytest.mark.unit
@@ -139,8 +193,12 @@ class TestPlateLocality:
     # Per-anatomy volume cap (metres): the largest allowed extent of ONE shell.
     # Hands/feet are small; a leg guard legitimately runs the length of the leg.
     _SHELL_CAP = {
-        "head": 0.30, "shoulders": 0.30, "chest": 0.50,
-        "hands": 0.25, "legs": 0.95, "feet": 0.40,
+        "head": 0.30,
+        "shoulders": 0.30,
+        "chest": 0.50,
+        "hands": 0.25,
+        "legs": 0.95,
+        "feet": 0.40,
     }
 
     @pytest.mark.parametrize("slot", SLOTS)
@@ -164,7 +222,9 @@ class TestPlateLocality:
 
         pos = build_shells(gwk.SLOTS["hands"])[0]
         near_mid = [p for p in pos if abs(p[0]) < 0.4]
-        assert near_mid == [], f"hands has {len(near_mid)} verts near centre — a bar, not gloves"
+        assert near_mid == [], (
+            f"hands has {len(near_mid)} verts near centre — a bar, not gloves"
+        )
         # And each glove actually sits over its hand bone (~0.72-0.82 m out).
         assert all(0.6 < abs(p[0]) < 0.9 for p in pos)
 
@@ -257,9 +317,9 @@ def _decode_mask_pixels(png: bytes) -> list[tuple[int, int, int]]:
     off = 8
     while off < len(png):
         length = struct.unpack_from(">I", png, off)[0]
-        tag = png[off + 4:off + 8]
+        tag = png[off + 4 : off + 8]
         if tag == b"IDAT":
-            idat += png[off + 8:off + 8 + length]
+            idat += png[off + 8 : off + 8 + length]
         off += 12 + length
     raw = zlib.decompress(idat)
     stride = 1 + w * 3
@@ -285,7 +345,9 @@ class TestPlateAppearanceS6:
     def test_base_albedo_is_light_steel(self):
         # grey (~0.4) × dye = mud; light steel (≥ 0.6) × dye = the dye's true hue.
         r, g, b, a = gwk.BASE_COLOR
-        assert min(r, g, b) >= 0.6, f"base albedo {gwk.BASE_COLOR} too dark for dyes to read"
+        assert min(r, g, b) >= 0.6, (
+            f"base albedo {gwk.BASE_COLOR} too dark for dyes to read"
+        )
         assert a == 1.0
 
     @pytest.mark.parametrize("slot", SLOTS)
@@ -294,7 +356,9 @@ class TestPlateAppearanceS6:
 
         gltf = GLTF2().load_from_bytes(gwk.build_plate_glb(slot))
         pbr = gltf.materials[0].pbrMetallicRoughness
-        assert pbr.metallicFactor <= 0.2, f"{slot} metallic {pbr.metallicFactor} swallows the dyed albedo"
+        assert pbr.metallicFactor <= 0.2, (
+            f"{slot} metallic {pbr.metallicFactor} swallows the dyed albedo"
+        )
 
     @pytest.mark.parametrize("slot", SLOTS)
     def test_plate_carries_uvs_for_mask(self, slot):
@@ -313,7 +377,9 @@ class TestPlateAppearanceS6:
         # Every texel is dyed by exactly one channel — no neutral/black gaps that
         # would leave undyed stripes on the plate.
         pixels = _decode_mask_pixels(gwk.build_mask_png(slot))
-        assert all(max(px) > 0 for px in pixels), f"{slot} mask has undyed (black) texels"
+        assert all(max(px) > 0 for px in pixels), (
+            f"{slot} mask has undyed (black) texels"
+        )
         # Primary (R) is the dominant channel so a single primary dye reads across
         # the whole plate body, not a thin band.
         primary = sum(1 for px in pixels if px[0] > 0)
