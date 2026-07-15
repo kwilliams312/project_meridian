@@ -16,6 +16,7 @@ public sealed partial class EditorSplitView : UserControl
     private const double ResponsiveCollapseWidth = 800;
     private bool _autoCollapsed;
     private bool _userOverride;
+    private double _availableWidth = double.PositiveInfinity;
     private Control? _layoutHost;
 
     public static readonly StyledProperty<Control?> FormContentProperty =
@@ -37,6 +38,7 @@ public sealed partial class EditorSplitView : UserControl
     }
 
     public bool IsPreviewOpen => PreviewPane.IsVisible;
+    internal bool IsSinglePanePreview => IsPreviewOpen && !FormPresenter.IsVisible;
     private ColumnDefinition SplitterColumn => LayoutGrid.ColumnDefinitions[1];
     private ColumnDefinition PreviewColumn => LayoutGrid.ColumnDefinitions[2];
     internal double PreviewWidth => PreviewColumn.Width.Value;
@@ -74,11 +76,8 @@ public sealed partial class EditorSplitView : UserControl
     public void SetPreviewOpen(bool isOpen)
     {
         PreviewPane.IsVisible = isOpen;
-        PreviewSplitter.IsVisible = isOpen;
         ShowPreviewButton.IsVisible = !isOpen;
-        SplitterColumn.Width = new GridLength(isOpen ? 5 : 0);
-        PreviewColumn.Width = new GridLength(isOpen ? DefaultPreviewWidth : 44);
-        PreviewColumn.MaxWidth = isOpen ? 560 : 44;
+        ApplyLayout();
     }
 
     private void OnSizeChanged(object? sender, SizeChangedEventArgs e)
@@ -92,7 +91,13 @@ public sealed partial class EditorSplitView : UserControl
 
     private void UpdateResponsiveState(double width)
     {
-        if (_userOverride || double.IsInfinity(width)) return;
+        if (double.IsInfinity(width)) return;
+        _availableWidth = width;
+        if (_userOverride)
+        {
+            ApplyLayout();
+            return;
+        }
         if (width < ResponsiveCollapseWidth && IsPreviewOpen)
         {
             _autoCollapsed = true;
@@ -103,6 +108,60 @@ public sealed partial class EditorSplitView : UserControl
             _autoCollapsed = false;
             SetPreviewOpen(true);
         }
+        else
+        {
+            ApplyLayout();
+        }
+    }
+
+    private void ApplyLayout()
+    {
+        if (!IsPreviewOpen)
+        {
+            FormPresenter.IsVisible = true;
+            PreviewSplitter.IsVisible = false;
+            Grid.SetColumn(PreviewPane, 2);
+            Grid.SetColumnSpan(PreviewPane, 1);
+            PreviewPane.BorderThickness = new Thickness(1, 0, 0, 0);
+            SplitterColumn.Width = new GridLength(0);
+            PreviewColumn.Width = new GridLength(44);
+            PreviewColumn.MaxWidth = 44;
+            InvalidateLayoutGrid();
+            return;
+        }
+
+        if (_availableWidth < ResponsiveCollapseWidth)
+        {
+            // A narrow host cannot fit the form minimum + splitter + desktop
+            // preview. Use the entire canvas for YAML until Hide returns to the
+            // form, keeping both transitions keyboard reachable.
+            FormPresenter.IsVisible = false;
+            PreviewSplitter.IsVisible = false;
+            Grid.SetColumn(PreviewPane, 0);
+            Grid.SetColumnSpan(PreviewPane, 3);
+            PreviewPane.BorderThickness = new Thickness(0);
+            SplitterColumn.Width = new GridLength(0);
+            PreviewColumn.Width = new GridLength(0);
+            PreviewColumn.MaxWidth = 0;
+            InvalidateLayoutGrid();
+            return;
+        }
+
+        FormPresenter.IsVisible = true;
+        PreviewSplitter.IsVisible = true;
+        Grid.SetColumn(PreviewPane, 2);
+        Grid.SetColumnSpan(PreviewPane, 1);
+        PreviewPane.BorderThickness = new Thickness(1, 0, 0, 0);
+        SplitterColumn.Width = new GridLength(5);
+        PreviewColumn.Width = new GridLength(DefaultPreviewWidth);
+        PreviewColumn.MaxWidth = 560;
+        InvalidateLayoutGrid();
+    }
+
+    private void InvalidateLayoutGrid()
+    {
+        LayoutGrid.InvalidateMeasure();
+        LayoutGrid.InvalidateArrange();
     }
 
     private void CollapsePreview(object? sender, RoutedEventArgs e)

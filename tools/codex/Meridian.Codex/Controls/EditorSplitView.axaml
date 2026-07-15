@@ -11,7 +11,7 @@
       <ColumnDefinition Width="340" MinWidth="0" MaxWidth="560" />
     </Grid.ColumnDefinitions>
 
-    <ContentPresenter Grid.Column="0"
+    <ContentPresenter x:Name="FormPresenter" Grid.Column="0"
                       Content="{Binding FormContent, ElementName=SplitView}"
                       HorizontalContentAlignment="Stretch"
                       VerticalContentAlignment="Stretch" />

@@ -1,5 +1,6 @@
 using System.Linq;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Headless;
@@ -7,6 +8,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Interactivity;
 using Avalonia.Styling;
 using Avalonia.VisualTree;
 using Meridian.Codex;
@@ -290,6 +292,85 @@ public class HeadlessShellTests
         Assert.InRange(split.PreviewWidth, 300, 560);
         Assert.Contains(split.GetVisualDescendants().OfType<TextBox>(), box =>
             box.IsReadOnly && box.Text == "schema: meridian/npc@1");
+    }
+
+    [AvaloniaFact]
+    public void Narrow_user_reopen_uses_reversible_single_pane_then_restores_desktop_split()
+    {
+        var view = new ItemEditorView { DataContext = new ItemEditorViewModel() };
+        var window = new Window { Width = 520, Height = 560, Content = view };
+        window.Show();
+        var split = Assert.Single(view.GetVisualDescendants().OfType<EditorSplitView>());
+        var form = Assert.IsType<ContentPresenter>(split.FindControl<ContentPresenter>("FormPresenter"));
+        var pane = Assert.IsType<Border>(split.FindControl<Border>("PreviewPane"));
+        var splitter = Assert.IsType<GridSplitter>(split.FindControl<GridSplitter>("PreviewSplitter"));
+        var show = Assert.IsType<Button>(split.FindControl<Button>("ShowPreviewButton"));
+
+        Arrange(split, 520, 560);
+        Assert.False(split.IsPreviewOpen);
+        Assert.True(form.IsVisible);
+
+        show.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Arrange(split, 520, 560);
+
+        Assert.True(split.IsSinglePanePreview);
+        Assert.False(form.IsVisible);
+        Assert.False(splitter.IsVisible);
+        Assert.Equal(0, pane.Bounds.Left);
+        Assert.InRange(pane.Bounds.Right, 519.5, 520.5);
+        var hide = Assert.Single(pane.GetVisualDescendants().OfType<Button>(),
+            button => AutomationProperties.GetName(button) == "Hide YAML preview");
+        var hideOrigin = Assert.NotNull(hide.TranslatePoint(new Point(0, 0), split));
+        Assert.True(hideOrigin.X >= 0);
+        Assert.True(hideOrigin.X + hide.Bounds.Width <= split.Bounds.Width + 0.5);
+        Assert.True(hide.Focus(NavigationMethod.Tab));
+        Assert.True(hide.IsFocused);
+
+        hide.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Arrange(split, 520, 560);
+        Assert.False(split.IsPreviewOpen);
+        Assert.True(form.IsVisible);
+
+        show.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        window.Width = 1200;
+        window.Height = 760;
+        Arrange(split, 1200, 760);
+        Assert.True(split.IsPreviewOpen);
+        Assert.False(split.IsSinglePanePreview);
+        Assert.True(form.IsVisible);
+        Assert.True(splitter.IsVisible);
+        Assert.InRange(split.PreviewWidth, 300, 560);
+
+        window.Width = 520;
+        window.Height = 560;
+        Arrange(split, 520, 560);
+        Assert.True(split.IsSinglePanePreview);
+        hide.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Arrange(split, 520, 560);
+        Assert.False(split.IsPreviewOpen);
+        Assert.True(form.IsVisible);
+        var actionBar = Assert.Single(view.GetVisualDescendants().OfType<EditorActionBar>());
+        Assert.True(actionBar.IsVisible);
+        Assert.True(actionBar.Bounds.Bottom <= view.Bounds.Bottom);
+        window.Close();
+    }
+
+    private static void Arrange(Control control, double width, double height)
+    {
+        control.InvalidateMeasure();
+        control.InvalidateArrange();
+        control.Measure(new Size(width, height));
+        control.Arrange(new Rect(0, 0, width, height));
+        if (control is EditorSplitView split)
+        {
+            // Headless top-levels remain fixed at 1024px, so flush the named
+            // production layout root at the modeled host size as well.
+            var layout = Assert.IsType<Grid>(split.FindControl<Grid>("LayoutGrid"));
+            layout.InvalidateMeasure();
+            layout.InvalidateArrange();
+            layout.Measure(new Size(width, height));
+            layout.Arrange(new Rect(0, 0, width, height));
+        }
     }
 
     [AvaloniaFact]
