@@ -123,6 +123,8 @@ The values you will almost always touch:
 | `authd.resources` / `worldd.resources` | see values.yaml | CPU/memory requests + limits. |
 | `authd.probes.type` / `worldd.probes.type` | `exec` | `exec` (`--version`) or `tcp` (game port). |
 | `worldd.db.enabled` | `false` | worldd has no DB dependency at M0 (SAD §5.2). |
+| `realmTheme` | `""` (core) | Content theme worldd serves (chibi-theme design §4, #762). Set to a pack namespace (e.g. `chibi`) → worldd gets `MERIDIAN_REALM_THEME`; also point `mariadb.contentSeed.sqlPath` at that theme's `/content/world-content-<theme>.sql`. |
+| `mariadb.contentSeed.sqlPath` | `/content/world-content.sql` | Baked world-DB DML the content-seed Job loads. A themed realm points this at `/content/world-content-<theme>.sql` (single-pack). |
 | `observability.enabled` | `false` | Turn on the in-process `/metrics` endpoint (OPS-05). |
 
 Full documented set: [`values.yaml`](values.yaml).

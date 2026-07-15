@@ -42,6 +42,22 @@ commonAnnotations: {}
 # without the pileup. Override per-daemon via `<daemon>.revisionHistoryLimit`.
 revisionHistoryLimit: 3
 
+# ── Realm content theme (chibi-theme design §4, #762) ────────────────────────
+# The content pack a realm serves as PRIMARY. Empty (the default) ⇒ the baseline
+# `core` behaviour: worldd resolves the first world_manifest row and reads no
+# MERIDIAN_REALM_THEME. Set to a pack namespace (e.g. "chibi") to theme a realm:
+#   * worldd gets MERIDIAN_REALM_THEME=<theme> so it resolves that pack's
+#     world_manifest row as primary (the C1 seam, server/worldd/world_boot.cpp), and
+#   * you MUST also point mariadb.contentSeed.sqlPath at that theme's single-pack
+#     world DB (the meridian-db image bakes /content/world-content-<theme>.sql),
+#     so the seeded world_manifest matches the theme worldd resolves.
+# Only worldd consumes this: the in-cluster bot-runner is the ENGINE-FREE load bot
+# (no Godot pack mount) and is theme-agnostic, and the human's GODOT client mounts
+# the theme locally via run-local's MERIDIAN_REALM_THEME (client seam #791). The
+# dev realm sets this to "chibi"; ptr/prod leave it empty (core) until the chibi
+# content is promoted onto their branches.
+realmTheme: ""
+
 # ── TLS (IF-1 authd, IF-2 worldd — both TLS listeners at M0) ─────────────────
 # Both daemons read a server cert + key, mounted read-only at /certs, exactly as
 # the compose does (server.crt / server.key). By default the chart renders a

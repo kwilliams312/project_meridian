@@ -200,6 +200,49 @@ STAGED_ART=(
   "content/core/assets/art/item/armor/warden_feet_mask.png:art/item/armor/warden_feet_mask.png"
 )
 
+# --- The CHIBI staged client pack (story #809). ------------------------------
+# The chibi theme pack (content/chibi) is a SECOND single-pack client mount the
+# client ships at res://meridian/chibi — the pack the dev realm loads once
+# MERIDIAN_REALM_THEME=chibi (C9/#762). It is staged and drift-gated EXACTLY like
+# core above, so a clean checkout (and the hosted chibi realm's client) can never
+# ship a stale/pre-roster chibi pack or an unrenderable body:
+#   * the three emit-pck JSON artifacts (pack.{manifest.json,contents.jsonl,
+#     data.json}) — a fresh `emit-pck --pack chibi` must match byte-for-byte, and
+#   * the body model's source bytes: the .glb the assembler runtime-loads plus its
+#     skin dye-mask and neutral recolor-base PNGs the colour-race body-material
+#     path samples (design 2026-07-14-chibi §6/R2; AssembledCharacter
+#     ._load_model_scene / _load_mask_texture fall back to the staged source
+#     sibling because the M0 pack is declarative).
+# Chibi has NO golden corpus (the golden is the core determinism snapshot); this
+# is the staged-pack half only. --update-golden refreshes it in lockstep.
+CHIBI_PACK_NS="chibi"
+CHIBI_STAGED_DIR="client/project/meridian/chibi"
+CHIBI_STAGED_FILES=(pack.manifest.json pack.contents.jsonl pack.data.json)
+# The chibi body sources. Entry format matches STAGED_ART:
+# "<content-tree source>:<staged copy under $CHIBI_STAGED_DIR>". The recolor-base
+# source is *_recolor_bc.png but stages at the assembler-resolved
+# *_recolor_base.png (the recolor asset id's basename + .png).
+CHIBI_STAGED_ART=(
+  "content/chibi/assets/art/chibi_pill_body/sk_chibi_pill_body.glb:art/chibi_pill_body.glb"
+  "content/chibi/assets/art/chibi_pill_body/chibi_pill_body_mask.png:art/chibi_pill_body_mask.png"
+  "content/chibi/assets/art/chibi_pill_body/chibi_pill_body_recolor_bc.png:art/chibi_pill_body_recolor_base.png"
+)
+
+# Emit ONLY the chibi client pack (emit-pck --pack chibi) into $1/, flattened to
+# the same flat shape as the staged files. No world.sql/index — this gate polices
+# the staged CLIENT mount only. Same fixed built_at as the golden so the
+# pack.manifest.json built_at is reproducible.
+emit_chibi_pck_into() {  # $1 = target dir
+  local dir="$1"
+  mkdir -p "$dir"
+  "$REPO_ROOT/$MCC" emit-pck "$REPO_ROOT/$CONTENT_DIR" --pack "$CHIBI_PACK_NS" \
+      --out "$dir/pck" --built-at "$GOLDEN_BUILT_AT" >/dev/null
+  cp "$dir/pck/meridian/${CHIBI_PACK_NS}/pack.manifest.json"  "$dir/pack.manifest.json"
+  cp "$dir/pck/meridian/${CHIBI_PACK_NS}/pack.contents.jsonl" "$dir/pack.contents.jsonl"
+  cp "$dir/pck/meridian/${CHIBI_PACK_NS}/pack.data.json"      "$dir/pack.data.json"
+  rm -rf "$dir/pck"
+}
+
 # --- 2a. --update-golden: regenerate the checked-in golden and stop. ---------
 if [ "$UPDATE_GOLDEN" -eq 1 ]; then
   log "Regenerating golden corpus → $GOLDEN_DIR (built_at='$GOLDEN_BUILT_AT')"
@@ -222,7 +265,23 @@ if [ "$UPDATE_GOLDEN" -eq 1 ]; then
     cp "$src" "$dst"
   done
   ok "Staged client pack refreshed: $STAGED_DIR/{${STAGED_FILES[*]// /,}} + ${#STAGED_ART[@]} model source(s)"
-  warn "Review the golden diff like a content diff, then commit tools/mcc/golden/ AND $STAGED_DIR/ together."
+  # The CHIBI staged pack (story #809) — refreshed in the same lockstep. No golden
+  # corpus for chibi; emit its pck fresh and stage the JSON + body source bytes.
+  CHIBI_TMP="$(mktemp -d)"
+  emit_chibi_pck_into "$CHIBI_TMP"
+  mkdir -p "$CHIBI_STAGED_DIR"
+  for f in "${CHIBI_STAGED_FILES[@]}"; do
+    cp "$CHIBI_TMP/$f" "$CHIBI_STAGED_DIR/$f"
+  done
+  for entry in "${CHIBI_STAGED_ART[@]}"; do
+    src="${entry%%:*}"; dst="$CHIBI_STAGED_DIR/${entry##*:}"
+    [ -f "$src" ] || die "chibi staged model source missing: $src"
+    mkdir -p "$(dirname "$dst")"
+    cp "$src" "$dst"
+  done
+  rm -rf "$CHIBI_TMP"
+  ok "Chibi staged client pack refreshed: $CHIBI_STAGED_DIR/{${CHIBI_STAGED_FILES[*]// /,}} + ${#CHIBI_STAGED_ART[@]} model source(s)"
+  warn "Review the golden diff like a content diff, then commit tools/mcc/golden/, $STAGED_DIR/ AND $CHIBI_STAGED_DIR/ together."
   exit 0
 fi
 
@@ -303,4 +362,46 @@ else
   die "python3 not found — cannot run the staged-model coverage gate (tools/check_staged_models.py); install python3 and re-run."
 fi
 
-log "${_B}Determinism gate passed.${_R} Golden corpus, staged client pack, and mcc output are all current and deterministic."
+# --- 7. CHIBI STAGED CLIENT PACK (story #809): the committed res://meridian/chibi
+# copy matches a fresh `emit-pck --pack chibi`, and the chibi body source bytes are
+# staged. Same guarantee as the core staged pack (§5/§6) for the second theme mount
+# the dev realm loads (C9/#762): a clean checkout can never ship a stale/pre-roster
+# chibi pack or an unrenderable chibi body. Chibi has no golden corpus, so emit a
+# fresh single-pack chibi pck here and diff the committed mount against it.
+log "Chibi staged client pack: comparing $CHIBI_STAGED_DIR against a fresh emit-pck --pack $CHIBI_PACK_NS"
+CHIBI_RUN="$(mktemp -d)"
+emit_chibi_pck_into "$CHIBI_RUN"
+chibi_stale=0
+for f in "${CHIBI_STAGED_FILES[@]}"; do
+  if ! cmp -s "$CHIBI_RUN/$f" "$CHIBI_STAGED_DIR/$f"; then
+    chibi_stale=1
+    warn "STALE chibi staged pack file $CHIBI_STAGED_DIR/$f vs fresh emit:"
+    diff "$CHIBI_STAGED_DIR/$f" "$CHIBI_RUN/$f" 2>/dev/null | head -20 >&2 || true
+  fi
+done
+rm -rf "$CHIBI_RUN"
+for entry in "${CHIBI_STAGED_ART[@]}"; do
+  src="${entry%%:*}"; dst="$CHIBI_STAGED_DIR/${entry##*:}"
+  if ! cmp -s "$src" "$dst"; then
+    chibi_stale=1
+    warn "STALE chibi staged model source $dst vs $src"
+  fi
+done
+if [ "$chibi_stale" -ne 0 ]; then
+  die "chibi staged client pack is STALE — regenerate it with 'scripts/check-golden.sh --update-golden' and commit $CHIBI_STAGED_DIR/."
+fi
+ok "Chibi staged client pack matches the fresh emit (+ staged body sources match their content-tree sources)"
+
+# Staged-model coverage for the chibi mount too (check_staged_models is namespace-
+# aware: --staged's dir name scopes it to chibi:* refs), so a future forgotten
+# chibi body/hair source is caught exactly as §6 catches a core one.
+log "Chibi staged-model coverage: every committed chibi model has staged bytes"
+if command -v python3 >/dev/null 2>&1; then
+  python3 "$REPO_ROOT/tools/check_staged_models.py" \
+      --content "$REPO_ROOT/$CONTENT_DIR" --staged "$REPO_ROOT/$CHIBI_STAGED_DIR" \
+    || die "chibi staged-model coverage FAILED — add the missing model(s) to CHIBI_STAGED_ART in $(basename "${BASH_SOURCE[0]}") and re-run --update-golden."
+else
+  die "python3 not found — cannot run the chibi staged-model coverage gate (tools/check_staged_models.py); install python3 and re-run."
+fi
+
+log "${_B}Determinism gate passed.${_R} Golden corpus, staged client pack (core + chibi), and mcc output are all current and deterministic."

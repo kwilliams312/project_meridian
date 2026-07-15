@@ -214,6 +214,16 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             {{- end }}
+            {{- /* Realm content theme (chibi-theme design §4, #762). worldd reads
+                   MERIDIAN_REALM_THEME to resolve that pack's world_manifest row as
+                   PRIMARY (world_boot.cpp); unset ⇒ the baseline "core"/first-row
+                   behaviour. Only worldd consumes it (authd has no content), so it
+                   is rendered for the worldd daemon only, and only when a theme is
+                   set (a core realm renders nothing → unchanged boot). */ -}}
+            {{- if and (eq $daemon "worldd") $root.Values.realmTheme }}
+            - name: MERIDIAN_REALM_THEME
+              value: {{ $root.Values.realmTheme | quote }}
+            {{- end }}
             {{- with $cfg.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

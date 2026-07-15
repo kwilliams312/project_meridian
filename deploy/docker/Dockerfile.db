@@ -31,7 +31,23 @@ COPY content/   ./content/
 RUN cmake -S tools/mcc -B tools/mcc/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
     && cmake --build tools/mcc/build --target mcc
 # Emit the world-DB content DML (IF-4 world_manifest + the content INSERTs).
-RUN tools/mcc/build/mcc emit-sql content --out /world-content.sql
+# --pack core: after the chibi theme pack (content/chibi) merged, an unpinned
+# `emit-sql content` emits BOTH packs' rosters into one world DB, whose per-pack
+# roster_id PKs collide on load (story #770/#803). Each realm loads exactly ONE
+# pack (design 2026-07-14-chibi §4), so bake a single-pack world DB PER theme:
+#   * /world-content.sql        — the default `core` realm content (ptr/prod), and
+#   * /world-content-chibi.sql  — the `chibi` theme the dev realm loads (C9/#762);
+#     the dev overlay points mariadb.contentSeed.sqlPath at it.
+# The chibi bake is guarded so the image still builds on a core-only tree (e.g. a
+# checkout that predates the chibi pack); a realm only ever seeds the file its
+# overlay selects, so an absent chibi file is inert for a core realm.
+RUN tools/mcc/build/mcc emit-sql content --pack core --out /world-content.sql \
+    && if [ -d content/chibi ]; then \
+         tools/mcc/build/mcc emit-sql content --pack chibi --out /world-content-chibi.sql; \
+       else \
+         echo "content/chibi absent — skipping chibi world DB bake"; \
+         : > /world-content-chibi.sql; \
+       fi
 
 # ── Runtime stage: MariaDB 11 with the baked schema + content ────────────────
 FROM mariadb:11
@@ -49,3 +65,7 @@ COPY schema/sql/world/                    /schemas/world/
 # image serves both the ephemeral dev DB and the persistent PTR/Prod DBs; the
 # Job refreshes content idempotently on every deploy/promotion).
 COPY --from=content /world-content.sql /content/world-content.sql
+# The chibi theme's single-pack world DB (C9/#762) — the dev realm's content-seed
+# Job loads THIS instead of the core one (dev overlay contentSeed.sqlPath). Empty
+# on a core-only tree (the guarded bake above); inert unless a realm selects it.
+COPY --from=content /world-content-chibi.sql /content/world-content-chibi.sql

@@ -7,6 +7,18 @@
 # IP reaches both daemons. NOTE: authd does not yet advertise this IP in its
 # realm list (the realm DB row) — external real clients need that; tracked in #339.
 # The in-cluster load harness reaches the daemons by ClusterIP name regardless.
+
+# Realm content theme (chibi-theme design §4, C9/#762). The dev realm serves the
+# CHIBI pack as primary (6 colour races × sex + 4 classes) instead of core: worldd
+# gets MERIDIAN_REALM_THEME=chibi ⇒ resolves the chibi world_manifest row as
+# primary, retiring the old core roster for this realm. MUST stay in lockstep with
+# mariadb.contentSeed.sqlPath below (the chibi single-pack world DB) so the seeded
+# content matches the theme worldd resolves. The bot-runner load bots are engine-
+# free and theme-agnostic (they char-create roster-position race/class = chibi's
+# Red/Warrior); the human's Godot client mounts chibi locally via run-local. ptr/
+# prod leave this empty (core) until chibi is promoted onto their branches.
+realmTheme: chibi
+
 image:
   # tag is pinned to the immutable <short-sha> by cd.yml write-back — see the
   # machine-managed realms/dev/image.yaml overlay (issue #380). The "dev" here is
@@ -73,6 +85,14 @@ mariadb:
   # below is now belt-and-suspenders (idempotent) rather than the only line of
   # defense; it can be retired when the admin portal (#339) lands.
   persistence: { enabled: true, storageClass: "longhorn", size: "8Gi" }
+  # Content seed → the CHIBI single-pack world DB (C9/#762), matching realmTheme
+  # above. The meridian-db image bakes /content/world-content-chibi.sql (Dockerfile.db
+  # `emit-sql content --pack chibi`); pointing the content-seed Job at it loads
+  # chibi's world_manifest row (one pack ⇒ no core+chibi roster_id collision) into
+  # meridian_world, so worldd's theme=chibi primary resolves and the seed's IF-4
+  # hash-gate ties to the chibi row. Default (core) realms leave this unset.
+  contentSeed:
+    sqlPath: /content/world-content-chibi.sql
 
 # SHORT-TERM: seed the realm row (→ the shared LB IP) + devtester on every sync,
 # so the ephemeral dev DB is usable without hand-seeding. Remove when the admin
