@@ -16,7 +16,18 @@
 #   --foreground  Start and block until Ctrl-C (then tear everything down).
 #   --stop      Stop a previously-started background realm and remove the datadir.
 #
-# Requires a prior build (scripts/dev/build.sh).
+# Themes (#792): the realm serves the DEFAULT `core` content unless
+# MERIDIAN_REALM_THEME names another pack. Any non-core theme stands up a FULL
+# themed realm:
+#   MERIDIAN_REALM_THEME=chibi scripts/dev/run-local.sh
+# builds that pack's world DB (mcc emit-sql --pack), loads it into the throwaway
+# MariaDB (alongside the schema DDL), stages its client pack (mcc emit-pck --pack
+# -> client/project/meridian/<theme>/), and points worldd at it
+# (MERIDIAN_WORLDDB_* + MERIDIAN_REALM_THEME) so worldd boots on that pack's
+# manifest (content identity `<theme>@<version>`). Unset/`core` is unchanged and
+# fully back-compat (schema-only world DB, content-less worldd boot, nothing staged).
+#
+# Requires a prior build (scripts/dev/build.sh) — including mcc for a themed run.
 #
 # Ports/env (see docs/BUILDING-MACOS.md):
 #   authd   IF-1  127.0.0.1:7100 (TLS 1.3)
@@ -67,6 +78,19 @@ WORLDD_PORT=7200
 TEST_USER="devtester"
 TEST_PASS="devpassword"
 REALM_NAME="Meridian Dev Realm"
+
+# --- Content theme (#792). ---------------------------------------------------
+# Which pack the local realm serves. Default "core" preserves the historical
+# behaviour EXACTLY: db_load_schemas loads the world DDL only (no content rows),
+# worldd is wired without a world DB so it degrades to a content-less boot, and
+# nothing is staged. Any other theme (e.g. chibi) triggers the full themed
+# bring-up below: build + load that pack's world DB, stage its client pack, and
+# point worldd at it via MERIDIAN_REALM_THEME (the C1 realm-theme seam).
+REALM_THEME="${MERIDIAN_REALM_THEME:-core}"
+MCC="${BUILD_ROOT}/mcc/mcc"
+CONTENT_DIR="${REPO_ROOT}/content"
+CLIENT_STAGE_ROOT="${REPO_ROOT}/client/project"   # emit-pck writes <root>/meridian/<ns>/
+WORLD_DB_NAME="meridian_world"
 
 # --- --stop: tear down a previously-started background realm and exit. --------
 stop_realm() {
@@ -119,6 +143,13 @@ cull_stale_realm
 [ -x "$WORLDD" ]  || die "worldd not built. Run: scripts/dev/build.sh"
 [ -x "$ACCOUNT" ] || die "meridian-account not built. Run: scripts/dev/build.sh"
 
+# A themed run needs mcc (to build the pack's world DB + client pack) and the
+# pack's content tree. Fail early with an actionable message rather than midway.
+if [ "$REALM_THEME" != "core" ]; then
+  [ -x "$MCC" ] || die "MERIDIAN_REALM_THEME=${REALM_THEME} needs mcc, not built at ${MCC}. Run: scripts/dev/build.sh"
+  [ -d "${CONTENT_DIR}/${REALM_THEME}" ] || die "no content pack for theme '${REALM_THEME}' at ${CONTENT_DIR}/${REALM_THEME}"
+fi
+
 mkdir -p "${RUN_DIR}"
 
 # --- Self-signed TLS cert (generate once, reuse). ----------------------------
@@ -149,6 +180,33 @@ cleanup_daemons() {
 # --- Bring up the DB. --------------------------------------------------------
 db_start
 db_load_schemas
+
+# --- Theme content (#792): build + load the theme's world DB, stage its pack. -
+# db_load_schemas above loaded the world DDL (structure only). For a themed realm
+# we ALSO build the pack's world DB content with mcc and load it into meridian_world,
+# then stage the pack's client artifacts. Skipped for the default "core" (unchanged).
+if [ "$REALM_THEME" != "core" ]; then
+  THEME_WORLD_SQL="${RUN_DIR}/world-${REALM_THEME}.sql"
+  log "Building ${REALM_THEME} world DB (mcc emit-sql --pack ${REALM_THEME})"
+  "$MCC" emit-sql "${CONTENT_DIR}" --out "${THEME_WORLD_SQL}" --pack "${REALM_THEME}" \
+    || { db_stop; die "mcc emit-sql --pack ${REALM_THEME} failed"; }
+  # Load the mcc-produced content INTO meridian_world. world.sql is a self-contained
+  # single-pack dump (that pack's world_manifest row + only its content rows) and
+  # brackets its own SET FOREIGN_KEY_CHECKS=0/1, so pipe it through one connection.
+  _dbc "${WORLD_DB_NAME}" < "${THEME_WORLD_SQL}" \
+    || { db_stop; die "loading ${REALM_THEME} world.sql into ${WORLD_DB_NAME} failed"; }
+  theme_identity="$(_dbc -N "${WORLD_DB_NAME}" -e \
+    "SELECT CONCAT(pack_namespace,'@',pack_version) FROM world_manifest ORDER BY id_band LIMIT 1;" 2>/dev/null || true)"
+  ok "${REALM_THEME} world DB loaded (world_manifest: ${theme_identity:-<none>})"
+
+  # Stage the pack's client artifacts so the client can mount res://meridian/<theme>
+  # (coordinates with C11's mount). emit-pck writes pack.manifest.json + the M0
+  # directory-manifest pack under <root>/meridian/<ns>/.
+  log "Staging ${REALM_THEME} client pack (mcc emit-pck --pack ${REALM_THEME}) -> ${CLIENT_STAGE_ROOT}/meridian/${REALM_THEME}/"
+  "$MCC" emit-pck "${CONTENT_DIR}" --out "${CLIENT_STAGE_ROOT}" --pack "${REALM_THEME}" \
+    || { db_stop; die "mcc emit-pck --pack ${REALM_THEME} failed"; }
+  ok "${REALM_THEME} client pack staged at ${CLIENT_STAGE_ROOT}/meridian/${REALM_THEME}/"
+fi
 
 # --- Create a test account (auth DB). ----------------------------------------
 log "Creating test account '${TEST_USER}' via meridian-account"
@@ -195,11 +253,29 @@ env MERIDIAN_DB_HOST=127.0.0.1 MERIDIAN_DB_PORT="${MERIDIAN_DEV_DB_PORT}" \
 AUTHD_PID=$!
 echo "$AUTHD_PID" > "${AUTHD_PIDFILE}"
 
-log "Launching worldd (IF-2) on 127.0.0.1:${WORLDD_PORT}"
+# Theme (#792): a non-core realm points worldd at the world DB (so it runs the
+# IF-4 boot content verify instead of degrading content-less) and passes the theme
+# so worldd resolves that pack's manifest row as PRIMARY (content identity
+# `<theme>@<version>`; C1 seam). Default core leaves both unset -> unchanged boot.
+# The array is expanded with the ${a[@]+"${a[@]}"} guard so an empty array is safe
+# under `set -u` on bash 3.2 (macOS system bash).
+WORLDD_THEME_ENV=()
+if [ "$REALM_THEME" != "core" ]; then
+  WORLDD_THEME_ENV=(
+    "MERIDIAN_WORLDDB_HOST=127.0.0.1"
+    "MERIDIAN_WORLDDB_PORT=${MERIDIAN_DEV_DB_PORT}"
+    "MERIDIAN_WORLDDB_USER=root"
+    "MERIDIAN_WORLDDB_NAME=${WORLD_DB_NAME}"
+    "MERIDIAN_REALM_THEME=${REALM_THEME}"
+  )
+fi
+
+log "Launching worldd (IF-2) on 127.0.0.1:${WORLDD_PORT} (theme ${REALM_THEME})"
 env MERIDIAN_DB_HOST=127.0.0.1 MERIDIAN_DB_PORT="${MERIDIAN_DEV_DB_PORT}" \
     MERIDIAN_DB_USER=root MERIDIAN_DB_NAME=meridian_auth \
     MERIDIAN_CHARDB_HOST=127.0.0.1 MERIDIAN_CHARDB_PORT="${MERIDIAN_DEV_DB_PORT}" \
     MERIDIAN_CHARDB_USER=root MERIDIAN_CHARDB_NAME=meridian_characters \
+    ${WORLDD_THEME_ENV[@]+"${WORLDD_THEME_ENV[@]}"} \
   "$WORLDD" --cert "$CERT" --key "$KEY" --bind 127.0.0.1 --port "${WORLDD_PORT}" \
     --log-format text \
   >"${RUN_DIR}/worldd.log" 2>&1 &
@@ -246,6 +322,18 @@ case "$MODE" in
     else
       warn "realm smoke FAILED — realm table empty (GUI login would get 0 realms)"; rc=1
     fi
+    # Theme boot guard (#792): a themed realm must actually boot worldd ON that
+    # pack's content. worldd logs "world-DB boot OK — content <theme>@<ver> ..."
+    # once it resolves the manifest; assert that identity is in the log.
+    if [ "$REALM_THEME" != "core" ]; then
+      if grep -qE "content ${REALM_THEME}@" "${RUN_DIR}/worldd.log"; then
+        boot_line="$(grep -oE "content ${REALM_THEME}@[^ ]+" "${RUN_DIR}/worldd.log" | head -1)"
+        ok "worldd booted on ${REALM_THEME} content (${boot_line})"
+      else
+        warn "theme smoke FAILED — worldd.log shows no '${REALM_THEME}@' content identity:"
+        tail -15 "${RUN_DIR}/worldd.log" >&2; rc=1
+      fi
+    fi
     cleanup_daemons
     db_stop
     echo
@@ -268,6 +356,7 @@ case "$MODE" in
       echo "  worldd   127.0.0.1:${WORLDD_PORT}   (log: ${RUN_DIR}/worldd.log)"
       echo "  MariaDB  127.0.0.1:${MERIDIAN_DEV_DB_PORT}   account: ${TEST_USER} / ${TEST_PASS}"
       echo "  realm    id ${REALM_ID} '${REALM_NAME}' -> 127.0.0.1:${WORLDD_PORT}"
+      echo "  theme    ${REALM_THEME}"
     }
     print_summary
     # Block until a daemon dies or Ctrl-C.
@@ -285,6 +374,7 @@ case "$MODE" in
     echo "  worldd   127.0.0.1:${WORLDD_PORT}   (pid $(cat "${WORLDD_PIDFILE}"), log: ${RUN_DIR}/worldd.log)"
     echo "  MariaDB  127.0.0.1:${MERIDIAN_DEV_DB_PORT}   account: ${TEST_USER} / ${TEST_PASS}"
     echo "  realm    id ${REALM_ID} '${REALM_NAME}' -> 127.0.0.1:${WORLDD_PORT}"
+    echo "  theme    ${REALM_THEME}"
     echo
     echo "  Stop with:  scripts/dev/run-local.sh --stop"
     # Detach: don't let EXIT kill the backgrounded daemons.
