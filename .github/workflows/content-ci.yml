@@ -203,7 +203,11 @@ jobs:
         run: |
           set -euo pipefail
           out=build/content-out
-          sql_hash="$(grep -A3 'INSERT INTO world_manifest' "$out/world.sql" \
+          # world_manifest holds one row per pack (sorted by namespace), so select
+          # the `core` row specifically — this asserts the tie for the core pack we
+          # compare against below. A bare head -1 would grab whichever pack sorts
+          # first (e.g. `chibi`) and compare the wrong hash.
+          sql_hash="$(grep -F "('core'," "$out/world.sql" \
                        | grep -Eo "'[0-9a-f]{64}'" | head -1 | tr -d "'")"
           pck_hash="$(python3 -c "import json; print(json.load(open('$out/pck/meridian/core/pack.manifest.json'))['content_hash'])")"
           echo "IF-4 world_manifest.content_hash: ${sql_hash:-<none>}"

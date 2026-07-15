@@ -141,8 +141,10 @@ CONTENT_SCHEMA_VERSION="$(jq -r '.content_schema_version' "$PACK_MANIFEST")"
 MCC_VERSION="$(jq -r '.mcc_version'              "$PACK_MANIFEST")"
 PACK_HASH="$(jq -r '.content_hash'               "$PACK_MANIFEST")"
 
-# IF-4 world_manifest content_hash (the sole 64-hex token in the INSERT tuple).
-SQL_HASH="$(grep -A3 'INSERT INTO world_manifest' "$WORLD_SQL" \
+# IF-4 world_manifest content_hash for $PACK_NS. world_manifest holds one row per
+# pack (sorted by namespace), so select the $PACK_NS row rather than the first —
+# a bare head -1 would grab whichever pack sorts first and pin the wrong hash.
+SQL_HASH="$(grep -F "('${PACK_NS}'," "$WORLD_SQL" \
              | grep -Eo "'[0-9a-f]{64}'" | head -1 | tr -d "'")"
 [ -n "$SQL_HASH" ]  || die "could not extract IF-4 world_manifest content_hash from $WORLD_SQL"
 [ -n "$PACK_HASH" ] || die "could not read IF-5 pack.manifest content_hash from $PACK_MANIFEST"
