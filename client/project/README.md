@@ -50,6 +50,44 @@ remains the fallback body whenever assembly can't proceed:
   the piece stays hidden and its geoset hides are **not** applied, so a body region
   is never left uncovered; unknown dye → the item's authored colors).
 
+## Theme-driven pack mount (`MERIDIAN_REALM_THEME`, #791)
+
+`MeridianContentDB` mounts the staged pack under `res://meridian/<theme>` and the
+whole client resolves visuals from it. Which theme it mounts is selected by
+`content/content_db.gd → resolve_pack_dir()`, in precedence order:
+
+1. **`MERIDIAN_PACK_DIR`** — an explicit full pack directory (dev/CI pointing at a
+   fresh `mcc emit-pck` build). Wins over everything.
+2. **`MERIDIAN_REALM_THEME`** — the realm's content theme namespace →
+   `res://meridian/<theme>`. This **mirrors worldd's `MERIDIAN_REALM_THEME`**
+   (`server/worldd/world_boot` — the realm's primary `pack_namespace`), so the
+   client mounts the same pack the connected realm serves: a chibi realm
+   (`theme=chibi`) shows chibi. The value is sanitised to a single `[a-z0-9_]`
+   segment (a `/`, `..`, or other unsafe value is rejected and falls back to core,
+   so it can never escape `res://meridian/`).
+3. **Default → `res://meridian/core`** (unchanged pre-#791 behaviour, back-compat).
+
+The realm also advertises its content hash in the IF-2 `HandshakeOk` (`content_hash`)
+for a later **fail-closed content-hash tie** at enter-world
+(`MeridianPackMount.set_expected_content_hash` — `world.fbs HandshakeOk.content_hash`
+already carries it). Until that handshake-driven verification is wired, the
+`MERIDIAN_REALM_THEME` selector is the local-dev bridge for choosing which staged
+pack to mount. `MeridianPackMount.mount_and_verify("res://meridian/<theme>")`
+already resolves the mounted pack's `content_hash` + `content_version`
+(`"<namespace>@<version>"`), so the hash tie is a thin follow-up.
+
+Staged packs live under `client/project/meridian/<theme>/` (the `mcc emit-pck`
+artifacts: `pack.manifest.json`, `pack.contents.jsonl`, `pack.data.json`). `core`
+and `chibi` both ship. Headless proof (build the GDExtension first, then seed the
+global-class cache with one `--import`):
+
+```
+scripts/dev/build-client.sh
+godot --headless --path client/project --import
+godot --headless --path client/project --script res://content/content_db_verify.gd        # core (baseline)
+godot --headless --path client/project --script res://content/content_db_theme_verify.gd   # theme mount (#791)
+```
+
 ## Rendering
 
 Forward+ per TD-02: **D3D12 on Windows, native Metal on macOS Apple Silicon**.

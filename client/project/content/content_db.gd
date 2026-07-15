@@ -46,11 +46,35 @@ extends Node
 class_name MeridianContentDB
 
 ## The env var a dev/CI run can point at a freshly built pack (e.g.
-## build/content-out/pck/meridian/core) instead of the staged res:// copy.
+## build/content-out/pck/meridian/core) instead of the staged res:// copy. This is
+## an EXPLICIT full pack directory and wins over the theme selection below.
 const PACK_DIR_ENV: String = "MERIDIAN_PACK_DIR"
 
-## The staged pack the client ships (mcc emit-pck output, res:// layout root).
-const DEFAULT_PACK_DIR: String = "res://meridian/core"
+## The realm's selected content THEME — the pack namespace whose staged mount the
+## client loads (issue #791; design §4/§8). Mirrors worldd's MERIDIAN_REALM_THEME
+## (server/worldd/world_boot: the realm's primary pack_namespace) so the client
+## mounts the SAME pack the connected realm serves — a chibi realm (theme=chibi)
+## shows chibi. Default "core" keeps the pre-#791 behaviour (back-compat). The
+## handshake also advertises the realm's content_hash (IF-2 HandshakeOk) for a
+## later fail-closed content-hash tie at enter-world (MeridianPackMount
+## .set_expected_content_hash); until that path is wired, this theme selector is the
+## local-dev bridge that picks WHICH res://meridian/<ns> to mount.
+const REALM_THEME_ENV: String = "MERIDIAN_REALM_THEME"
+
+## The res:// root every staged theme pack lives under: res://meridian/<theme>
+## (e.g. res://meridian/core, res://meridian/chibi). MeridianPackMount mounts this
+## same res:// layout (client SAD §2.3).
+const PACK_MOUNT_ROOT: String = "res://meridian"
+
+## The baseline theme when MERIDIAN_REALM_THEME is unset (matches worldd's
+## kDefaultRealmTheme). "core" is the IF-9 baseline namespace.
+const DEFAULT_THEME: String = "core"
+
+## The staged pack the client ships when no override/theme is set (the res://
+## meridian/core mount). Kept as a named constant for callers/tests that reference
+## the default explicitly; derived from the root + default theme so the two never
+## drift.
+const DEFAULT_PACK_DIR: String = PACK_MOUNT_ROOT + "/" + DEFAULT_THEME
 
 ## The authored-default sentinel a dye miss returns (contract ① §9: "unknown dye →
 ## authored colors"). Fully transparent so a caller can tell a real color from a
@@ -87,18 +111,62 @@ static func instance():
 	return _instance
 
 
+## Resolve the pack directory the client mounts, applying the #791 precedence:
+##   1. MERIDIAN_PACK_DIR — an EXPLICIT full pack dir (dev/CI fresh-build override).
+##   2. MERIDIAN_REALM_THEME — the realm theme namespace → res://meridian/<theme>
+##      (mirrors worldd's primary pack_namespace, so the client mounts the pack the
+##      connected realm serves; the theme is sanitised to a single path segment).
+##   3. Default → res://meridian/core (unchanged pre-#791 behaviour, back-compat).
+## Static so the boot flow, tests, and any future handshake-driven resolver share
+## one source of truth for "which staged pack does this client mount".
+static func resolve_pack_dir() -> String:
+	var override_dir := OS.get_environment(PACK_DIR_ENV)
+	if not override_dir.is_empty():
+		return override_dir
+	return PACK_MOUNT_ROOT.path_join(resolve_theme())
+
+
+## The realm theme namespace this client mounts: MERIDIAN_REALM_THEME when set to a
+## safe single segment, else DEFAULT_THEME ("core"). A theme carrying a path
+## separator, "..", or other unsafe characters is REJECTED (falls back to core with
+## a warning) so an env value can never escape res://meridian/ into an arbitrary
+## mount. The theme is a pack namespace — the same [a-z0-9_] shape mcc allocates.
+static func resolve_theme() -> String:
+	var theme := OS.get_environment(REALM_THEME_ENV).strip_edges()
+	if theme.is_empty():
+		return DEFAULT_THEME
+	if not _is_safe_theme(theme):
+		push_warning("MeridianContentDB: ignoring unsafe MERIDIAN_REALM_THEME '%s' — falling back to '%s'." % [theme, DEFAULT_THEME])
+		return DEFAULT_THEME
+	return theme
+
+
+## A theme namespace is a single lowercase [a-z0-9_] path segment (mcc's namespace
+## shape). Rejects empty, path separators, "..", and anything that could traverse
+## out of res://meridian/.
+static func _is_safe_theme(theme: String) -> bool:
+	if theme.is_empty():
+		return false
+	for c in theme:
+		var ok := (c >= "a" and c <= "z") or (c >= "0" and c <= "9") or c == "_"
+		if not ok:
+			return false
+	return true
+
+
 func _init() -> void:
 	# First instance wins the singleton slot (the autoload in the app — it is
 	# constructed at boot before any consumer; the lazily-created one in verifies).
 	if _instance == null:
 		_instance = self
-	# Resolve the pack directory: an explicit env override wins (dev/CI pointing at a
-	# fresh build), else the staged res:// pack. Loading needs no scene tree, so it
-	# runs here (not _ready) and works identically for the autoload and standalone
-	# instances. A load failure is NOT fatal — the DB stays empty and callers use
-	# their content-missing fallback (spec §6).
-	var override_dir := OS.get_environment(PACK_DIR_ENV)
-	var dir := override_dir if not override_dir.is_empty() else DEFAULT_PACK_DIR
+	# Resolve the pack directory (issue #791): an explicit MERIDIAN_PACK_DIR wins
+	# (dev/CI pointing at a fresh build), else the realm THEME selects
+	# res://meridian/<theme> (MERIDIAN_REALM_THEME, default "core" — mirrors worldd
+	# so the client mounts the pack the connected realm serves). Loading needs no
+	# scene tree, so it runs here (not _ready) and works identically for the autoload
+	# and standalone instances. A load failure is NOT fatal — the DB stays empty and
+	# callers use their content-missing fallback (spec §6).
+	var dir := resolve_pack_dir()
 	if not load_from(dir):
 		push_warning("MeridianContentDB: no pack loaded from '%s' — content-dependent UI degrades to its fallback (spec ②/§6)." % dir)
 
