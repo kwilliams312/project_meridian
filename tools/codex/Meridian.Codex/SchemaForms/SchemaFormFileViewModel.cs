@@ -24,17 +24,19 @@ public sealed partial class SchemaFormFileViewModel : ObservableObject
             IsDirty = document.ToYaml() != _baseline;
             Revalidate();
             Status = IsValid ? "Valid changes are ready to save." : "Fix the validation errors before saving.";
+            OnPropertyChanged(nameof(CanSave));
             OnPropertyChanged(nameof(SaveStateDescription));
             SaveCommand.NotifyCanExecuteChanged();
         };
     }
 
     public string FilePath { get; }
-    public string Header => $"Experimental schema form — {Path.GetFileName(FilePath)}";
+    public string Header => $"Schema editor — {Path.GetFileName(FilePath)}";
     public SchemaFormDocument Document { get; }
     public SchemaFormViewModel Form { get; }
     public IReadOnlyList<SchemaDiagnostic> Diagnostics { get; private set; } = [];
     public bool IsValid => Diagnostics.Count == 0;
+    public bool CanSave => IsDirty && IsValid;
     public string SaveStateDescription => !IsValid
         ? "Save unavailable. Fix the field errors described in the form."
         : !IsDirty
@@ -45,7 +47,7 @@ public sealed partial class SchemaFormFileViewModel : ObservableObject
         : $"{Diagnostics.Count} validation error{(Diagnostics.Count == 1 ? string.Empty : "s")}. {Diagnostics[0].Message}";
 
     [ObservableProperty] private bool _isDirty;
-    [ObservableProperty] private string _status = "Loaded. This is the internal story #668 renderer preview.";
+    [ObservableProperty] private string _status = "Loaded and validated against the content schema.";
 
     public static SchemaFormFileViewModel? TryCreate(string[]? args, out string? error)
     {
@@ -79,9 +81,9 @@ public sealed partial class SchemaFormFileViewModel : ObservableObject
         }
     }
 
-    private bool CanSave() => IsDirty && IsValid;
+    private bool CanExecuteSave() => CanSave;
 
-    [RelayCommand(CanExecute = nameof(CanSave))]
+    [RelayCommand(CanExecute = nameof(CanExecuteSave))]
     private void Save() => TrySave();
 
     public bool TrySave()
@@ -97,6 +99,7 @@ public sealed partial class SchemaFormFileViewModel : ObservableObject
         _baseline = Document.ToYaml();
         IsDirty = false;
         Status = $"Saved {Path.GetFileName(FilePath)}.";
+        OnPropertyChanged(nameof(CanSave));
         OnPropertyChanged(nameof(SaveStateDescription));
         SaveCommand.NotifyCanExecuteChanged();
         return true;
@@ -109,6 +112,7 @@ public sealed partial class SchemaFormFileViewModel : ObservableObject
         OnPropertyChanged(nameof(Diagnostics));
         OnPropertyChanged(nameof(IsValid));
         OnPropertyChanged(nameof(ValidationSummary));
+        OnPropertyChanged(nameof(CanSave));
         OnPropertyChanged(nameof(SaveStateDescription));
         SaveCommand.NotifyCanExecuteChanged();
     }

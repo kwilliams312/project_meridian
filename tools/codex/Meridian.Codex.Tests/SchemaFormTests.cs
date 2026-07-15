@@ -6,6 +6,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.VisualTree;
+using Meridian.Codex.Controls;
 using Meridian.Codex.SchemaForms;
 using Meridian.Codex.Views;
 using Xunit;
@@ -628,6 +629,49 @@ public sealed class SchemaFormTests
 
 public sealed class SchemaFormHeadlessTests
 {
+    [AvaloniaTheory]
+    [InlineData(1440)]
+    [InlineData(520)]
+    public void Themed_schema_host_preserves_guidance_icon_geometry_and_sticky_save(double width)
+    {
+        var copy = ContentFixtures.CopyToTemp("abilities/cleave_strike.ability.yaml");
+        var vm = SchemaFormFileViewModel.TryCreate(["--schema-form", "ability", copy], out _)!;
+        var window = new SchemaFormWindow { DataContext = vm };
+        window.Show();
+        var form = Assert.Single(window.GetVisualDescendants().OfType<SchemaFormView>());
+
+        // Avalonia.Headless fixes top-level geometry at 1024px. Constrain the
+        // actual form host explicitly to exercise both supported layout classes.
+        form.InvalidateMeasure();
+        form.Measure(new Size(width, 700));
+        form.Arrange(new Rect(0, 0, width, 700));
+
+        var cooldown = vm.Form.Root.Children.Single(field => field.Path == "cooldown_ms");
+        var fieldView = form.GetVisualDescendants().OfType<SchemaFieldView>()
+            .Single(view => ReferenceEquals(view.DataContext, cooldown));
+        var header = Assert.IsType<Grid>(fieldView.FindControl<Grid>("FieldHeader"));
+        var information = fieldView.GetVisualDescendants().OfType<Button>()
+            .Single(button => AutomationProperties.GetAutomationId(button) == cooldown.InformationAutomationId);
+        var tooltip = Assert.IsType<TextBlock>(ToolTip.GetTip(information));
+
+        Assert.Equal(width, form.Bounds.Width);
+        Assert.InRange(information.Bounds.Width, 31.5, 32.5);
+        Assert.InRange(information.Bounds.Height, 31.5, 32.5);
+        Assert.True(information.Bounds.Right <= header.Bounds.Width + 0.5);
+        Assert.Equal(cooldown.InformationText, tooltip.Text);
+        Assert.Contains(fieldView.GetVisualAncestors().OfType<Border>(),
+            border => border.Classes.Contains("card"));
+
+        var actionBar = Assert.Single(window.GetVisualDescendants().OfType<EditorActionBar>());
+        var save = Assert.Single(actionBar.GetVisualDescendants().OfType<Button>());
+        Assert.Equal("Save content file", AutomationProperties.GetName(save));
+        Assert.Equal(vm.SaveStateDescription, AutomationProperties.GetHelpText(save));
+        Assert.Equal(vm.SaveStateDescription, AutomationProperties.GetItemStatus(save));
+        Assert.False(save.IsEffectivelyEnabled);
+        Assert.True(actionBar.Bounds.Bottom <= window.Bounds.Bottom);
+        window.Close();
+    }
+
     [AvaloniaFact]
     public void Representative_pack_npc_item_and_ability_forms_expose_field_semantics()
     {
@@ -932,7 +976,8 @@ public sealed class SchemaFormHeadlessTests
         window.Show();
 
         Assert.Contains(window.GetVisualDescendants().OfType<TextBlock>(), block => block.Text?.Contains(Path.GetFileName(copy)) == true);
-        var save = Assert.Single(window.GetVisualDescendants().OfType<Button>(), button => button.Content?.ToString() == "Save");
+        var save = Assert.Single(window.GetVisualDescendants().OfType<Button>(),
+            button => button.Content?.ToString() == "Save content file");
         Assert.False(save.Command!.CanExecute(save.CommandParameter));
     }
 }

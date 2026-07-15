@@ -4,13 +4,15 @@
              xmlns:views="using:Meridian.Codex.Views"
              x:Class="Meridian.Codex.Views.SchemaFormView"
              x:DataType="sf:SchemaFormViewModel">
-  <ScrollViewer>
-    <ItemsControl ItemsSource="{Binding Root.Children}" Margin="16">
-      <ItemsControl.ItemTemplate>
-        <DataTemplate x:DataType="sf:SchemaFieldViewModel">
-          <views:SchemaFieldView />
-        </DataTemplate>
-      </ItemsControl.ItemTemplate>
-    </ItemsControl>
+  <ScrollViewer Background="{DynamicResource CodexWorkspaceBrush}">
+    <Border x:Name="SchemaEditorSheet" Classes="card" Margin="28" MaxWidth="960" HorizontalAlignment="Stretch">
+      <ItemsControl ItemsSource="{Binding Root.Children}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="sf:SchemaFieldViewModel">
+            <views:SchemaFieldView />
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </Border>
   </ScrollViewer>
 </UserControl>

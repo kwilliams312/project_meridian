@@ -1,0 +1,57 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:Meridian.Codex.Controls"
+             x:Class="Meridian.Codex.Controls.EditorSplitView"
+             x:Name="SplitView"
+             x:DataType="controls:EditorSplitView">
+  <Grid x:Name="LayoutGrid">
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="*" MinWidth="360" />
+      <ColumnDefinition Width="5" />
+      <ColumnDefinition Width="340" MinWidth="0" MaxWidth="560" />
+    </Grid.ColumnDefinitions>
+
+    <ContentPresenter x:Name="FormPresenter" Grid.Column="0"
+                      Content="{Binding FormContent, ElementName=SplitView}"
+                      Background="{DynamicResource CodexWorkspaceBrush}"
+                      HorizontalContentAlignment="Stretch"
+                      VerticalContentAlignment="Stretch" />
+
+    <GridSplitter x:Name="PreviewSplitter"
+                  Grid.Column="1"
+                  ResizeDirection="Columns"
+                  Background="{DynamicResource CodexBorderSubtleBrush}"
+                  AutomationProperties.Name="Resize YAML preview" />
+
+    <Border x:Name="PreviewPane"
+            Grid.Column="2"
+            Background="{DynamicResource CodexPreviewBrush}"
+            BorderBrush="{DynamicResource CodexBorderSubtleBrush}"
+            BorderThickness="1,0,0,0">
+      <Grid RowDefinitions="Auto,*">
+        <Border Padding="14,10" BorderBrush="{DynamicResource CodexBorderSubtleBrush}" BorderThickness="0,0,0,1">
+          <Grid ColumnDefinitions="*,Auto">
+            <StackPanel Spacing="2">
+              <TextBlock Text="YAML preview" FontWeight="SemiBold" />
+              <TextBlock Classes="muted" Text="Read-only source" FontSize="12" />
+            </StackPanel>
+            <Button Grid.Column="1" Classes="quiet" Content="Hide" Click="CollapsePreview"
+                    AutomationProperties.Name="Hide YAML preview" />
+          </Grid>
+        </Border>
+        <ScrollViewer Grid.Row="1" Padding="14">
+          <TextBox Text="{Binding PreviewText, ElementName=SplitView}"
+                   IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
+                   FontFamily="Cascadia Code,Menlo,Consolas,monospace" FontSize="12"
+                   BorderThickness="0" Background="Transparent"
+                   AutomationProperties.Name="YAML preview source" />
+        </ScrollViewer>
+      </Grid>
+    </Border>
+
+    <Button x:Name="ShowPreviewButton"
+            Grid.Column="2" Width="56" HorizontalAlignment="Right" VerticalAlignment="Top"
+            Margin="0,12,0,0" Padding="6,10" Content="YAML" IsVisible="False"
+            Click="ExpandPreview" AutomationProperties.Name="Show YAML preview" />
+  </Grid>
+</UserControl>

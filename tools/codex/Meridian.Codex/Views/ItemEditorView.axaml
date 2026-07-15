@@ -3,41 +3,28 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:Meridian.Codex.ViewModels"
+             xmlns:controls="using:Meridian.Codex.Controls"
              mc:Ignorable="d" d:DesignWidth="640" d:DesignHeight="700"
              x:Class="Meridian.Codex.Views.ItemEditorView"
              x:DataType="vm:ItemEditorViewModel">
 
-  <UserControl.Styles>
-    <Style Selector="TextBlock.section">
-      <Setter Property="FontSize" Value="16" />
-      <Setter Property="FontWeight" Value="SemiBold" />
-      <Setter Property="Margin" Value="0,12,0,4" />
-    </Style>
-    <Style Selector="TextBlock.field">
-      <Setter Property="VerticalAlignment" Value="Center" />
-      <Setter Property="Margin" Value="0,0,8,0" />
-    </Style>
-  </UserControl.Styles>
-
   <DockPanel>
 
     <!-- Command + file bar. -->
-    <Border DockPanel.Dock="Top" Padding="8" Background="{DynamicResource SystemControlBackgroundListLowBrush}">
-      <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto" RowDefinitions="Auto,Auto">
+    <Border DockPanel.Dock="Top" Classes="toolbar">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto" RowDefinitions="Auto,Auto">
         <Button Content="_New" Command="{Binding NewCommand}" Margin="0,0,8,0"
                 AutomationProperties.Name="New item" />
         <Button Grid.Column="1" Content="_Open…" Command="{Binding OpenCommand}" Margin="0,0,8,0"
                 AutomationProperties.Name="Open item file"
                 AutomationProperties.HelpText="Choose a Meridian item YAML file using the system file picker." />
-        <Button Grid.Column="2" Content="_Save" Command="{Binding SaveCommand}" Margin="0,0,8,0"
-                AutomationProperties.Name="Save item" />
-        <TextBlock Grid.Column="3" Text="{Binding DisplayPath}" TextTrimming="CharacterEllipsis" Margin="0,0,8,0"
+        <TextBlock Grid.Column="2" Classes="muted" Text="{Binding DisplayPath}" TextTrimming="CharacterEllipsis" Margin="8,0"
                    VerticalAlignment="Center" ToolTip.Tip="{Binding FilePath}"
                    AutomationProperties.Name="Selected item file"
                    AutomationProperties.HelpText="The compact selected path. Use Copy full path to access the complete location." />
-        <Button Grid.Column="4" Content="Copy full path" Command="{Binding CopyFullPathCommand}"
+        <Button Grid.Column="3" Classes="quiet" Content="Copy full path" Command="{Binding CopyFullPathCommand}"
                 AutomationProperties.Name="Copy full item path" />
-        <TextBox Grid.Row="1" Grid.ColumnSpan="5" Margin="0,8,0,0"
+        <TextBox Grid.Row="1" Grid.ColumnSpan="4" Margin="0,8,0,0"
                  IsVisible="{Binding ShowManualFilePath}" Text="{Binding FilePath}"
                  Watermark="Manual item YAML path (native picker unavailable)"
                  AutomationProperties.Name="Manual item file path"
@@ -46,21 +33,37 @@
     </Border>
 
     <!-- Validation + status bar. -->
-    <Border DockPanel.Dock="Bottom" Padding="8,4" Background="{DynamicResource SystemControlBackgroundListLowBrush}">
-      <StackPanel Spacing="2">
-        <TextBlock Text="{Binding StatusText}" />
-        <TextBlock Text="{Binding ValidationMessage}" FontSize="11" Opacity="0.8" TextWrapping="Wrap" />
-      </StackPanel>
-    </Border>
+    <StackPanel DockPanel.Dock="Bottom">
+      <Border Classes="status-bar">
+        <StackPanel Spacing="2">
+          <TextBlock Text="{Binding StatusText}" />
+          <TextBlock Classes="muted" Text="{Binding ValidationMessage}" FontSize="12" TextWrapping="Wrap" />
+        </StackPanel>
+      </Border>
+      <controls:EditorActionBar ActionText="Save item"
+                                ActionCommand="{Binding SaveCommand}"
+                                IsActionEnabled="{Binding IsValid}"
+                                StateDescription="{Binding ValidationMessage}" />
+    </StackPanel>
 
-    <Grid ColumnDefinitions="*,320">
+    <controls:EditorSplitView PreviewText="{Binding PreviewYaml}">
+      <controls:EditorSplitView.FormContent>
 
       <!-- Form. -->
-      <ScrollViewer Grid.Column="0" Padding="16">
-        <StackPanel Spacing="4">
+      <ScrollViewer Background="{DynamicResource CodexWorkspaceBrush}">
+        <Border x:Name="ItemEditorSheet" Classes="editor-sheet">
+        <StackPanel Spacing="8">
+
+          <Border Classes="editor-heading">
+            <StackPanel Spacing="4">
+              <TextBlock Classes="page-title" Text="Item editor" />
+              <TextBlock Classes="muted" Text="Classification, equipment rendering, effects, stats, and economy for one item."
+                         TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
 
           <TextBlock Classes="section" Text="Identity / classification" />
-          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+          <Grid Classes="form-grid" ColumnDefinitions="176,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
             <TextBlock Grid.Row="0" Grid.Column="0" Classes="field" Text="ID" />
             <TextBox   Grid.Row="0" Grid.Column="1" Text="{Binding Id}" />
             <TextBlock Grid.Row="1" Grid.Column="0" Classes="field" Text="Name" />
@@ -108,7 +111,7 @@
                             ItemsSource="{Binding $parent[ItemsControl].((vm:ItemEditorViewModel)DataContext).StatKeys}"
                             SelectedItem="{Binding Stat}" />
                   <TextBox Width="90" Watermark="amount" Text="{Binding Amount}" />
-                  <Button Content="✕"
+                  <Button Classes="danger" Content="Remove"
                           Command="{Binding $parent[ItemsControl].((vm:ItemEditorViewModel)DataContext).RemoveStatCommand}"
                           CommandParameter="{Binding}" />
                 </StackPanel>
@@ -118,7 +121,7 @@
           <Button Content="+ Add stat" Command="{Binding AddStatCommand}" HorizontalAlignment="Left" />
 
           <TextBlock Classes="section" Text="Weapon / armor" />
-          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto">
+          <Grid Classes="form-grid" ColumnDefinitions="176,*" RowDefinitions="Auto,Auto,Auto">
             <TextBlock Grid.Row="0" Grid.Column="0" Classes="field" Text="Damage (min / max)" />
             <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="8">
               <TextBox Width="80" Text="{Binding WeaponDamageMin}" />
@@ -143,7 +146,7 @@
                   <ComboBox Width="90"
                             ItemsSource="{Binding $parent[ItemsControl].((vm:ItemEditorViewModel)DataContext).Mirrors}"
                             SelectedItem="{Binding Mirror}" />
-                  <Button Content="✕"
+                  <Button Classes="danger" Content="Remove"
                           Command="{Binding $parent[ItemsControl].((vm:ItemEditorViewModel)DataContext).RemoveWornModelCommand}"
                           CommandParameter="{Binding}" />
                 </StackPanel>
@@ -151,7 +154,7 @@
             </ItemsControl.ItemTemplate>
           </ItemsControl>
           <Button Content="+ Add worn model" Command="{Binding AddWornModelCommand}" HorizontalAlignment="Left" />
-          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto" Margin="0,8,0,0">
+          <Grid Classes="form-grid" ColumnDefinitions="176,*" RowDefinitions="Auto" Margin="0,8,0,0">
             <TextBlock Grid.Row="0" Grid.Column="0" Classes="field" Text="Attach / sheath" />
             <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="8">
               <ComboBox Width="130" ItemsSource="{Binding AttachSockets}" SelectedItem="{Binding WornAttachSocket}" />
@@ -166,7 +169,7 @@
                   <ComboBox Width="140"
                             ItemsSource="{Binding $parent[ItemsControl].((vm:ItemEditorViewModel)DataContext).GeosetRegions}"
                             SelectedItem="{Binding Token}" />
-                  <Button Content="✕"
+                  <Button Classes="danger" Content="Remove"
                           Command="{Binding $parent[ItemsControl].((vm:ItemEditorViewModel)DataContext).RemoveWornHideCommand}"
                           CommandParameter="{Binding}" />
                 </StackPanel>
@@ -182,7 +185,7 @@
                   <ComboBox Width="140"
                             ItemsSource="{Binding $parent[ItemsControl].((vm:ItemEditorViewModel)DataContext).DyeChannels}"
                             SelectedItem="{Binding Token}" />
-                  <Button Content="✕"
+                  <Button Classes="danger" Content="Remove"
                           Command="{Binding $parent[ItemsControl].((vm:ItemEditorViewModel)DataContext).RemoveWornDyeChannelCommand}"
                           CommandParameter="{Binding}" />
                 </StackPanel>
@@ -192,7 +195,7 @@
           <Button Content="+ Add dye channel" Command="{Binding AddWornDyeChannelCommand}" HorizontalAlignment="Left" />
 
           <TextBlock Classes="section" Text="Effects" />
-          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto">
+          <Grid Classes="form-grid" ColumnDefinitions="176,*" RowDefinitions="Auto">
             <TextBlock Grid.Row="0" Grid.Column="0" Classes="field" Text="On use (ability)" />
             <TextBox   Grid.Row="0" Grid.Column="1" Watermark="ability ref" Text="{Binding OnUse}" />
           </Grid>
@@ -202,7 +205,7 @@
               <DataTemplate x:DataType="vm:ItemOnEquipRowViewModel">
                 <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
                   <TextBox Width="220" Watermark="ability ref" Text="{Binding Ability}" />
-                  <Button Content="✕"
+                  <Button Classes="danger" Content="Remove"
                           Command="{Binding $parent[ItemsControl].((vm:ItemEditorViewModel)DataContext).RemoveOnEquipCommand}"
                           CommandParameter="{Binding}" />
                 </StackPanel>
@@ -212,7 +215,7 @@
           <Button Content="+ Add on-equip effect" Command="{Binding AddOnEquipCommand}" HorizontalAlignment="Left" />
 
           <TextBlock Classes="section" Text="Price" />
-          <Grid ColumnDefinitions="140,*" RowDefinitions="Auto">
+          <Grid Classes="form-grid" ColumnDefinitions="176,*" RowDefinitions="Auto">
             <TextBlock Grid.Row="0" Grid.Column="0" Classes="field" Text="Sell / buy (copper)" />
             <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="8">
               <TextBox Width="100" Watermark="sell" Text="{Binding PriceSell}" />
@@ -221,21 +224,9 @@
           </Grid>
 
         </StackPanel>
+        </Border>
       </ScrollViewer>
-
-      <!-- Live YAML preview — proves the round-trip the CST layer guarantees. -->
-      <Border Grid.Column="1" BorderThickness="1,0,0,0"
-              BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
-        <DockPanel>
-          <TextBlock DockPanel.Dock="Top" Text="YAML preview" FontWeight="SemiBold" Margin="8" />
-          <ScrollViewer Padding="8">
-            <TextBox Text="{Binding PreviewYaml}" IsReadOnly="True" AcceptsReturn="True"
-                     FontFamily="Cascadia Code,Menlo,Consolas,monospace" FontSize="12"
-                     BorderThickness="0" Background="Transparent" />
-          </ScrollViewer>
-        </DockPanel>
-      </Border>
-
-    </Grid>
+      </controls:EditorSplitView.FormContent>
+    </controls:EditorSplitView>
   </DockPanel>
 </UserControl>
