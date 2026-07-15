@@ -215,6 +215,10 @@ int main() {
     // --- 1. mcc emit-sql content --pack chibi -> world.sql. --------------------
     const fs::path world_sql = scratch / "world.sql";
     {
+        // --pack chibi: emit the SINGLE pack this Chibi-specific harness exercises
+        // (one pack per realm, design §4). Without --pack, the merged content/ tree
+        // emits both packs' per-pack roster_id 1-N rows into one DB and the `race`/
+        // `class` primary keys collide on load (#798).
         std::string cmd = "\"" + mcc + "\" emit-sql \"" + std::string(CHIBI_CONTENT_DIR) +
                           "\" --pack chibi --out \"" + world_sql.string() + "\" >" +
                           (scratch / "emit.log").string() + " 2>&1";
