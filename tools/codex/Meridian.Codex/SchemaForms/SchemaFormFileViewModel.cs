@@ -24,6 +24,7 @@ public sealed partial class SchemaFormFileViewModel : ObservableObject
             IsDirty = document.ToYaml() != _baseline;
             Revalidate();
             Status = IsValid ? "Valid changes are ready to save." : "Fix the validation errors before saving.";
+            OnPropertyChanged(nameof(SaveStateDescription));
             SaveCommand.NotifyCanExecuteChanged();
         };
     }
@@ -34,6 +35,11 @@ public sealed partial class SchemaFormFileViewModel : ObservableObject
     public SchemaFormViewModel Form { get; }
     public IReadOnlyList<SchemaDiagnostic> Diagnostics { get; private set; } = [];
     public bool IsValid => Diagnostics.Count == 0;
+    public string SaveStateDescription => !IsValid
+        ? "Save unavailable. Fix the field errors described in the form."
+        : !IsDirty
+            ? "Save unavailable. There are no unsaved changes."
+            : "Save is available. Valid changes are ready to write.";
     public string? ValidationSummary => IsValid
         ? null
         : $"{Diagnostics.Count} validation error{(Diagnostics.Count == 1 ? string.Empty : "s")}. {Diagnostics[0].Message}";
@@ -91,6 +97,7 @@ public sealed partial class SchemaFormFileViewModel : ObservableObject
         _baseline = Document.ToYaml();
         IsDirty = false;
         Status = $"Saved {Path.GetFileName(FilePath)}.";
+        OnPropertyChanged(nameof(SaveStateDescription));
         SaveCommand.NotifyCanExecuteChanged();
         return true;
     }
@@ -102,6 +109,7 @@ public sealed partial class SchemaFormFileViewModel : ObservableObject
         OnPropertyChanged(nameof(Diagnostics));
         OnPropertyChanged(nameof(IsValid));
         OnPropertyChanged(nameof(ValidationSummary));
+        OnPropertyChanged(nameof(SaveStateDescription));
         SaveCommand.NotifyCanExecuteChanged();
     }
 }

@@ -17,13 +17,24 @@ properties:
       help: Stable prefix that owns every content ID in this pack.
       example: emberfall
       constraint: 2-32 lowercase letters, digits, or underscores; must start with a letter.
+      documentation: schema/content/README.md
   name:
     $ref: "#/$defs/displayName"
-    x-meridian-ui: { group: identity, label: Pack name, widget: single_line }
+    x-meridian-ui:
+      group: identity
+      label: Pack name
+      widget: single_line
+      help: Human-facing name shown when operators choose this content pack.
+      example: Emberfall Adventures
   description:
     type: string
     maxLength: 2000
-    x-meridian-ui: { group: identity, label: Description, widget: multiline }
+    x-meridian-ui:
+      group: identity
+      label: Description
+      widget: multiline
+      help: Optional summary of this pack's theme and intended use.
+      constraint: At most 2,000 characters.
   version:
     description: Semver of this content pack.
     type: string
@@ -34,6 +45,7 @@ properties:
       widget: semver
       example: 1.0.0
       constraint: Semantic version in major.minor.patch form.
+      documentation: docs/superpowers/specs/2026-07-13-pack-contract-content-schema-design.md
   content_schema_version:
     description: Major schema version this pack is authored against.
     const: 1
@@ -89,7 +101,16 @@ properties:
     required: [godot]
     x-meridian-ui: { group: compatibility, label: Engine compatibility }
     properties:
-      godot: { type: string, pattern: "^4\\.\\d+$" }
+      godot:
+        type: string
+        pattern: "^4\\.\\d+$"
+        x-meridian-ui:
+          group: compatibility
+          label: Godot version
+          widget: single_line
+          help: Engine major and minor version required to load this pack.
+          example: "4.6"
+          constraint: Use major.minor form, beginning with 4.
   dependencies:
     description: Other packs whose IDs this pack may reference.
     type: array

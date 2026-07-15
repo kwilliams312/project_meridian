@@ -10,8 +10,24 @@ additionalProperties: false
 required: [schema, id, name, item_class, rarity, visual]
 properties:
   schema: { const: "meridian/item@2" }
-  id: { $ref: "#/$defs/contentId" }
-  name: { $ref: "#/$defs/displayName" }
+  id:
+    $ref: "#/$defs/contentId"
+    x-meridian-ui:
+      group: identity
+      label: Item ID
+      widget: single_line
+      help: Permanent fully qualified ID owned by this pack.
+      example: emberfall:item.ashblade
+      constraint: Use namespace:item.name with lowercase dot-separated segments.
+      documentation: schema/content/README.md
+  name:
+    $ref: "#/$defs/displayName"
+    x-meridian-ui:
+      group: identity
+      label: Display name
+      widget: single_line
+      help: Item name shown in inventory, loot, and vendor interfaces.
+      example: Ashblade
   flavor_text: { type: string, maxLength: 500 }
   item_class: { $ref: "#/$defs/itemClass" }
   subclass:
@@ -33,7 +49,16 @@ properties:
            neck, finger, trinket, main_hand, off_hand, two_hand, ranged, bag]
   rarity:
     enum: [poor, common, uncommon, rare, epic, legendary]
-  required_level: { type: integer, minimum: 1, default: 1 }
+  required_level:
+    type: integer
+    minimum: 1
+    default: 1
+    x-meridian-ui:
+      group: requirements
+      label: Required level
+      widget: number
+      help: Minimum character level allowed to equip or use this item.
+      constraint: At least 1.
   item_level:
     description: Drives stat-budget validation from M2 (ITM-03).
     type: integer
@@ -62,7 +87,18 @@ properties:
     required: [damage, speed_ms]
     properties:
       damage: { $ref: "#/$defs/intRange" }
-      speed_ms: { type: integer, minimum: 1000, maximum: 5000 }
+      speed_ms:
+        type: integer
+        minimum: 1000
+        maximum: 5000
+        x-meridian-ui:
+          group: combat
+          label: Weapon speed
+          widget: number
+          unit: ms
+          help: Delay between weapon attacks.
+          example: 2400
+          constraint: 1,000-5,000 milliseconds.
       school: { $ref: "#/$defs/school", default: physical }
 
   armor: { type: integer, minimum: 0 }
@@ -102,6 +138,9 @@ properties:
           label: Inventory icon
           widget: asset_picker
           reference_type: asset:art
+          help: Art-registry icon shown in inventory and loot interfaces.
+          example: core:art.icon.item.rusty_pickaxe
+          constraint: Select an icon asset ID; 3D generation is not available for icons.
         x-meridian-asset:
           allowed_classes: [icon]
           eligible_generators: []
@@ -114,6 +153,9 @@ properties:
           label: World model
           widget: asset_picker
           reference_type: asset:art
+          help: Optional 3D model used when the item appears in the world.
+          example: core:art.weapon.rusty_pickaxe
+          constraint: Select a weapon_model, armor_model, or prop asset ID; Meshy generation is available.
         x-meridian-asset:
           allowed_classes: [weapon_model, armor_model, prop]
           eligible_generators: [meshy]
@@ -152,14 +194,33 @@ properties:
           hides:
             type: array
             uniqueItems: true
+            x-meridian-ui:
+              group: presentation
+              label: Hidden body regions
+              help: Geoset regions hidden while this armor is worn to prevent body clipping.
+              documentation: docs/superpowers/specs/2026-07-09-character-equipment-data-contract-design.md
             items: { $ref: "#/$defs/geosetRegion" }
           attach:
             type: object
             additionalProperties: false
             required: [socket]
             properties:
-              socket: { $ref: "#/$defs/attachSocket" }
-              sheath_socket: { $ref: "#/$defs/attachSocket" }
+              socket:
+                $ref: "#/$defs/attachSocket"
+                x-meridian-ui:
+                  group: presentation
+                  label: Equipped socket
+                  help: Skeleton attachment point used while this item is equipped.
+                  example: main_hand
+                  documentation: docs/superpowers/specs/2026-07-09-character-equipment-data-contract-design.md
+              sheath_socket:
+                $ref: "#/$defs/attachSocket"
+                x-meridian-ui:
+                  group: presentation
+                  label: Sheathed socket
+                  help: Optional skeleton attachment point used while the item is sheathed.
+                  example: hip_l
+                  documentation: docs/superpowers/specs/2026-07-09-character-equipment-data-contract-design.md
           dye_channels:
             type: array
             uniqueItems: true
