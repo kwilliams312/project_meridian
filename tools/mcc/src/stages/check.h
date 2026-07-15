@@ -41,9 +41,14 @@ int link_content(const std::string& content_dir, DiagFormat format, bool allocat
 // so the emit is reproducible). Diagnostics render to `out` unless emitting there.
 // Returns 0 on success, 1 on any error, 2 when `content_dir` cannot be scanned or
 // `out_file` cannot be written.
+// `select_namespace` picks which pack to emit when the tree holds more than one:
+// non-empty emits ONE pack's world DB (its world_manifest row + only its content
+// rows — a single-pack realm world DB, design §4); empty is the back-compat
+// multi-pack dump. An unknown namespace is an error (mirrors emit_pck_content).
 int emit_sql_content(const std::string& content_dir, const std::string& out_file,
                      const std::string& mcc_version, const std::string& built_at,
-                     DiagFormat format, std::ostream& out, std::ostream& err);
+                     DiagFormat format, std::ostream& out, std::ostream& err,
+                     const std::string& select_namespace = "");
 
 // Run discover+parse+validate+link then the emit-pck stage (Tools SAD §2.7, IF-5).
 // Assembles the client content pack: pack.manifest.json (the IF-5 metadata the

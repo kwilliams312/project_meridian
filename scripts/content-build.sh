@@ -144,8 +144,15 @@ built_at_args=()
 run_build() {  # $1 = scratch dir to build into
   local dir="$1"
   # ${arr[@]:+...} guards the empty-array expansion under `set -u` on bash 3.2 (macOS).
+  # --pack pins the core pack for BOTH emits: the core gate builds a SINGLE-pack
+  # core world DB (one world_manifest row + only core content), so a second pack's
+  # roster (class/race) rows can't collide on the per-pack roster_id key when
+  # world.sql loads into MariaDB (design §4, story #770). emit-pck is likewise
+  # single-pack (a `chibi` pack sorts before `core` and would otherwise hijack the
+  # emit). The chibi pack's own single-pack world DB is proven loadable standalone
+  # by a separate content-ci step (the dev realm loads chibi the same way).
   ( cd "$dir" \
-      && "$REPO_ROOT/$MCC" emit-sql "$REPO_ROOT/$CONTENT_DIR" --out build/world.sql ${built_at_args[@]:+"${built_at_args[@]}"} >/dev/null \
+      && "$REPO_ROOT/$MCC" emit-sql "$REPO_ROOT/$CONTENT_DIR" --pack "$PACK_NS" --out build/world.sql ${built_at_args[@]:+"${built_at_args[@]}"} >/dev/null \
       && "$REPO_ROOT/$MCC" emit-pck "$REPO_ROOT/$CONTENT_DIR" --pack "$PACK_NS" --out build/pck ${built_at_args[@]:+"${built_at_args[@]}"} >/dev/null )
 }
 

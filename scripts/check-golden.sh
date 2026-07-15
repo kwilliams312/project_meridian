@@ -116,11 +116,15 @@ ok "mcc: $("$MCC" --version)"
 emit_into() {  # $1 = target dir
   local dir="$1"
   mkdir -p "$dir"
-  "$REPO_ROOT/$MCC" emit-sql "$REPO_ROOT/$CONTENT_DIR" \
+  # --pack pins the core pack for BOTH emits so the golden is the core pack's
+  # single-pack snapshot: emit-sql emits one world_manifest row + only core content
+  # (a second pack's roster rows would otherwise share the world.sql and collide on
+  # the per-pack roster_id key on load — design §4, story #770), and emit-pck emits
+  # the core pack (a `chibi` pack sorts before `core` and would otherwise hijack the
+  # single-pack emit). index.json below is NOT pack-scoped — it is the full IF-9 ID
+  # index across every pack, so it still lists chibi's ids.
+  "$REPO_ROOT/$MCC" emit-sql "$REPO_ROOT/$CONTENT_DIR" --pack "$PACK_NS" \
       --out "$dir/world.sql" --built-at "$GOLDEN_BUILT_AT" >/dev/null
-  # --pack pins the core pack: emit-pck is single-pack at M0 and would otherwise
-  # emit the first pack sorted by namespace (e.g. a `chibi` pack sorts before
-  # `core`). The golden is the core pack's snapshot, so name it explicitly.
   "$REPO_ROOT/$MCC" emit-pck "$REPO_ROOT/$CONTENT_DIR" --pack "$PACK_NS" \
       --out "$dir/pck" --built-at "$GOLDEN_BUILT_AT" >/dev/null
   # `mcc index` resolves ids against idmap.lock, so it runs against the pack root

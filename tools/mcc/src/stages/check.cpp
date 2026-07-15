@@ -138,7 +138,8 @@ int link_content(const std::string& content_dir, DiagFormat format, bool allocat
 
 int emit_sql_content(const std::string& content_dir, const std::string& out_file,
                      const std::string& mcc_version, const std::string& built_at,
-                     DiagFormat format, std::ostream& out, std::ostream& err) {
+                     DiagFormat format, std::ostream& out, std::ostream& err,
+                     const std::string& select_namespace) {
     model::ContentModel model;
     if (!discover(content_dir, model)) {
         err << "mcc emit-sql: content directory not found: " << content_dir << '\n';
@@ -159,6 +160,7 @@ int emit_sql_content(const std::string& content_dir, const std::string& out_file
         EmitSqlOptions opts;
         opts.mcc_version = mcc_version;
         opts.built_at = built_at;
+        opts.select_namespace = select_namespace;
         emitted = emit_sql(model, linked, opts, diags);
     }
 
