@@ -58,9 +58,15 @@ const PaperdollScript := preload("res://scenes/charselect/character_paperdoll.gd
 ## `canvas_items` stretch it grows with the window (#630).
 const PAPERDOLL_SIZE := Vector2i(360, 460)
 
+## Sex axis (design §8): male/female over the SHARED body — the picker drives the
+## preview's catalog lookup (both sexes share the chibi body for now; differentiation
+## via hair/makeup is a later theme addition). 0 = male, 1 = female (content_db._sex_name).
+const SEX_OPTIONS: Array = [{"id": 0, "name": "Male"}, {"id": 1, "name": "Female"}]
+
 @onready var _preview_holder: Control = %PreviewHolder
 @onready var _race_option: OptionButton = %RaceOption
 @onready var _class_option: OptionButton = %ClassOption
+@onready var _sex_option: OptionButton = %SexOption
 @onready var _hair_option: OptionButton = %HairOption
 @onready var _face_option: OptionButton = %FaceOption
 @onready var _skin_option: OptionButton = %SkinOption
@@ -97,6 +103,9 @@ func _ready() -> void:
 	# Changing race re-drives the appearance pickers from that race's catalog (#477),
 	# which then re-assembles the preview for the new race.
 	_race_option.item_selected.connect(func(_i: int) -> void: _populate_appearance_pickers(_race_option.get_selected_id()))
+	# Changing sex re-drives the appearance pickers from the male/female catalog (both
+	# sexes share the chibi body for now) and re-assembles the preview for the new sex.
+	_sex_option.item_selected.connect(func(_i: int) -> void: _populate_appearance_pickers(_race_option.get_selected_id()))
 
 
 # Called by the controller each time the view is (re)shown: clear the name field and
@@ -118,31 +127,45 @@ func show_error(message: String) -> void:
 
 # --- Pickers (moved verbatim from char_select.gd — the controller no longer owns them) -
 
-# Fill the race + class + appearance pickers. Race/class come from the M0-frozen roster;
-# hair/face/skin are CATALOG-DRIVEN off MeridianContentDB (#477, spec ② §3). Each item
-# carries its id so the create record reads ids, never list indices.
+# Fill the race + class + sex + appearance pickers. Race/class are PACK-DRIVEN off the
+# mounted theme pack's roster (design §8/R3 — the chibi realm shows its 6 colour races ×
+# 4 classes), falling back to the compiled MeridianRoster for a pack that ships no roster
+# (core). hair/face/skin are CATALOG-DRIVEN off MeridianContentDB (#477, spec ② §3). Each
+# item carries its id so the create record reads ids, never list indices.
 func _populate_pickers() -> void:
+	var races: Array = ContentDb.instance().effective_races()
+	var classes: Array = ContentDb.instance().effective_classes()
 	_race_option.clear()
-	for r in MeridianRoster.RACES:
+	for r in races:
 		_race_option.add_item(String(r["name"]), int(r["id"]))
 	_class_option.clear()
-	for c in MeridianRoster.CLASSES:
+	for c in classes:
 		_class_option.add_item(String(c["name"]), int(c["id"]))
-	# Default to the M1-playable pair (Ardent / Vanguard), then drive the appearance
-	# pickers from that race's catalog.
-	_select_option_by_id(_race_option, MeridianRoster.DEFAULT_RACE_ID)
-	_select_option_by_id(_class_option, MeridianRoster.DEFAULT_CLASS_ID)
+	_sex_option.clear()
+	for s in SEX_OPTIONS:
+		_sex_option.add_item(String(s["name"]), int(s["id"]))
+	# Default to the roster's FIRST race/class (pack order = roster_id; the chibi race
+	# picker IS the colour choice, defaulting to the first colour) and male.
+	if not races.is_empty():
+		_select_option_by_id(_race_option, int(races[0]["id"]))
+	if not classes.is_empty():
+		_select_option_by_id(_class_option, int(classes[0]["id"]))
+	_select_option_by_id(_sex_option, 0)
 	_populate_appearance_pickers(_race_option.get_selected_id())
 
 
-# (Re)fill the hair/face/skin pickers from the appearance catalog for `race_id` (M1 sex
-# 0 = male). A mounted catalog → each preset id becomes a picker item and the pickers
-# enable; no catalog → the pickers disable with a "(content missing)" placeholder (spec
-# §6), and _selected_appearance falls back to the default record.
+# (Re)fill the hair/face/skin pickers from the appearance catalog for `race_id` at the
+# selected sex. A mounted catalog with presets → each preset id becomes a picker item and
+# the pickers enable; no catalog OR empty preset lists (a chibi colour race ships EMPTY
+# presets for now — appearance customization is a later theme addition) → the pickers
+# disable with a "(content missing)" placeholder (spec §6), and _selected_appearance falls
+# back to the default record.
 func _populate_appearance_pickers(race_id: int) -> void:
-	var cat: Dictionary = ContentDb.instance().catalog(race_id, 0)
+	var cat: Dictionary = ContentDb.instance().catalog(race_id, _sex_option.get_selected_id())
 	var presets: Dictionary = cat.get("presets", {})
-	_content_missing = cat.is_empty() or not presets.has("hair")
+	# Empty preset lists count as content-missing so the record cleanly defaults (a chibi
+	# race has a catalog + body_material but no hair/face/skin presets yet).
+	_content_missing = cat.is_empty() or presets.get("hair", []).is_empty()
 	_fill_preset_picker(_hair_option, presets.get("hair", []), "Hair")
 	_fill_preset_picker(_face_option, presets.get("face", []), "Face")
 	_fill_preset_picker(_skin_option, presets.get("skin", []), "Skin")
@@ -190,11 +213,13 @@ func _select_option_by_id(option: OptionButton, id: int) -> void:
 			return
 
 
-# Re-assemble the paperdoll from the CURRENT form state (selected race + the appearance
-# record the pickers report). Called on every appearance/race pick — the live update.
+# Re-assemble the paperdoll from the CURRENT form state (selected race + sex + the
+# appearance record the pickers report). Called on every appearance/race/sex pick — the
+# live update. For a chibi colour race this assembles the coloured body (body_material dye).
 func _refresh_preview_from_form() -> void:
 	if _paperdoll != null:
-		_paperdoll.set_appearance(_race_option.get_selected_id(), _selected_appearance(), [])
+		_paperdoll.set_appearance(_race_option.get_selected_id(), _selected_appearance(), [],
+			_sex_option.get_selected_id())
 
 
 # --- Actions -----------------------------------------------------------------

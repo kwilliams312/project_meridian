@@ -78,6 +78,14 @@ text = "Class"
 unique_name_in_owner = true
 layout_mode = 2
 
+[node name="SexLabel" type="Label" parent="Root/Body/OptionsPanel"]
+layout_mode = 2
+text = "Sex"
+
+[node name="SexOption" type="OptionButton" parent="Root/Body/OptionsPanel"]
+unique_name_in_owner = true
+layout_mode = 2
+
 [node name="AppearanceLabel" type="Label" parent="Root/Body/OptionsPanel"]
 layout_mode = 2
 text = "Customization"

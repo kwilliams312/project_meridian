@@ -46,6 +46,13 @@ const ContentDbScript := preload("res://content/content_db.gd")
 const AssembledCharacterScript := preload("res://characters/assembled_character.gd")
 
 const FIXTURE_DIR: String = "user://assembler_fixture"
+# A CHIBI-SHAPE fixture (story #760, design 2026-07-14-chibi §8): a theme pack that ships
+# a 6-colour-race roster + appearance body_material, reusing the REAL staged core art so
+# the body-dye path actually loads meshes/textures. Proves the client wiring (pack roster
+# drives the pickers, body_material resolves, the body assembles WITH the dye applied,
+# zero assembly_failed) without needing the chibi art staged — the human UI-E2E covers the
+# real chibi assets. Separate dir so it never clobbers the FIXTURE_DIR pack above.
+const CHIBI_FIXTURE_DIR: String = "user://assembler_chibi_fixture"
 
 # The 8 blockout geoset regions (tools/blender/meridian_rig generate_blockout.py).
 const REGIONS: Array = [
@@ -109,6 +116,9 @@ func _initialize() -> void:
 
 	# --- Phase B: fixture pack (hides / race_overrides / skinned / missing) ----
 	_verify_fixtures(ac, db)
+
+	# --- Phase C: chibi-shape pack (roster + body_material body-dye, #760) ------
+	_verify_chibi_body_material(ac, db)
 
 	# Restore the real pack so anything after this verify sees loaded content.
 	db.load_from("res://meridian/core")
@@ -586,6 +596,183 @@ func _verify_fixtures(ac, db) -> void:
 	_check("torso geoset STAYS visible — no hide-while-uncovered (T4 ruling)",
 		torso_after != null and torso_after.visible)
 	ac.set_equipment_slot(SLOT_CHEST, 0, [])
+
+
+# --- C. chibi-shape pack: pack roster + body_material body-dye (#760) -----------
+# The C7 client proof, headless. A theme pack that ships a 6-colour-race roster + the
+# appearance body_material recolor (design §8/§6), reusing the real staged core body +
+# masks + russet dye so the dye path loads real bytes. Proves: (1) the PACK ROSTER drives
+# the effective roster (6 races × 4 classes, beyond the compiled 4); (2) every colour race
+# resolves a catalog carrying body_material (no catalog: errors); (3) assembling a colour
+# race dyes the BODY — every geoset gets the dye_tint.gdshader ShaderMaterial with the
+# race colour + localized metalness, albedo/mask bound — with ZERO assembly_failed.
+func _verify_chibi_body_material(ac, db) -> void:
+	print(" C. chibi-shape pack — pack roster + body_material body-dye (#760):")
+	_write_chibi_fixture()
+	var loaded: bool = db.load_from(CHIBI_FIXTURE_DIR)
+	_check("chibi-shape fixture pack loads", loaded)
+
+	# 1. Pack roster drives the pickers (design §8/R3) — 6 colour races × 4 classes.
+	var races: Array = db.races()
+	var classes: Array = db.classes()
+	_check("pack ships 6 colour races", races.size() == 6)
+	_check("races are ordered by roster_id 1..6",
+		races.size() == 6 and int(races[0]["id"]) == 1 and int(races[5]["id"]) == 6)
+	_check("race roster carries the colour names (Red..Silver)",
+		races.size() == 6 and String(races[0]["name"]) == "Red"
+		and String(races[4]["name"]) == "Gold" and String(races[5]["name"]) == "Silver")
+	_check("pack ships 4 classes (Warrior/Mage/Rogue/Priest)", classes.size() == 4)
+	_check("effective_races is the PACK roster (6, not the compiled 4)",
+		db.effective_races().size() == 6)
+	_check("pack roster validates colour races 5 & 6 (beyond the compiled 1..4)",
+		db.is_valid_race(5) and db.is_valid_race(6) and not db.is_valid_race(7))
+
+	# 2. Every colour race resolves a catalog carrying body_material (no catalog: errors).
+	var all_catalogs := true
+	var all_have_bm := true
+	for rid in range(1, 7):
+		var cat: Dictionary = db.catalog(rid, 0)
+		if cat.is_empty():
+			all_catalogs = false
+		elif not cat.has("body_material"):
+			all_have_bm = false
+	_check("all 6 colour races resolve a catalog (pack race-name key mapping)", all_catalogs)
+	_check("all 6 catalogs carry a body_material recolor", all_have_bm)
+
+	# 3. Assemble race 5 (Gold — the METALLIC race) and prove the body carries the dye.
+	var failures_before: int = _failures.size()
+	var ok: bool = ac.assemble(5, 0, {}, [])
+	_check("assemble(5,0) — Gold chibi assembles a real body (no capsule fallback)",
+		ok and ac.is_assembled())
+	_check("ZERO assembly_failed across the chibi body assemble",
+		_failures.size() == failures_before)
+
+	var russet: Color = db.dye_color(db.numeric_id_for("core:dye.russet"))  # fixture's gold tint
+	var geosets: Array = ac.body_geosets()
+	_check("chibi body instanced its geoset meshes", not geosets.is_empty())
+	var every_geoset_dyed := not geosets.is_empty()
+	var sample: ShaderMaterial = null
+	for g in geosets:
+		if not (g is MeshInstance3D):
+			continue
+		var sm := g.material_override as ShaderMaterial
+		if sm == null or sm.shader == null \
+				or sm.shader.resource_path != "res://characters/dye_tint.gdshader":
+			every_geoset_dyed = false
+			continue
+		if sample == null:
+			sample = sm
+	_check("EVERY body geoset carries the dye_tint mask ShaderMaterial", every_geoset_dyed)
+	if sample != null:
+		var primary = sample.get_shader_parameter("dye_primary")
+		_check("body dye_primary == the race dye colour (skin recolor)",
+			primary is Color and (primary as Color).is_equal_approx(russet))
+		# Unset use flags read back as null (the assembler leaves secondary/accent at the
+		# shader's 0.0 default, exactly like the equipment path) — treat null as inactive.
+		_check("primary channel active (use_primary == 1), others inactive",
+			_flag_active(sample, "use_primary")
+			and not _flag_active(sample, "use_secondary")
+			and not _flag_active(sample, "use_accent"))
+		_check("Gold race is metallic (metallic == 1.0 — shader localizes it to the skin mask)",
+			float(sample.get_shader_parameter("metallic")) == 1.0)
+		_check("the skin dye mask is bound", sample.get_shader_parameter("dye_mask") is Texture2D)
+		_check("the neutral recolor-base albedo is bound",
+			sample.get_shader_parameter("albedo_tex") is Texture2D)
+
+	# 4. A FLAT colour race (Red, roster_id 1) assembles too, non-metallic body dye.
+	var flat_before: int = _failures.size()
+	var ok2: bool = ac.assemble(1, 0, {}, [])
+	_check("assemble(1,0) — Red (flat) chibi assembles with ZERO assembly_failed",
+		ok2 and ac.is_assembled() and _failures.size() == flat_before)
+	var red_geosets: Array = ac.body_geosets()
+	var red_sm: ShaderMaterial = null
+	for g in red_geosets:
+		if g is MeshInstance3D and g.material_override is ShaderMaterial:
+			red_sm = g.material_override
+			break
+	_check("Red body is dyed but NOT metallic (metallic == 0.0)",
+		red_sm != null and float(red_sm.get_shader_parameter("metallic")) == 0.0)
+
+	ac.clear()
+
+
+# A dye-shader use flag reads active (== 1.0) — null/unset counts as the 0.0 default.
+func _flag_active(sm: ShaderMaterial, name: String) -> bool:
+	var v = sm.get_shader_parameter(name)
+	return v != null and float(v) == 1.0
+
+
+# Write the chibi-shape fixture pack: a 6-colour-race roster + 4 classes + per-race
+# appearance body_material, all reusing the real staged core body + masks + russet dye so
+# the body-dye path loads real bytes (same reuse pattern as _write_fixture_pack). Red/Green
+# flat (metallic 0); Gold/Silver metallic (1.0) — mirrors the real chibi pack's colour model.
+func _write_chibi_fixture() -> void:
+	DirAccess.make_dir_recursive_absolute(CHIBI_FIXTURE_DIR)
+
+	# Only the ids the body-dye path touches need contents entries (body model + the two
+	# masks reused as recolor-base/mask + the russet dye). Resources point at the real
+	# staged core layout so model_path resolves to loadable staged .glb/.png bytes.
+	var contents: PackedStringArray = [
+		JSON.stringify({"id": "core:art.char.ardent.male.base", "numeric_id": 81,
+			"resource": "res://meridian/core/art/char/ardent/male/base.scn", "hash": ""}),
+		JSON.stringify({"id": "core:art.item.armor.warden_chest_mask", "numeric_id": 91,
+			"resource": "res://meridian/core/art/item/armor/warden_chest_mask.res", "hash": ""}),
+		JSON.stringify({"id": "core:art.item.armor.warden_head_mask", "numeric_id": 97,
+			"resource": "res://meridian/core/art/item/armor/warden_head_mask.res", "hash": ""}),
+		JSON.stringify({"id": "core:dye.russet", "numeric_id": 78,
+			"resource": "res://meridian/core/tables/dye.bin", "hash": ""}),
+	]
+	var jsonl := FileAccess.open(CHIBI_FIXTURE_DIR + "/pack.contents.jsonl", FileAccess.WRITE)
+	jsonl.store_string("\n".join(contents) + "\n")
+	jsonl.close()
+
+	# The 6 colour races (roster_id 1..6) — Gold(5)/Silver(6) metallic, the rest flat.
+	var race_names: Array = ["Red", "Green", "Blue", "Yellow", "Gold", "Silver"]
+	var race_rows: Array = []
+	var appearance_rows: Array = []
+	for i in range(6):
+		var rid: int = i + 1
+		var rname: String = String(race_names[i]).to_lower()
+		var metallic: float = 1.0 if rid >= 5 else 0.0
+		race_rows.append({"id": "chibi:race.%s" % rname, "numeric_id": 1000 + rid,
+			"roster_id": rid, "name": race_names[i]})
+		var bm: Dictionary = {
+			# Reuse a real staged mask as the neutral recolor base + the skin mask so the
+			# textures load; the assertion is on the SHADER params the assembler binds.
+			"albedo": "core:art.item.armor.warden_head_mask",
+			"dye_mask": "core:art.item.armor.warden_chest_mask",
+			"metallic": metallic,
+			"dyes": [{"channel": "primary", "dye": "core:dye.russet"}],
+		}
+		if metallic > 0.0:
+			bm["roughness"] = 0.30
+		appearance_rows.append({
+			"id": "chibi:appearance.%s.male" % rname, "numeric_id": 1100 + rid,
+			"race": rname, "sex": "male",
+			"skeleton": "core:art.char.ardent.male.base",
+			"body_model": "core:art.char.ardent.male.base",
+			"body_material": bm,
+			"presets": {"hair": [], "face": [], "skin": []},
+		})
+
+	var class_names: Array = ["Warrior", "Mage", "Rogue", "Priest"]
+	var class_rows: Array = []
+	for i in range(4):
+		class_rows.append({"id": "chibi:class.%s" % String(class_names[i]).to_lower(),
+			"numeric_id": 1200 + i + 1, "roster_id": i + 1, "name": class_names[i]})
+
+	var data: Dictionary = {
+		"schema": "meridian/pack-data@1",
+		"namespace": "chibi",
+		"appearance": appearance_rows,
+		"class": class_rows,
+		"dye": [{"id": "core:dye.russet", "numeric_id": 78, "color": "#8a4b2d"}],
+		"item": [],
+		"race": race_rows,
+	}
+	var json := FileAccess.open(CHIBI_FIXTURE_DIR + "/pack.data.json", FileAccess.WRITE)
+	json.store_string(JSON.stringify(data, "  "))
+	json.close()
 
 
 # How many BODY geoset meshes are currently visible (LOD0-only at M1).

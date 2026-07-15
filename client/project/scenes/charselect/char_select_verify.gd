@@ -47,6 +47,7 @@ func _initialize() -> void:
 	_verify_store()
 	await _verify_scene()
 	await _verify_relogin_roster()
+	await _verify_pack_driven_roster()
 
 	print("\n%s" % ("ALL RUNTIME CHECKS PASS" if _fails == 0 else "%d RUNTIME FAILURE(S)" % _fails))
 	quit(0 if _fails == 0 else 1)
@@ -396,3 +397,45 @@ func _verify_relogin_roster() -> void:
 		empty_list != null and empty_list.item_count == 0)
 	root.remove_child(empty)
 	empty.queue_free()
+
+
+# --- 5. PACK-DRIVEN roster labels + validation (chibi theme, #760) -------------
+# With a theme pack mounted (design §8/R3), char_select labels a character with the PACK's
+# race/class names (not the compiled MeridianRoster) and its create validation accepts the
+# pack roster (a colour race beyond the compiled 1..4). Mounts a chibi-shape roster into the
+# shared ContentDB, seeds a Gold (roster_id 5) Warrior, and asserts the label + acceptance;
+# restores core afterwards so no other verify sees the fixture.
+func _verify_pack_driven_roster() -> void:
+	print(" pack-driven roster labels + validation (chibi theme, #760):")
+	var dir := "user://char_select_theme_fixture"
+	DirAccess.make_dir_recursive_absolute(dir)
+	var f := FileAccess.open(dir + "/pack.data.json", FileAccess.WRITE)
+	f.store_string(JSON.stringify({
+		"schema": "meridian/pack-data@1", "namespace": "chibi",
+		"appearance": [], "dye": [], "item": [],
+		"class": [{"id": "chibi:class.warrior", "numeric_id": 3001, "roster_id": 1, "name": "Warrior"},
+			{"id": "chibi:class.mage", "numeric_id": 3002, "roster_id": 2, "name": "Mage"}],
+		"race": [{"id": "chibi:race.red", "numeric_id": 1001, "roster_id": 1, "name": "Red"},
+			{"id": "chibi:race.gold", "numeric_id": 1005, "roster_id": 5, "name": "Gold"}],
+	}, "  "))
+	f.close()
+	ContentDbScript.instance().load_from(dir)
+
+	var packed: PackedScene = load("res://scenes/charselect/char_select.tscn")
+	var scene := packed.instantiate()
+	# Seed a Gold (roster_id 5) Warrior — the offline store accepts it now that validation
+	# is pack-driven (a colour race beyond the compiled 1..4 the old store would reject).
+	scene.configure("tester@example.com", [{"name": "Goldie", "race": 5, "class": 1}])
+	root.add_child(scene)
+	await process_frame
+	var char_list: ItemList = scene.find_child("CharList", true, false)
+	_check("pack-roster character is accepted + listed (colour race 5 beyond compiled 1..4)",
+		char_list != null and char_list.item_count == 1)
+	_check("char label uses the PACK race + class names ('Goldie — Warrior (Gold)')",
+		char_list != null and char_list.item_count == 1
+		and char_list.get_item_text(0) == "Goldie — Warrior (Gold)")
+	root.remove_child(scene)
+	scene.queue_free()
+
+	# Restore the staged core pack so the process-wide singleton is core after this verify.
+	ContentDbScript.instance().load_from("res://meridian/core")

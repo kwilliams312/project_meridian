@@ -64,6 +64,11 @@ const _DYE_MASK_SUFFIX: String = "_mask"
 const _GEOSET_PREFIX: String = "geo_"
 const _SOCKET_BONE_PREFIX: String = "socket_"
 
+# Body-material dye channel NAMES -> the RGB mask index the dye shader multiplies
+# (mirrors the wire dye `channel` ints 0/1/2 — ⑤/S3). The chibi appearance
+# body_material declares its skin dye on the "primary" channel (design §6/R2).
+const _DYE_CHANNEL_INDEX: Dictionary = {"primary": 0, "secondary": 1, "accent": 2}
+
 var _race: int = 0
 var _sex: int = 0
 var _assembled: bool = false
@@ -124,6 +129,13 @@ func assemble(race: int, sex: int, appearance: Dictionary, equipment: Array) -> 
 	# without this a body-only assemble would draw all 4 LODs stacked. Equipment
 	# changes re-run _apply_hides, but a no-equipment assemble needs it here.
 	_apply_hides()
+
+	# Body-material recolor (chibi colour races, design §6/R2): when the catalog
+	# declares a body_material, dye the BODY skin with the race's colour through the
+	# skin mask — the SAME mask-tint path equipment uses (⑤/S3), extended from
+	# equipment-only to the body. A catalog without body_material (the core races,
+	# which bake colour into the body model) skips this entirely — no visual change.
+	_apply_body_material(cat)
 
 	# Hair preset = mesh on the head (spec §4). The blockout catalog aliases every
 	# preset to the body model, so only a DISTINCT hair model mounts — the
@@ -277,6 +289,12 @@ func body_geosets() -> Array:
 # this kind at all.
 func _resolve_preset(presets: Dictionary, kind: String, wanted: int) -> Dictionary:
 	var entries: Array = presets.get(kind, [])
+	# An EMPTY preset list is not a miss — the catalog simply offers no customization on
+	# this channel (a chibi colour race ships empty hair/face/skin presets for now, design
+	# §5/§8). Resolve to {} WITHOUT assembly_failed; only a non-empty list with the wanted
+	# id absent is the spec-§6 "unknown preset id → entry 1 + telemetry" case below.
+	if entries.is_empty():
+		return {}
 	var fallback: Dictionary = {}
 	for e in entries:
 		if typeof(e) != TYPE_DICTIONARY:
@@ -530,6 +548,80 @@ func _tint_mesh(mi: MeshInstance3D, channel_colors: Dictionary) -> void:
 		sm.set_shader_parameter("use_accent", 1.0)
 
 	mi.material_override = sm
+
+
+# Body-material recolor (chibi colour races, design 2026-07-14-chibi §6/R2). The
+# catalog's `body_material` = {albedo, dye_mask, metallic, [roughness], dyes:[{channel,
+# dye}]}: the client multiplies the neutral `albedo` recolor base by each dyed channel's
+# colour through `dye_mask` — the SAME dye_tint.gdshader mask path equipment uses (⑤/S3),
+# applied to the BODY geoset meshes. Only the mask's painted skin region recolors (R =
+# skin on the chibi mask), so the atlas eyes + cloth wrap survive; a metallic race
+# (Gold/Silver) sets metallic 1.0 and the shader localizes metalness to the same skin
+# region (METALLIC = metallic * max(mask.rgb)). Fallbacks mirror the equipment path:
+#   * no body_material                       → no-op (core races bake colour in the model);
+#   * no resolvable albedo/mask texture      → skip (body keeps its imported material);
+#   * an unknown dye id                      → that channel stays untinted (+ assembly_failed);
+#   * every dye unknown                      → no override (body keeps its imported material).
+func _apply_body_material(cat: Dictionary) -> void:
+	var bm: Dictionary = cat.get("body_material", {})
+	if bm.is_empty() or _body_geosets.is_empty():
+		return
+
+	# The neutral recolor base + the skin mask (both art-asset ids resolved as textures).
+	var albedo_tex: Texture2D = _load_mask_texture(String(bm.get("albedo", "")))
+	var mask: Texture2D = _load_mask_texture(String(bm.get("dye_mask", "")))
+	if albedo_tex == null or mask == null:
+		# Missing recolor bytes → leave the body's imported material (no crash, spec §6).
+		return
+
+	var db = ContentDbScript.instance()
+	# Resolve each declared channel's dye colour (name -> RGB index -> Color). Only KNOWN
+	# dyes populate the map; an unknown id stays untinted for that channel (authored base).
+	var channel_colors: Dictionary = {}  # int channel (0/1/2) -> Color
+	for d in bm.get("dyes", []):
+		if typeof(d) != TYPE_DICTIONARY:
+			continue
+		var ch: int = int(_DYE_CHANNEL_INDEX.get(String(d.get("channel", "")), -1))
+		if ch < 0:
+			continue
+		var dye_ref = d.get("dye", "")
+		# body_material carries the dye as a content id String; resolve it to the numeric
+		# the dye table is keyed by (the equipment path already receives numeric ids).
+		var dye_num: int = int(dye_ref) if dye_ref is int else db.numeric_id_for(String(dye_ref))
+		var c: Color = db.dye_color(dye_num)
+		if c == ContentDbScript.UNKNOWN_DYE:
+			_fail("dye:%s" % str(dye_ref))
+			continue
+		channel_colors[ch] = c
+	# No known dye resolved → keep the body's imported material (no override).
+	if channel_colors.is_empty():
+		return
+
+	# Every body geoset shares ONE material (same recolor base + mask + dyes), so build it
+	# once and assign it to all of them — a Godot material can back multiple meshes.
+	var sm := ShaderMaterial.new()
+	sm.shader = DyeShader
+	sm.set_shader_parameter("dye_mask", mask)
+	# The recolor base IS the authored albedo the shader tints (albedo_color white so the
+	# texture drives it, matching _tint_mesh's albedo-preservation contract).
+	sm.set_shader_parameter("albedo_tex", albedo_tex)
+	sm.set_shader_parameter("albedo_color", Color(1, 1, 1, 1))
+	sm.set_shader_parameter("metallic", float(bm.get("metallic", 0.0)))
+	if bm.has("roughness"):
+		sm.set_shader_parameter("roughness", float(bm["roughness"]))
+	if channel_colors.has(0):
+		sm.set_shader_parameter("dye_primary", channel_colors[0])
+		sm.set_shader_parameter("use_primary", 1.0)
+	if channel_colors.has(1):
+		sm.set_shader_parameter("dye_secondary", channel_colors[1])
+		sm.set_shader_parameter("use_secondary", 1.0)
+	if channel_colors.has(2):
+		sm.set_shader_parameter("dye_accent", channel_colors[2])
+		sm.set_shader_parameter("use_accent", 1.0)
+
+	for g in _body_geosets:
+		if g is MeshInstance3D:
+			g.material_override = sm
 
 
 # Load a dye mask texture by asset id: prefer the DECLARED imported resource when

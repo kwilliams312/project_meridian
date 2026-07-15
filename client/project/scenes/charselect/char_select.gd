@@ -49,6 +49,12 @@ const PaperdollScript := preload("res://scenes/charselect/character_paperdoll.gd
 # roster. Preloaded by path for the same reason.
 const CharacterCreateScene := preload("res://scenes/charselect/character_create.tscn")
 
+# MeridianContentDB (#477) by PATH — the roster labels + create validation are PACK-DRIVEN
+# off the mounted theme pack's roster (design §8/R3), falling back to the compiled
+# MeridianRoster for a pack that ships none. ContentDb.instance() is the autoload in the
+# app, else a shared lazily-created instance (headless --script verify, no autoloads).
+const ContentDb := preload("res://content/content_db.gd")
+
 ## Render size of the roster paperdoll (the selected character, front-facing). Matches
 ## the #630 sizing; a minimum, not a trap — under `canvas_items` stretch it scales.
 const ROSTER_PAPERDOLL_SIZE := Vector2i(260, 290)
@@ -229,8 +235,8 @@ func _refresh_list() -> void:
 	for row in _rows():
 		var label := "%s — %s (%s)" % [
 			String(row["name"]),
-			MeridianRoster.class_name_for(int(row["class"])),
-			MeridianRoster.race_name(int(row["race"])),
+			ContentDb.instance().class_display_name(int(row["class"])),
+			ContentDb.instance().race_display_name(int(row["race"])),
 		]
 		var idx := _char_list.add_item(label)
 		_char_list.set_item_metadata(idx, int(row["id"]))
@@ -325,10 +331,10 @@ func _on_create_confirmed(char_name: String, race: int, char_class: int, appeara
 	if name.length() > 32:
 		_notify_create_error("A name can be at most 32 characters.")
 		return
-	if not MeridianRoster.is_valid_race(race):
+	if not ContentDb.instance().is_valid_race(race):
 		_notify_create_error("Cannot create: invalid race.")
 		return
-	if not MeridianRoster.is_valid_class(char_class):
+	if not ContentDb.instance().is_valid_class(char_class):
 		_notify_create_error("Cannot create: invalid class.")
 		return
 

@@ -25,6 +25,13 @@
 extends RefCounted
 class_name CharacterStore
 
+# MeridianContentDB (#477) by PATH — race/class validation is PACK-DRIVEN off the mounted
+# theme pack's roster (design 2026-07-14-chibi §8/R3, story #760), so the offline create
+# path accepts exactly the theme's playable roster (chibi's 6 colour races × 4 classes) and
+# falls back to the compiled MeridianRoster for a pack that ships none (core) — keeping the
+# offline behaviour identical to the online server's roster-from-pack validation.
+const ContentDb := preload("res://content/content_db.gd")
+
 ## Mirrors character.name VARCHAR(32) / characters.h kMaxNameLen. An over-long name
 ## is rejected here with a clear error instead of being silently truncated.
 const MAX_NAME_LEN: int = 32
@@ -75,11 +82,11 @@ func create(name: String, race_id: int, class_id: int, appearance: Dictionary = 
 		return _err("invalid_name", "Name must not be empty.")
 	if trimmed.length() > MAX_NAME_LEN:
 		return _err("invalid_name", "Name exceeds %d characters." % MAX_NAME_LEN)
-	# 2. Race in the M0-frozen roster.
-	if not MeridianRoster.is_valid_race(race_id):
+	# 2. Race in the effective roster (the mounted theme pack's, else compiled).
+	if not ContentDb.instance().is_valid_race(race_id):
 		return _err("invalid_race", "Unknown race id %d." % race_id)
-	# 3. Class in the M0-frozen roster.
-	if not MeridianRoster.is_valid_class(class_id):
+	# 3. Class in the effective roster (the mounted theme pack's, else compiled).
+	if not ContentDb.instance().is_valid_class(class_id):
 		return _err("invalid_class", "Unknown class id %d." % class_id)
 	# 4. Name unique (case-insensitive, uq_character_name).
 	var lname := trimmed.to_lower()
