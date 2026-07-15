@@ -59,10 +59,13 @@ int emit_sql_content(const std::string& content_dir, const std::string& out_file
 // `godot_version` overrides the pack's engine.godot pin when non-empty. Returns 0
 // on success, 1 on any error, 2 when `content_dir` cannot be scanned or `out_dir`
 // cannot be written.
+// `select_namespace` picks which pack to emit when the tree holds more than one
+// (empty = first sorted by namespace; an unknown namespace is an error).
 int emit_pck_content(const std::string& content_dir, const std::string& out_dir,
                      const std::string& mcc_version, const std::string& built_at,
                      const std::string& godot_version, DiagFormat format,
-                     std::ostream& out, std::ostream& err);
+                     std::ostream& out, std::ostream& err,
+                     const std::string& select_namespace = "");
 
 // Fast single-file / incremental validation path (Tools SAD §6.3, TLS-06): run
 // classify + parse + the single-file lints over exactly ONE content file, with

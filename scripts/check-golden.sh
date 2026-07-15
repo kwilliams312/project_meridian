@@ -118,7 +118,10 @@ emit_into() {  # $1 = target dir
   mkdir -p "$dir"
   "$REPO_ROOT/$MCC" emit-sql "$REPO_ROOT/$CONTENT_DIR" \
       --out "$dir/world.sql" --built-at "$GOLDEN_BUILT_AT" >/dev/null
-  "$REPO_ROOT/$MCC" emit-pck "$REPO_ROOT/$CONTENT_DIR" \
+  # --pack pins the core pack: emit-pck is single-pack at M0 and would otherwise
+  # emit the first pack sorted by namespace (e.g. a `chibi` pack sorts before
+  # `core`). The golden is the core pack's snapshot, so name it explicitly.
+  "$REPO_ROOT/$MCC" emit-pck "$REPO_ROOT/$CONTENT_DIR" --pack "$PACK_NS" \
       --out "$dir/pck" --built-at "$GOLDEN_BUILT_AT" >/dev/null
   # `mcc index` resolves ids against idmap.lock, so it runs against the pack root
   # ($CONTENT_DIR), not content/core. Its --json output is fully sorted (by type,

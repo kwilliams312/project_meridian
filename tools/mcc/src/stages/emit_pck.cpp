@@ -305,9 +305,28 @@ EmitPckResult emit_pck(const model::ContentModel& model, const LinkResult& linke
         result.ok = false;
         return result;
     }
-    const model::ParsedFile& pack = *packs[0];
+    // Pick the pack to emit: the caller-named namespace when given, else the first
+    // sorted by namespace (back-compat). A named-but-absent namespace is an error
+    // rather than a silent fall-through to the wrong pack.
+    std::size_t selected = 0;
+    if (!opts.select_namespace.empty()) {
+        const auto it = std::find_if(
+            packs.begin(), packs.end(), [&](const model::ParsedFile* p) {
+                return p->namespace_ == opts.select_namespace;
+            });
+        if (it == packs.end()) {
+            diags.error("E002", "content/", "",
+                        "emit-pck: no pack with namespace '" + opts.select_namespace +
+                            "' found under the content tree");
+            result.ok = false;
+            return result;
+        }
+        selected = static_cast<std::size_t>(it - packs.begin());
+    }
+    const model::ParsedFile& pack = *packs[selected];
     const std::string ns = pack.namespace_;
-    for (std::size_t i = 1; i < packs.size(); ++i) {
+    for (std::size_t i = 0; i < packs.size(); ++i) {
+        if (i == selected) continue;
         diags.info("I100", packs[i]->file.rel_path, "",
                    "emit-pck: pack '" + packs[i]->namespace_ +
                        "' deferred (single-pack emit at M0)");

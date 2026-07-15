@@ -8,6 +8,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 INSERT INTO world_manifest
   (pack_namespace, pack_version, id_band, content_hash, schema_version, compatibility_version, mcc_version, built_at)
 VALUES
+  ('chibi', '0.1.0', 1, 'd26732993f2e1998da0158012d2c29498ca7a085d33e92d83a5ffbf391596a16', 1, 1, '0.0.0', '1970-01-01 00:00:00'),
   ('core', '0.1.0', 0, '9f90580d23f2989b38810a1019299e3efd7dbba357c82d1e7e8924fc5209bce1', 1, 1, '0.0.0', '1970-01-01 00:00:00');
 
 -- npc_template (8 rows)

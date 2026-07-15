@@ -1,0 +1,14 @@
+# IF-8 sidecar (meridian/asset@1). Scaffold seed for the chibi pack (#756): the
+# smallest valid entity so the pack carries content, gets its own IF-9 id-band,
+# and emits a world_manifest row. It is the realm/pack-picker preview image for
+# the chibi theme (theme.preview_asset target, wired when realm selection lands).
+# Example-pack placeholder: the LFS source file lands with the first art drop;
+# provenance is complete now. Later stories (C3-C6) build the pack's real content.
+schema: meridian/asset@1
+id: chibi:art.ui.theme_preview
+class: ui_art
+source: assets/ui/theme_preview.png
+license: CC-BY-4.0
+provenance:
+  source_tier: original
+  authors: [meridian-contributors]
