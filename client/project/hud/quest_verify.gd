@@ -211,6 +211,17 @@ func _verify_gossip_window() -> void:
 	_check("pressing accept emits intent (quest 28, giver 27)",
 		int(accept["quest"]) == 28 and int(accept["giver"]) == 27)
 
+	# #838: a SUCCESSFUL accept (OK) re-requests the gossip menu for the open NPC so the
+	# dialog transitions (available → in-progress/turn-in) instead of leaving the stale
+	# "Accept" row. A GATED accept (status != OK) must NOT re-request.
+	var refresh := {"npc": 0, "count": 0}
+	bus.gossip_hello_requested.connect(func(g): refresh["npc"] = g; refresh["count"] += 1)
+	bus.publish_quest_accept_result(28, 4)  # LEVEL_TOO_LOW → no refresh
+	_check("gated accept does NOT refresh the gossip menu", int(refresh["count"]) == 0)
+	bus.publish_quest_accept_result(28, 0)  # OK → re-request gossip on the open NPC 27
+	_check("accept OK re-requests gossip menu on the open NPC (27)",
+		int(refresh["count"]) == 1 and int(refresh["npc"]) == 27)
+
 	# Turn-in row emits a turn-in intent.
 	var turn := {"quest": 0}
 	bus.quest_turn_in_requested.connect(func(q, _n, _c): turn["quest"] = q)

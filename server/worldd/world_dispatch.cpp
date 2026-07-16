@@ -395,6 +395,22 @@ mn::QuestAcceptStatus to_wire(AcceptStatus s) {
     return mn::QuestAcceptStatus::UNKNOWN_QUEST;
 }
 
+// #838 — resolve a client-supplied giver / turn-in NPC guid to its npc_template id.
+// A SPAWNED world NPC's wire guid lives in the kWorldEntityGuidBase band (assigned by
+// install_spawns), NOT the low-32-bit npc_template id space — so the GOSSIP_HELLO path
+// maps it back via WorldState::npc_template_for_guid before serving that NPC's content.
+// The quest accept / turn-in giver checks MUST do the same resolution: otherwise a
+// spawned giver's guid (e.g. 0xE000'0000'0000'0000, whose low 32 bits are 0) never
+// matches def->giver_npc_id and the accept is wrongly rejected WRONG_GIVER — the bug the
+// client saw as "clicking Accept does nothing". Falls back to treating the guid AS the
+// template id, the pre-spawn 1:1 placeholder mapping (no world entity registered).
+std::uint32_t resolve_npc_template_id(const ConnCtx& ctx, std::uint64_t wire_guid) {
+    if (ctx.world != nullptr) {
+        if (auto tmpl = ctx.world->npc_template_for_guid(wire_guid)) return *tmpl;
+    }
+    return static_cast<std::uint32_t>(wire_guid);
+}
+
 mn::QuestTurnInStatus to_wire(TurnInStatus s) {
     switch (s) {
         case TurnInStatus::kOk:            return mn::QuestTurnInStatus::OK;
@@ -3045,11 +3061,12 @@ void Dispatcher::register_m0_stubs() {
 
         const QuestDef* def = quest_store().find(quest_id);
         if (def == nullptr) { reply(mn::QuestAcceptStatus::UNKNOWN_QUEST); return; }
-        // WRONG_GIVER (wire-only, dispatch-added). At M1 an NPC entity guid maps 1:1
-        // to its npc_template id (no NPC entities spawn yet — the mcc #28 spawn seam);
-        // giver_guid == 0 is "unspecified / self-serve" and skips the check.
+        // WRONG_GIVER (wire-only, dispatch-added). giver_guid == 0 is "unspecified /
+        // self-serve" and skips the check. A SPAWNED giver is addressed by its world-
+        // entity wire guid, so resolve it to its npc_template id first (#838) — the same
+        // mapping GOSSIP_HELLO uses; a raw template id (pre-spawn) resolves to itself.
         if (giver_guid != 0 &&
-            static_cast<std::uint32_t>(giver_guid) != def->giver_npc_id) {
+            resolve_npc_template_id(ctx, giver_guid) != def->giver_npc_id) {
             reply(mn::QuestAcceptStatus::WRONG_GIVER);
             return;
         }
@@ -3090,7 +3107,10 @@ void Dispatcher::register_m0_stubs() {
         const auto* req = fb::GetRoot<mn::QuestTurnIn>(f.payload);
         if (req == nullptr) return;
         const QuestId quest_id = req->quest_id();
-        const std::uint32_t npc_id = static_cast<std::uint32_t>(req->turn_in_guid());
+        // Resolve a SPAWNED turn-in NPC's world-entity guid to its npc_template id, the
+        // same way QUEST_ACCEPT / GOSSIP_HELLO do (#838) — else a spawned turn-in giver
+        // is mis-identified and the turn-in is wrongly rejected.
+        const std::uint32_t npc_id = resolve_npc_template_id(ctx, req->turn_in_guid());
         const int choice_index = req->choice_index();
 
         auto reply = [&](mn::QuestTurnInStatus st, std::uint32_t xp, std::int64_t money,
