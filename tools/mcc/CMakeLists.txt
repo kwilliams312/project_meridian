@@ -396,10 +396,18 @@ add_executable(mccore-smoke
     libmccore/tests/smoke.c)
 target_link_libraries(mccore-smoke PRIVATE mccore)
 
+# The smoke test cross-checks the ABI's id_count against the live `mcc` CLI for
+# ABI↔CLI parity (#772 — no more hand-bumped magic-number counts), so it shells
+# out to the CLI binary at run time. Build the CLI before the test and hand it
+# the resolved executable path via a compile definition (same argv/cwd-free
+# pattern as MCCORE_TEST_CONTENT_ROOT). $<TARGET_FILE:mcc> is the built binary.
+add_dependencies(mccore-smoke mcc)
+
 # The content ROOT is the repo's top-level content/ dir (which contains the
 # `core` pack). Resolved at configure time so the test needs no argv/cwd.
 target_compile_definitions(mccore-smoke PRIVATE
-    MCCORE_TEST_CONTENT_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/../../content")
+    MCCORE_TEST_CONTENT_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/../../content"
+    MCC_CLI_EXE="$<TARGET_FILE:mcc>")
 
 if(MSVC)
     target_compile_options(mccore-smoke PRIVATE /W4)
