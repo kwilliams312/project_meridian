@@ -320,13 +320,15 @@ table EntityEnter {
   power_type:PowerType = NONE;  // which secondary pool (mana/energy/rage/none)
   level:uint16 = 0;        // unit level (0 = unset/unknown)
   name:string;             // display name for the unit frame (empty = unnamed placeholder)
-  // Visual-assembly fields for PLAYER entities (②/T1, #538; client-character-
-  // assembler design §2). Additive (appended, defaulted/absent) exactly like the
-  // char_class + vitals blocks above — a pre-#538 decoder still reads the
-  // original fields, and NPC/creature EntityEnter carries NONE of these (race 0,
-  // appearance + equipment ABSENT), so the client renders NPCs via the monolithic
-  // visual.model path. Only ids travel; all visual lookup is client-side pck
-  // content (design §2 "only ids travel").
+  // Visual-assembly fields (②/T1, #538; client-character-assembler design §2).
+  // Additive (appended, defaulted/absent) exactly like the char_class + vitals
+  // blocks above — a pre-#538 decoder still reads the original fields. Set for ANY
+  // entity that assembles like a player: every player, and (npc@2, contract ①/§7,
+  // #821) an NPC that carries an appearance_catalog. A MODEL-ONLY entity (every M1
+  // NPC/creature) carries NONE of these (race 0, appearance + equipment ABSENT), so
+  // the client renders it via the monolithic visual.model path. The presence of the
+  // block — not the entity kind — decides. Only ids travel; all visual lookup is
+  // client-side pck content (design §2 "only ids travel").
   race:uint8 = 0;                 // M0-frozen roster race id (roster.h); 0 = unset/non-player
   sex:uint8 = 0;                  // reserved; 0 = male (M1 ships male only)
   appearance:Appearance;          // §5.2 record (contract ① T5); absent for NPCs

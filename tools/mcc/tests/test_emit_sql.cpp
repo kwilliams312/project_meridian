@@ -439,6 +439,112 @@ void test_multipack_selection() {
            "--pack for an absent namespace is an error, not a silent wrong pick");
 }
 
+// A fixture exercising the npc@2 visual.appearance branch (assemble-like-a-player):
+// a race with roster_id 7 that renders as an appearance_catalog, the catalog itself
+// (sex male, non-empty presets hair=3/face=2/skin=5), and an NPC that references the
+// catalog via visual.appearance. emit-sql must lower the NPC's visual.appearance to
+// the 5 npc_template.visual_appearance_* columns: race roster id 7, sex 0, and the
+// first preset id of each list.
+fs::path make_appearance_fixture() {
+    const fs::path root = make_scratch("appearance");
+    const fs::path content = root / "content";
+    const fs::path core = content / "core";
+    write_file(core / "pack.yaml",
+               "schema: meridian/pack@1\n"
+               "namespace: core\n"
+               "name: Test Pack\n"
+               "version: 1.0.0\n"
+               "content_schema_version: 1\n");
+    write_file(core / "races" / "hero.race.yaml",
+               "schema: meridian/race@1\n"
+               "id: core:race.hero\n"
+               "roster_id: 7\n"
+               "name: Hero\n"
+               "appearance: core:appearance.hero.male\n");
+    write_file(core / "appearance" / "hero_male.appearance.yaml",
+               "schema: meridian/appearance_catalog@1\n"
+               "id: core:appearance.hero.male\n"
+               "race: hero\n"
+               "sex: male\n"
+               "skeleton: core:art.rig\n"
+               "body_model: core:art.body\n"
+               "presets:\n"
+               "  hair:\n    - { id: 3, model: core:art.hair }\n"
+               "  face:\n    - { id: 2, texture: core:art.face }\n"
+               "  skin:\n    - { id: 5, palette: core:art.skin }\n");
+    write_file(core / "npcs" / "hero.npc.yaml",
+               "schema: meridian/npc@2\n"
+               "id: core:npc.hero\n"
+               "name: Herald\n"
+               "level: { min: 1, max: 1 }\n"
+               "creature_type: humanoid\n"
+               "faction: friendly\n"
+               "stats:\n  health: 10\n  damage: { min: 1, max: 2 }\n  attack_speed_ms: 2000\n"
+               "visual:\n  appearance: appearance.hero.male\n");
+    // A model-only NPC in the SAME emit — its 5 appearance columns must round-trip
+    // NULL (proving the branch-A/branch-B split; no behaviour change for model NPCs).
+    write_file(core / "npcs" / "grunt.npc.yaml",
+               "schema: meridian/npc@2\n"
+               "id: core:npc.grunt\n"
+               "name: Grunt\n"
+               "level: { min: 1, max: 1 }\n"
+               "creature_type: beast\n"
+               "faction: hostile\n"
+               "stats:\n  health: 10\n  damage: { min: 1, max: 2 }\n  attack_speed_ms: 2000\n"
+               "visual:\n  model: art.creature.grunt\n");
+    // The grunt's model needs an IF-9 asset id so emit_npc resolves visual_model_id.
+    write_file(core / "assets" / "grunt.asset.yaml",
+               "schema: meridian/asset@1\n"
+               "id: core:art.creature.grunt\n"
+               "class: creature_model\n"
+               "source: assets/art/creature/grunt.glb\n"
+               "license: CC-BY-4.0\n"
+               "provenance:\n  source_tier: original\n  authors: [test]\n");
+    return content.string();
+}
+
+// npc@2 visual.appearance -> the 5 npc_template.visual_appearance_* columns, and
+// model-only NPCs round-trip them NULL (no behaviour change).
+void test_npc_appearance_projection() {
+    std::cout << "test_npc_appearance_projection (visual.appearance -> 5 columns)\n";
+    const std::string content = make_appearance_fixture();
+    bool ok = false;
+    const std::string sql = run_emit(content, ok).sql;
+    report(ok, "appearance fixture emits with no diagnostics");
+    // The npc_template column list must carry the 5 new columns in order.
+    report(sql.find("visual_appearance_race_id, visual_appearance_sex, "
+                    "visual_appearance_hair, visual_appearance_face, "
+                    "visual_appearance_skin") != std::string::npos,
+           "npc_template declares the 5 visual_appearance_* columns");
+    // Herald (branch B): the row tail after visual_sound_set_id (NULL, no model/
+    // scale/sound_set) must be race=7, sex=0, hair=3, face=2, skin=5 — the race
+    // roster id + the first preset id of each list.
+    const std::size_t herald = sql.find("'Herald'");
+    report(herald != std::string::npos, "appearance NPC row present");
+    if (herald != std::string::npos) {
+        const std::size_t end = sql.find(')', herald);
+        const std::string row = sql.substr(herald, end - herald);
+        report(row.find(", NULL, NULL, NULL, 7, 0, 3, 2, 5") != std::string::npos,
+               "appearance NPC projects race=7,sex=0,hair=3,face=2,skin=5 (model NULL)",
+               row);
+    }
+    // Grunt (branch A): model set, all 5 appearance columns NULL.
+    const std::size_t grunt = sql.find("'Grunt'");
+    report(grunt != std::string::npos, "model-only NPC row present");
+    if (grunt != std::string::npos) {
+        const std::size_t end = sql.find(')', grunt);
+        const std::string row = sql.substr(grunt, end - grunt);
+        // The last 5 cells (visual_appearance_*) must all be NULL. `row` ends at the
+        // skin cell (substr excludes the closing paren), so the 5 appearance columns
+        // are the row's suffix.
+        const std::string tail = ", NULL, NULL, NULL, NULL, NULL";
+        const bool ends_null = row.size() >= tail.size() &&
+                               row.compare(row.size() - tail.size(), tail.size(), tail) == 0;
+        report(ends_null,
+               "model-only NPC round-trips the 5 appearance columns as NULL", row);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -447,6 +553,7 @@ int main() {
     test_emit_wellformed();
     test_determinism();
     test_ref_resolution();
+    test_npc_appearance_projection();
     test_multipack_selection();
 
     std::cout << "\n" << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";

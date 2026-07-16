@@ -1,4 +1,4 @@
-schema: meridian/npc@1
+schema: meridian/npc@2
 id: itm1:npc.marshal_bren
 name: Marshal Bren
 subtitle: Wardens' Quartermaster

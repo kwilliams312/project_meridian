@@ -1,9 +1,9 @@
-# meridian/npc@1 — ambient chibi villager (#817, epic #816). The Meadow's elder,
+# meridian/npc@2 — ambient chibi villager (#817, epic #816). The Meadow's elder,
 # who tends the glade lanterns that keep the dark at the treeline. Original
 # Meridian lore (clean-room). Reuses the shared chibi body mesh
 # (chibi:art.chibi_pill_body); no net-new art. See tansy_dewhollow.npc.yaml for
 # the shared-body / visual@1 note.
-schema: meridian/npc@1
+schema: meridian/npc@2
 id: chibi:npc.mardle_puffcap
 name: Mardle Puffcap
 subtitle: Glade Lantern-Keeper

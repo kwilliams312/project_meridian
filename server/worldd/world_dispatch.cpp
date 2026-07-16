@@ -645,8 +645,10 @@ std::vector<EquippedVisualRec> visible_equipment_visuals(const itm::Inventory& i
 
 // Assemble the EntityEnter visual-assembly block for a player from its loaded
 // character row (race + §5.2 appearance) and equipment container (visible slots).
-// Present ONLY for players — NPCs never carry this (EntityIdentity::visual stays
-// nullopt), so their EntityEnter omits race/appearance/equipment entirely.
+// This is the PLAYER source of EntityIdentity::visual; since npc@2 (contract ①/§7,
+// #821) an NPC that carries an appearance_catalog also sets visual — but from the DB
+// projection in install_spawns, not here. A model-only NPC leaves visual nullopt, so
+// its EntityEnter omits race/appearance/equipment entirely.
 //
 // Best-effort on the equipment load, exactly like push_inventory_snapshot: a
 // transient DB fault (or a minimal DB without the inventory tables) degrades to
@@ -3700,6 +3702,12 @@ void WorldServer::install_spawns(const std::vector<SpawnPlacement>& spawns) {
         id.type_id = sp.npc_id;   // the client maps the npc id to its model/appearance
         id.char_class = 0;        // not a player — no class coloring
         id.name = sp.name;
+        // npc@2 (contract ①/§7, #821): an NPC that carries an appearance_catalog
+        // relays the SAME visual-assembly block a player does — the encoder emits it
+        // whenever identity.visual is set (not gated on player-vs-NPC), so the client
+        // assembles + recolors the body via the proven player path. A model-only NPC
+        // leaves visual unset (nullopt) and stays on the monolithic visual.model path.
+        if (sp.appearance) id.visual = *sp.appearance;
         impl_->world.add_world_entity(id, sp.stats, sp.npc_id, sp.pos);
         ++n;
     }

@@ -64,6 +64,7 @@ const char* env(const char* k) { return std::getenv(k); }
 constexpr std::uint32_t kGossipNpc = 100;   // friendly quest-giver NPC (GOSSIP_HELLO target)
 constexpr std::uint32_t kDewdropNpc = 200;  // synthetic chibi:npc.dewdrop_slime
 constexpr std::uint32_t kSproutcapNpc = 201; // synthetic chibi:npc.sproutcap_scamp
+constexpr std::uint32_t kAppearanceNpc = 202; // npc@2 assemble-like-a-player NPC (#821)
 constexpr std::uint32_t kGiverQuest = 300;  // the quest kGossipNpc gives (so gossip is non-empty)
 
 // The tables load_world_content SELECTs from. Created WITHOUT foreign keys (the stores
@@ -167,6 +168,11 @@ void create_tables(db::Connection& c) {
         "  ai_behavior ENUM('aggressive','defensive','passive') NULL DEFAULT 'defensive',"
         "  ai_aggro_radius_m FLOAT NULL DEFAULT 20, ai_leash_radius_m FLOAT NULL DEFAULT 60,"
         "  move_run_speed_mps FLOAT NULL DEFAULT 7,"
+        // npc@2 assemble-like-a-player projection columns (#821) — the #821 loader reads
+        // them in PASS 2; NULL for a model-only NPC. Mirrors schema/sql/world/10_npc.sql.
+        "  visual_appearance_race_id TINYINT UNSIGNED NULL, visual_appearance_sex TINYINT UNSIGNED NULL,"
+        "  visual_appearance_hair TINYINT UNSIGNED NULL, visual_appearance_face TINYINT UNSIGNED NULL,"
+        "  visual_appearance_skin TINYINT UNSIGNED NULL,"
         "  PRIMARY KEY (id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
     c.execute(
         "CREATE TABLE npc_trainer (npc_id INT UNSIGNED NOT NULL, PRIMARY KEY (npc_id))"
@@ -326,6 +332,18 @@ void seed_fixture(db::Connection& c) {
         "3, 5, 2400, 'aggressive', 8, 18, 3),"
         "(201, 'Sproutcap Scamp', NULL, NULL, NULL, NULL, 2, 'hostile', 140, NULL, 5, "
         "5, 8, 2200, 'aggressive', 10, 22, 4)");
+    // An npc@2 assemble-like-a-player NPC (#821): the 5 visual_appearance_* columns
+    // are set (race roster 1, male, hair/face/skin preset ids 2/3/4), so PASS 2 must
+    // populate SpawnPlacement.appearance and install_spawns relay identity.visual.
+    c.execute(
+        "INSERT INTO npc_template (id, name, vendor_ref_id, loot_table_ref_id, loot_money_min, "
+        "loot_money_max, level_min, faction, stat_health, stat_mana, stat_armor, "
+        "stat_damage_min, stat_damage_max, stat_attack_speed_ms, ai_behavior, "
+        "ai_aggro_radius_m, ai_leash_radius_m, move_run_speed_mps, "
+        "visual_appearance_race_id, visual_appearance_sex, visual_appearance_hair, "
+        "visual_appearance_face, visual_appearance_skin) VALUES "
+        "(202, 'Tansy Dewhollow', NULL, NULL, NULL, NULL, 1, 'friendly', 100, NULL, 0, "
+        "1, 1, 2000, 'passive', 0, 0, 0, 1, 0, 2, 3, 4)");
     // Quest 300, given by NPC 100 — so DbNpcStore marks 100 a quest giver and the
     // gossip planner surfaces a quest option (a non-empty menu).
     c.execute(
@@ -346,6 +364,10 @@ void seed_fixture(db::Connection& c) {
     c.execute(
         "INSERT INTO spawn_point (id, zone_ref_id, npc_id, pos_x, pos_y, pos_z, orientation_deg, "
         "respawn_min, respawn_max, wander_radius_m) VALUES (3, 20, 201, -312, 5, -316, 0, 30, 45, 10)");
+    // The appearance NPC's placement (near the others, inside the AoI enter radius).
+    c.execute(
+        "INSERT INTO spawn_point (id, zone_ref_id, npc_id, pos_x, pos_y, pos_z, orientation_deg, "
+        "respawn_min, respawn_max, wander_radius_m) VALUES (4, 20, 202, -316, 5, -319, 0, 30, 45, NULL)");
 }
 
 const mw::SpawnPlacement* find_spawn(const std::vector<mw::SpawnPlacement>& spawns,
@@ -392,14 +414,33 @@ int main() {
 
         // ---- 1. LOAD: spawn_point resolved against npc_template ---------------
         mw::WorldContent content = mw::load_world_content(conn);
-        check("three spawn placements loaded", content.spawns.size() == 3);
+        check("four spawn placements loaded", content.spawns.size() == 4);
 
         const mw::SpawnPlacement* giver = find_spawn(content.spawns, kGossipNpc);
         const mw::SpawnPlacement* dewdrop = find_spawn(content.spawns, kDewdropNpc);
         const mw::SpawnPlacement* sproutcap = find_spawn(content.spawns, kSproutcapNpc);
+        const mw::SpawnPlacement* tansy = find_spawn(content.spawns, kAppearanceNpc);
         check("gossip NPC placement loaded", giver != nullptr);
         check("Dewdrop Slime placement loaded", dewdrop != nullptr);
         check("Sproutcap Scamp placement loaded", sproutcap != nullptr);
+        check("appearance NPC placement loaded", tansy != nullptr);
+
+        // npc@2 (#821): the appearance NPC's 5 visual_appearance_* columns project onto
+        // SpawnPlacement.appearance (the exact CharacterVisual a player carries), while
+        // every model-only NPC leaves it nullopt — the no-behaviour-change guarantee.
+        if (tansy) {
+            check("appearance NPC carries a CharacterVisual projection",
+                  tansy->appearance.has_value());
+            if (tansy->appearance) {
+                const mw::CharacterVisual& v = *tansy->appearance;
+                check("appearance projection scalars round-trip from the 5 columns",
+                      v.race == 1 && v.sex == 0 && v.appearance_version == 1 &&
+                          v.hair == 2 && v.face == 3 && v.skin == 4 && v.equipment.empty());
+            }
+        }
+        check("model-only NPCs carry NO appearance (identity.visual stays unset)",
+              giver && dewdrop && sproutcap && !giver->appearance &&
+                  !dewdrop->appearance && !sproutcap->appearance);
         if (giver) {
             check("gossip NPC name resolved from npc_template", giver->name == "Pippa Patch");
             check("gossip NPC is friendly", giver->stats.faction == mw::Faction::kFriendly);
@@ -440,8 +481,8 @@ int main() {
         mw::Dispatcher dispatcher;
         mw::WorldServer world(dispatcher, mw::WorldServerConfig{});
         world.install_spawns(content.spawns);
-        check("all spawns exist in the map tick", world.map_creature_count() == 3);
-        check("all spawns are AoI entities", world.world_state().world_entity_count() == 3);
+        check("all spawns exist in the map tick", world.map_creature_count() == 4);
+        check("all spawns are AoI entities", world.world_state().world_entity_count() == 4);
 
         // ---- 3. VISIBILITY: a session entering AoI sees the nearby spawns ------
         // Capture every s2c frame the relay sends the entering session. After the #498
@@ -467,6 +508,7 @@ int main() {
         // Decode every ENTITY_ENTER and match it to a spawn (guid in the world-entity
         // band; name + level from the resolved npc_template vitals).
         bool saw_gossip_enter = false, saw_dewdrop_enter = false, saw_sproutcap_enter = false;
+        bool saw_appearance_enter = false, appearance_wire_ok = false, gossip_wire_model_only = false;
         std::uint64_t gossip_guid = 0;
         for (const auto& [op, payload] : frames) {
             if (op != mn::Opcode::ENTITY_ENTER) continue;
@@ -476,14 +518,30 @@ int main() {
             if (name == "Pippa Patch" && ee->level() == 1 && ee->max_health() == 100) {
                 saw_gossip_enter = true;
                 gossip_guid = ee->entity_guid();
+                // A model-only NPC's EntityEnter omits the visual-assembly block.
+                gossip_wire_model_only = (ee->appearance() == nullptr && ee->race() == 0);
             }
             if (name == "Dewdrop Slime" && ee->max_health() == 100) saw_dewdrop_enter = true;
             if (name == "Sproutcap Scamp" && ee->max_health() == 140) saw_sproutcap_enter = true;
+            if (name == "Tansy Dewhollow") {
+                saw_appearance_enter = true;
+                // npc@2 (#821): the appearance NPC's EntityEnter carries the visual
+                // block projected from the 5 columns — race + the §5.2 appearance record.
+                const auto* a = ee->appearance();
+                appearance_wire_ok = ee->race() == 1 && ee->sex() == 0 && a != nullptr &&
+                                     a->version() == 1 && a->hair() == 2 && a->face() == 3 &&
+                                     a->skin() == 4;
+            }
         }
         check("entering AoI delivers ENTITY_ENTER for the spawned gossip NPC (with vitals+name)",
               saw_gossip_enter);
         check("entering AoI delivers ENTITY_ENTER for Dewdrop Slime", saw_dewdrop_enter);
         check("entering AoI delivers ENTITY_ENTER for Sproutcap Scamp", saw_sproutcap_enter);
+        check("entering AoI delivers ENTITY_ENTER for the appearance NPC", saw_appearance_enter);
+        check("appearance NPC's ENTITY_ENTER carries identity.visual (race + appearance record)",
+              appearance_wire_ok);
+        check("model-only NPC's ENTITY_ENTER omits the visual block (no behaviour change)",
+              gossip_wire_model_only);
         check("spawned entity guid is in the world-entity band (not a template id)",
               gossip_guid >= mw::kWorldEntityGuidBase);
 

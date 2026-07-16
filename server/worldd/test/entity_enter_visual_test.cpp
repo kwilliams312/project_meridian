@@ -8,9 +8,13 @@
 //     the §5.2 appearance record (contract ① T5) and the visible equipment set
 //     — including a per-item dye choice carried as a NUMERIC dye id (the wire
 //     shape the client resolves to a colour; §2 dye-resolution note);
-//   * an NPC/creature entity (EntityIdentity::visual absent) carries NONE of the
+//   * a MODEL-ONLY entity (EntityIdentity::visual absent) carries NONE of the
 //     new fields — appearance/equipment ABSENT (not zero-filled), race/sex 0 —
-//     so the client keeps rendering it via the monolithic visual.model path.
+//     so the client keeps rendering it via the monolithic visual.model path;
+//   * an APPEARANCE-CARRYING NPC (npc@2, contract ①/§7, #821: char_class 0, visual
+//     present, no equipment) round-trips race + the appearance record just like a
+//     player — proving the encoder is gated on `visual` being set, NOT on the entity
+//     being a player. This is the wire proof of the story-1 mechanism.
 //
 // CLEAN-ROOM: written from the client-character-assembler design §2 + the
 // world.fbs additive-field contract; no GPL source consulted (CONTRIBUTING.md).
@@ -119,11 +123,11 @@ int main() {
         }
     }
 
-    // ===== 2. NPC/creature: NO appearance/equipment (absent, not defaults) ====
-    // A world entity relay (WorldEntityRec) never sets EntityIdentity::visual, so
-    // its EntityEnter must omit the visual-assembly fields entirely: appearance
-    // and equipment ABSENT, race/sex at the 0 default. This is the branch that
-    // keeps NPC rendering on the monolithic visual.model path.
+    // ===== 2. MODEL-ONLY entity: NO appearance/equipment (absent, not defaults) ==
+    // A model-only relay (WorldEntityRec with EntityIdentity::visual unset — every M1
+    // NPC/creature) must omit the visual-assembly fields entirely: appearance and
+    // equipment ABSENT, race/sex at the 0 default. This is the branch that keeps
+    // model-only rendering on the monolithic visual.model path.
     {
         EntityIdentity id;
         id.entity_guid = 99;
@@ -146,6 +150,55 @@ int main() {
         check("2: sex is 0 (unset) for NPC", e->sex() == 0);
         // The pre-#538 vitals block still decodes (additive evolution).
         check("2: name still round-trips", e->name() && e->name()->str() == "Sentry");
+    }
+
+    // ===== 3. APPEARANCE-CARRYING NPC: same block a player carries (npc@2) =======
+    // The story-1 mechanism (contract ①/§7, #821): an NPC that carries an
+    // appearance_catalog projects EntityIdentity::visual (install_spawns copies the DB
+    // projection). It is NOT a player — char_class 0, no equipment — yet its
+    // EntityEnter MUST carry race + the appearance record, because the encoder emits
+    // the block whenever `visual` is set, not when the entity is a player. This is the
+    // DB-free wire proof that an NPC CAN carry an appearance (story 2 turns it on).
+    {
+        EntityIdentity id;
+        id.entity_guid = 77;
+        id.type_id = 4200;   // an npc_template id, not a player
+        id.char_class = 0;   // NPCs carry no class (install_spawns sets 0)
+        id.name = "Tansy Dewhollow";
+
+        CharacterVisual vis;
+        vis.race = 1;   // a chibi race roster id (the wire `race`)
+        vis.sex = 0;    // male
+        vis.appearance_version = 1;
+        vis.hair = 1;
+        vis.face = 1;
+        vis.skin = 1;
+        // equipment left empty — worn_items is not projected at M1.
+        id.visual = vis;
+
+        Player unit(id.entity_guid, at(-320.0f, -320.0f), placeholder_player_stats(0),
+                    /*account_id=*/0, /*char_class=*/0, id.name);
+
+        std::vector<std::uint8_t> buf = encode_entity_enter_payload(id, unit);
+
+        fb::Verifier v(buf.data(), buf.size());
+        check("3: appearance-NPC EntityEnter verifies", v.VerifyBuffer<mn::EntityEnter>(nullptr));
+        const auto* e = fb::GetRoot<mn::EntityEnter>(buf.data());
+
+        check("3: NPC (char_class 0) still carries appearance", e->char_class() == 0);
+        check("3: race round-trips for an appearance NPC", e->race() == 1);
+        check("3: sex round-trips for an appearance NPC", e->sex() == 0);
+        const auto* a = e->appearance();
+        if (check("3: appearance present for an appearance NPC", a != nullptr)) {
+            check("3: appearance.version", a->version() == 1);
+            check("3: appearance.hair", a->hair() == 1);
+            check("3: appearance.face", a->face() == 1);
+            check("3: appearance.skin", a->skin() == 1);
+        }
+        // No worn gear projected this story — the equipment set is empty (a present-
+        // but-empty vector when visual is set; worn_items is not projected at M1).
+        check("3: no worn items (worn_items not projected at M1)",
+              e->equipment() == nullptr || e->equipment()->size() == 0);
     }
 
     if (g_fail == 0) {

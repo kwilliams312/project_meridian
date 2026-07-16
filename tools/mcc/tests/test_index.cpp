@@ -91,7 +91,7 @@ void write_corpus(const fs::path& root) {
                "version: 0.1.0\n"
                "content_schema_version: 1\n");
     write_file(root / "t" / "goblin.npc.yaml",
-               "schema: meridian/npc@1\n"
+               "schema: meridian/npc@2\n"
                "id: t:npc.goblin\n"
                "name: Goblin\n"
                "level: 3\n");

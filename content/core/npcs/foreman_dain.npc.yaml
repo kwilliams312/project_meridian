@@ -1,4 +1,4 @@
-schema: meridian/npc@1
+schema: meridian/npc@2
 id: core:npc.foreman_dain
 name: Foreman Dain
 subtitle: Cinderdeep Survivor

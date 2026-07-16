@@ -15,16 +15,16 @@ public readonly record struct ContentId(string Id);
 public readonly record struct AbilityRef(string Id);
 public readonly record struct VendorRef(string Id);
 public readonly record struct LootRef(string Id);
+public readonly record struct AppearanceRef(string Id);
+public readonly record struct ItemRef(string Id);
 public readonly record struct EquipTypeRef(string Id);
 public readonly record struct NpcRef(string Id);
 public readonly record struct ZoneRef(string Id);
 public readonly record struct QuestRef(string Id);
-public readonly record struct ItemRef(string Id);
 public readonly record struct DyeRef(string Id);
 public readonly record struct AttributeRef(string Id);
 public readonly record struct RaceRef(string Id);
 public readonly record struct TalentTreeRef(string Id);
-public readonly record struct AppearanceRef(string Id);
 public readonly record struct TalentRef(string Id);
 public readonly record struct ArtRef(string Id);
 public readonly record struct SfxRef(string Id);
@@ -518,14 +518,19 @@ public sealed record NpcLoot
 
 public sealed record NpcVisual
 {
-    public required ArtRef Model { get; init; }
+    /// <summary>Branch A — a monolithic creature/mob mesh (the @1 shape).</summary>
+    public ArtRef? Model { get; init; }
+    /// <summary>Branch B — the appearance_catalog entity this NPC renders as, the SAME per-race/sex customization catalog players use. L011 resolves it (that an appearance-shaped ref points at an appearance_catalog is guaranteed structurally by L003). worldd projects it to EntityIdentity.visual (race roster_id + sex + preset ids) so the client assembles + recolors the body like a player.</summary>
+    public AppearanceRef? Appearance { get; init; }
+    /// <summary>RESERVED (contract ① §7): modular gear worn over the assembled body (branch B), by item id. Optional and NOT projected at M1 (YAGNI — per-NPC recolor needs only `appearance`); present so a future modular-NPC story is additive.</summary>
+    public IReadOnlyList<ItemRef>? WornItems { get; init; }
     public double? Scale { get; init; }
     public SfxRef? SoundSet { get; init; }
 }
 
 public sealed record Npc
 {
-    public const string SchemaTag = "meridian/npc@1";
+    public const string SchemaTag = "meridian/npc@2";
     public required ContentId Id { get; init; }
     public required string Name { get; init; }
     /// <summary>Shown under the name plate, e.g. "Mining Supervisor".</summary>
