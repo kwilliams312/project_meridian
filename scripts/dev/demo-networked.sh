@@ -40,10 +40,11 @@
 #
 #   --bots N       how many bots/accounts/characters to run   (default 4; env
 #                  MERIDIAN_DEMO_BOTS; flag wins over env)
-#   --no-client    run everything EXCEPT the GUI client, wait for the bots to enter
-#                  world, then grep the worldd log for the per-session class_id and
-#                  print the DISTINCT classes seen — proves the colors will differ
-#                  without needing a display (env MERIDIAN_DEMO_NO_CLIENT=1).
+#   --no-client    run everything EXCEPT the GUI client, wait for the bots to spawn
+#                  (ENTER_WORLD), then grep the worldd log for the per-session
+#                  class_id and print the DISTINCT classes seen — proves the colors
+#                  will differ without needing a display (env
+#                  MERIDIAN_DEMO_NO_CLIENT=1).
 
 set -euo pipefail
 
@@ -222,42 +223,65 @@ ok "${BOTS} bot(s) walking"
 
 # --- 7a. Headless verify path (--no-client): prove the classes, no GUI. ------
 # Everything above already ran (realm → accounts → characters → bots). Now wait for
-# the bots to complete their WORLD_HELLO, grep worldd's log for the per-session
-# class_id field (world_dispatch.cpp ~509 logs "WORLD_HELLO accepted -> HandshakeOk
-# ... class_id=N"), and print the DISTINCT classes seen. This proves the bots enter
-# with varied classes — i.e. the capsules WILL be colored differently — without a
-# display.
+# the bots to spawn, grep worldd's log for the per-session class_id field, and print
+# the DISTINCT classes seen. This proves the bots enter with varied classes — i.e.
+# the capsules WILL be colored differently — without a display.
+#
+# worldd logs the class_id on its ENTER_WORLD spawn line, NOT the earlier
+# WORLD_HELLO character-select handshake (world_dispatch.cpp:
+# "ENTER_WORLD accepted -> spawned ... class_id=<N>"). WORLD_HELLO carries only
+# grant/account/realm ids. Parse the ENTER_WORLD line for class_id, and match both
+# the text log shape (class_id=N) and the JSON shape ("class_id":N) so the proof
+# survives a --log-format change.
 if [ "${NO_CLIENT}" = "1" ]; then
   WORLDD_LOG="${REPO_ROOT}/.dev-run/worldd.log"
-  log "headless verify: waiting for ${BOTS} bot(s) to enter world (WORLD_HELLO)..."
-  # Poll the log for BOTS accepted handshakes (up to ~15s) rather than sleep-guess.
-  accepted=0
+
+  # class_ids_from_log <logfile> — one class_id per ENTER_WORLD spawn line, format
+  # agnostic: `class_id=1` (text) and `"class_id":1` (JSON) both yield `1`.
+  class_ids_from_log() {
+    grep 'ENTER_WORLD accepted' "$1" 2>/dev/null \
+      | grep -oE '"?class_id"?[[:space:]]*[=:][[:space:]]*[0-9]+' \
+      | grep -oE '[0-9]+$' || true
+  }
+
+  log "headless verify: waiting for ${BOTS} bot(s) to enter world (ENTER_WORLD)..."
+  # Poll the log for BOTS spawns (up to ~15s) rather than sleep-guess. ENTER_WORLD
+  # always follows WORLD_HELLO, so waiting on the spawn line avoids racing the
+  # class_id extraction against handshakes that haven't spawned yet.
+  entered=0
   # shellcheck disable=SC2034  # w is the retry-budget loop counter
   for w in $(seq 1 60); do
     # grep -c prints exactly one count line (0 on no match); `|| true` swallows
     # its exit-1-on-no-match so `set -e` and the arithmetic stay happy.
-    accepted="$(grep -c 'WORLD_HELLO accepted' "${WORLDD_LOG}" 2>/dev/null || true)"
-    [ -n "${accepted}" ] || accepted=0
-    [ "${accepted}" -ge "${BOTS}" ] && break
+    entered="$(grep -c 'ENTER_WORLD accepted' "${WORLDD_LOG}" 2>/dev/null || true)"
+    [ -n "${entered}" ] || entered=0
+    [ "${entered}" -ge "${BOTS}" ] && break
     sleep 0.25
   done
+  accepted="$(grep -c 'WORLD_HELLO accepted' "${WORLDD_LOG}" 2>/dev/null || true)"
+  [ -n "${accepted}" ] || accepted=0
 
   echo
-  log "worldd WORLD_HELLO accept lines (class_id per session):"
-  grep 'WORLD_HELLO accepted' "${WORLDD_LOG}" 2>/dev/null \
-    | grep -oE 'class_id=[0-9]+' | sort | uniq -c || true
+  log "worldd ENTER_WORLD spawn lines (class_id per session):"
+  class_ids_from_log "${WORLDD_LOG}" | sort | uniq -c || true
 
   echo
-  distinct="$(grep 'WORLD_HELLO accepted' "${WORLDD_LOG}" 2>/dev/null \
-                | grep -oE 'class_id=[0-9]+' | sort -u | paste -sd',' - || true)"
-  n_distinct="$(grep 'WORLD_HELLO accepted' "${WORLDD_LOG}" 2>/dev/null \
-                  | grep -oE 'class_id=[0-9]+' | sort -u | grep -c . || true)"
+  distinct="$(class_ids_from_log "${WORLDD_LOG}" | sort -u | paste -sd',' - || true)"
+  n_distinct="$(class_ids_from_log "${WORLDD_LOG}" | sort -u | grep -c . || true)"
   [ -n "${n_distinct}" ] || n_distinct=0
   ok "accepted handshakes: ${accepted}/${BOTS}"
+  ok "bots entered world:  ${entered}/${BOTS}"
   ok "distinct class_ids entered: ${n_distinct}  [${distinct}]"
 
-  # For the default 4-bot demo all four roster classes should appear.
-  if [ "${BOTS}" -ge 4 ] && [ "${n_distinct}" -lt 4 ]; then
+  # Distinguish a stale parser from a genuine no-entry failure: if the bots DID
+  # spawn (ENTER_WORLD lines present) but no class_id parsed, the extractor above
+  # no longer matches worldd's log shape — say so, rather than reporting a false
+  # "no bots entered" (the false negative that motivated this fix, #822).
+  if [ "${entered}" -ge "${BOTS}" ] && [ "${n_distinct}" -eq 0 ]; then
+    warn "parser mismatch: ${entered} ENTER_WORLD line(s) present but 0 class_ids parsed"
+    warn "  → the class_id extractor no longer matches worldd's log format (NOT a bot failure) — see ${WORLDD_LOG}"
+  elif [ "${BOTS}" -ge 4 ] && [ "${n_distinct}" -lt 4 ]; then
+    # For the default 4-bot demo all four roster classes should appear.
     warn "expected 4 distinct class_ids for --bots ${BOTS}, saw ${n_distinct} — see ${WORLDD_LOG}"
   fi
   echo
