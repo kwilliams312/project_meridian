@@ -147,8 +147,14 @@ func _add_option_row(opt: Dictionary) -> void:
 			b.pressed.connect(func(): _bus.request_quest_accept(target_id, _npc_guid))
 			_body.add_child(b)
 		Bus.GOSSIP_QUEST_IN_PROGRESS:
+			# An accepted-but-incomplete quest: a non-interactive REMINDER row (never an
+			# accept button), so re-talking to the giver reads "you're already on this"
+			# instead of re-offering it (#843). Pull the objective progress from the bus
+			# quest log so the reminder tells the player what is still outstanding; fall
+			# back to a generic line when the quest isn't in the log yet.
 			var l := Label.new()
-			l.text = "[…]  Quest #%d — in progress" % target_id
+			l.text = _in_progress_text(target_id)
+			l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			l.add_theme_color_override("font_color", Color(0.75, 0.78, 0.85))
 			_body.add_child(l)
 		Bus.GOSSIP_QUEST_COMPLETE:
@@ -233,6 +239,25 @@ func _show_turn_in_choices(quest_id: int, entry: Dictionary) -> void:
 	var back := _make_button("← Back", Color(0.75, 0.78, 0.85))
 	back.pressed.connect(func(): show_menu(_npc_guid, _bus.gossip_options()))
 	_body.add_child(back)
+
+
+# The reminder line for an in-progress quest row (#843). Reads the quest's live
+# objective progress from the bus quest log and summarizes what is still outstanding
+# ("Did you complete this?" + a have/need tally). When the quest is not (yet) in the
+# log — no bus, or the QUEST_LOG resync has not arrived — falls back to a generic line
+# so the row is always a reminder and never an accept offer.
+func _in_progress_text(quest_id: int) -> String:
+	var entry: Dictionary = _bus.quest_entry(quest_id) if _bus != null else {}
+	var objectives: Array = entry.get("objectives", [])
+	if objectives.is_empty():
+		return "[…]  Quest #%d — in progress. Did you complete this?" % quest_id
+	var have := 0
+	var need := 0
+	for o in objectives:
+		var od := o as Dictionary
+		have += int(od.get("have", 0))
+		need += int(od.get("need", 0))
+	return "[…]  Quest #%d — Did you complete this?  (%d/%d)" % [quest_id, have, need]
 
 
 func _make_button(text: String, color: Color) -> Button:

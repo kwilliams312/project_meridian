@@ -194,6 +194,19 @@ func _verify_gossip_window() -> void:
 	var accept := {"quest": 0, "giver": 0}
 	bus.quest_accept_requested.connect(func(q, g): accept["quest"] = q; accept["giver"] = g)
 
+	# #843: the in-progress reminder reads its objective tally from the bus quest log,
+	# so seed quest #40 as accepted-but-incomplete (1 of 3 kobolds culled) before the menu.
+	bus.publish_quest_log([
+		{
+			"quest_id": 40, "level": 2, "complete": false,
+			"objectives": [
+				{"type": 0, "target_id": 26, "have": 1, "need": 3, "complete": false},
+			],
+			"reward_xp": 50, "reward_money": 120,
+			"reward_items": [], "choice_items": [],
+		},
+	])
+
 	bus.publish_gossip_menu(27, [
 		{"kind": EventBus.GOSSIP_QUEST_AVAILABLE, "target_id": 28},
 		{"kind": EventBus.GOSSIP_QUEST_IN_PROGRESS, "target_id": 40},
@@ -210,6 +223,19 @@ func _verify_gossip_window() -> void:
 		accept_btn.emit_signal("pressed")
 	_check("pressing accept emits intent (quest 28, giver 27)",
 		int(accept["quest"]) == 28 and int(accept["giver"]) == 27)
+
+	# #843: the IN_PROGRESS row is a non-interactive reminder — NOT a re-offer. It must
+	# render as a Label carrying "Did you complete this?" + the live objective tally
+	# (1/3), and there must be NO accept button for the accepted quest #40.
+	var reminder := _find_label_containing(win, "Quest #40")
+	_check("in-progress row renders as a reminder label (not an accept button)",
+		reminder != null and _find_button_containing(win, "Quest #40") == null)
+	_check("in-progress reminder asks 'Did you complete this?'",
+		reminder != null and reminder.text.find("Did you complete this?") != -1)
+	_check("in-progress reminder shows the objective tally (1/3)",
+		reminder != null and reminder.text.find("(1/3)") != -1)
+	_check("no accept offer is shown for the already-accepted quest #40",
+		_find_button_containing(win, "Accept quest #40") == null)
 
 	# #838: a SUCCESSFUL accept (OK) re-requests the gossip menu for the open NPC so the
 	# dialog transitions (available → in-progress/turn-in) instead of leaving the stale
