@@ -336,6 +336,24 @@ std::size_t WorldState::world_entity_count() const {
     return entities_.size();
 }
 
+std::vector<VisibleWorldEntity> WorldState::visible_world_entities(SessionSlot slot) const {
+    std::lock_guard<std::mutex> lk(mtx_);
+    std::vector<VisibleWorldEntity> out;
+    auto sit = sessions_.find(slot);
+    if (sit == sessions_.end()) return out;  // not entered — nothing visible
+    // Project the session's tracked visible ENTITIES (content spawns; sessions are
+    // handled separately via `visible`) to {guid, template}. A guid the relay is
+    // still tracking but whose entity record is gone (defensive — entities are not
+    // removed at M1) is skipped so the caller never resolves a stale template.
+    out.reserve(sit->second.visible_entities.size());
+    for (AoiId g : sit->second.visible_entities) {
+        auto eit = entities_.find(g);
+        if (eit == entities_.end()) continue;
+        out.push_back(VisibleWorldEntity{g, eit->second.npc_template_id});
+    }
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // Area triggers + POI discovery (#368; WLD-01/03). Evaluated against the mover's
 // authoritative position (the map tick's movement phase; SAD §2.5).
