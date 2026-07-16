@@ -1,0 +1,36 @@
+# meridian/quest@1 — second chibi starter quest (#831, epic #816). Chains off
+# "A Meadow Welcome": once Bram has met the sprout, he sends a five-leaf clover
+# sprig up to old Mardle Puffcap by the lanterns — the lantern-keeper Tansy's
+# gossip promises will "steer you home". A second talk/deliver beat (QST-01) that
+# walks the new chibi from the clover rows across to the lanterns, meeting a third
+# villager, with no combat (Sprout Meadow has no mobs or loot yet). prerequisites
+# gate it behind the welcome quest so the two read as a short onboarding chain.
+# Mirrors core's deliver quest shape (sparks_in_the_dark); turn-in is the deliver
+# target Mardle. Original Meridian lore (clean-room, CONTRIBUTING.md §clean-room).
+schema: meridian/quest@1
+id: chibi:quest.rows_and_lanterns
+name: Rows and Lanterns
+summary: Bring Bram's five-leaf clover sprig to Mardle Puffcap at the lanterns.
+offer_text: >-
+  Now you've got the way of the rows, do me a good turn. Old Mardle keeps the
+  lanterns lit at the Meadow's edge, and a five-leaf sprig keeps her boots dry
+  through the night watch. Take her this one — mind the dewponds on the way.
+completion_text: >-
+  Five leaves, and picked at dawn — that Bram never forgets me. Off you go, then,
+  sprout. Stay inside the lantern-light and the Meadow will always show you home.
+level: 2
+required_level: 1
+zone: chibi:zone.sprout_meadow
+giver: chibi:npc.bram_cloverfoot
+turn_in: chibi:npc.mardle_puffcap
+prerequisites:
+  quests:
+    - chibi:quest.a_meadow_welcome
+objectives:
+  - type: deliver
+    item: chibi:item.clover_sprig
+    to: chibi:npc.mardle_puffcap
+rewards:
+  xp: 120
+  money: 90
+script: null
