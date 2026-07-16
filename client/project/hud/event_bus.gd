@@ -687,6 +687,10 @@ signal loot_closed(corpse_guid: int)
 ## The vendor window should open on `vendor_id` (the gossip vendor entry was picked).
 signal vendor_opened(vendor_id: int)
 
+## The vendor window should close (Close button, or the world scene auto-closing it when
+## the player leaves the NPC's interaction range, #851). The window hides; UI-only.
+signal vendor_closed(vendor_id: int)
+
 ## A vendor transaction result. `result` carries a "kind" ("buy"/"sell"/"buyback"), the
 ## typed `status`, and the transaction fields. Already merged (balance + buyback queue).
 signal vendor_result(result: Dictionary)
@@ -702,6 +706,10 @@ signal trainer_list_changed(npc_guid: int, entries: Array)
 
 ## The trainer window should open on `npc_guid` (the gossip trainer entry was picked).
 signal trainer_opened(npc_guid: int)
+
+## The trainer window should close (Close button, or the world scene auto-closing it when
+## the player leaves the NPC's interaction range, #851). The window hides; UI-only.
+signal trainer_closed(npc_guid: int)
 
 ## A TRAINER_LEARN_RESULT. `result` carries {npc_guid,ability_id,status,cost,new_balance}.
 ## Already merged (balance + known-ability set).
@@ -738,6 +746,13 @@ var _loot_copper: int = 0            # money still on the open corpse
 var _loot_items: Array = []          # remaining lootable slots on the open corpse
 var _vendor_id: int = 0              # the open vendor (0 = none)
 var _vendor_catalog: Array = []      # the open vendor's VENDOR_LIST rows: {item_template_id,price,quality,stock}
+# The NPC whose vendor / trainer WINDOW is currently open (0 = none). Distinct from the
+# catalog/list state above (_vendor_id / _trainer_npc), which is set when the server list
+# ARRIVES — even before the window is revealed — and is never cleared. These two track the
+# actual open-window state (set on open_vendor / open_trainer, cleared on close_*), so the
+# world scene can auto-close a window when the player walks out of interaction range (#851).
+var _vendor_open_npc: int = 0        # the NPC whose vendor window is open (0 = none)
+var _trainer_open_npc: int = 0       # the NPC whose trainer window is open (0 = none)
 var _inventory: Array = []           # backpack contents (INVENTORY_SNAPSHOT): {slot,item_template_id,count,quality,binding}
 var _backpack_slots: int = 0         # backpack grid capacity (cell count)
 var _inventory_known: bool = false   # an INVENTORY_SNAPSHOT has been seen
@@ -916,13 +931,31 @@ func request_trainer_learn(npc_guid: int, ability_id: int) -> void:
 ## entry fires). UI-only — no server frame (the wire has no vendor-catalog opcode; gap).
 func open_vendor(vendor_id: int) -> void:
 	_vendor_id = vendor_id
+	_vendor_open_npc = vendor_id
 	vendor_opened.emit(vendor_id)
 
 
 ## Open the trainer window on `npc_guid` (called when the gossip trainer entry fires). The
 ## TRAINER_LIST was already pushed with the GOSSIP_MENU — this only reveals the window.
 func open_trainer(npc_guid: int) -> void:
+	_trainer_open_npc = npc_guid
 	trainer_opened.emit(npc_guid)
+
+
+## Close the open vendor window (Close button, or the world scene auto-closing it out of
+## range — #851). Clears the open-window guid and emits so the window hides. UI-only.
+func close_vendor() -> void:
+	var vendor_id := _vendor_open_npc
+	_vendor_open_npc = 0
+	vendor_closed.emit(vendor_id)
+
+
+## Close the open trainer window (Close button, or the world scene auto-closing it out of
+## range — #851). Clears the open-window guid and emits so the window hides. UI-only.
+func close_trainer() -> void:
+	var npc_guid := _trainer_open_npc
+	_trainer_open_npc = 0
+	trainer_closed.emit(npc_guid)
 
 # --- Read API (bus -> view-models; all return copies) ------------------------
 
@@ -944,6 +977,18 @@ func loot_items() -> Array:
 ## The open vendor id (0 = none).
 func vendor_id() -> int:
 	return _vendor_id
+
+
+## The NPC whose vendor window is currently OPEN (0 = none). Unlike vendor_id(), this is
+## cleared on close — the world scene reads it to auto-close the window out of range (#851).
+func vendor_open_npc() -> int:
+	return _vendor_open_npc
+
+
+## The NPC whose trainer window is currently OPEN (0 = none). Cleared on close (unlike
+## trainer_npc(), which holds the list state). Read by the world scene for auto-close (#851).
+func trainer_open_npc() -> int:
+	return _trainer_open_npc
 
 
 ## The open vendor's server-computed catalog (copies): {item_template_id,price,quality,stock}.

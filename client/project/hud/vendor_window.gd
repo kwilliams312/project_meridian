@@ -65,6 +65,7 @@ func setup(bus: MeridianEventBus) -> void:
 		return
 	_bus = bus
 	_bus.vendor_opened.connect(_on_vendor_opened)
+	_bus.vendor_closed.connect(_on_vendor_closed)
 	_bus.vendor_catalog_changed.connect(_on_catalog_changed)
 	_bus.vendor_result.connect(_on_vendor_result)
 	_bus.vendor_buyback_changed.connect(_on_buyback_changed)
@@ -165,7 +166,10 @@ func _build() -> void:
 	close_row.alignment = BoxContainer.ALIGNMENT_END
 	var close := Button.new()
 	close.text = "Close  [Esc]"
-	close.pressed.connect(func(): set_frame_visible(false))
+	# Route the close through the bus (like the gossip window) so the open-window guid the
+	# world scene tracks for the #851 out-of-range auto-close is cleared; fall back to a
+	# local hide when unbound (a standalone verify with no bus).
+	close.pressed.connect(_on_close_pressed)
 	close_row.add_child(close)
 	root.add_child(close_row)
 
@@ -188,6 +192,19 @@ func _on_vendor_opened(vendor_id: int) -> void:
 		_render_catalog(_bus.vendor_catalog())
 		_render_buyback(_bus.buyback_entries())
 	set_frame_visible(true)
+
+
+func _on_vendor_closed(_vendor_id_arg: int) -> void:
+	set_frame_visible(false)
+
+
+# The Close button: ask the bus to close (clears the world scene's open-window tracking for
+# the #851 auto-close), which re-enters as _on_vendor_closed; hide directly if unbound.
+func _on_close_pressed() -> void:
+	if _bus != null:
+		_bus.close_vendor()
+	else:
+		set_frame_visible(false)
 
 
 func _on_catalog_changed(vendor_id: int, items: Array) -> void:

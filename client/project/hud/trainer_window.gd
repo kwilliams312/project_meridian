@@ -44,6 +44,7 @@ func setup(bus: MeridianEventBus) -> void:
 	_bus = bus
 	_bus.trainer_list_changed.connect(_on_trainer_list_changed)
 	_bus.trainer_opened.connect(_on_trainer_opened)
+	_bus.trainer_closed.connect(_on_trainer_closed)
 	_bus.trainer_learn_result.connect(_on_trainer_learn_result)
 
 
@@ -84,7 +85,10 @@ func _build() -> void:
 	close_row.alignment = BoxContainer.ALIGNMENT_END
 	var close := Button.new()
 	close.text = "Close  [Esc]"
-	close.pressed.connect(func(): set_frame_visible(false))
+	# Route the close through the bus (like the gossip window) so the open-window guid the
+	# world scene tracks for the #851 out-of-range auto-close is cleared; fall back to a
+	# local hide when unbound (a standalone verify with no bus).
+	close.pressed.connect(_on_close_pressed)
 	close_row.add_child(close)
 	root.add_child(close_row)
 
@@ -108,6 +112,19 @@ func _on_trainer_opened(npc_guid: int) -> void:
 		return
 	_npc = npc_guid
 	render(npc_guid, _bus.trainer_entries())
+
+
+func _on_trainer_closed(_npc_guid: int) -> void:
+	set_frame_visible(false)
+
+
+# The Close button: ask the bus to close (clears the world scene's open-window tracking for
+# the #851 auto-close), which re-enters as _on_trainer_closed; hide directly if unbound.
+func _on_close_pressed() -> void:
+	if _bus != null:
+		_bus.close_trainer()
+	else:
+		set_frame_visible(false)
 
 
 func _on_trainer_learn_result(result: Dictionary) -> void:

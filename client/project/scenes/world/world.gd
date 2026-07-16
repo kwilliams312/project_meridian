@@ -55,6 +55,15 @@ const TARGET_PICK_RANGE := 1000.0     # metres — max click-pick ray length
 # button (the TPS camera orbits on left-drag). We never mark the LMB event handled.
 const TARGET_CLICK_DRAG_PX := 8.0
 
+# NPC dialog auto-close (#851). While a gossip / vendor / trainer window is open, the world
+# scene closes it once the player walks out of the NPC's interaction reach — you should not
+# keep a menu open from across the map. The reach + the planar distance decision live in the
+# dependency-free DialogAutoclose module (mirrors the server gate #842; 5 m open, 5.5 m close
+# with hysteresis) so the policy is unit-testable without the whole world scene. The server
+# stays authoritative (it already refuses out-of-range gossip/accept/turn-in); this is purely
+# the client proactively closing the view.
+const DialogAutoclose := preload("res://scenes/world/dialog_autoclose.gd")
+
 # Character Select — where a PRE-HandshakeOk connection failure returns the player
 # (#301 UX: never strand them in an empty world). Kept in sync with the char-select
 # handoff (scenes/charselect/char_select.gd → WORLD_SCENE).
@@ -387,6 +396,11 @@ func _physics_process(delta: float) -> void:
 	# server still validates (RESURRECT_TOO_FAR) — this only completes the run without a click.
 	if _bus != null and _bus.is_ghost() and _player != null:
 		_bus.update_ghost_position(_player.position)
+
+	# 6. NPC dialog auto-close (#851): if an interaction window is open and the player has
+	# walked out of the NPC's interaction reach, proactively close it (mirrors the server
+	# range gate #842). Runs after the remote + player positions are updated above.
+	_tick_interaction_autoclose()
 
 	_refresh_hud()
 
@@ -900,6 +914,38 @@ func _open_gossip_on_current_npc() -> void:
 		npc = _default_gossip_npc()
 	print("[world] GOSSIP_HELLO -> npc=%d" % npc)
 	_bus.request_gossip_hello(npc)
+
+
+# --- NPC dialog auto-close (#851) --------------------------------------------
+# While a gossip / vendor / trainer window is open, close it once the player leaves the
+# NPC's interaction reach — the same UX Esc gives, driven by distance. The bus tracks the
+# open NPC guid per window (gossip_npc / vendor_open_npc / trainer_open_npc); we measure the
+# player's HORIZONTAL distance to that NPC's spawned node and, past the close threshold,
+# reuse the existing bus close path (which hides the window). No per-frame allocation: this
+# is a handful of dictionary lookups and float math over at most three open windows.
+func _tick_interaction_autoclose() -> void:
+	if _bus == null or _player == null:
+		return
+	var ppos: Vector3 = _player.position
+	if _bus.gossip_npc() != 0 and _npc_dialog_out_of_reach(_bus.gossip_npc(), ppos):
+		_bus.close_gossip()
+	if _bus.vendor_open_npc() != 0 and _npc_dialog_out_of_reach(_bus.vendor_open_npc(), ppos):
+		_bus.close_vendor()
+	if _bus.trainer_open_npc() != 0 and _npc_dialog_out_of_reach(_bus.trainer_open_npc(), ppos):
+		_bus.close_trainer()
+
+
+# True iff the NPC named by `guid` is beyond the interaction close threshold from `ppos`.
+# When the NPC has NO known world position (not a spawned remote entity — e.g. the dev
+# raw-template-id gossip fallback, or an NPC not yet / no longer in AoI) the distance is
+# unmeasurable, so we DON'T auto-close — mirroring the server gate, which only enforces
+# range when the position is knowable (#842). Distance is planar (height-ignoring), the same
+# horizontal_distance the server uses.
+func _npc_dialog_out_of_reach(guid: int, ppos: Vector3) -> bool:
+	var node: Node3D = _remote_nodes.get(guid)
+	if node == null:
+		return false
+	return DialogAutoclose.should_close(ppos, node.position, DialogAutoclose.CLOSE_M)
 
 
 # The dev corpse to open loot on when nothing is targeted (overridable with
