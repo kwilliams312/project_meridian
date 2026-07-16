@@ -29,6 +29,61 @@ _DB_PID=""
 _dbc()     { mariadb       --no-defaults --socket="${MERIDIAN_DEV_DB_SOCKET}" --user=root "$@"; }
 _dbadmin() { mariadb-admin --no-defaults --socket="${MERIDIAN_DEV_DB_SOCKET}" --user=root "$@"; }
 
+# PIDs of mariadbd processes that belong to THIS realm — matched by our datadir OR
+# socket appearing in their argv. This is the safe alternative to a blanket
+# `pkill mariadbd`: a system MariaDB (or another dev realm on a different
+# port/socket, e.g. a concurrent run-local under a different override) has a
+# different datadir/socket and is never selected. pgrep -x scopes to the exact
+# process name; the case-glob then keeps only the ones that are ours.
+_db_realm_pids() {
+  local pids p cmd
+  pids="$(pgrep -x mariadbd 2>/dev/null || true)"
+  for p in $pids; do
+    cmd="$(ps -o command= -p "$p" 2>/dev/null || true)"
+    case "$cmd" in
+      *"${MERIDIAN_DEV_DB_DATADIR}"*|*"${MERIDIAN_DEV_DB_SOCKET}"*)
+        printf '%s\n' "$p" ;;
+    esac
+  done
+}
+
+# Bring THIS realm's mariadbd down for good, WITHOUT touching datadir/socket
+# (callers remove those only after this confirms the server is gone). Robust to
+# the orphaned-server / stale-pidfile case that pidfile-only shutdown misses:
+#   1. graceful `shutdown` over our socket if it still answers,
+#   2. SIGTERM → poll up to ~10s → SIGKILL every candidate pid: the tracked
+#      _DB_PID, the pidfile pid, AND any orphan matched by datadir/socket,
+#   3. return non-zero if the socket is STILL answering afterwards, so callers
+#      know not to delete the datadir out from under a live server.
+# Kills are always realm-scoped (see _db_realm_pids) — never a bare pkill.
+_db_force_down() {
+  if [ -S "${MERIDIAN_DEV_DB_SOCKET}" ] && _dbadmin ping >/dev/null 2>&1; then
+    log "Shutting down MariaDB (socket ${MERIDIAN_DEV_DB_SOCKET})"
+    _dbadmin shutdown >/dev/null 2>&1 || true
+  fi
+
+  local pidfile_pid="" targets p i alive
+  [ -f "${_DB_PIDFILE}" ] && pidfile_pid="$(cat "${_DB_PIDFILE}" 2>/dev/null || true)"
+  targets="$(printf '%s\n%s\n%s\n' "${_DB_PID}" "${pidfile_pid}" "$(_db_realm_pids)" \
+             | grep -E '^[0-9]+$' | sort -u || true)"
+
+  for p in $targets; do kill -0 "$p" 2>/dev/null && kill "$p" 2>/dev/null || true; done
+  # shellcheck disable=SC2034  # i is the retry-budget loop counter
+  for i in $(seq 1 20); do
+    alive=""
+    for p in $targets; do kill -0 "$p" 2>/dev/null && alive="${alive} $p"; done
+    [ -z "$alive" ] && break
+    sleep 0.5
+  done
+  for p in $targets; do kill -0 "$p" 2>/dev/null && kill -9 "$p" 2>/dev/null || true; done
+
+  if [ -S "${MERIDIAN_DEV_DB_SOCKET}" ] && _dbadmin ping >/dev/null 2>&1; then
+    warn "MariaDB still answering on ${MERIDIAN_DEV_DB_SOCKET} after shutdown + SIGKILL"
+    return 1
+  fi
+  return 0
+}
+
 # Start a fresh throwaway MariaDB. Wipes any prior datadir (throwaway by design).
 db_start() {
   local sock_len=${#MERIDIAN_DEV_DB_SOCKET}
@@ -39,16 +94,14 @@ db_start() {
   # Guard against a stale instance from a crashed prior run (or a second
   # concurrent invocation) still holding our socket/port — otherwise we would
   # silently talk to the wrong server and load schemas into a datadir we don't
-  # manage. If a previous mariadb.pid is live, reap it; if the socket still
-  # answers, refuse rather than clobber.
-  if [ -f "${_DB_PIDFILE}" ]; then
-    local old; old="$(cat "${_DB_PIDFILE}" 2>/dev/null || true)"
-    if [ -n "$old" ] && kill -0 "$old" 2>/dev/null; then
-      warn "reaping stale mariadbd from a prior run (pid ${old})"
-      mariadb-admin --no-defaults --socket="${MERIDIAN_DEV_DB_SOCKET}" --user=root shutdown >/dev/null 2>&1 \
-        || kill "$old" 2>/dev/null || true
-      sleep 1; kill -9 "$old" 2>/dev/null || true
-    fi
+  # manage. Reap any leftover mariadbd that is demonstrably OURS — a live
+  # pidfile OR an orphan whose datadir/socket matches this realm (the pidfile
+  # having drifted from the real server pid is exactly the #841 failure). Only
+  # after that, if the socket STILL answers, it's a server we don't recognise:
+  # refuse rather than clobber it.
+  if [ -f "${_DB_PIDFILE}" ] || [ -n "$(_db_realm_pids)" ]; then
+    warn "reaping stale mariadbd from a prior run before starting fresh"
+    _db_force_down || true
     rm -f "${_DB_PIDFILE}"
   fi
   if [ -S "${MERIDIAN_DEV_DB_SOCKET}" ] && \
@@ -80,6 +133,7 @@ db_start() {
 
   # Wait for it to accept connections (poll the condition, don't sleep-guess).
   local i
+  # shellcheck disable=SC2034  # i is the retry-budget loop counter
   for i in $(seq 1 60); do
     if _dbadmin ping >/dev/null 2>&1; then
       ok "MariaDB up ($(_dbc -N -e 'SELECT VERSION();' 2>/dev/null))"
@@ -123,19 +177,17 @@ db_load_schemas() {
   ok "world schema loaded ($(_dbc -N meridian_world -e 'SELECT COUNT(*) FROM information_schema.tables WHERE table_schema="meridian_world";') tables)"
 }
 
-# Stop the instance cleanly and (unless MERIDIAN_DEV_DB_KEEP=1) remove the datadir.
+# Stop the instance and (unless MERIDIAN_DEV_DB_KEEP=1) remove the datadir.
+# Single source of truth for DB teardown — used by test.sh's EXIT trap, the
+# run-local.sh --smoke/--foreground paths, AND run-local.sh --stop. Delegates the
+# actual shutdown to _db_force_down so an orphaned mariadbd / stale pidfile is
+# reaped by datadir+socket, not just the tracked pid; the datadir/socket are
+# removed ONLY once the server is confirmed down (never out from under a live one).
 db_stop() {
-  if [ -n "${_DB_PID}" ] && kill -0 "${_DB_PID}" 2>/dev/null; then
-    log "Shutting down MariaDB"
-    _dbadmin shutdown >/dev/null 2>&1 || kill "${_DB_PID}" 2>/dev/null || true
-    # Wait for the process to actually exit.
-    local i
-    # shellcheck disable=SC2034  # i is the loop counter for the retry budget
-    for i in $(seq 1 20); do
-      kill -0 "${_DB_PID}" 2>/dev/null || break
-      sleep 0.5
-    done
-    kill -9 "${_DB_PID}" 2>/dev/null || true
+  if ! _db_force_down; then
+    warn "MariaDB still up after teardown — leaving datadir/socket intact (would strand a live server)"
+    _DB_PID=""
+    return 1
   fi
   _DB_PID=""
   if [ "${MERIDIAN_DEV_DB_KEEP:-0}" != "1" ]; then
