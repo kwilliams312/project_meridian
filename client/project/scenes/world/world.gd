@@ -1235,14 +1235,22 @@ func _on_giver_indicator_changed(npc_guid: int, kind: int) -> void:
 	if existing == null:
 		existing = Label3D.new()
 		existing.name = "GiverMarker"
-		existing.position = Vector3(0, 2.6, 0)
-		existing.font_size = 64
-		existing.outline_size = 12
+		# #859: a BIG glyph raised clear of the (now lowered, bar-less) NPC nameplate so it is
+		# never covered — pixel_size + font_size set the world height (~1.2 m), y clears the name.
+		existing.position = Vector3(0, 2.9, 0)
+		existing.pixel_size = 0.012
+		existing.font_size = 96
+		existing.outline_size = 18
 		existing.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		existing.no_depth_test = true
+		existing.render_priority = 2  # draw the marker over the nameplate labels
 		node.add_child(existing)
 	existing.text = glyph
 	existing.modulate = tint
+	# The server only advertises a marker for a quest/friendly NPC, so this guid IS an NPC:
+	# drop its nameplate health bar and lower + fade the name so the glyph above reads clean (#859).
+	if _nameplates != null:
+		_nameplates.mark_npc(npc_guid)
 
 
 # --- Loot / vendor / trainer controller (ITM-02/ECO-01/NPC-02, #441) ----------

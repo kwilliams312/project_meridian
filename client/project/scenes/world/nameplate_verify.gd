@@ -135,6 +135,29 @@ func _initialize() -> void:
 	_check("no nameplate for the local player", not plates.has(0x9001))
 	_check("local self-vitals did not spawn a plate", plates.active_count() == 1)
 
+	# --- #859: a server-pushed giver marker flags the entity as a quest/friendly NPC. ----------
+	# QUEST_MARKER_UPDATE (AVAILABLE=1) for the live entity drives world._on_giver_indicator_changed
+	# (wired to giver_indicator_changed in _ready): it floats a BIGGER overhead `!` AND marks the
+	# plate an NPC — health bar gone, name lowered + ~0.8 translucent, so the glyph reads clean.
+	bus.publish_quest_marker_update(mob_guid, 1)  # 1 = MARKER_AVAILABLE → gold `!`
+	await _wait(1)
+	var marker = mob_node.get_node_or_null("GiverMarker")
+	_check("overhead giver marker floated over the NPC", marker != null)
+	_check("marker shows the gold '!' glyph", marker != null and marker.text == "!")
+	# Bigger than the pre-#859 marker (font 64 @ y=2.6): larger font + raised so it clears the name.
+	_check("marker font size increased (>= 96)", marker != null and marker.font_size >= 96)
+	_check("marker raised clear of the name (y >= 2.85)", marker != null and marker.position.y >= 2.85)
+	# The nameplate is now in NPC mode: no health bar, lowered + translucent name.
+	_check("plate flagged as an NPC", plate.is_npc())
+	_check("NPC nameplate hides the health bar background", not bar_bg.visible)
+	_check("NPC nameplate hides the health bar fill", not bar_fill.visible)
+	_check("NPC name lowered to NAME_Y_NPC (below the player/mob NAME_Y)",
+		absf(name_label.position.y - Nameplate.NAME_Y_NPC) < 0.001
+		and name_label.position.y < Nameplate.NAME_Y)
+	# _alpha is 1.0 here (set above), so the on-screen name alpha is the ~0.8 NPC base translucency.
+	_check("NPC name is ~0.8 translucent at full opacity",
+		absf(plate.name_alpha() - Nameplate.NAME_ALPHA_NPC) < 0.001)
+
 	# --- ENTITY_LEAVE recycles the plate back into the pool (reuse, not a leak). ---------
 	world._despawn_remote(mob_guid)
 	await _wait(2)
