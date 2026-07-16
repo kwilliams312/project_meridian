@@ -151,7 +151,7 @@
     {
       "schema_file": "npc.schema.yaml",
       "schema_id": "meridian://schema/content/npc.schema.yaml",
-      "content_schema": "meridian/npc@1",
+      "content_schema": "meridian/npc@2",
       "fields": [
         {
           "path": "id",
@@ -299,13 +299,26 @@
           }
         },
         {
+          "path": "visual.appearance",
+          "ui": {
+            "group": "presentation",
+            "label": "Appearance catalog",
+            "widget": "reference_picker",
+            "reference_type": "content:appearance",
+            "help": "Assemble this NPC like a player from a per-race/sex appearance catalog.",
+            "example": "chibi:appearance.red.male",
+            "constraint": "Use an appearance_catalog id; the NPC renders/recolors via the player path.",
+            "documentation": "schema/content/README.md"
+          }
+        },
+        {
           "path": "visual.scale",
           "ui": {
             "group": "presentation",
             "label": "Model scale",
             "widget": "number",
             "unit": "scale",
-            "help": "Multiplier applied to the source model size.",
+            "help": "Multiplier applied to the source model / assembled body size.",
             "example": 1.0,
             "constraint": "Greater than 0 and at most 10."
           }

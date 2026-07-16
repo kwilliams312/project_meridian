@@ -1,4 +1,4 @@
-schema: meridian/npc@1
+schema: meridian/npc@2
 id: core:npc.quartermaster_bren
 name: Quartermaster Bren
 subtitle: Emberfall Supplies

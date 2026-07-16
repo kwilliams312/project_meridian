@@ -55,10 +55,26 @@ CREATE TABLE npc_template (
   loot_money_min           BIGINT UNSIGNED NULL,            -- loot.money (intRange copper, D-25 additive)
   loot_money_max           BIGINT UNSIGNED NULL,
 
-  -- visual.* (asset refs are client-facing; numeric ids kept for the id tie)
-  visual_model_id          INT UNSIGNED NULL,               -- visual.model (artRef; required in schema)
+  -- visual.* (asset refs are client-facing; numeric ids kept for the id tie).
+  -- @2 makes visual a oneOf: branch A is `model` (below); branch B assembles the NPC
+  -- like a player from an appearance_catalog, projected to the visual_appearance_*
+  -- columns. Exactly ONE branch is populated per NPC: a model-only NPC has
+  -- visual_model_id set + every visual_appearance_* NULL; an appearance NPC has
+  -- visual_model_id NULL + the visual_appearance_* set. scale/sound_set apply to both.
+  visual_model_id          INT UNSIGNED NULL,               -- visual.model (branch A artRef)
   visual_scale             FLOAT NULL DEFAULT 1.0,
   visual_sound_set_id      INT UNSIGNED NULL,               -- visual.sound_set (sfxRef)
+
+  -- visual.appearance (@2 branch B) — the CharacterVisual scalars worldd relays on
+  -- EntityEnter (identity.visual), the SAME per-race/sex assemble+recolor path a
+  -- player uses. All NULL for a model-only NPC (every M1 NPC). race_id is the race
+  -- ROSTER id (character.race space, not the IF-9 content id); sex 0=male/1=female;
+  -- hair/face/skin are 1-based appearance_catalog preset ids.
+  visual_appearance_race_id  TINYINT UNSIGNED NULL,         -- race roster id (1..255)
+  visual_appearance_sex      TINYINT UNSIGNED NULL,         -- 0 = male, 1 = female
+  visual_appearance_hair     TINYINT UNSIGNED NULL,         -- hair preset id (1-based)
+  visual_appearance_face     TINYINT UNSIGNED NULL,         -- face preset id (1-based)
+  visual_appearance_skin     TINYINT UNSIGNED NULL,         -- skin preset id (1-based)
 
   PRIMARY KEY (id),
   CONSTRAINT fk_npc_vendor  FOREIGN KEY (vendor_ref_id)     REFERENCES vendor_inventory (id),

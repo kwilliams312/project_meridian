@@ -93,34 +93,70 @@ CLIENT_STAGE_ROOT="${REPO_ROOT}/client/project"   # emit-pck writes <root>/merid
 WORLD_DB_NAME="meridian_world"
 
 # --- --stop: tear down a previously-started background realm and exit. --------
+# SIGTERM a pid, poll up to ~5s for it to exit, then SIGKILL. No-op if gone.
+_term_wait_kill() {
+  local p="$1" i
+  kill -0 "$p" 2>/dev/null || return 0
+  kill "$p" 2>/dev/null || true
+  # shellcheck disable=SC2034  # i is the retry-budget loop counter
+  for i in $(seq 1 10); do
+    kill -0 "$p" 2>/dev/null || return 0
+    sleep 0.5
+  done
+  kill -9 "$p" 2>/dev/null || true
+}
+
+# True (0) if nothing is LISTENing on TCP $1.
+_port_free() { ! lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
+
+# After teardown, assert the realm's ports + DB socket are actually free. Warns
+# and returns non-zero on any holdout, so a botched stop is visible NOW instead
+# of resurfacing at the next start as a MariaDB "already running".
+_verify_realm_down() {
+  local held=""
+  _port_free "${AUTHD_PORT}"           || held="${held} authd:${AUTHD_PORT}"
+  _port_free "${WORLDD_PORT}"          || held="${held} worldd:${WORLDD_PORT}"
+  _port_free "${MERIDIAN_DEV_DB_PORT}" || held="${held} mariadb:${MERIDIAN_DEV_DB_PORT}"
+  if [ -S "${MERIDIAN_DEV_DB_SOCKET}" ]; then held="${held} socket:${MERIDIAN_DEV_DB_SOCKET}"; fi
+  if [ -n "$held" ]; then
+    warn "realm teardown incomplete — still held:${held}"
+    return 1
+  fi
+  return 0
+}
+
 stop_realm() {
+  local pf p
   for pf in "${AUTHD_PIDFILE}" "${WORLDD_PIDFILE}"; do
     if [ -f "$pf" ]; then
-      local p; p="$(cat "$pf")"
-      if kill -0 "$p" 2>/dev/null; then
+      p="$(cat "$pf" 2>/dev/null || true)"
+      if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
         log "Stopping $(basename "$pf" .pid) (pid $p)"
-        kill "$p" 2>/dev/null || true
+        _term_wait_kill "$p"
       fi
       rm -f "$pf"
     fi
   done
-  # Reuse the _db.sh datadir/socket/pidfile paths to stop a leftover DB.
-  if [ -f "${REPO_ROOT}/.dev-run/mariadb.pid" ]; then
-    local dbp; dbp="$(cat "${REPO_ROOT}/.dev-run/mariadb.pid")"
-    if kill -0 "$dbp" 2>/dev/null; then
-      log "Stopping MariaDB (pid $dbp)"
-      mariadb-admin --no-defaults --socket="${MERIDIAN_DEV_DB_SOCKET}" --user=root shutdown >/dev/null 2>&1 \
-        || kill "$dbp" 2>/dev/null || true
-    fi
+  # Belt-and-suspenders (matches the start-path cull): reap any of OUR orphaned
+  # daemons whose pidfile drifted/vanished, matched by their exact binary path.
+  # Path-scoped — never a bare pkill that could hit an unrelated process.
+  pkill -f "$WORLDD" 2>/dev/null || true
+  pkill -f "$AUTHD"  2>/dev/null || true
+
+  # DB teardown via the canonical _db.sh path: robust to an orphaned mariadbd /
+  # stale pidfile (reaps by datadir+socket, not just the pidfile pid) and removes
+  # the datadir/socket only AFTER the server is confirmed down.
+  db_stop || warn "MariaDB teardown reported a problem"
+
+  if _verify_realm_down; then
+    ok "Local realm stopped."
+    return 0
   fi
-  rm -rf "${MERIDIAN_DEV_DB_DATADIR}"
-  rm -f "${MERIDIAN_DEV_DB_SOCKET}" "${REPO_ROOT}/.dev-run/mariadb.pid"
-  ok "Local realm stopped."
+  return 1
 }
 
 if [ "$MODE" = "stop" ]; then
-  stop_realm
-  exit 0
+  if stop_realm; then exit 0; else exit 1; fi
 fi
 
 # --- Idempotent start: cull any leftover realm before bringing up a fresh one. -
@@ -132,9 +168,11 @@ fi
 # realm (pidfiles + its DB) AND belt-and-suspenders kills any of OUR orphaned daemons
 # still running, guaranteeing exactly one realm.
 cull_stale_realm() {
-  stop_realm >/dev/null 2>&1 || true            # tracked realm (pidfiles) + its DB
-  pkill -f "$WORLDD" 2>/dev/null || true         # our orphaned daemons (exact binary path)
-  pkill -f "$AUTHD"  2>/dev/null || true
+  # stop_realm now does the full teardown (tracked pidfiles + orphaned daemons by
+  # binary path + robust DB reap by datadir/socket), so the start-path cull is
+  # just a quiet call to it. Its non-zero (ports still held) is non-fatal here —
+  # db_start's own guard makes the final refuse-or-clobber decision.
+  stop_realm >/dev/null 2>&1 || true
 }
 log "culling any leftover local realm (idempotent start)"
 cull_stale_realm

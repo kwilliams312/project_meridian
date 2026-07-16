@@ -20,7 +20,7 @@ public class NpcEditorViewModelTests
         var vm = new NpcEditorViewModel();
 
         Assert.True(vm.IsValid);
-        Assert.StartsWith("schema: meridian/npc@1", vm.PreviewYaml);
+        Assert.StartsWith("schema: meridian/npc@2", vm.PreviewYaml);
     }
 
     [Fact]

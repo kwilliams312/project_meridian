@@ -352,6 +352,25 @@ Bytes encode_equipment_change_result(mn::EquipmentChangeStatus status,
     return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
 }
 
+// Map the pure npc::QuestMarker (gossip.h) to its wire QuestMarkerKind (world.fbs).
+// One-to-one, so the marker the client shows can never disagree with the planner.
+mn::QuestMarkerKind to_wire(npc::QuestMarker m) {
+    switch (m) {
+        case npc::QuestMarker::kNone:             return mn::QuestMarkerKind::NONE;
+        case npc::QuestMarker::kAvailable:        return mn::QuestMarkerKind::AVAILABLE;
+        case npc::QuestMarker::kTurnInReady:      return mn::QuestMarkerKind::TURN_IN_READY;
+        case npc::QuestMarker::kTurnInIncomplete: return mn::QuestMarkerKind::TURN_IN_INCOMPLETE;
+    }
+    return mn::QuestMarkerKind::NONE;
+}
+
+// Encode a QUEST_MARKER_UPDATE payload (#844/#849): the NPC's wire guid + the icon.
+Bytes encode_quest_marker_update(std::uint64_t npc_guid, mn::QuestMarkerKind marker) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateQuestMarkerUpdate(b, npc_guid, marker));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
 // Best-effort current balance for a reject reply (the transaction changed nothing,
 // so the client sees the unchanged money). Never throws — a DB fault degrades to 0.
 std::int64_t safe_balance(ConnCtx& ctx) {
@@ -405,6 +424,22 @@ mn::QuestAcceptStatus to_wire(AcceptStatus s) {
         case AcceptStatus::kMissingPrerequisite: return mn::QuestAcceptStatus::MISSING_PREREQUISITE;
     }
     return mn::QuestAcceptStatus::UNKNOWN_QUEST;
+}
+
+// #838 — resolve a client-supplied giver / turn-in NPC guid to its npc_template id.
+// A SPAWNED world NPC's wire guid lives in the kWorldEntityGuidBase band (assigned by
+// install_spawns), NOT the low-32-bit npc_template id space — so the GOSSIP_HELLO path
+// maps it back via WorldState::npc_template_for_guid before serving that NPC's content.
+// The quest accept / turn-in giver checks MUST do the same resolution: otherwise a
+// spawned giver's guid (e.g. 0xE000'0000'0000'0000, whose low 32 bits are 0) never
+// matches def->giver_npc_id and the accept is wrongly rejected WRONG_GIVER — the bug the
+// client saw as "clicking Accept does nothing". Falls back to treating the guid AS the
+// template id, the pre-spawn 1:1 placeholder mapping (no world entity registered).
+std::uint32_t resolve_npc_template_id(const ConnCtx& ctx, std::uint64_t wire_guid) {
+    if (ctx.world != nullptr) {
+        if (auto tmpl = ctx.world->npc_template_for_guid(wire_guid)) return *tmpl;
+    }
+    return static_cast<std::uint32_t>(wire_guid);
 }
 
 mn::QuestTurnInStatus to_wire(TurnInStatus s) {
@@ -671,8 +706,10 @@ std::vector<EquippedVisualRec> visible_equipment_visuals(const itm::Inventory& i
 
 // Assemble the EntityEnter visual-assembly block for a player from its loaded
 // character row (race + §5.2 appearance) and equipment container (visible slots).
-// Present ONLY for players — NPCs never carry this (EntityIdentity::visual stays
-// nullopt), so their EntityEnter omits race/appearance/equipment entirely.
+// This is the PLAYER source of EntityIdentity::visual; since npc@2 (contract ①/§7,
+// #821) an NPC that carries an appearance_catalog also sets visual — but from the DB
+// projection in install_spawns, not here. A model-only NPC leaves visual nullopt, so
+// its EntityEnter omits race/appearance/equipment entirely.
 //
 // Best-effort on the equipment load, exactly like push_inventory_snapshot: a
 // transient DB fault (or a minimal DB without the inventory tables) degrades to
@@ -993,6 +1030,54 @@ void push_known_abilities(net::Session& sess, ConnCtx& ctx) {
                                      encode_known_abilities(*ctx.abilities, ctx.learned)));
 }
 
+// Push the OVERHEAD QUEST MARKERS (#844/#849) for every NPC currently in this
+// session's interest set. For each visible content NPC (WorldState::visible_world_
+// entities — the relay-tracked visibility, quest-free/DB-free), resolve its template
+// via npc_store(), compute this player's marker (npc::compute_quest_marker over the
+// SAME QuestLogView the gossip planner uses — so a `!`/`?` can never contradict the
+// menu), diff it against the per-session last-marker cache, and emit a
+// QUEST_MARKER_UPDATE only for a CHANGE. Called PROACTIVELY (no interaction) after
+// enter-world / accept / progress / turn-in / on-sight movement so the icons track
+// live state. Runs on this connection's own IO worker (ctx.quests + ctx.last_markers
+// are single-threaded, like the rest of the per-connection quest state). No-op before
+// spawn (no quest log / not entered).
+void push_quest_markers(net::Session& sess, ConnCtx& ctx) {
+    if (ctx.world == nullptr || !ctx.entered || !ctx.quests) return;
+    const std::vector<VisibleWorldEntity> visible =
+        ctx.world->visible_world_entities(ctx.slot);
+    // Prune cache entries for NPCs no longer in view: the client dropped them on
+    // ENTITY_LEAVE, so a later re-enter must re-push from a clean (default-none) slate.
+    {
+        std::unordered_set<std::uint64_t> live;
+        live.reserve(visible.size());
+        for (const VisibleWorldEntity& e : visible) live.insert(e.guid);
+        for (auto it = ctx.last_markers.begin(); it != ctx.last_markers.end();) {
+            if (live.count(it->first) == 0)
+                it = ctx.last_markers.erase(it);
+            else
+                ++it;
+        }
+    }
+    const QuestLogView view(*ctx.quests, ctx.char_level);
+    for (const VisibleWorldEntity& e : visible) {
+        const npc::NpcDef* def =
+            npc_store().find(static_cast<npc::NpcId>(e.npc_template_id));
+        const npc::QuestMarker marker =
+            def != nullptr ? npc::compute_quest_marker(*def, view) : npc::QuestMarker::kNone;
+        const auto it = ctx.last_markers.find(e.guid);
+        const npc::QuestMarker prev =
+            it != ctx.last_markers.end() ? it->second : npc::QuestMarker::kNone;
+        if (marker == prev) continue;  // unchanged since the last push (or still default-none)
+        if (marker == npc::QuestMarker::kNone)
+            ctx.last_markers.erase(e.guid);  // cleared — back to the client's default (no icon)
+        else
+            ctx.last_markers[e.guid] = marker;
+        send_s2c(sess, ctx,
+                 encode_frame(net::Opcode::QUEST_MARKER_UPDATE, 0,
+                              encode_quest_marker_update(e.guid, to_wire(marker))));
+    }
+}
+
 // Snapshot every active quest's per-objective `have` (the pre-mutation baseline the
 // QUEST_PROGRESS delta is computed against). Deterministic (std::map).
 std::map<QuestId, std::vector<std::uint16_t>> snapshot_quest_haves(const QuestLog& log) {
@@ -1044,6 +1129,9 @@ bool apply_and_emit_progress(net::Session& sess, ConnCtx& ctx,
         snapshot_quest_haves(*ctx.quests);
     if (!mutate()) return false;  // nothing advanced
     emit_quest_progress_deltas(sess, ctx, before);
+    // Objective progress can flip a turn-in NPC's marker from greyed `?` to lit `?`
+    // (last objective just completed) — re-push the overhead markers (#844/#849).
+    push_quest_markers(sess, ctx);
     return true;
 }
 
@@ -1801,6 +1889,11 @@ void Dispatcher::register_m0_stubs() {
             // Explore (QST-01, #396): credit any explore objective the mover's
             // area-trigger crossings satisfy (QUEST_PROGRESS follows if it advanced).
             credit_explore_triggers(sess, ctx, crossings);
+            // ON-SIGHT overhead markers (#844/#849): moving may bring new NPCs into
+            // the interest set — push their `!`/`?` marker (diffed, so NPCs already
+            // shown re-emit nothing). credit_explore_triggers above may have pushed
+            // too; the diff cache makes a second call here idempotent.
+            push_quest_markers(sess, ctx);
         }
 
         // COMBAT cast interrupt (CMB-01 #344): moving cancels an in-progress cast
@@ -2376,6 +2469,12 @@ void Dispatcher::register_m0_stubs() {
                ev.char_class = pc.class_id;
                ctx.simulation_enqueue(std::move(ev));
            }
+
+           // ON-SIGHT overhead markers at spawn (#844/#849): enter() already computed
+           // this session's initial interest set, so push the `!`/`?` marker for every
+           // NPC it can already see — the client shows quest indicators the instant it
+           // is in-world, without interacting (the bug #844 fixes). Proactive + diffed.
+           push_quest_markers(sess, ctx);
        });
 
     // --- 0x3xxx COMBAT: ability use (CMB-01 #344/#345) --------------------------
@@ -3175,11 +3274,12 @@ void Dispatcher::register_m0_stubs() {
 
         const QuestDef* def = quest_store().find(quest_id);
         if (def == nullptr) { reply(mn::QuestAcceptStatus::UNKNOWN_QUEST); return; }
-        // WRONG_GIVER (wire-only, dispatch-added). At M1 an NPC entity guid maps 1:1
-        // to its npc_template id (no NPC entities spawn yet — the mcc #28 spawn seam);
-        // giver_guid == 0 is "unspecified / self-serve" and skips the check.
+        // WRONG_GIVER (wire-only, dispatch-added). giver_guid == 0 is "unspecified /
+        // self-serve" and skips the check. A SPAWNED giver is addressed by its world-
+        // entity wire guid, so resolve it to its npc_template id first (#838) — the same
+        // mapping GOSSIP_HELLO uses; a raw template id (pre-spawn) resolves to itself.
         if (giver_guid != 0 &&
-            static_cast<std::uint32_t>(giver_guid) != def->giver_npc_id) {
+            resolve_npc_template_id(ctx, giver_guid) != def->giver_npc_id) {
             reply(mn::QuestAcceptStatus::WRONG_GIVER);
             return;
         }
@@ -3213,6 +3313,9 @@ void Dispatcher::register_m0_stubs() {
         // Resync the client's quest log (a QUEST_PROGRESS/QuestLog follows an accept).
         send_s2c(sess, ctx, encode_frame(net::Opcode::QUEST_LOG, f.seq,
                                          encode_quest_log(*ctx.quests)));
+        // Accepting flips the giver's marker `!` -> greyed `?` (now on the quest) and
+        // may light a turn-in NPC — re-push the overhead markers (#844/#849).
+        push_quest_markers(sess, ctx);
     });
 
     on(net::Opcode::QUEST_TURN_IN, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
@@ -3220,7 +3323,10 @@ void Dispatcher::register_m0_stubs() {
         const auto* req = fb::GetRoot<mn::QuestTurnIn>(f.payload);
         if (req == nullptr) return;
         const QuestId quest_id = req->quest_id();
-        const std::uint32_t npc_id = static_cast<std::uint32_t>(req->turn_in_guid());
+        // Resolve a SPAWNED turn-in NPC's world-entity guid to its npc_template id, the
+        // same way QUEST_ACCEPT / GOSSIP_HELLO do (#838) — else a spawned turn-in giver
+        // is mis-identified and the turn-in is wrongly rejected.
+        const std::uint32_t npc_id = resolve_npc_template_id(ctx, req->turn_in_guid());
         const int choice_index = req->choice_index();
 
         auto reply = [&](mn::QuestTurnInStatus st, std::uint32_t xp, std::int64_t money,
@@ -3313,6 +3419,9 @@ void Dispatcher::register_m0_stubs() {
             push_inventory_snapshot(sess, ctx);
             send_s2c(sess, ctx, encode_frame(net::Opcode::QUEST_LOG, f.seq,
                                              encode_quest_log(*ctx.quests)));
+            // Turning in clears this NPC's lit `?` (quest done) — re-push the overhead
+            // markers so the icon drops (#844/#849).
+            push_quest_markers(sess, ctx);
         } catch (const std::exception& e) {
             log::warn(kCat, "QUEST_TURN_IN failed", {log::field("error", e.what())});
             reply(mn::QuestTurnInStatus::UNKNOWN_QUEST, 0, 0, {});  // defensive (no INTERNAL enum)
@@ -3833,6 +3942,12 @@ void WorldServer::install_spawns(const std::vector<SpawnPlacement>& spawns) {
         id.type_id = sp.npc_id;   // the client maps the npc id to its model/appearance
         id.char_class = 0;        // not a player — no class coloring
         id.name = sp.name;
+        // npc@2 (contract ①/§7, #821): an NPC that carries an appearance_catalog
+        // relays the SAME visual-assembly block a player does — the encoder emits it
+        // whenever identity.visual is set (not gated on player-vs-NPC), so the client
+        // assembles + recolors the body via the proven player path. A model-only NPC
+        // leaves visual unset (nullopt) and stays on the monolithic visual.model path.
+        if (sp.appearance) id.visual = *sp.appearance;
         impl_->world.add_world_entity(id, sp.stats, sp.npc_id, sp.pos);
         ++n;
     }

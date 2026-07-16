@@ -118,13 +118,16 @@ std::vector<std::uint8_t> encode_entity_enter_payload(const EntityIdentity& subj
     // Empty for the D-11 placeholder (no characters DB).
     auto name = b.CreateString(subject.name);
 
-    // Visual-assembly block (②/T1, #538): appearance + visible equipment for a
-    // PLAYER entity, resolved once at enter-world time (world_dispatch.cpp) and
-    // carried on `subject.visual`. Nested wire objects (Appearance / EquippedVisual
-    // / DyeChoice) MUST be built BEFORE the parent EntityEnter table starts, so
-    // they are created here first. An NPC/creature has no visual, so all four
-    // fields stay at their defaults (race/sex 0; appearance/equipment ABSENT) and
-    // the client falls back to the monolithic visual.model path.
+    // Visual-assembly block (②/T1, #538): appearance + visible equipment for any
+    // entity that assembles like a player — a PLAYER (resolved at enter-world time,
+    // world_dispatch.cpp) or, since npc@2 (contract ①/§7, #821), an NPC that carries
+    // an appearance_catalog (projected in install_spawns). Carried on `subject.visual`
+    // and emitted whenever it is set — NOT gated on player-vs-NPC. Nested wire objects
+    // (Appearance / EquippedVisual / DyeChoice) MUST be built BEFORE the parent
+    // EntityEnter table starts, so they are created here first. A model-only entity
+    // (every M1 NPC/creature) has no visual, so all four fields stay at their defaults
+    // (race/sex 0; appearance/equipment ABSENT) and the client falls back to the
+    // monolithic visual.model path.
     std::uint8_t race = 0;
     std::uint8_t sex = 0;
     fb::Offset<mn::Appearance> appearance = 0;
@@ -348,6 +351,24 @@ std::optional<std::uint32_t> WorldState::npc_template_for_guid(AoiId guid) const
 std::size_t WorldState::world_entity_count() const {
     std::lock_guard<std::mutex> lk(mtx_);
     return entities_.size();
+}
+
+std::vector<VisibleWorldEntity> WorldState::visible_world_entities(SessionSlot slot) const {
+    std::lock_guard<std::mutex> lk(mtx_);
+    std::vector<VisibleWorldEntity> out;
+    auto sit = sessions_.find(slot);
+    if (sit == sessions_.end()) return out;  // not entered — nothing visible
+    // Project the session's tracked visible ENTITIES (content spawns; sessions are
+    // handled separately via `visible`) to {guid, template}. A guid the relay is
+    // still tracking but whose entity record is gone (defensive — entities are not
+    // removed at M1) is skipped so the caller never resolves a stale template.
+    out.reserve(sit->second.visible_entities.size());
+    for (AoiId g : sit->second.visible_entities) {
+        auto eit = entities_.find(g);
+        if (eit == entities_.end()) continue;
+        out.push_back(VisibleWorldEntity{g, eit->second.npc_template_id});
+    }
+    return out;
 }
 
 // ---------------------------------------------------------------------------

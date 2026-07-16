@@ -113,7 +113,13 @@ public sealed class SchemaCatalog
         if (unsupported.Length > 0)
             return Unsupported(name, path, required, $"Unsupported JSON Schema keyword(s): {string.Join(", ", unsupported)}. Edit this object in YAML.", ui, asset);
 
-        if (schema["oneOf"] is JsonArray variants)
+        // A discriminated oneOf of variant OBJECTS is a tagged union (ProjectOneOf).
+        // A oneOf that sits ALONGSIDE `properties` is a validation-only CONSTRAINT on a
+        // single object (e.g. npc@2 visual's model-XOR-appearance required/not pair) —
+        // the field is the object; the oneOf just narrows which properties may co-occur.
+        // Project it as the object (below); the constraint validates the document but
+        // does not change the form's field shape (same posture as allOf/if/then/else).
+        if (schema["oneOf"] is JsonArray variants && schema["properties"] is null)
             return ProjectOneOf(schemaFile, name, path, schema, root, required, variants, ui, asset, conditionalRequirements, availabilityCondition);
 
         var choices = Strings(schema["enum"] as JsonArray);

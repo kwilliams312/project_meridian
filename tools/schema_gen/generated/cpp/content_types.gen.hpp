@@ -21,16 +21,16 @@ struct ContentId { std::string id; };
 struct AbilityRef { std::string id; };
 struct VendorRef { std::string id; };
 struct LootRef { std::string id; };
+struct AppearanceRef { std::string id; };
+struct ItemRef { std::string id; };
 struct EquipTypeRef { std::string id; };
 struct NpcRef { std::string id; };
 struct ZoneRef { std::string id; };
 struct QuestRef { std::string id; };
-struct ItemRef { std::string id; };
 struct DyeRef { std::string id; };
 struct AttributeRef { std::string id; };
 struct RaceRef { std::string id; };
 struct TalentTreeRef { std::string id; };
-struct AppearanceRef { std::string id; };
 struct TalentRef { std::string id; };
 struct ArtRef { std::string id; };
 struct SfxRef { std::string id; };
@@ -449,7 +449,9 @@ struct NpcLoot {
 };
 
 struct NpcVisual {
-    ArtRef model;
+    std::optional<ArtRef> model;  // Branch A — a monolithic creature/mob mesh (the @1 shape).
+    std::optional<AppearanceRef> appearance;  // Branch B — the appearance_catalog entity this NPC renders as, the SAME per-race/sex customization catalog players use. L011 resolves it (that an appearance-shaped ref points at an appearance_catalog is guaranteed structurally by L003). worldd projects it to EntityIdentity.visual (race roster_id + sex + preset ids) so the client assembles + recolors the body like a player.
+    std::vector<ItemRef> worn_items;  // RESERVED (contract ① §7): modular gear worn over the assembled body (branch B), by item id. Optional and NOT projected at M1 (YAGNI — per-NPC recolor needs only `appearance`); present so a future modular-NPC story is additive.
     std::optional<double> scale;  // optional
     std::optional<SfxRef> sound_set;  // optional
 };

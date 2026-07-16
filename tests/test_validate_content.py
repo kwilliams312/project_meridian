@@ -25,7 +25,7 @@ license: Apache-2.0
 """
 
 NPC = """\
-schema: meridian/npc@1
+schema: meridian/npc@2
 id: tp:npc.dummy
 name: Dummy
 level: { min: 1, max: 1 }
@@ -35,6 +35,21 @@ stats:
   health: 10
   damage: { min: 1, max: 2 }
   attack_speed_ms: 2000
+"""
+
+# A per-race/sex appearance_catalog the visual.appearance (@2 branch B) tests point
+# at. Minimal but schema-valid (empty preset lists, like the chibi catalogs).
+APPEARANCE = """\
+schema: meridian/appearance_catalog@1
+id: tp:appearance.hero.male
+race: ardent
+sex: male
+skeleton: tp:art.char.rig
+body_model: tp:art.char.body
+presets:
+  hair: []
+  face: []
+  skin: []
 """
 
 ZONE = """\
@@ -143,6 +158,62 @@ class TestFileAndEnvelope:
         broken = NPC.replace("creature_type: humanoid\n", "")
         res = run(tmp_path, {"tp/npcs/dummy.npc.yaml": broken})
         assert "SCHEMA" in codes(res.errors)
+
+    def test_npc_at_1_envelope_now_rejected(self, tmp_path):
+        # No back-compat: npc@1 is rejected once the type is bumped to @2 (L001).
+        legacy = NPC.replace("meridian/npc@2", "meridian/npc@1")
+        res = run(tmp_path, {"tp/npcs/dummy.npc.yaml": legacy})
+        assert "L001" in codes(res.errors)
+
+
+@pytest.mark.unit
+class TestNpcVisualOneOf:
+    """npc@2 visual oneOf: branch A (model) | branch B (appearance) — contract ①/§7."""
+
+    def test_model_only_branch_valid(self, tmp_path):
+        # Branch A — the @1 monolithic-model shape stays valid at @2.
+        npc = NPC + "visual:\n  model: art.creature.dummy\n  scale: 1.5\n"
+        res = run(tmp_path, {"tp/npcs/dummy.npc.yaml": npc})
+        assert res.errors == []
+
+    def test_appearance_branch_valid(self, tmp_path):
+        # Branch B — assemble-like-a-player from an appearance_catalog resolves clean.
+        npc = NPC + "visual:\n  appearance: appearance.hero.male\n"
+        res = run(
+            tmp_path,
+            {
+                "tp/npcs/dummy.npc.yaml": npc,
+                "tp/appearance/hero_male.appearance.yaml": APPEARANCE,
+            },
+        )
+        assert res.errors == []
+
+    def test_both_branches_rejected(self, tmp_path):
+        # oneOf: a visual that satisfies BOTH branches (model AND appearance) is invalid.
+        npc = NPC + "visual:\n  model: art.creature.dummy\n  appearance: appearance.hero.male\n"
+        res = run(
+            tmp_path,
+            {
+                "tp/npcs/dummy.npc.yaml": npc,
+                "tp/appearance/hero_male.appearance.yaml": APPEARANCE,
+            },
+        )
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_neither_branch_rejected(self, tmp_path):
+        # oneOf: a visual with neither model nor appearance matches no branch.
+        npc = NPC + "visual:\n  scale: 2.0\n"
+        res = run(tmp_path, {"tp/npcs/dummy.npc.yaml": npc})
+        assert "SCHEMA" in codes(res.errors)
+
+    def test_appearance_ref_must_resolve(self, tmp_path):
+        # The appearance-branch ref is resolved like any content ref (L011): a
+        # dangling appearance id is an unresolved-reference error. (The "resolves to
+        # an appearance_catalog TYPE" guarantee is structural — appearanceRef shape +
+        # L003 + L011 — so it needs no dedicated lint.)
+        npc = NPC + "visual:\n  appearance: appearance.nope\n"
+        res = run(tmp_path, {"tp/npcs/dummy.npc.yaml": npc})
+        assert "L011" in codes(res.errors)
 
 
 @pytest.mark.unit

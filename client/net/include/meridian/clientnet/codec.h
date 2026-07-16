@@ -143,11 +143,13 @@ struct EntityEnter {
     std::uint8_t power_type = 0;   // world.fbs PowerType (0=NONE,1=MANA,2=ENERGY,3=RAGE)
     std::uint16_t level = 0;       // unit level (0 = unset/unknown)
     std::string name;              // display name for the unit frame (empty = unnamed)
-    // Visual-assembly fields for PLAYER entities (T4, #541; design §2). Additive +
-    // OPTIONAL exactly like the vitals block: an NPC/creature (or pre-#538 server)
-    // EntityEnter carries NONE of them - race stays 0, `has_appearance` is false, and
-    // `equipment` is empty, so the client renders the capsule/monolithic path. Only ids
-    // travel; all visual lookup is client-side pck content (design §2).
+    // Visual-assembly fields (T4, #541; design §2). Additive + OPTIONAL exactly like
+    // the vitals block. Set for ANY entity that assembles like a player: every player,
+    // and (npc@2, contract ①/§7, #821) an NPC that carries an appearance_catalog. A
+    // MODEL-ONLY entity (every M1 NPC/creature, or a pre-#538 server) carries NONE of
+    // them - race stays 0, `has_appearance` is false, and `equipment` is empty, so the
+    // client renders the capsule/monolithic path. Only ids travel; all visual lookup is
+    // client-side pck content (design §2).
     std::uint8_t race = 0;         // M0-frozen roster race id (roster.h); 0 = unset/non-player
     std::uint8_t sex = 0;          // reserved; 0 = male (M1 ships male only)
     bool has_appearance = false;   // true iff the Appearance table was present (player entity)

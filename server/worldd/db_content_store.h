@@ -63,6 +63,7 @@
 #include "quest_def.h"        // meridian::worldd::QuestStore / QuestDef
 #include "roster.h"           // meridian::characters::Roster — DB-loaded playable roster (#695)
 #include "vendor_catalog.h"   // meridian::vendor::VendorCatalog / VendorListing
+#include "world_state.h"      // CharacterVisual — the appearance projection a spawn relays (#821)
 
 namespace meridian::worldd {
 
@@ -188,6 +189,12 @@ struct SpawnPlacement {
     std::uint32_t respawn_min = 0;     // spawn_point.respawn_min (seconds)
     std::uint32_t respawn_max = 0;     // spawn_point.respawn_max (seconds)
     std::optional<float> wander_radius_m;  // spawn_point.wander_radius_m (NULL when it patrols instead)
+    // The npc@2 assemble-like-a-player projection (contract ①/§7, #821): present iff
+    // this template's visual_appearance_race_id is non-null (an NPC that carries an
+    // appearance_catalog). install_spawns copies it verbatim onto EntityIdentity.visual
+    // so the client assembles + recolors the body via the SAME player path. nullopt for
+    // a model-only NPC (every M1 NPC) — that entity stays on the monolithic model path.
+    std::optional<CharacterVisual> appearance;
 };
 
 // Load every `spawn_point` row, resolving each against its `npc_template` (name +

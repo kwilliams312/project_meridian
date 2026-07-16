@@ -39,7 +39,7 @@ struct ParsedFile {
     DiscoveredFile file;
     bool parsed = false;
     YAML::Node root;            // valid only when parsed
-    std::string schema;         // envelope `schema:` (e.g. "meridian/npc@1")
+    std::string schema;         // envelope `schema:` (e.g. "meridian/npc@2")
     std::string id;             // envelope `id:` (empty for pack manifests)
     std::string namespace_;     // pack `namespace:` (only for pack manifests)
 };

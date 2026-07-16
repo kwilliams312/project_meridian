@@ -1,0 +1,32 @@
+# meridian/quest@1 — first chibi starter quest (#831, epic #816). Sprout Meadow
+# shipped NPCs (#817) but no quests, so a freshly-sprouted chibi had nothing to do
+# on enter-world; this is the very first thing they can pick up. A pure talk/deliver
+# beat (QST-01): the greeter Tansy sends the new sprout out to meet Bram the forager,
+# introducing the deliver mechanic with no combat — Sprout Meadow has no mobs or loot
+# yet (gather/kill objectives wait on a later world story). Mirrors core's deliver
+# quest shape (sparks_in_the_dark): giver Tansy, turn-in is the deliver target Bram.
+# Original Meridian lore (clean-room, CONTRIBUTING.md §clean-room).
+schema: meridian/quest@1
+id: chibi:quest.a_meadow_welcome
+name: A Meadow Welcome
+summary: Carry Tansy's dewdrop token out to Bram Cloverfoot on the clover rows.
+offer_text: >-
+  Awake at last, little sprout! First morning's for making friends. Take this
+  dewdrop token — every sprout gets one — and carry it out to Bram Cloverfoot on
+  the clover rows. Put it in his hand so he knows the Meadow's grown a new one.
+completion_text: >-
+  A dewdrop token, still cold! Then Tansy's seen you woken. Welcome to the rows,
+  sprout — stick close and I'll show you where the good clover hides.
+level: 1
+required_level: 1
+zone: chibi:zone.sprout_meadow
+giver: chibi:npc.tansy_dewhollow
+turn_in: chibi:npc.bram_cloverfoot
+objectives:
+  - type: deliver
+    item: chibi:item.dewdrop_token
+    to: chibi:npc.bram_cloverfoot
+rewards:
+  xp: 80
+  money: 50
+script: null

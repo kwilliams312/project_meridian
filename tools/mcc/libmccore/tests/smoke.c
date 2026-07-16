@@ -10,17 +10,27 @@
  *   - version handshake (mccore_abi_version, mccore_version_string)
  *   - open/close lifecycle
  *   - validate  -> asserts {"ok": true}
- *   - index     -> asserts the meridian/id-index@1 schema + expected ids
- *   - pickable  -> asserts itemRef yields count:37 / ok:true
+ *   - index     -> asserts the meridian/id-index@1 schema; id_count is checked
+ *                  DYNAMICALLY against the `mcc` CLI (ABI↔CLI parity), not a
+ *                  frozen literal — see the [index] section for why (#772)
+ *   - pickable  -> asserts itemRef yields ok:true; its candidate count is
+ *                  likewise cross-checked against the CLI, not a frozen literal
  *   - backlinks -> asserts core:item.kobold_ear has referrer_count:2
  *   - resolve   -> asserts kobold_ear -> numeric_id 17, type "item"
  *   - alloc/free discipline: every returned string is mccore_free()'d; a bulk
  *     alloc/free loop shakes out an obvious leak/double-free.
- * The numeric expectations match the committed idmap.lock (`mcc index/pickable/
- * refs`), so a drift between the ABI and the CLI fails this test.
+ * The stable numeric anchors (kobold_ear #17, its 2 referrers) match the
+ * committed idmap.lock, and the full-corpus id_count is cross-checked live
+ * against the `mcc` CLI, so a drift between the ABI and the CLI fails this test.
  *
  * Returns 0 on success; prints a FAIL line and returns 1 on the first mismatch.
  */
+
+/* popen()/pclose() are POSIX, not ISO C — request the POSIX surface before any
+ * header is pulled in so the declarations are visible under -std=c11 -Wpedantic. */
+#ifndef _WIN32
+#  define _POSIX_C_SOURCE 200809L
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,6 +40,19 @@
 
 #ifndef MCCORE_TEST_CONTENT_ROOT
 #error "MCCORE_TEST_CONTENT_ROOT must be defined by the build (the content/ root)"
+#endif
+
+#ifndef MCC_CLI_EXE
+#error "MCC_CLI_EXE must be defined by the build (path to the mcc CLI, for ABI↔CLI parity)"
+#endif
+
+/* Windows spells the pipe-open primitives with a leading underscore. */
+#ifdef _WIN32
+#  define MCC_POPEN  _popen
+#  define MCC_PCLOSE _pclose
+#else
+#  define MCC_POPEN  popen
+#  define MCC_PCLOSE pclose
 #endif
 
 static int g_failures = 0;
@@ -50,6 +73,87 @@ static void check(int cond, const char* what) {
  * without pulling a JSON parser into a C smoke test. */
 static int contains(const char* hay, const char* needle) {
     return hay && strstr(hay, needle) != NULL;
+}
+
+/* Parse the integer value of a named JSON field (e.g. "id_count" in an index
+ * document, "count" in a pickable document). `key` is the quoted key, like
+ * "\"id_count\"". Returns the value, or -1 if the field is absent/malformed.
+ * Each doc carries exactly one such field, so no JSON parser is needed (same
+ * dependency-free discipline as contains()). */
+static long json_uint_field(const char* json, const char* key) {
+    if (!json) return -1;
+    const char* p = strstr(json, key);
+    if (!p) return -1;
+    p += strlen(key);
+    while (*p && *p != ':') ++p;           /* skip to the key's colon */
+    if (*p != ':') return -1;
+    ++p;
+    while (*p == ' ' || *p == '\t') ++p;    /* skip whitespace before the number */
+    if (*p < '0' || *p > '9') return -1;
+    return strtol(p, NULL, 10);
+}
+
+/* Count the id entries actually enumerated in an index JSON's "ids" array. Each
+ * entry carries exactly one "numeric_id" key, and that key appears nowhere else
+ * in the index document, so counting the key counts the ids. Lets us assert the
+ * index is self-consistent (id_count == ids actually listed). */
+static long count_id_entries(const char* json) {
+    if (!json) return -1;
+    long n = 0;
+    const char* needle = "\"numeric_id\"";
+    const size_t nlen = strlen(needle);
+    for (const char* p = strstr(json, needle); p != NULL; p = strstr(p + nlen, needle)) {
+        ++n;
+    }
+    return n;
+}
+
+/* Run a read-only index-family `mcc` subcommand against the same content root
+ * and capture its stdout. `subcmd` is "index" or "pickable"; `arg` is the
+ * subcommand's positional argument (the ref-type for pickable) or NULL (index
+ * takes none). This is the AUTHORITATIVE source the ABI is checked against: the
+ * standalone CLI and libmccore read the SAME content root through the SAME stage
+ * code, so their answers must agree — a live parity check that needs no
+ * hand-maintained literal. Returns a malloc'd, NUL-terminated buffer (caller
+ * frees) or NULL on failure (spawn error or non-zero CLI exit). */
+static char* run_cli(const char* subcmd, const char* arg) {
+    char cmd[8192];
+    /* mcc <subcmd> [arg] <root> --json  (index takes no arg; pickable takes the
+     * ref-type first, then the dir). Quote paths so spaces are tolerated. */
+    int n;
+    if (arg) {
+        n = snprintf(cmd, sizeof cmd, "\"%s\" %s \"%s\" \"%s\" --json",
+                     MCC_CLI_EXE, subcmd, arg, MCCORE_TEST_CONTENT_ROOT);
+    } else {
+        n = snprintf(cmd, sizeof cmd, "\"%s\" %s \"%s\" --json",
+                     MCC_CLI_EXE, subcmd, MCCORE_TEST_CONTENT_ROOT);
+    }
+    if (n < 0 || (size_t)n >= sizeof cmd) return NULL;
+
+    FILE* fp = MCC_POPEN(cmd, "r");
+    if (!fp) return NULL;
+
+    size_t cap = 1u << 16, len = 0;
+    char* buf = (char*)malloc(cap);
+    if (!buf) { MCC_PCLOSE(fp); return NULL; }
+
+    char chunk[4096];
+    size_t got;
+    while ((got = fread(chunk, 1, sizeof chunk, fp)) > 0) {
+        if (len + got + 1 > cap) {
+            while (len + got + 1 > cap) cap <<= 1;
+            char* nb = (char*)realloc(buf, cap);
+            if (!nb) { free(buf); MCC_PCLOSE(fp); return NULL; }
+            buf = nb;
+        }
+        memcpy(buf + len, chunk, got);
+        len += got;
+    }
+    buf[len] = '\0';
+
+    int rc = MCC_PCLOSE(fp);
+    if (rc != 0) { free(buf); return NULL; }  /* CLI must exit 0 for a valid corpus */
+    return buf;
 }
 
 int main(void) {
@@ -109,8 +213,31 @@ int main(void) {
     check(idx != NULL && st == MCCORE_OK, "mccore_index_json() returns the index");
     check(contains(idx, "\"schema\": \"meridian/id-index@1\""),
           "index carries the meridian/id-index@1 schema");
-    check(contains(idx, "\"id_count\": 274"), "index reports id_count 274 (matches mcc index)");
+
+    /* id_count is verified DYNAMICALLY, never against a frozen literal (#772): a
+     * hardcoded full-corpus count went stale on every content addition and every
+     * idmap-reallocating rebase, forcing brittle manual bumps. Instead we assert
+     * the invariants that actually matter and let the number float with content:
+     *   1. non-empty corpus                    (id_count > 0),
+     *   2. the ABI index is self-consistent    (id_count == ids it enumerates),
+     *   3. ABI↔CLI PARITY: the count equals what the `mcc` CLI reports for the
+     *      SAME content root — the authoritative cross-check this smoke test
+     *      exists to guard. Content grows freely; a genuine drift between the
+     *      shared library and the CLI still fails the test. */
+    long abi_id_count = json_uint_field(idx, "\"id_count\"");
+    if (abi_id_count >= 0) printf("         ABI id_count: %ld\n", abi_id_count);
+    check(abi_id_count > 0, "index reports a positive id_count");
+    check(abi_id_count == count_id_entries(idx),
+          "id_count matches the number of ids the ABI enumerates (self-consistent)");
     check(contains(idx, "core:item.kobold_ear"), "index contains core:item.kobold_ear");
+
+    char* cli_idx = run_cli("index", NULL);
+    check(cli_idx != NULL, "mcc CLI `index --json` runs (exit 0) and returns output");
+    long cli_id_count = json_uint_field(cli_idx, "\"id_count\"");
+    if (cli_id_count >= 0) printf("         CLI id_count: %ld\n", cli_id_count);
+    check(cli_id_count > 0 && cli_id_count == abi_id_count,
+          "ABI id_count matches the mcc CLI id_count for the same content (ABI<->CLI parity)");
+    free(cli_idx);
     mccore_free(idx);
 
     /* ---- pickable(itemRef) -> 28 candidates ------------------------------ */
@@ -122,7 +249,20 @@ int main(void) {
           "pickable carries the meridian/pickable@1 schema");
     check(contains(pick, "\"type\": \"item\""), "pickable normalized itemRef -> type item");
     check(contains(pick, "\"ok\": true"), "pickable ok:true");
-    check(contains(pick, "\"count\": 37"), "pickable itemRef count is 37 (matches mcc pickable)");
+
+    /* Same #772 treatment as id_count: the itemRef candidate count is a
+     * full-subset count that grows with every item added, so it is checked
+     * against the live CLI (ABI↔CLI parity), not a frozen literal. */
+    long abi_pick_count = json_uint_field(pick, "\"count\"");
+    if (abi_pick_count >= 0) printf("         ABI itemRef count: %ld\n", abi_pick_count);
+    check(abi_pick_count > 0, "pickable itemRef reports a positive count");
+    char* cli_pick = run_cli("pickable", "itemRef");
+    check(cli_pick != NULL, "mcc CLI `pickable itemRef --json` runs (exit 0) and returns output");
+    long cli_pick_count = json_uint_field(cli_pick, "\"count\"");
+    if (cli_pick_count >= 0) printf("         CLI itemRef count: %ld\n", cli_pick_count);
+    check(cli_pick_count > 0 && cli_pick_count == abi_pick_count,
+          "ABI itemRef count matches the mcc CLI count for the same content (ABI<->CLI parity)");
+    free(cli_pick);
     mccore_free(pick);
 
     /* An unknown ref type is a valid answer (ok:false), NOT an error. */

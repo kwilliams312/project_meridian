@@ -509,6 +509,25 @@ target_link_libraries(worldd-quest-loot-npc-wire-test
 set_target_properties(worldd-quest-loot-npc-wire-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-quest-loot-npc-wire COMMAND worldd-quest-loot-npc-wire-test)
 
+# --- Proactive OVERHEAD QUEST MARKER push wire test (#844 story A / #849). ------
+# Proves the server pushes a diffed QUEST_MARKER_UPDATE for a visible quest NPC over
+# the REAL serve/dispatch loop, PROACTIVELY (no gossip) — `!` on sight, greyed `?`
+# after accept, and no re-push when the marker is unchanged. DB-free (a test
+# WORLD_HELLO enters the session into the AoI relay without a grant DB), so it always
+# runs in the plain server ctest. The 4-state marker computation itself is proven by
+# meridian-npc-test; this proves the LIVE push wiring.
+add_executable(worldd-quest-marker-push-wire-test
+  test/quest_marker_push_wire_test.cpp
+)
+target_link_libraries(worldd-quest-marker-push-wire-test
+  PRIVATE
+    meridian::world-dispatch
+    meridian::npc
+    Threads::Threads
+)
+set_target_properties(worldd-quest-marker-push-wire-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-quest-marker-push-wire COMMAND worldd-quest-marker-push-wire-test)
+
 # --- LIVE quest objective crediting integration test (QST-01 event-bus; #396). -
 # Proves a player's world actions advance the quests THEY accepted and emit
 # QUEST_PROGRESS, per objective SOURCE, over the REAL serve/dispatch loop: a KILL

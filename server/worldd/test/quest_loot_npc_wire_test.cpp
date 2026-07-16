@@ -78,6 +78,11 @@ constexpr std::uint32_t kWornShortsword    = items::kPlaceholderIdBase + 1;
 constexpr std::uint32_t kCrackedBuckler    = items::kPlaceholderIdBase + 2;
 constexpr std::uint64_t kCorpse        = 0xC0FFEEULL;      // the seeded (owned) corpse
 constexpr std::uint64_t kCorpseForeign = 0xBADCAFEULL;     // a corpse owned by someone else
+// #838 regression: a SPAWNED gossip/giver NPC's wire guid lives in the world-entity
+// band (kWorldEntityGuidBase), NOT the low-32-bit npc_template id space. The chibi realm
+// exposed the bug — the client accepts a quest at a spawned entity's guid, and the accept
+// handler mis-resolved it (static_cast<u32> == 0) and replied WRONG_GIVER.
+constexpr std::uint64_t kSmithSpawnGuid = mw::kWorldEntityGuidBase;  // first world entity
 constexpr std::uint64_t kSelfGuid      = 4242ULL;          // this session's synthetic char guid
 
 // ---- Throwaway self-signed cert (OpenSSL API; mirrors the other wire tests) ---
@@ -309,6 +314,27 @@ int main() {
         seed_corpse(world, kCorpse, kSelfGuid);
         seed_corpse(world, kCorpseForeign, /*owner=*/9999);
 
+        // #838: register a SPAWNED smith NPC in the AoI world registry so its wire guid
+        // (kWorldEntityGuidBase band) resolves back to kSmithNpc — reproducing the chibi
+        // realm, where the client accepts a quest at a spawned entity's guid, NOT a raw
+        // template id. Pre-fix the accept handler read static_cast<u32>(guid) (== 0 for
+        // 0xE000…0) and replied WRONG_GIVER; the fix resolves the guid to its template.
+        {
+            mw::EntityIdentity id;
+            id.entity_guid = kSmithSpawnGuid;
+            id.type_id = kSmithNpc;
+            id.name = "Test Smith";
+            mw::UnitStats st;
+            st.level = 1;
+            st.max_health = 100;
+            st.faction = mw::Faction::kFriendly;
+            const mw::Position origin;  // location is irrelevant to the giver check
+            world.world_state().add_world_entity(id, st, kSmithNpc, origin);
+            check("#838: spawned smith guid resolves to its npc_template id",
+                  world.world_state().npc_template_for_guid(kSmithSpawnGuid).value_or(0) ==
+                      kSmithNpc);
+        }
+
         // TEST WORLD_HELLO: promote IN-WORLD without a grant DB. Emplace a quest log
         // over the placeholder store, capture a synthetic class/level (Runcaller-ish
         // class 2, level 1 — so the Vanguard-only strike is WRONG_CLASS and the
@@ -456,14 +482,17 @@ int main() {
                 check("got a QuestLog (request)", false);
             }
 
-            // --- QUEST_ACCEPT(Q2) at the smith -> the log exposes its choice_items --
+            // --- QUEST_ACCEPT(Q2) at the smith's SPAWNED guid -> OK (#838) ----------
             // Q2 ("Ore for the Smith") is a CHOICE-reward quest: the client must see
-            // its choice_items[] to render the picker before turn-in (#443).
+            // its choice_items[] to render the picker before turn-in (#443). The giver
+            // is addressed by the smith's SPAWNED world-entity wire guid (what the client
+            // actually sends after GOSSIP_HELLO), not the raw template id — pre-#838 the
+            // handler mis-resolved it and replied WRONG_GIVER, so nothing was accepted.
             if (auto pl = round_trip(c, mn::Opcode::QUEST_ACCEPT,
-                                     enc_quest_accept(kQ2, kSmithNpc),
+                                     enc_quest_accept(kQ2, kSmithSpawnGuid),
                                      mn::Opcode::QUEST_ACCEPT_RESULT, seq++)) {
                 const auto* m = decode<mn::QuestAcceptResult>(*pl);
-                check("accept Q2 at the smith -> OK",
+                check("#838: accept Q2 at the smith's SPAWNED guid -> OK (not WRONG_GIVER)",
                       m && m->quest_id() == kQ2 &&
                           m->status() == mn::QuestAcceptStatus::OK);
             } else {

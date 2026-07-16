@@ -621,10 +621,13 @@ std::vector<Message> build_corpus() {
                  expect(attrs->Get(1)->key() == 2u &&
                             attrs->Get(1)->value() == -7,
                         "if2_entity_enter.attrs[1]");
-                 // ②/T1 (#538): this canonical instance is the NPC/legacy shape —
-                 // it sets NO visual-assembly fields, so they must decode ABSENT
-                 // (appearance/equipment null; race/sex 0). Locks the additive
-                 // "omitted for non-players" branch alongside the populated golden.
+                 // ②/T1 (#538): this canonical instance is the MODEL-ONLY / legacy
+                 // shape — it sets NO visual-assembly fields, so they must decode
+                 // ABSENT (appearance/equipment null; race/sex 0). Locks the additive
+                 // "omitted for a model-only entity" branch (every M1 NPC/creature)
+                 // alongside the populated golden. Presence of the block — not the
+                 // entity kind — decides (npc@2, #821: an appearance-carrying NPC uses
+                 // the POPULATED shape, if2_entity_enter_visual, below).
                  expect(m->appearance() == nullptr,
                         "if2_entity_enter.appearance absent");
                  expect(m->equipment() == nullptr,
@@ -633,9 +636,13 @@ std::vector<Message> build_corpus() {
                  expect(m->sex() == 0u, "if2_entity_enter.sex unset");
                }});
 
-  // EntityEnter WITH the ②/T1 (#538) visual-assembly block — a PLAYER entity that
-  // carries race, the §5.2 appearance record (contract ① T5), and one visible
-  // equipped item (feet slot) dyed on the primary channel with a NUMERIC dye id.
+  // EntityEnter WITH the ②/T1 (#538) visual-assembly block — an entity that assembles
+  // like a player: it carries race, the §5.2 appearance record (contract ① T5), and
+  // one visible equipped item (feet slot) dyed on the primary channel with a NUMERIC
+  // dye id. This golden is a PLAYER (char_class 1, worn gear), but the SAME populated
+  // shape is what an appearance-carrying NPC sends (npc@2, contract ①/§7, #821) — the
+  // wire is gated on the block's presence, not the entity kind (the char_class-0 +
+  // appearance NPC encode is proven in worldd/test/entity_enter_visual_test.cpp §3).
   // Freezes the appended-field wire shape Task 4 (the client assembler) binds to:
   // an EquippedVisual list of {slot, item_template, [DyeChoice{channel,dye_id}]}.
   // The dye vector is populated HERE (hand-seeded) even though worldd sends it
@@ -1713,6 +1720,30 @@ std::vector<Message> build_corpus() {
                         "if2_quest_log[0].choice_items[0].item_id");
                  expect(choices->Get(1)->item_id() == 900002u,
                         "if2_quest_log[0].choice_items[1].item_id");
+               }});
+
+  // QuestMarkerUpdate — S->C the proactive overhead marker for one NPC (#844/#849).
+  // The server pushes the classic `!`/`?` icon as the player's quest state changes;
+  // this golden pins the npc guid (AoI band) + the greyed-`?` in-progress kind.
+  c.push_back({"if2_quest_marker_update", "IF-2", "QUEST_MARKER_UPDATE (0x4007)",
+               "S->C overhead marker: NPC guid 0xE000000000000001 -> TURN_IN_INCOMPLETE",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateQuestMarkerUpdate(
+                     b, /*npc_guid=*/0xE000000000000001ULL,
+                     mn::QuestMarkerKind::TURN_IN_INCOMPLETE));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::QuestMarkerUpdate>(nullptr),
+                             "if2_quest_marker_update verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::QuestMarkerUpdate>(buf.data());
+                 expect(m->npc_guid() == 0xE000000000000001ULL,
+                        "if2_quest_marker_update.npc_guid");
+                 expect(m->marker() == mn::QuestMarkerKind::TURN_IN_INCOMPLETE,
+                        "if2_quest_marker_update.marker");
                }});
 
   // ==== IF-2 inventory / loot (world.fbs; ITM-02 #369) ======================

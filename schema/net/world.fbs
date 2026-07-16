@@ -113,6 +113,7 @@ enum Opcode : uint16 {
   QUEST_TURN_IN        = 0x4004,  // C→S  turn a completed quest in at the turn-in NPC
   QUEST_TURN_IN_RESULT = 0x4005,  // S→C  typed turn-in outcome + rewards granted
   QUEST_LOG            = 0x4006,  // S→C  the character's active quest log snapshot
+  QUEST_MARKER_UPDATE  = 0x4007,  // S→C  overhead quest marker for one NPC (#844/#849)
 
   // --- 0x5xxx  inventory / loot / economy  (M1 — ITM-02: loot, #369, epic #20) ---
   // Server-authoritative corpse looting (server PRD §4-M1: "loot generation from
@@ -323,13 +324,15 @@ table EntityEnter {
   power_type:PowerType = NONE;  // which secondary pool (mana/energy/rage/none)
   level:uint16 = 0;        // unit level (0 = unset/unknown)
   name:string;             // display name for the unit frame (empty = unnamed placeholder)
-  // Visual-assembly fields for PLAYER entities (②/T1, #538; client-character-
-  // assembler design §2). Additive (appended, defaulted/absent) exactly like the
-  // char_class + vitals blocks above — a pre-#538 decoder still reads the
-  // original fields, and NPC/creature EntityEnter carries NONE of these (race 0,
-  // appearance + equipment ABSENT), so the client renders NPCs via the monolithic
-  // visual.model path. Only ids travel; all visual lookup is client-side pck
-  // content (design §2 "only ids travel").
+  // Visual-assembly fields (②/T1, #538; client-character-assembler design §2).
+  // Additive (appended, defaulted/absent) exactly like the char_class + vitals
+  // blocks above — a pre-#538 decoder still reads the original fields. Set for ANY
+  // entity that assembles like a player: every player, and (npc@2, contract ①/§7,
+  // #821) an NPC that carries an appearance_catalog. A MODEL-ONLY entity (every M1
+  // NPC/creature) carries NONE of these (race 0, appearance + equipment ABSENT), so
+  // the client renders it via the monolithic visual.model path. The presence of the
+  // block — not the entity kind — decides. Only ids travel; all visual lookup is
+  // client-side pck content (design §2 "only ids travel").
   race:uint8 = 0;                 // M0-frozen roster race id (roster.h); 0 = unset/non-player
   sex:uint8 = 0;                  // reserved; 0 = male (M1 ships male only)
   appearance:Appearance;          // §5.2 record (contract ① T5); absent for NPCs
@@ -1010,6 +1013,26 @@ table QuestLog {
   quests:[QuestLogEntry];
 }
 
+/// The overhead quest marker for one NPC as THIS player sees it (#844/#849) —
+/// mirrors gossip.h QuestMarker. The classic MMO floating indicators the client
+/// billboards over an NPC's head, computed by the server WITHOUT any interaction:
+enum QuestMarkerKind : uint16 {
+  NONE               = 0,   // nothing to advertise
+  AVAILABLE          = 1,   // `!`        — this NPC gives a quest the player may accept
+  TURN_IN_READY      = 2,   // lit `?`    — a quest this NPC turns in, objectives complete
+  TURN_IN_INCOMPLETE = 3,   // greyed `?` — a quest this NPC turns in, objectives not done
+}
+
+/// S→C. The overhead marker for ONE visible NPC, pushed PROACTIVELY (before the
+/// player interacts) and re-pushed whenever the player's quest state changes what
+/// the icon should be (accept / progress / turn-in) or a new NPC comes into view.
+/// The server diffs against the last marker it sent for each NPC and emits only on
+/// change; the client DISPLAYS it, never computes it (Principle 1, "server is law").
+table QuestMarkerUpdate {
+  npc_guid:uint64;                        // the NPC entity's wire guid (AoI band)
+  marker:QuestMarkerKind = NONE;          // the icon to show (NONE clears it)
+}
+
 // ===========================================================================
 // 0x5xxx — inventory / loot / economy  (M1 — ITM-02: loot, #369, epic #20)
 // ===========================================================================
@@ -1473,6 +1496,8 @@ table TrainerLearnResult {
 // 0x4xxx  quest state       — DEFINED above (M1, QST-01 #371): QuestAccept / QuestAcceptResult /
 //                             QuestProgress / QuestTurnIn / QuestTurnInResult / QuestLog (accept from a
 //                             giver, objective tracking, turn-in + reward grant; server PRD §4-M1).
+//                             QuestMarkerUpdate (0x4007, #844/#849): the proactive overhead `!`/`?`
+//                             marker for one NPC, pushed as the player's quest state changes.
 //                             NPC gossip menus (which surface these quest options) are DEFINED in the 0x52xx
 //                             block (M1, NPC-01 #372); scripted quest events (QST-02) are a later issue.
 // 0x5xxx  inventory/economy — LOOT (0x5001..0x5006) DEFINED above (M1, ITM-02 #369): LootRequest / LootResponse /

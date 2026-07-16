@@ -1,4 +1,4 @@
-schema: meridian/npc@1
+schema: meridian/npc@2
 id: core:npc.warden_sela
 name: Warden Sela
 subtitle: Emberfall Trailwarden

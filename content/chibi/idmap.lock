@@ -61,6 +61,8 @@ map:                         # append-only; local index (SAD §2.4)
   chibi:equip_type.two_hand: 45
   chibi:equip_type.wand: 46
   chibi:item.base_cloth_wrap: 47
+  chibi:item.clover_sprig: 91
+  chibi:item.dewdrop_token: 92
   chibi:item.mage_apprentice_robe: 48
   chibi:item.mage_apprentice_staff: 49
   chibi:item.priest_prayer_wand: 50
@@ -73,6 +75,8 @@ map:                         # append-only; local index (SAD §2.4)
   chibi:npc.mardle_puffcap: 87
   chibi:npc.nib_the_fernhopper: 88
   chibi:npc.tansy_dewhollow: 89
+  chibi:quest.a_meadow_welcome: 93
+  chibi:quest.rows_and_lanterns: 94
   chibi:race.blue: 80
   chibi:race.gold: 81
   chibi:race.green: 82

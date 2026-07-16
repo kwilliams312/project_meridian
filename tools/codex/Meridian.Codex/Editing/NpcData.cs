@@ -25,7 +25,7 @@ public sealed class NpcData
     private readonly Dictionary<string, string> _values = new(System.StringComparer.Ordinal);
 
     /// <summary>The schema const every NPC file carries.</summary>
-    public const string SchemaTag = "meridian/npc@1";
+    public const string SchemaTag = "meridian/npc@2";
 
     /// <summary>Present leaf paths and their string values (absent optionals are simply missing).</summary>
     public IReadOnlyDictionary<string, string> Values => _values;
@@ -187,9 +187,13 @@ public sealed class NpcData
             }
         }
 
+        // npc@2 made NpcVisual a oneOf: Model is now nullable (the assemble-like-a-
+        // player branch B carries Appearance instead). The Codex NPC editor authors the
+        // model branch only (branch B — per-NPC appearance — is not yet a Codex form,
+        // #821 story 1 is mechanism-only), so project the model fields null-safely.
         if (npc.Visual is { } vis)
         {
-            d.Set("visual.model", vis.Model.Id);
+            d.Set("visual.model", vis.Model?.Id);
             d.Set("visual.scale", Num(vis.Scale));
             d.Set("visual.sound_set", vis.SoundSet?.Id);
         }

@@ -63,7 +63,7 @@ provenance:
 """
 
 NPC_DOC = """\
-schema: meridian/npc@1
+schema: meridian/npc@2
 id: tp:npc.kobold_miner
 name: Kobold Miner
 level: { min: 1, max: 2 }

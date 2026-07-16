@@ -101,7 +101,7 @@ long long read_compat(const YAML::Node& pack_root) {
     return 1;
 }
 
-// The type word of a schema envelope: "meridian/npc@1" -> "npc".
+// The type word of a schema envelope: "meridian/npc@2" -> "npc".
 std::string type_of_schema(const std::string& schema) {
     const std::size_t slash = schema.find('/');
     if (slash == std::string::npos) return schema;

@@ -1,4 +1,4 @@
-schema: meridian/npc@1
+schema: meridian/npc@2
 id: core:npc.cindermaw
 name: The Cindermaw
 subtitle: Terror of the Sunken Gallery

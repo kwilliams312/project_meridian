@@ -88,6 +88,35 @@ public:
 //   * otherwise (already done, or gated, or not a giver) -> no option for it
 GossipMenu build_gossip_menu(const NpcDef& npc, const QuestStateView& quests);
 
+// --- Overhead quest marker (#844 / #849) -------------------------------------
+// The single "floating icon" a client renders over an NPC's head to advertise its
+// quest role for THIS player, computed WITHOUT any interaction (unlike the gossip
+// menu, which is only built on GOSSIP_HELLO). The classic MMO indicators:
+//   * kAvailable         — a `!`: this NPC GIVES a quest the player may accept now.
+//   * kTurnInReady        — a lit `?`: the player is on a quest this NPC turns in AND
+//                          its objectives are complete (turn it in for the reward).
+//   * kTurnInIncomplete   — a greyed `?`: the player is on a quest this NPC turns in
+//                          but the objectives are NOT yet complete (a reminder).
+//   * kNone               — nothing to advertise.
+// Mirrors the wire QuestMarkerKind (world.fbs); the client only DISPLAYS it.
+enum class QuestMarker : std::uint8_t {
+    kNone = 0,
+    kAvailable = 1,          // `!`         — gives && can_accept
+    kTurnInReady = 2,        // lit `?`     — turn_in && is_complete
+    kTurnInIncomplete = 3,   // greyed `?`  — turn_in && is_active && !is_complete
+};
+
+const char* quest_marker_name(QuestMarker m);
+
+// Compute the ONE overhead marker for `npc` as `player` sees it. An NPC may take part
+// in several quests, so the per-quest signals are folded into a single marker by a
+// fixed PRECEDENCE (most actionable wins), so the icon is deterministic:
+//   kTurnInReady  >  kAvailable  >  kTurnInIncomplete  >  kNone
+// (a reward ready to collect outranks a new quest to grab, which outranks the
+// in-progress reminder). Pure — reuses the SAME QuestStateView seam the gossip
+// planner does, so the marker can never disagree with the menu.
+QuestMarker compute_quest_marker(const NpcDef& npc, const QuestStateView& quests);
+
 }  // namespace meridian::npc
 
 #endif  // MERIDIAN_NPC_GOSSIP_H
