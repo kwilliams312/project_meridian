@@ -1,0 +1,24 @@
+# meridian/npc@1 — ambient chibi villager (#817, epic #816). A cheerful forager
+# who works the Meadow's clover rows. Original Meridian lore (clean-room). Reuses
+# the shared chibi body mesh (chibi:art.chibi_pill_body); no net-new art. See
+# tansy_dewhollow.npc.yaml for the shared-body / visual@1 note.
+schema: meridian/npc@1
+id: chibi:npc.bram_cloverfoot
+name: Bram Cloverfoot
+subtitle: Meadow Forager
+level: { min: 3, max: 3 }
+creature_type: humanoid
+faction: friendly
+stats:
+  health: 300
+  armor: 55
+  damage: { min: 4, max: 7 }
+  attack_speed_ms: 2000
+interaction:
+  gossip_text: >-
+    Four-leaf's a myth — it's the five-leaf clover that keeps your boots dry out
+    here. Fill your pockets while the dew's up; the Meadow always grows back more
+    than you can carry.
+visual:
+  model: chibi:art.chibi_pill_body
+  scale: 1.05

@@ -6,10 +6,10 @@
   "content_schema_version": 1,
   "godot_version": "4.6",
   "id_band": 1,
-  "content_hash": "eb6f7a6af69f097c1cdb19fd0536915e85ca1bd02bc8920fc8fec40fd9d2d568",
+  "content_hash": "980cc250a98550d34aec57d0d8834e28e92d6e2480b89e0e35918d0489593d0d",
   "mcc_version": "0.0.0",
   "built_at": "1970-01-01 00:00:00",
-  "entry_count": 85,
+  "entry_count": 90,
   "entries": [
     { "id": "chibi:art.ui.theme_preview", "numeric_id": 1048577, "type": "asset", "resource": "res://meridian/chibi/art/ui/theme_preview.res", "hash": "3e24aee13ccfaf259f48df2a35ef05a035065c6a885f63896ec31f2612e69d09" },
     { "id": "chibi:zone.sprout_meadow", "numeric_id": 1048578, "type": "zone", "resource": "res://meridian/chibi/tables/zone.bin", "hash": "87cd1e89b6bdbc4f261091e2942655df52244c883735b4fb83f901c64d35798e" },
@@ -95,6 +95,11 @@
     { "id": "chibi:race.green", "numeric_id": 1048658, "type": "race", "resource": "res://meridian/chibi/tables/race.bin", "hash": "9a0d87cbd7991e4d89f1f1b433e6b15a55bebfd7264e0263881e76e6770a89a7" },
     { "id": "chibi:race.red", "numeric_id": 1048659, "type": "race", "resource": "res://meridian/chibi/tables/race.bin", "hash": "a5c2d4502d2684bb881d8a0a7aed6d6d0aab7e12e5d6308b1d19ec7f88a51571" },
     { "id": "chibi:race.silver", "numeric_id": 1048660, "type": "race", "resource": "res://meridian/chibi/tables/race.bin", "hash": "027ecd60c42efd420117dc12fa2cf9f633b5b7554b59e3c90dd52c995e9adbfb" },
-    { "id": "chibi:race.yellow", "numeric_id": 1048661, "type": "race", "resource": "res://meridian/chibi/tables/race.bin", "hash": "eebf35aa2cfb5bbeb0a0b43104176f193fa116d4155a1f5120b8879a81f35151" }
+    { "id": "chibi:race.yellow", "numeric_id": 1048661, "type": "race", "resource": "res://meridian/chibi/tables/race.bin", "hash": "eebf35aa2cfb5bbeb0a0b43104176f193fa116d4155a1f5120b8879a81f35151" },
+    { "id": "chibi:npc.bram_cloverfoot", "numeric_id": 1048662, "type": "npc", "resource": "res://meridian/chibi/tables/npc.bin", "hash": "9443958d2f036b2745bd5e05b0bb98865c935ed210e9f1f9dd75cb50d6d45312" },
+    { "id": "chibi:npc.mardle_puffcap", "numeric_id": 1048663, "type": "npc", "resource": "res://meridian/chibi/tables/npc.bin", "hash": "b96c4c43e0eb35b96ed02b1499b56420ee01348d7ce3d64b959940689c6d1019" },
+    { "id": "chibi:npc.nib_the_fernhopper", "numeric_id": 1048664, "type": "npc", "resource": "res://meridian/chibi/tables/npc.bin", "hash": "056da6cda1f18bff9a8066c7a600965e28a49449ec5cdfabe43da64d2a1b0a88" },
+    { "id": "chibi:npc.tansy_dewhollow", "numeric_id": 1048665, "type": "npc", "resource": "res://meridian/chibi/tables/npc.bin", "hash": "65d7a101cce567745bf1380cae489a72ee2bfc4aba85a355c28eb09d5c87b311" },
+    { "id": "chibi:spawn.sprout_meadow_glade", "numeric_id": 1048666, "type": "spawn", "resource": "res://meridian/chibi/tables/spawn.bin", "hash": "d50e3dde3869b968fae1a6b79deff5575dd965e75cac6d9c4a61c73fbe6e11ef" }
   ]
 }
