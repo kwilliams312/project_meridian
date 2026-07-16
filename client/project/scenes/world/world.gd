@@ -936,6 +936,11 @@ func _route_quest_gossip_frame(opcode: int, payload: PackedByteArray) -> void:
 			_bus.publish_quest_turn_in_result(q)
 		"quest_log":
 			_bus.publish_quest_log(q.get("quests", []))
+		"quest_marker_update":
+			# worldd's PROACTIVE overhead marker for one NPC (#844/#849) — the source of
+			# truth for the billboarded !/? (no longer derived from a GOSSIP_MENU), so it
+			# shows on sight before any interaction.
+			_bus.publish_quest_marker_update(int(q.get("npc_guid", 0)), int(q.get("marker", 0)))
 		_:
 			# Not a quest/gossip opcode — try the loot/vendor/trainer decode seam (#441).
 			_route_econ_frame(opcode, payload)
@@ -1157,18 +1162,30 @@ func _on_quest_log_requested() -> void:
 		_net.send_bulk(frame)
 
 
-# Float a giver indicator (!/?) over an NPC's remote node when one exists. NPC entities
-# do not spawn at M1 (npc_guid maps to a template id), so this is a no-op until spawns
-# land (mcc #28) — but the seam is wired so the marker appears the moment an NPC does.
-func _on_giver_indicator_changed(npc_guid: int, marker: String) -> void:
+# Float a giver indicator (!/?) over an NPC's remote node when one exists. `kind` is the
+# server-pushed QuestMarkerKind (#844/#849): AVAILABLE = gold `!`, TURN_IN_READY = lit green
+# `?`, TURN_IN_INCOMPLETE = dimmed grey `?`, NONE = no marker. NPC entities do not spawn at
+# M1 (npc_guid maps to a template id), so this is a no-op until spawns land (mcc #28) — but
+# the seam is wired so the marker appears the moment an NPC does.
+func _on_giver_indicator_changed(npc_guid: int, kind: int) -> void:
 	var node: Node3D = _remote_nodes.get(npc_guid)
 	if node == null:
 		return
 	var existing := node.get_node_or_null("GiverMarker") as Label3D
-	if marker.is_empty():
+	if kind == MeridianEventBusScript.MARKER_NONE:
 		if existing != null:
 			existing.queue_free()
 		return
+	# Map the server marker to its glyph + colour (the greyed `?` is the third state, #844).
+	var glyph := "!"
+	var tint := Color(1.0, 0.85, 0.2)  # gold — a quest is available here
+	match kind:
+		MeridianEventBusScript.MARKER_TURN_IN_READY:
+			glyph = "?"
+			tint = Color(0.55, 0.9, 0.4)   # lit green — turn-in ready
+		MeridianEventBusScript.MARKER_TURN_IN_INCOMPLETE:
+			glyph = "?"
+			tint = Color(0.5, 0.5, 0.52)   # dimmed grey — turn in here, objectives not done
 	if existing == null:
 		existing = Label3D.new()
 		existing.name = "GiverMarker"
@@ -1178,8 +1195,8 @@ func _on_giver_indicator_changed(npc_guid: int, marker: String) -> void:
 		existing.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		existing.no_depth_test = true
 		node.add_child(existing)
-	existing.text = marker
-	existing.modulate = Color(1.0, 0.85, 0.2) if marker == "!" else Color(0.55, 0.9, 0.4)
+	existing.text = glyph
+	existing.modulate = tint
 
 
 # --- Loot / vendor / trainer controller (ITM-02/ECO-01/NPC-02, #441) ----------

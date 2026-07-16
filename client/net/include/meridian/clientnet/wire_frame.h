@@ -84,6 +84,10 @@ inline constexpr std::uint16_t kOpQuestProgress     = 0x4003;  // S→C
 inline constexpr std::uint16_t kOpQuestTurnIn       = 0x4004;  // C→S
 inline constexpr std::uint16_t kOpQuestTurnInResult = 0x4005;  // S→C
 inline constexpr std::uint16_t kOpQuestLog          = 0x4006;  // C↔S (request / snapshot)
+// QUEST_MARKER_UPDATE (S→C, #844/#849): the overhead quest marker for ONE visible NPC,
+// pushed PROACTIVELY (before any interaction) and re-pushed whenever the player's quest
+// state changes the icon. The client DISPLAYS it (billboarded !/?), never computes it.
+inline constexpr std::uint16_t kOpQuestMarkerUpdate = 0x4007;  // S→C
 // NPC gossip (M1 — NPC-01/02, #372/#433). GOSSIP_HELLO opens gossip on an NPC guid;
 // GOSSIP_MENU is the server-computed, state-gated option list.
 inline constexpr std::uint16_t kOpGossipHello    = 0x5201;  // C→S

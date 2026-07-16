@@ -613,6 +613,18 @@ struct QuestLog {
 Bytes encode_quest_log(const QuestLog& in);  // C→S request (empty) + S→C mock symmetry
 std::optional<QuestLog> decode_quest_log(const Bytes& buf);
 
+// QUEST_MARKER_UPDATE (S→C, #844/#849): the overhead quest marker for ONE visible NPC,
+// pushed proactively by worldd (no interaction) and re-pushed on any change. `marker` is
+// world.fbs QuestMarkerKind (0=NONE clears it, 1=AVAILABLE `!`, 2=TURN_IN_READY lit `?`,
+// 3=TURN_IN_INCOMPLETE greyed `?`) — carried as a u16 ordinal so this POD API stays free
+// of the generated-enum dependency, like the quest/gossip status fields above.
+struct QuestMarkerUpdate {
+    std::uint64_t npc_guid = 0;
+    std::uint16_t marker = 0;  // QuestMarkerKind
+};
+Bytes encode_quest_marker_update(const QuestMarkerUpdate& in);  // test/mock symmetry
+std::optional<QuestMarkerUpdate> decode_quest_marker_update(const Bytes& buf);
+
 // ---------------------------------------------------------------------------
 // IF-2 (world.fbs) — CORPSE LOOTING (M1 ITM-02, #369/#441), VENDORS (M1 ECO-01,
 // #370/#441), TRAINERS (M1 NPC-02, #372/#441). Server-authoritative throughout

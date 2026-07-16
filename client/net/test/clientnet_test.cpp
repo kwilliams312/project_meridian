@@ -1473,6 +1473,36 @@ void test_quest_codec() {
           log_out->quests[1].reward_items[0].count == 3);
     CHECK(log_out->quests[1].choice_items.empty());
 
+    // QuestMarkerUpdate (S→C, #844/#849): worldd's proactive overhead marker for one NPC.
+    // Each QuestMarkerKind ordinal survives the enum, and it wraps under QUEST_MARKER_UPDATE
+    // (0x4007). AVAILABLE (`!`) on sight …
+    codec::QuestMarkerUpdate qm_avail{/*npc_guid=*/0x1000000000000042ull, /*AVAILABLE*/ 1};
+    {
+        Bytes frame = encode_world_frame(kOpQuestMarkerUpdate, 1,
+                                         codec::encode_quest_marker_update(qm_avail));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == kOpQuestMarkerUpdate && f->opcode == 0x4007);
+    }
+    auto qm_avail_out =
+        codec::decode_quest_marker_update(codec::encode_quest_marker_update(qm_avail));
+    CHECK(qm_avail_out.has_value());
+    CHECK(qm_avail_out->npc_guid == 0x1000000000000042ull && qm_avail_out->marker == 1);
+    // … TURN_IN_INCOMPLETE (greyed `?`) while the objective is unmet …
+    codec::QuestMarkerUpdate qm_incomplete{/*npc_guid=*/77ull, /*TURN_IN_INCOMPLETE*/ 3};
+    auto qm_inc_out =
+        codec::decode_quest_marker_update(codec::encode_quest_marker_update(qm_incomplete));
+    CHECK(qm_inc_out.has_value() && qm_inc_out->npc_guid == 77ull && qm_inc_out->marker == 3);
+    // … TURN_IN_READY (lit `?`) once complete …
+    codec::QuestMarkerUpdate qm_ready{77ull, /*TURN_IN_READY*/ 2};
+    auto qm_ready_out =
+        codec::decode_quest_marker_update(codec::encode_quest_marker_update(qm_ready));
+    CHECK(qm_ready_out.has_value() && qm_ready_out->marker == 2);
+    // … and NONE (0) clears it after turn-in.
+    codec::QuestMarkerUpdate qm_none{77ull, /*NONE*/ 0};
+    auto qm_none_out =
+        codec::decode_quest_marker_update(codec::encode_quest_marker_update(qm_none));
+    CHECK(qm_none_out.has_value() && qm_none_out->marker == 0);
+
     // Verify-before-GetRoot: garbage + empty are rejected on every S→C decoder.
     Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
     CHECK(!codec::decode_quest_accept(garbage).has_value());
@@ -1482,6 +1512,8 @@ void test_quest_codec() {
     CHECK(!codec::decode_quest_turn_in_result(garbage).has_value());
     CHECK(!codec::decode_quest_log(garbage).has_value());
     CHECK(!codec::decode_quest_log(Bytes{}).has_value());
+    CHECK(!codec::decode_quest_marker_update(garbage).has_value());
+    CHECK(!codec::decode_quest_marker_update(Bytes{}).has_value());
 }
 
 // ---------------------------------------------------------------------------

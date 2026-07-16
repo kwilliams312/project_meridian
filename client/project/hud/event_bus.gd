@@ -334,6 +334,13 @@ const GOSSIP_QUEST_COMPLETE := 2
 const GOSSIP_VENDOR := 3
 const GOSSIP_TRAINER := 4
 
+# world.fbs QuestMarkerKind ordinals (the overhead marker worldd pushes per NPC, #844/#849).
+# The server computes these WITHOUT any interaction; the client only DISPLAYS them.
+const MARKER_NONE := 0                # nothing to advertise (hide the marker)
+const MARKER_AVAILABLE := 1           # `!`        — this NPC gives an acceptable quest
+const MARKER_TURN_IN_READY := 2       # lit `?`    — a quest turns in here, objectives complete
+const MARKER_TURN_IN_INCOMPLETE := 3  # greyed `?` — a quest turns in here, objectives not done
+
 # --- View subscription signals (bus -> quest/gossip view-models) -------------
 
 ## A GOSSIP_MENU arrived for `npc_guid`. `options` is an Array of option Dictionaries
@@ -363,10 +370,11 @@ signal quest_turn_in_result(result: Dictionary)
 ## The tracked (watched) quest changed. `quest_id` == 0 means nothing is tracked.
 signal tracked_quest_changed(quest_id: int)
 
-## A quest-giver NPC's indicator changed. `marker` is "!" (a quest is available here),
-## "?" (a quest is turn-in-ready here), or "" (no marker). The world scene floats it
-## over the NPC when one exists.
-signal giver_indicator_changed(npc_guid: int, marker: String)
+## A quest-giver NPC's overhead marker changed. `kind` is a world.fbs QuestMarkerKind
+## ordinal (MARKER_NONE/AVAILABLE/TURN_IN_READY/TURN_IN_INCOMPLETE) — the SERVER computes
+## it and pushes QUEST_MARKER_UPDATE proactively (#844/#849); the world scene floats the
+## billboarded `!`/`?` over the NPC when one exists. NONE clears it.
+signal giver_indicator_changed(npc_guid: int, kind: int)
 
 # --- Intent signals (view -> the world scene, which owns the net thread) ------
 
@@ -393,17 +401,30 @@ var _quest_order: Array = []          # quest_ids in server order (stable render
 var _tracked_quest: int = 0           # the watched quest (0 = none)
 var _gossip_npc: int = 0              # the NPC whose gossip menu is open (0 = none)
 var _gossip_options: Array = []       # the open menu's options (empty = closed)
-var _giver_markers: Dictionary = {}   # npc_guid:int -> "!"/"?"/"" (last computed)
+var _giver_markers: Dictionary = {}   # npc_guid:int -> QuestMarkerKind int (last PUSHED)
 
 # --- Publish API (the net layer -> bus) --------------------------------------
 
-## Publish a GOSSIP_MENU (decode_quest_frame kind "gossip_menu"). Stores the open menu,
-## recomputes the NPC's giver indicator from the option kinds, and emits.
+## Publish a GOSSIP_MENU (decode_quest_frame kind "gossip_menu"). Stores the open menu and
+## emits. It NO LONGER derives the overhead giver marker from the option kinds — worldd
+## pushes QUEST_MARKER_UPDATE proactively (#844/#849), so the marker is known on sight (see
+## publish_quest_marker_update) rather than only after the player opens gossip.
 func publish_gossip_menu(npc_guid: int, options: Array) -> void:
 	_gossip_npc = npc_guid
 	_gossip_options = options.duplicate(true)
 	gossip_menu_changed.emit(npc_guid, _gossip_options)
-	_recompute_giver_marker(npc_guid, options)
+
+
+## Publish a QUEST_MARKER_UPDATE (decode_quest_frame kind "quest_marker_update", #844/#849).
+## worldd computes + pushes the overhead marker for ONE NPC PROACTIVELY (on sight and on any
+## quest-state change), so `!` shows before the player interacts. SERVER IS LAW — the bus
+## only stores + re-emits the pushed QuestMarkerKind; it never derives it. Diffed so a
+## re-push of the same kind is a no-op (worldd already diffs, but the view stays quiet too).
+func publish_quest_marker_update(npc_guid: int, kind: int) -> void:
+	if int(_giver_markers.get(npc_guid, MARKER_NONE)) == kind:
+		return
+	_giver_markers[npc_guid] = kind
+	giver_indicator_changed.emit(npc_guid, kind)
 
 
 ## Publish a QUEST_ACCEPT_RESULT. On OK, watch the newly-accepted quest so the tracker
@@ -554,9 +575,10 @@ func gossip_options() -> Array:
 	return _gossip_options.duplicate(true)
 
 
-## The last computed giver marker for `npc_guid` ("!"/"?"/"").
-func giver_marker(npc_guid: int) -> String:
-	return String(_giver_markers.get(npc_guid, ""))
+## The last PUSHED overhead marker for `npc_guid` as a QuestMarkerKind ordinal
+## (MARKER_NONE when the server has advertised nothing for it).
+func giver_marker(npc_guid: int) -> int:
+	return int(_giver_markers.get(npc_guid, MARKER_NONE))
 
 # --- Quest/gossip internals --------------------------------------------------
 
@@ -608,22 +630,6 @@ static func _all_objectives_complete(objs: Array) -> bool:
 # tracked quest when the current one is turned in / absent.
 func _first_active_quest() -> int:
 	return int(_quest_order[0]) if not _quest_order.is_empty() else 0
-
-
-# Derive an NPC's giver indicator from a gossip menu's option kinds and emit it:
-# a turn-in-ready quest ("?") outranks an available one ("!"); otherwise no marker.
-func _recompute_giver_marker(npc_guid: int, options: Array) -> void:
-	var has_available := false
-	var has_complete := false
-	for o in options:
-		match int((o as Dictionary).get("kind", -1)):
-			GOSSIP_QUEST_COMPLETE: has_complete = true
-			GOSSIP_QUEST_AVAILABLE: has_available = true
-	var marker := "?" if has_complete else ("!" if has_available else "")
-	if String(_giver_markers.get(npc_guid, "")) == marker:
-		return
-	_giver_markers[npc_guid] = marker
-	giver_indicator_changed.emit(npc_guid, marker)
 
 
 # =============================================================================
