@@ -90,6 +90,17 @@ constexpr std::uint64_t kSmithSpawnGuid = mw::kWorldEntityGuidBase;  // first wo
 // smith/trainer because a plain giver's GOSSIP_HELLO reply is a single GOSSIP_MENU frame.)
 constexpr std::uint64_t kGiverSpawnNear = mw::kWorldEntityGuidBase + 1;  // in range
 constexpr std::uint64_t kGiverSpawnFar  = mw::kWorldEntityGuidBase + 2;  // out of range
+// #842 LIVE-BUG regression: the chibi realm exposed a hole — the greybox client opens
+// gossip/accept by the NPC's TEMPLATE id (the env-default gossip npc / the pre-spawn
+// 1:1 mapping), NOT its spawned world-entity guid. player_in_interaction_range resolved
+// the target ONLY as a spawned entity guid, so a template-id target carried "no world
+// position" and the range gate was SKIPPED entirely — interaction worked from ANY
+// distance (both near AND far). A vendor whose ONLY spawn is 10 m away (mirrors a chibi
+// NPC ~10 m from the enter spawn) reproduces it: gossiped by TEMPLATE id it must gate to
+// its spawned position. kNpcVendor pushes a VENDOR_LIST after a NON-EMPTY menu, so this
+// case is placed LAST (its trailing frame can't disturb an earlier round_trip).
+constexpr std::uint32_t kVendorNpc      = npc::kNpcVendor;               // vendor role NPC
+constexpr std::uint64_t kVendorSpawnFar = mw::kWorldEntityGuidBase + 3;  // 10 m away, sole vendor spawn
 constexpr std::uint64_t kSelfGuid      = 4242ULL;          // this session's synthetic char guid
 // The player's in-world spawn (the stub WORLD_HELLO emplaces authoritative movement here).
 constexpr float kPlayerX = -320.0f;
@@ -372,6 +383,19 @@ int main() {
             check("#842: distant giver guid also resolves to its npc_template id",
                   world.world_state().npc_template_for_guid(kGiverSpawnFar).value_or(0) ==
                       kQuestGiverNpc);
+
+            // #842 LIVE-BUG: a VENDOR whose ONLY spawn is 10 m away — the interaction
+            // target the greybox client addresses by TEMPLATE id (kVendorNpc), not by
+            // this spawned guid. It must still be range-gated to (kPlayerX+10, kPlayerY).
+            mw::EntityIdentity id_vendor;
+            id_vendor.entity_guid = kVendorSpawnFar;
+            id_vendor.type_id = kVendorNpc;
+            id_vendor.name = "Distant Vendor";
+            mw::Position vendor_pos;
+            vendor_pos.x = kPlayerX + 10.0f;  // 10 m ≫ the 5 m interaction reach
+            vendor_pos.y = kPlayerY;
+            vendor_pos.z = 0.0f;
+            world.world_state().add_world_entity(id_vendor, st, kVendorNpc, vendor_pos);
         }
 
         // TEST WORLD_HELLO: promote IN-WORLD without a grant DB. Emplace a quest log
@@ -725,6 +749,49 @@ int main() {
                       m && m->status() == mn::LootStatus::NOT_A_LOOTER);
             } else {
                 check("got a LootResponse (foreign)", false);
+            }
+
+            // ===== #842 LIVE-BUG: a TEMPLATE-ID interaction is still range-gated =====
+            // The chibi realm's tester could gossip/accept from ANY distance because the
+            // greybox client addresses the NPC by its TEMPLATE id, and the gate only knew
+            // how to look a target up as a SPAWNED entity guid — a template id resolved to
+            // "no position" and the whole gate was skipped. These two cases drive the SAME
+            // template-id path the live client uses (RED without the fix), proving the gate
+            // now resolves a template-id target to its nearest spawned instance and gates by
+            // DISTANCE, not by guid shape.
+
+            // CONTROL: gossip by TEMPLATE id when a spawn of that template is IN RANGE (the
+            // quest giver has a copy AT the player) -> the menu opens (Q1 IN_PROGRESS). This
+            // single-frame reply comes first so its round_trip is never disturbed.
+            if (auto pl = round_trip(c, mn::Opcode::GOSSIP_HELLO,
+                                     enc_gossip_hello(kQuestGiverNpc),
+                                     mn::Opcode::GOSSIP_MENU, seq++)) {
+                const auto* m = decode<mn::GossipMenu>(*pl);
+                bool has_q1 = false;
+                if (m && m->options())
+                    for (const auto* o : *m->options())
+                        if (o->kind() == mn::GossipOptionKind::QUEST_IN_PROGRESS &&
+                            o->target_id() == kQ1)
+                            has_q1 = true;
+                check("#842 live-bug: gossip by TEMPLATE id, spawn IN RANGE -> menu opens",
+                      m && has_q1);
+            } else {
+                check("got a GossipMenu (template-id in-range)", false);
+            }
+
+            // THE BUG: gossip by TEMPLATE id when the ONLY spawn of that template is 10 m
+            // away -> refused (empty menu). RED (pre-fix): the vendor menu opened from 10 m
+            // (a VENDOR option + a trailing VENDOR_LIST), exactly the live "far works" symptom.
+            // GREEN: the gate resolves kVendorNpc to its 10 m spawn and refuses. Placed LAST
+            // so a RED-path trailing VENDOR_LIST cannot corrupt a later read.
+            if (auto pl = round_trip(c, mn::Opcode::GOSSIP_HELLO,
+                                     enc_gossip_hello(kVendorNpc),
+                                     mn::Opcode::GOSSIP_MENU, seq++)) {
+                const auto* m = decode<mn::GossipMenu>(*pl);
+                check("#842 live-bug: gossip by TEMPLATE id, spawn OUT OF RANGE -> refused",
+                      m && (m->options() == nullptr || m->options()->size() == 0));
+            } else {
+                check("got a GossipMenu (template-id out-of-range)", false);
             }
         }  // client closes
 

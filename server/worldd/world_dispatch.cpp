@@ -428,20 +428,34 @@ inline constexpr float kNpcInteractionRangeM = kCreatureBasicAttackRangeM;  // 5
 static_assert(kNpcInteractionRangeM > 0.0f, "interaction range must be positive");
 
 // True iff the player may interact with the NPC named by `wire_guid`. Range is
-// enforced ONLY when both positions are knowable: the target is a SPAWNED world
-// entity (its authoritative position) AND this session has authoritative movement
-// state (the player's position). When the target is NOT a spawned entity — the
-// pre-spawn placeholder path (a raw template id), a self-serve giver (guid 0), or
-// no world registry (the DB-less dispatch smoke test) — range cannot be evaluated
-// and the interaction is ALLOWED: the spawned-entity path is the only one that
-// carries a world position to gate on. Horizontal (x,y) distance, mirroring the
-// combat cast-range check (aoi_grid.h horizontal_distance vs ability.range_m).
+// enforced whenever the NPC's world position is knowable AND this session has
+// authoritative movement state (the player's position). The target position is
+// resolved TWO ways, because the client addresses an NPC by EITHER form:
+//   1. a SPAWNED world-entity guid (kWorldEntityGuidBase band) — the position is the
+//      entity's own authoritative position (a well-behaved client that targeted it); or
+//   2. a raw npc TEMPLATE id — the greybox / pre-spawn path: the env-default gossip
+//      npc, or the pre-spawn 1:1 guid==template mapping. A template can have MANY
+//      spawns, so we gate on the NEAREST spawned instance (the copy the player is next
+//      to). #842 LIVE BUG: this second resolution was MISSING — a template-id target
+//      returned "no spawned position" and the whole gate was SKIPPED, so interaction
+//      worked from ANY distance (the chibi realm's "both near AND far" symptom). "Server
+//      is law": the gate must not depend on the client sending the spawned guid.
+// Only a target with NO spawned position anywhere (a self-serve giver / a truly
+// un-spawned template / no world registry — the DB-less smoke path) stays ungated: there
+// is nothing to measure against. Horizontal (x,y) distance, mirroring the combat
+// cast-range check (aoi_grid.h horizontal_distance vs ability.range_m).
 bool player_in_interaction_range(const ConnCtx& ctx, std::uint64_t wire_guid) {
     if (ctx.world == nullptr || !ctx.movement) return true;  // no positions to gate on
+    const Position& me = ctx.movement->authoritative();
     std::optional<Position> npc = ctx.world->world_entity_position(wire_guid);
-    if (!npc) return true;  // not a spawned entity — nothing to gate on
-    const float dist = horizontal_distance(ctx.movement->authoritative(), *npc);
-    return dist <= kNpcInteractionRangeM;
+    if (!npc) {
+        // Not a spawned-entity guid — treat it as a template id and gate on the nearest
+        // spawned instance of that template (nullopt only when the template has none).
+        npc = ctx.world->nearest_world_entity_of_template(
+            static_cast<std::uint32_t>(wire_guid), me);
+    }
+    if (!npc) return true;  // no spawned position anywhere — nothing to gate on
+    return horizontal_distance(me, *npc) <= kNpcInteractionRangeM;
 }
 
 mn::QuestTurnInStatus to_wire(TurnInStatus s) {
