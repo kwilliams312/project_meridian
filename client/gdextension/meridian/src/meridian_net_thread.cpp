@@ -776,6 +776,12 @@ Dictionary MeridianNetThread::decode_quest_frame(int opcode,
 			quests.push_back(qd);
 		}
 		d["quests"] = quests;
+	} else if (opcode == cn::kOpQuestMarkerUpdate) {
+		auto m = cn::codec::decode_quest_marker_update(buf);
+		if (!m) return d;
+		d["kind"] = String("quest_marker_update");
+		d["npc_guid"] = static_cast<int64_t>(m->npc_guid);
+		d["marker"] = static_cast<int64_t>(m->marker);  // QuestMarkerKind ordinal
 	}
 	return d;  // kind stays "" for a non-quest/gossip opcode / undecodable payload
 }

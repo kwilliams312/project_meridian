@@ -896,6 +896,22 @@ std::optional<QuestLog> decode_quest_log(const Bytes& buf) {
     return out;
 }
 
+Bytes encode_quest_marker_update(const QuestMarkerUpdate& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateQuestMarkerUpdate(
+        b, in.npc_guid, static_cast<mn::QuestMarkerKind>(in.marker)));
+    return to_bytes(b);
+}
+
+std::optional<QuestMarkerUpdate> decode_quest_marker_update(const Bytes& buf) {
+    const mn::QuestMarkerUpdate* t = verify_and_get<mn::QuestMarkerUpdate>(buf);
+    if (t == nullptr) return std::nullopt;
+    QuestMarkerUpdate out;
+    out.npc_guid = t->npc_guid();
+    out.marker = static_cast<std::uint16_t>(t->marker());
+    return out;
+}
+
 // ---- IF-2 LOOT (0x5001..0x5006 — ITM-02, #369/#441) ------------------------
 
 Bytes encode_loot_request(const LootRequest& in) {

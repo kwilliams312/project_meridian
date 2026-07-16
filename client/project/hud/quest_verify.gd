@@ -6,9 +6,11 @@
 # safety. NOT a shipped scene: run it as
 #   godot --headless --script res://hud/quest_verify.gd
 # so CI / a dev box proves — with NO display and NO server — that:
-#   * the bus stores + re-emits the server's quest/gossip state (GOSSIP_MENU → giver
-#     marker; QUEST_LOG snapshot → tracked-quest pick; QUEST_PROGRESS merge; accept /
-#     turn-in results drive tracking + log removal);
+#   * the bus stores + re-emits the server's quest/gossip state (QUEST_LOG snapshot →
+#     tracked-quest pick; QUEST_PROGRESS merge; accept / turn-in results drive tracking +
+#     log removal); the PROACTIVE per-NPC overhead marker (QUEST_MARKER_UPDATE, #844/#849)
+#     sets the right billboard icon per QuestMarkerKind (`!`/lit `?`/greyed `?`/hidden) on
+#     SIGHT — no longer derived from GOSSIP_MENU;
 #   * the three windows render that state (options, quest blocks, tracker lines) and
 #     issue the right INTENTS back through the bus (accept / turn-in / vendor / trainer);
 #   * MeridianNetThread builds the C→S quest/gossip frames non-empty and its
@@ -41,6 +43,7 @@ func _initialize() -> void:
 
 	_verify_event_bus_quest()
 	_verify_event_bus_gossip()
+	_verify_event_bus_quest_markers()
 	await _verify_gossip_window()
 	await _verify_turn_in_choice_picker()
 	await _verify_quest_log_window()
@@ -144,9 +147,11 @@ func _verify_event_bus_gossip() -> void:
 	print("[event_bus/gossip]")
 	var bus = EventBus.new()
 
-	# A GOSSIP_MENU with a turn-in-ready quest yields a "?" giver marker (outranks "!").
-	var marker := {"v": "x"}
-	bus.giver_indicator_changed.connect(func(_g, m): marker["v"] = m)
+	# A GOSSIP_MENU stores the open menu + emits, but NO LONGER drives the overhead marker
+	# (#844/#849): the marker is now push-only (QUEST_MARKER_UPDATE), so opening gossip must
+	# NOT fire giver_indicator_changed nor set a giver_marker.
+	var gossip_marker_fired := {"v": false}
+	bus.giver_indicator_changed.connect(func(_g, _k): gossip_marker_fired["v"] = true)
 	var menu_events: Array = []
 	bus.gossip_menu_changed.connect(func(g, o): menu_events.append([g, o]))
 	bus.publish_gossip_menu(27, [
@@ -157,12 +162,9 @@ func _verify_event_bus_gossip() -> void:
 	_check("gossip_menu_changed fired for npc 27", menu_events.size() == 1 and int(menu_events[0][0]) == 27)
 	_check("gossip menu stored (3 options)", bus.gossip_options().size() == 3)
 	_check("gossip npc is 27", bus.gossip_npc() == 27)
-	_check("giver marker '?' (turn-in outranks available)", String(marker["v"]) == "?")
-	_check("giver_marker getter agrees", bus.giver_marker(27) == "?")
-
-	# An available-only menu yields "!".
-	bus.publish_gossip_menu(62, [{"kind": EventBus.GOSSIP_QUEST_AVAILABLE, "target_id": 71}])
-	_check("available-only marker is '!'", bus.giver_marker(62) == "!")
+	_check("gossip does NOT derive overhead marker (push is source of truth)",
+		not bool(gossip_marker_fired["v"]))
+	_check("gossip leaves giver_marker at NONE", bus.giver_marker(27) == EventBus.MARKER_NONE)
 
 	# close_gossip clears the open menu + fires gossip_closed.
 	var closed := {"v": false}
@@ -180,6 +182,60 @@ func _verify_event_bus_gossip() -> void:
 	bus.request_trainer_entry(64)
 	_check("vendor entry hook fires", int(vendor["v"]) == 27)
 	_check("trainer entry hook fires", int(trainer["v"]) == 64)
+
+
+# The push-driven overhead marker (#844/#849): a QUEST_MARKER_UPDATE for an NPC sets the
+# right icon per QuestMarkerKind, transitions update it, and NONE hides it — mirroring the
+# world scene's state->glyph/colour mapping. Proves `!` shows on SIGHT (no gossip needed).
+func _verify_event_bus_quest_markers() -> void:
+	print("[event_bus/quest_markers]")
+	var bus = EventBus.new()
+
+	# world.gd's mapping under test (kind -> {glyph, is_dimmed}). Kept beside the assertions
+	# so the state->icon contract the billboard renders is verified headlessly.
+	var icon_of := func(kind: int) -> Dictionary:
+		match kind:
+			EventBus.MARKER_AVAILABLE: return {"glyph": "!", "dimmed": false}
+			EventBus.MARKER_TURN_IN_READY: return {"glyph": "?", "dimmed": false}
+			EventBus.MARKER_TURN_IN_INCOMPLETE: return {"glyph": "?", "dimmed": true}
+			_: return {"glyph": "", "dimmed": false}  # NONE -> hidden
+
+	var events: Array = []
+	bus.giver_indicator_changed.connect(func(g, k): events.append([g, k]))
+
+	# On SIGHT: worldd pushes AVAILABLE for Tansy (guid 27) before any interaction -> gold `!`.
+	bus.publish_quest_marker_update(27, EventBus.MARKER_AVAILABLE)
+	_check("on-sight AVAILABLE emits for npc 27",
+		events.size() == 1 and int(events[0][0]) == 27 and int(events[0][1]) == EventBus.MARKER_AVAILABLE)
+	_check("giver_marker(27) == AVAILABLE", bus.giver_marker(27) == EventBus.MARKER_AVAILABLE)
+	_check("AVAILABLE maps to gold '!'", icon_of.call(bus.giver_marker(27)) == {"glyph": "!", "dimmed": false})
+
+	# A re-push of the SAME kind is a no-op (diffed) — no duplicate emit.
+	bus.publish_quest_marker_update(27, EventBus.MARKER_AVAILABLE)
+	_check("re-push of unchanged marker is a no-op", events.size() == 1)
+
+	# ACCEPT clears Tansy's `!` (server pushes NONE) -> marker hidden.
+	bus.publish_quest_marker_update(27, EventBus.MARKER_NONE)
+	_check("accept clears '!' (NONE emitted)",
+		events.size() == 2 and int(events[1][1]) == EventBus.MARKER_NONE)
+	_check("giver_marker(27) back to NONE", bus.giver_marker(27) == EventBus.MARKER_NONE)
+	_check("NONE maps to no glyph (hidden)", String(icon_of.call(EventBus.MARKER_NONE)["glyph"]) == "")
+
+	# Bram (guid 55): greyed `?` while the objective is incomplete …
+	bus.publish_quest_marker_update(55, EventBus.MARKER_TURN_IN_INCOMPLETE)
+	_check("Bram TURN_IN_INCOMPLETE stored", bus.giver_marker(55) == EventBus.MARKER_TURN_IN_INCOMPLETE)
+	_check("INCOMPLETE maps to dimmed '?'",
+		icon_of.call(bus.giver_marker(55)) == {"glyph": "?", "dimmed": true})
+
+	# … then lit `?` once the objective completes (a distinct transition, not a no-op).
+	bus.publish_quest_marker_update(55, EventBus.MARKER_TURN_IN_READY)
+	_check("objective done -> TURN_IN_READY transition emits",
+		events.size() == 4 and int(events[3][1]) == EventBus.MARKER_TURN_IN_READY)
+	_check("READY maps to lit '?'", icon_of.call(bus.giver_marker(55)) == {"glyph": "?", "dimmed": false})
+
+	# … and NONE after turn-in clears Bram's `?`.
+	bus.publish_quest_marker_update(55, EventBus.MARKER_NONE)
+	_check("turn-in clears Bram's '?'", bus.giver_marker(55) == EventBus.MARKER_NONE)
 
 
 func _verify_gossip_window() -> void:
@@ -392,6 +448,10 @@ func _verify_net_bridge() -> void:
 	_check("garbage GOSSIP_MENU → kind ''", String(bad.get("kind", "x")) == "")
 	var other: Dictionary = net.decode_quest_frame(0x2001, PackedByteArray())
 	_check("non-quest opcode → kind ''", String(other.get("kind", "x")) == "")
+	# QUEST_MARKER_UPDATE (0x4007, #844/#849) rejects a garbage body safely (kind ''); the
+	# valid wire round-trip for this opcode is proven by the C++ ctest (clientnet quest case).
+	var bad_marker: Dictionary = net.decode_quest_frame(0x4007, PackedByteArray([0xFF, 0xFF, 0xFF, 0xFF]))
+	_check("garbage QUEST_MARKER_UPDATE → kind ''", String(bad_marker.get("kind", "x")) == "")
 
 
 # --- helpers -----------------------------------------------------------------
