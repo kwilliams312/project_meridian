@@ -82,8 +82,18 @@ constexpr std::uint64_t kCorpseForeign = 0xBADCAFEULL;     // a corpse owned by 
 // band (kWorldEntityGuidBase), NOT the low-32-bit npc_template id space. The chibi realm
 // exposed the bug — the client accepts a quest at a spawned entity's guid, and the accept
 // handler mis-resolved it (static_cast<u32> == 0) and replied WRONG_GIVER.
-constexpr std::uint64_t kSmithSpawnGuid = mw::kWorldEntityGuidBase;  // first world entity
+constexpr std::uint64_t kSmithSpawnGuid = mw::kWorldEntityGuidBase;  // first world entity (in range)
+// #842: two spawned copies of the PLAIN quest-giver template (kQuestGiverNpc, which gives
+// Q1 and pushes no trainer/vendor list) — one AT the player (in range), one 100 m away
+// (out of range). Same NPC content behind both guids, so these isolate the interaction-
+// range gate: only the spawned position differs. (The quest giver is used instead of the
+// smith/trainer because a plain giver's GOSSIP_HELLO reply is a single GOSSIP_MENU frame.)
+constexpr std::uint64_t kGiverSpawnNear = mw::kWorldEntityGuidBase + 1;  // in range
+constexpr std::uint64_t kGiverSpawnFar  = mw::kWorldEntityGuidBase + 2;  // out of range
 constexpr std::uint64_t kSelfGuid      = 4242ULL;          // this session's synthetic char guid
+// The player's in-world spawn (the stub WORLD_HELLO emplaces authoritative movement here).
+constexpr float kPlayerX = -320.0f;
+constexpr float kPlayerY = -320.0f;
 
 // ---- Throwaway self-signed cert (OpenSSL API; mirrors the other wire tests) ---
 bool generate_self_signed(const std::string& cert_path, const std::string& key_path) {
@@ -328,11 +338,40 @@ int main() {
             st.level = 1;
             st.max_health = 100;
             st.faction = mw::Faction::kFriendly;
-            const mw::Position origin;  // location is irrelevant to the giver check
-            world.world_state().add_world_entity(id, st, kSmithNpc, origin);
+            // #842: spawn the smith AT the player's position so interacting with it is
+            // IN RANGE (the interaction-range gate now makes the spawn location matter —
+            // the player spawns at (kPlayerX, kPlayerY, 0), see the WORLD_HELLO stub).
+            mw::Position at_player;
+            at_player.x = kPlayerX;
+            at_player.y = kPlayerY;
+            at_player.z = 0.0f;
+            world.world_state().add_world_entity(id, st, kSmithNpc, at_player);
             check("#838: spawned smith guid resolves to its npc_template id",
                   world.world_state().npc_template_for_guid(kSmithSpawnGuid).value_or(0) ==
                       kSmithNpc);
+
+            // #842: two spawned quest givers (template kQuestGiverNpc, which gives Q1) —
+            // one AT the player (in range), one 100 m away (out of range) — so gossip /
+            // accept aimed at the far one is refused while the near one succeeds. A plain
+            // giver's gossip reply is a single GOSSIP_MENU (no trainer/vendor push frame).
+            mw::EntityIdentity id_near;
+            id_near.entity_guid = kGiverSpawnNear;
+            id_near.type_id = kQuestGiverNpc;
+            id_near.name = "Nearby Giver";
+            world.world_state().add_world_entity(id_near, st, kQuestGiverNpc, at_player);
+
+            mw::EntityIdentity id_far;
+            id_far.entity_guid = kGiverSpawnFar;
+            id_far.type_id = kQuestGiverNpc;
+            id_far.name = "Distant Giver";
+            mw::Position far_pos;
+            far_pos.x = kPlayerX + 100.0f;  // 100 m ≫ the 5 m interaction reach
+            far_pos.y = kPlayerY;
+            far_pos.z = 0.0f;
+            world.world_state().add_world_entity(id_far, st, kQuestGiverNpc, far_pos);
+            check("#842: distant giver guid also resolves to its npc_template id",
+                  world.world_state().npc_template_for_guid(kGiverSpawnFar).value_or(0) ==
+                      kQuestGiverNpc);
         }
 
         // TEST WORLD_HELLO: promote IN-WORLD without a grant DB. Emplace a quest log
@@ -350,8 +389,8 @@ int main() {
                           ctx.char_level = 1;
                           ctx.quests.emplace(quest_store);
                           mw::Position spawn;
-                          spawn.x = -320.0f;
-                          spawn.y = -320.0f;
+                          spawn.x = kPlayerX;
+                          spawn.y = kPlayerY;
                           spawn.z = 0.0f;
                           ctx.movement.emplace(spawn, /*spawn_time_ms=*/0);
                           ctx.movement->set_entity_guid(kSelfGuid);
@@ -587,6 +626,61 @@ int main() {
                       m && (m->options() == nullptr || m->options()->size() == 0));
             } else {
                 check("got a GossipMenu (unknown)", false);
+            }
+
+            // ===== #842 NPC INTERACTION-RANGE GATE ============================
+            // The player is at (kPlayerX, kPlayerY, 0). The NEAR giver is spawned right
+            // there (in range); the FAR giver is 100 m away (out of range). Same NPC
+            // content (kQuestGiverNpc, gives Q1) behind both guids — only the spawned
+            // position differs, so these assertions isolate the range gate.
+
+            // --- GOSSIP on the IN-RANGE spawned giver -> a real menu opens ----
+            // Q1 was accepted above, so the giver's menu carries Q1 as IN_PROGRESS.
+            // (Pre-#842 this always opened; the point here is it STILL opens in range.)
+            if (auto pl = round_trip(c, mn::Opcode::GOSSIP_HELLO,
+                                     enc_gossip_hello(kGiverSpawnNear),
+                                     mn::Opcode::GOSSIP_MENU, seq++)) {
+                const auto* m = decode<mn::GossipMenu>(*pl);
+                bool has_q1 = false;
+                if (m && m->options())
+                    for (const auto* o : *m->options())
+                        if (o->kind() == mn::GossipOptionKind::QUEST_IN_PROGRESS &&
+                            o->target_id() == kQ1)
+                            has_q1 = true;
+                check("#842: gossip on the IN-RANGE giver opens a menu (Q1 IN_PROGRESS)",
+                      m && m->npc_guid() == kGiverSpawnNear && has_q1);
+            } else {
+                check("got a GossipMenu (in-range giver)", false);
+            }
+
+            // --- GOSSIP on the OUT-OF-RANGE spawned giver -> empty menu (refused) --
+            // Same template + content as the near giver, but 100 m away: the server
+            // refuses the interaction and returns the empty-menu surface (no dialog).
+            // RED (without the gate): this returns the Q1 menu just like the near giver.
+            if (auto pl = round_trip(c, mn::Opcode::GOSSIP_HELLO,
+                                     enc_gossip_hello(kGiverSpawnFar),
+                                     mn::Opcode::GOSSIP_MENU, seq++)) {
+                const auto* m = decode<mn::GossipMenu>(*pl);
+                check("#842: gossip on the OUT-OF-RANGE giver -> empty menu (refused)",
+                      m && m->npc_guid() == kGiverSpawnFar &&
+                          (m->options() == nullptr || m->options()->size() == 0));
+            } else {
+                check("got a GossipMenu (out-of-range giver)", false);
+            }
+
+            // --- QUEST_ACCEPT at the OUT-OF-RANGE giver -> WRONG_GIVER (refused) --
+            // The far giver IS Q1's correct giver by template, so WITHOUT the range gate
+            // this would proceed to accept() (RED: ALREADY_ACTIVE, since Q1 is already in
+            // the log); WITH the gate the proximity check fires FIRST and refuses it as
+            // WRONG_GIVER before accept() runs.
+            if (auto pl = round_trip(c, mn::Opcode::QUEST_ACCEPT,
+                                     enc_quest_accept(kQ1, kGiverSpawnFar),
+                                     mn::Opcode::QUEST_ACCEPT_RESULT, seq++)) {
+                const auto* m = decode<mn::QuestAcceptResult>(*pl);
+                check("#842: accept Q1 at the OUT-OF-RANGE giver -> WRONG_GIVER (refused)",
+                      m && m->status() == mn::QuestAcceptStatus::WRONG_GIVER);
+            } else {
+                check("got a QuestAcceptResult (out-of-range accept)", false);
             }
 
             // --- LOOT_REQUEST on the owned corpse -> OK + a slot ---------------

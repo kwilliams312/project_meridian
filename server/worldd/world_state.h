@@ -395,6 +395,14 @@ public:
     // to the npc content it should serve gossip/trainer/vendor from (#486). Thread-safe.
     std::optional<std::uint32_t> npc_template_for_guid(AoiId guid) const;
 
+    // The authoritative WORLD position of the spawned world entity with wire guid
+    // `guid`, or nullopt if `guid` names no registered world entity (a session, a
+    // placeholder, or unknown). Returned BY VALUE (a copy taken under the lock) so
+    // the caller never dereferences an entity pointer outside the lock. The NPC
+    // interaction-range gate (GOSSIP_HELLO / quest accept + turn-in, #842) reads
+    // this to reject an interaction attempted from too far. Thread-safe.
+    std::optional<Position> world_entity_position(AoiId guid) const;
+
     // Test/diagnostic: how many static world entities are registered.
     std::size_t world_entity_count() const;
 

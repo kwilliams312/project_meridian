@@ -331,6 +331,13 @@ std::optional<std::uint32_t> WorldState::npc_template_for_guid(AoiId guid) const
     return it->second.npc_template_id;
 }
 
+std::optional<Position> WorldState::world_entity_position(AoiId guid) const {
+    std::lock_guard<std::mutex> lk(mtx_);
+    auto it = entities_.find(guid);
+    if (it == entities_.end()) return std::nullopt;
+    return it->second.unit.position();  // copy under the lock (M1 entities are static)
+}
+
 std::size_t WorldState::world_entity_count() const {
     std::lock_guard<std::mutex> lk(mtx_);
     return entities_.size();
