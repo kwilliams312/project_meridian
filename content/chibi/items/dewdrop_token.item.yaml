@@ -1,0 +1,20 @@
+# meridian/item@2 — starter-quest carry item (#831, epic #816). A keepsake Tansy
+# Dewhollow hands a freshly-sprouted chibi to carry out to Bram Cloverfoot on the
+# clover rows (the "A Meadow Welcome" talk/deliver quest). item_class: quest — no
+# stats, no slot, provided on accept and consumed on turn-in, exactly like core's
+# spare_lamp. Original Meridian lore (clean-room, CONTRIBUTING.md §clean-room).
+# visual.icon reuses a core placeholder icon until the chibi pack ships its own
+# icon art (same interim-art choice the existing chibi items make) — FLAGGED to
+# the lead.
+schema: meridian/item@2
+id: chibi:item.dewdrop_token
+name: Tansy's Dewdrop Token
+flavor_text: >-
+  A bead of morning dew set in a twist of meadow-grass — Tansy hands one to
+  every sprout, so the older folk know a new friend has woken.
+item_class: quest
+rarity: common
+binding: on_pickup
+stack_size: 1
+visual:
+  icon: core:art.icon.item.map_scrap

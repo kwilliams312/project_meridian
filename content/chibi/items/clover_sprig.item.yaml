@@ -1,0 +1,19 @@
+# meridian/item@2 — starter-quest carry item (#831, epic #816). A five-leaf
+# clover sprig Bram Cloverfoot sends up to old Mardle Puffcap by the lanterns
+# (the "Rows and Lanterns" talk/deliver quest). item_class: quest — no stats, no
+# slot, provided on accept and consumed on turn-in, mirroring core's spare_lamp.
+# Original Meridian lore (clean-room, CONTRIBUTING.md §clean-room). visual.icon
+# reuses a core placeholder icon until the chibi pack ships its own icon art (the
+# same interim-art choice the existing chibi items make) — FLAGGED to the lead.
+schema: meridian/item@2
+id: chibi:item.clover_sprig
+name: Five-Leaf Clover Sprig
+flavor_text: >-
+  Bram swears the fifth leaf is what keeps a forager's boots dry. He always
+  saves the best sprig of the morning for Mardle.
+item_class: quest
+rarity: common
+binding: on_pickup
+stack_size: 5
+visual:
+  icon: core:art.icon.item.hollow_charm
