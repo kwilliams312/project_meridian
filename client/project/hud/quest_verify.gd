@@ -248,6 +248,16 @@ func _verify_gossip_window() -> void:
 	_check("accept OK re-requests gossip menu on the open NPC (27)",
 		int(refresh["count"]) == 1 and int(refresh["npc"]) == 27)
 
+	# #850: a SUCCESSFUL turn-in (OK) likewise re-requests the gossip menu for the open NPC
+	# so the completed quest's turn-in row disappears (server drops it once QuestLog marks
+	# the quest done) — the NPC returns to normal instead of leaving a stale, spammable
+	# "Turn in" row that only Esc clears. A failed turn-in (status != OK) must NOT re-request.
+	bus.publish_quest_turn_in_result({"quest_id": 29, "status": 4})  # INCOMPLETE → no refresh
+	_check("failed turn-in does NOT refresh the gossip menu", int(refresh["count"]) == 1)
+	bus.publish_quest_turn_in_result({"quest_id": 29, "status": 0})  # OK → re-request on NPC 27
+	_check("turn-in OK re-requests gossip menu on the open NPC (27)",
+		int(refresh["count"]) == 2 and int(refresh["npc"]) == 27)
+
 	# Turn-in row emits a turn-in intent.
 	var turn := {"quest": 0}
 	bus.quest_turn_in_requested.connect(func(q, _n, _c): turn["quest"] = q)

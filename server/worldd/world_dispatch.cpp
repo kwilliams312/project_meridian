@@ -3556,6 +3556,19 @@ void Dispatcher::register_m0_stubs() {
             if (auto tmpl = ctx.world->npc_template_for_guid(npc_guid))
                 npc_id = static_cast<npc::NpcId>(*tmpl);
         }
+
+        // Deliver (QST-01, #396) — credit BEFORE building the gossip menu (#850). Talking
+        // to an NPC is the deliver interaction: it hands over any quest item this NPC is
+        // the deliver target for, completing that objective (the item was granted on
+        // accept). The credit MUST land first, because for a deliver quest the same NPC is
+        // the turn-in giver — building the menu against pre-credit state would surface a
+        // stale "in progress" row on the FIRST interact and only flip to the turn-in
+        // (QUEST_COMPLETE) option on a SECOND interact. Crediting first makes the turn-in
+        // appear on the first gossip. QUEST_PROGRESS is pushed for whatever advanced (so it
+        // precedes the GOSSIP_MENU reply). Uses the resolved template id so a deliver target
+        // clicked as a spawned entity (#486) still credits.
+        credit_deliver_at_npc(sess, ctx, static_cast<std::uint32_t>(npc_id));
+
         const npc::NpcDef* def = npc_store().find(npc_id);
         if (def == nullptr) {
             // Unknown NPC: no gossip content, but interacting still delivers (below).
@@ -3599,14 +3612,6 @@ void Dispatcher::register_m0_stubs() {
                                                          listings != nullptr ? *listings : kEmpty)));
             }
         }
-
-        // Deliver (QST-01, #396): talking to an NPC is the deliver interaction — hand
-        // any quest item this NPC is the deliver target for, completing the objective
-        // (the item was granted on accept). QUEST_PROGRESS follows for whatever
-        // advanced. Runs AFTER the gossip reply so a non-deliver interaction's reply
-        // ordering (GOSSIP_MENU / TRAINER_LIST) is unchanged. Uses the resolved template
-        // id so a deliver target clicked as a spawned entity (#486) still credits.
-        credit_deliver_at_npc(sess, ctx, static_cast<std::uint32_t>(npc_id));
     });
 
     on(net::Opcode::TRAINER_LEARN, [](net::Session& sess, const Frame& f, ConnCtx& ctx) {

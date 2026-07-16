@@ -43,6 +43,7 @@ func setup(bus: MeridianEventBus) -> void:
 	_bus.gossip_menu_changed.connect(_on_gossip_menu_changed)
 	_bus.gossip_closed.connect(_on_gossip_closed)
 	_bus.quest_accept_result.connect(_on_quest_accept_result)
+	_bus.quest_turn_in_result.connect(_on_quest_turn_in_result)
 
 
 func set_frame_visible(v: bool) -> void:
@@ -100,6 +101,19 @@ func _on_gossip_closed() -> void:
 # (status != OK) leaves the menu untouched. OK == 0 (world.fbs QuestAcceptStatus.OK).
 func _on_quest_accept_result(_quest_id: int, status: int) -> void:
 	if status != 0:
+		return
+	if _bus != null and visible and _npc_guid != 0:
+		_bus.request_gossip_hello(_npc_guid)
+
+
+# QST-01 (#850): the server is authoritative on turn-in and does NOT re-push the gossip
+# menu, so after a SUCCESSFUL turn-in re-request it for the open NPC — the server serves
+# the now state-gated menu with the completed quest's turn-in row GONE (QuestLog marks it
+# done), so the NPC returns to its normal state instead of leaving the stale, spammable
+# "Turn in" row that only Esc would clear. A failed turn-in (status != OK) leaves the menu
+# untouched. OK == 0 (world.fbs QuestTurnInStatus.OK). Mirrors the accept-OK refresh above.
+func _on_quest_turn_in_result(result: Dictionary) -> void:
+	if int(result.get("status", -1)) != 0:
 		return
 	if _bus != null and visible and _npc_guid != 0:
 		_bus.request_gossip_hello(_npc_guid)
