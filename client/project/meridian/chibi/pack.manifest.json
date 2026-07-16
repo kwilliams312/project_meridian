@@ -6,10 +6,10 @@
   "content_schema_version": 1,
   "godot_version": "4.6",
   "id_band": 1,
-  "content_hash": "d03799d2516bd3d9ae8307c5f5fc2b4f26cb8095ebc83546ca3a92c8e5246d9c",
+  "content_hash": "b9137852a440ea32a299198027303bd276c1ded8ddf6475504d2009337a71468",
   "mcc_version": "0.0.0",
   "built_at": "1970-01-01 00:00:00",
-  "entry_count": 94,
+  "entry_count": 90,
   "entries": [
     { "id": "chibi:art.ui.theme_preview", "numeric_id": 1048577, "type": "asset", "resource": "res://meridian/chibi/art/ui/theme_preview.res", "hash": "3e24aee13ccfaf259f48df2a35ef05a035065c6a885f63896ec31f2612e69d09" },
     { "id": "chibi:zone.sprout_meadow", "numeric_id": 1048578, "type": "zone", "resource": "res://meridian/chibi/tables/zone.bin", "hash": "87cd1e89b6bdbc4f261091e2942655df52244c883735b4fb83f901c64d35798e" },
@@ -96,14 +96,10 @@
     { "id": "chibi:race.red", "numeric_id": 1048659, "type": "race", "resource": "res://meridian/chibi/tables/race.bin", "hash": "a5c2d4502d2684bb881d8a0a7aed6d6d0aab7e12e5d6308b1d19ec7f88a51571" },
     { "id": "chibi:race.silver", "numeric_id": 1048660, "type": "race", "resource": "res://meridian/chibi/tables/race.bin", "hash": "027ecd60c42efd420117dc12fa2cf9f633b5b7554b59e3c90dd52c995e9adbfb" },
     { "id": "chibi:race.yellow", "numeric_id": 1048661, "type": "race", "resource": "res://meridian/chibi/tables/race.bin", "hash": "eebf35aa2cfb5bbeb0a0b43104176f193fa116d4155a1f5120b8879a81f35151" },
-    { "id": "chibi:npc.bram_cloverfoot", "numeric_id": 1048662, "type": "npc", "resource": "res://meridian/chibi/tables/npc.bin", "hash": "87cb36bf5631aa3936c74696a6fdc4b0115252fac5e498f3f03496e858ddfdef" },
-    { "id": "chibi:npc.mardle_puffcap", "numeric_id": 1048663, "type": "npc", "resource": "res://meridian/chibi/tables/npc.bin", "hash": "e8371f23947eabfb54383ae8bff075febadc292e7d7b579bb458f48fcd624a52" },
+    { "id": "chibi:npc.bram_cloverfoot", "numeric_id": 1048662, "type": "npc", "resource": "res://meridian/chibi/tables/npc.bin", "hash": "5f10b9dc93c41b0419db931aade487e00bacdaa734437ae682ec9d064f2e992c" },
+    { "id": "chibi:npc.mardle_puffcap", "numeric_id": 1048663, "type": "npc", "resource": "res://meridian/chibi/tables/npc.bin", "hash": "4900ea5b902aa9ca009ad8fa05965ed6bcd8f24587b7104bdecdcc3b8870b9f0" },
     { "id": "chibi:npc.nib_the_fernhopper", "numeric_id": 1048664, "type": "npc", "resource": "res://meridian/chibi/tables/npc.bin", "hash": "de1071198c9e6348ccf5cb96cd9016229e682910083d618c63d948011c833873" },
-    { "id": "chibi:npc.tansy_dewhollow", "numeric_id": 1048665, "type": "npc", "resource": "res://meridian/chibi/tables/npc.bin", "hash": "cf61ca7d0974440319575b6b0f9191e67ab1b6c5309fb48a29286ef277e10961" },
-    { "id": "chibi:spawn.sprout_meadow_glade", "numeric_id": 1048666, "type": "spawn", "resource": "res://meridian/chibi/tables/spawn.bin", "hash": "d50e3dde3869b968fae1a6b79deff5575dd965e75cac6d9c4a61c73fbe6e11ef" },
-    { "id": "chibi:item.clover_sprig", "numeric_id": 1048667, "type": "item", "resource": "res://meridian/chibi/tables/item.bin", "hash": "59d56aafc9be2f198498cfdb0474522a8dd8d12486427243afc9beab65cce077" },
-    { "id": "chibi:item.dewdrop_token", "numeric_id": 1048668, "type": "item", "resource": "res://meridian/chibi/tables/item.bin", "hash": "4651ea0c3eaf3deb74262470c275734c3aa25f300fc8931fe8d23bc188c6cb02" },
-    { "id": "chibi:quest.a_meadow_welcome", "numeric_id": 1048669, "type": "quest", "resource": "res://meridian/chibi/tables/quest.bin", "hash": "2a381e2122fefb2af7d414b2478fd1204b1953b8d8cda57299e88b65d028360e" },
-    { "id": "chibi:quest.rows_and_lanterns", "numeric_id": 1048670, "type": "quest", "resource": "res://meridian/chibi/tables/quest.bin", "hash": "e658f04494f907a09351201153f0fcd1f16493bef02e11156030840407169599" }
+    { "id": "chibi:npc.tansy_dewhollow", "numeric_id": 1048665, "type": "npc", "resource": "res://meridian/chibi/tables/npc.bin", "hash": "6737eb751e49f9e1463ae0da15f92e8c95a4610f49c9beeea0afe6107d19abdc" },
+    { "id": "chibi:spawn.sprout_meadow_glade", "numeric_id": 1048666, "type": "spawn", "resource": "res://meridian/chibi/tables/spawn.bin", "hash": "d50e3dde3869b968fae1a6b79deff5575dd965e75cac6d9c4a61c73fbe6e11ef" }
   ]
 }
