@@ -237,6 +237,55 @@ void test_trainer_plan() {
 }
 
 // The in-memory learned set (M1 — no durable table yet).
+void test_quest_marker_lifecycle() {
+    std::printf("[quest marker — overhead icon across a quest lifecycle]\n");
+    mn::PlaceholderNpcStore store;
+    // The placeholder giver both GIVES and TURNS IN the one placeholder quest — the
+    // common giver==turn-in NPC, so one NPC walks the whole marker lifecycle.
+    const mn::NpcDef& giver = *store.find(mn::kNpcQuestGiver);
+    const mn::NpcDef& vendor = *store.find(mn::kNpcVendor);  // no quests at all
+    FakeQuestState qs;
+    qs.quest = mn::kPlaceholderQuestId;
+
+    // Before accept: acceptable -> `!` available.
+    qs.acceptable = true;
+    check("available before accept -> kAvailable",
+          mn::compute_quest_marker(giver, qs) == mn::QuestMarker::kAvailable);
+
+    // After accept (in log, objectives incomplete): greyed `?` at the turn-in NPC.
+    qs.acceptable = false;
+    qs.active = true;
+    check("accepted+incomplete -> kTurnInIncomplete (greyed ?)",
+          mn::compute_quest_marker(giver, qs) == mn::QuestMarker::kTurnInIncomplete);
+
+    // Objectives complete: lit `?` ready to turn in.
+    qs.complete = true;
+    check("complete -> kTurnInReady (lit ?)",
+          mn::compute_quest_marker(giver, qs) == mn::QuestMarker::kTurnInReady);
+
+    // After turn-in (no longer acceptable/active/complete): no marker.
+    qs.acceptable = false;
+    qs.active = false;
+    qs.complete = false;
+    check("after turn-in -> kNone",
+          mn::compute_quest_marker(giver, qs) == mn::QuestMarker::kNone);
+
+    // An NPC that gives/takes no quest never shows a marker, whatever the state.
+    qs.acceptable = true;
+    qs.active = true;
+    qs.complete = true;
+    check("non-quest NPC -> kNone",
+          mn::compute_quest_marker(vendor, qs) == mn::QuestMarker::kNone);
+
+    // Precedence: a ready turn-in outranks an available quest (both true at once is
+    // impossible for one quest, so verify the fold picks the lit `?` when complete).
+    qs.acceptable = true;
+    qs.active = true;
+    qs.complete = true;
+    check("complete dominates -> kTurnInReady",
+          mn::compute_quest_marker(giver, qs) == mn::QuestMarker::kTurnInReady);
+}
+
 void test_learned_set() {
     std::printf("[trainer — in-memory learned set]\n");
     mn::LearnedAbilitySet learned;
@@ -254,6 +303,7 @@ int main() {
     test_gossip_quest_states();
     test_gossip_role_flags_and_order();
     test_trainer_plan();
+    test_quest_marker_lifecycle();
     test_learned_set();
 
     std::printf(g_fail == 0 ? "\nALL NPC TESTS PASSED\n"

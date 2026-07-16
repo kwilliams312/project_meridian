@@ -330,6 +330,15 @@ inline constexpr AoiId kSyntheticGuidBase = 0xF000'0000'0000'0000ULL;
 // assigned kWorldEntityGuidBase + index in install order.
 inline constexpr AoiId kWorldEntityGuidBase = 0xE000'0000'0000'0000ULL;
 
+// One NPC/creature currently in a session's interest set, projected for the quest-
+// marker push (#844/#849): its wire guid + the npc_template id the dispatch layer
+// resolves against npc_store() to compute the overhead marker. A pure snapshot — the
+// relay stays quest-free/DB-free; the dispatch thread does the quest computation.
+struct VisibleWorldEntity {
+    AoiId guid = 0;
+    std::uint32_t npc_template_id = 0;
+};
+
 // ---------------------------------------------------------------------------
 // WorldState — the world-thread-owned session registry + AoI relay.
 // ---------------------------------------------------------------------------
@@ -397,6 +406,15 @@ public:
 
     // Test/diagnostic: how many static world entities are registered.
     std::size_t world_entity_count() const;
+
+    // The static WORLD ENTITIES (content NPCs/creatures) currently in `slot`'s
+    // interest set — its guid + npc_template id, one per visible entity (#844/#849).
+    // The quest-marker push (world_dispatch push_quest_markers) enumerates these on
+    // the DISPATCH thread, resolves each template, and computes the per-NPC marker;
+    // this accessor stays quest-free/DB-free (it only reads the AoI visibility the
+    // relay already tracks) so the relay's threading invariant is unchanged. Empty
+    // if `slot` is not entered. Thread-safe.
+    std::vector<VisibleWorldEntity> visible_world_entities(SessionSlot slot) const;
 
     // ── GM commands targeting a session (OPS-02b, #418) ──────────────────────
     // These let a GM command reach a session by name (`.summon`, `.kick`) or set a

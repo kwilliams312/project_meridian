@@ -53,6 +53,7 @@
 #include "active_sessions.h"
 #include "buyback.h"  // vendor::BuybackQueue — per-session buyback state (ECO-01, #370)
 #include "combat_resolver.h"
+#include "gossip.h"   // npc::QuestMarker — the overhead quest-marker cache (#844/#849)
 #include "item_template.h"   // items::TemplateStore (content-store install seam, #390)
 #include "loot_registry.h"  // shared corpse loot registry (ITM-02 wire; #388)
 #include "loot_table.h"      // loot::LootTableStore (WorldServer::set_loot_tables, #390)
@@ -252,6 +253,16 @@ struct ConnCtx {
     // field. 0 / 1 pre-spawn (the handlers reject before kInWorld).
     std::uint8_t char_class = 0;
     std::uint16_t char_level = 1;
+
+    // OVERHEAD QUEST MARKERS (#844/#849). The last marker THIS session was told to
+    // show over each visible NPC, keyed by the NPC's wire guid. push_quest_markers
+    // recomputes each visible NPC's marker (npc::compute_quest_marker over ctx.quests)
+    // after enter-world / accept / progress / turn-in / movement, and emits a
+    // QUEST_MARKER_UPDATE only when the value DIFFERS from this cache — so an
+    // unchanged marker never re-hits the wire. Single-threaded on this connection's
+    // IO worker (like `quests`); an NPC leaving the interest set is pruned so a later
+    // re-enter re-pushes from a clean slate. Empty until the first push.
+    std::unordered_map<std::uint64_t, npc::QuestMarker> last_markers;
 
     // QUEST state (QST-01, #371). This session's quest state machine — accept /
     // objective progress / turn-in — a pure, in-memory per-character log (like the

@@ -50,4 +50,44 @@ GossipMenu build_gossip_menu(const NpcDef& npc, const QuestStateView& quests) {
     return menu;
 }
 
+const char* quest_marker_name(QuestMarker m) {
+    switch (m) {
+        case QuestMarker::kNone:              return "none";
+        case QuestMarker::kAvailable:         return "available";
+        case QuestMarker::kTurnInReady:       return "turn_in_ready";
+        case QuestMarker::kTurnInIncomplete:  return "turn_in_incomplete";
+    }
+    return "unknown";
+}
+
+QuestMarker compute_quest_marker(const NpcDef& npc, const QuestStateView& quests) {
+    // Fold every quest this NPC participates in into ONE marker by precedence
+    // (see the header): a ready turn-in outranks an available quest, which outranks
+    // an in-progress turn-in reminder. Track the best seen and stop early once the
+    // top rank is reached.
+    QuestMarker best = QuestMarker::kNone;
+    auto rank = [](QuestMarker m) -> int {
+        switch (m) {
+            case QuestMarker::kTurnInReady:      return 3;
+            case QuestMarker::kAvailable:        return 2;
+            case QuestMarker::kTurnInIncomplete: return 1;
+            case QuestMarker::kNone:             return 0;
+        }
+        return 0;
+    };
+    for (const NpcQuestRef& q : npc.quests) {
+        QuestMarker here = QuestMarker::kNone;
+        if (q.turn_in && quests.is_complete(q.quest_id)) {
+            here = QuestMarker::kTurnInReady;
+        } else if (q.gives && quests.can_accept(q.quest_id)) {
+            here = QuestMarker::kAvailable;
+        } else if (q.turn_in && quests.is_active(q.quest_id)) {
+            here = QuestMarker::kTurnInIncomplete;
+        }
+        if (rank(here) > rank(best)) best = here;
+        if (best == QuestMarker::kTurnInReady) break;  // top rank — cannot improve
+    }
+    return best;
+}
+
 }  // namespace meridian::npc

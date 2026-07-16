@@ -1700,6 +1700,30 @@ std::vector<Message> build_corpus() {
                         "if2_quest_log[0].choice_items[1].item_id");
                }});
 
+  // QuestMarkerUpdate — S->C the proactive overhead marker for one NPC (#844/#849).
+  // The server pushes the classic `!`/`?` icon as the player's quest state changes;
+  // this golden pins the npc guid (AoI band) + the greyed-`?` in-progress kind.
+  c.push_back({"if2_quest_marker_update", "IF-2", "QUEST_MARKER_UPDATE (0x4007)",
+               "S->C overhead marker: NPC guid 0xE000000000000001 -> TURN_IN_INCOMPLETE",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateQuestMarkerUpdate(
+                     b, /*npc_guid=*/0xE000000000000001ULL,
+                     mn::QuestMarkerKind::TURN_IN_INCOMPLETE));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::QuestMarkerUpdate>(nullptr),
+                             "if2_quest_marker_update verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::QuestMarkerUpdate>(buf.data());
+                 expect(m->npc_guid() == 0xE000000000000001ULL,
+                        "if2_quest_marker_update.npc_guid");
+                 expect(m->marker() == mn::QuestMarkerKind::TURN_IN_INCOMPLETE,
+                        "if2_quest_marker_update.marker");
+               }});
+
   // ==== IF-2 inventory / loot (world.fbs; ITM-02 #369) ======================
   // Server-authoritative corpse looting. The roll + the four validation gates
   // (ownership / in-range / not-already-looted / quest) live in the server loot
