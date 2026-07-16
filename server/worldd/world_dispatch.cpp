@@ -20,8 +20,9 @@
 #include <thread>
 #include <vector>
 
+#include "aoi_grid.h"    // horizontal_distance — NPC interaction-range gate (#842)
 #include "characters.h"  // meridian-characters CRUD: list/create/delete (#286 / D-35)
-#include "creature_ai.h"  // CreatureSpawnDef — content spawns into the map tick (#486)
+#include "creature_ai.h"  // CreatureSpawnDef + kCreatureBasicAttackRangeM (#486/#842)
 #include "currency.h"    // ECO-01 int64 copper: add_money / get_money (quest + trainer)
 #include "db_content_store.h"  // SpawnPlacement — authored spawn placements (#486)
 #include "economy_sanity.h"  // OPS-03b defense-in-depth economy delta checks (#421)
@@ -428,6 +429,52 @@ std::uint32_t resolve_npc_template_id(const ConnCtx& ctx, std::uint64_t wire_gui
         if (auto tmpl = ctx.world->npc_template_for_guid(wire_guid)) return *tmpl;
     }
     return static_cast<std::uint32_t>(wire_guid);
+}
+
+// #842 — NPC interaction (gossip / quest accept / turn-in) PROXIMITY gate. "Server
+// is law" (Baseline Pillar 3): an interaction only opens when the player is within
+// interaction reach of the NPC's spawned world position — a client that clicks a
+// far-away (or teleport-targeted) NPC is refused server-side, not trusted.
+//
+// RADIUS — DERIVED, not invented. We reuse the shared melee/interaction reach
+// (creature_ai.h kCreatureBasicAttackRangeM == 5 m, the same 5 m the cast-range
+// check in combat_resolver.cpp and ability.range_m use for melee): you interact
+// with an NPC at roughly the distance you could melee it. No extra margin is added
+// — the client only offers the interact affordance when the NPC is targeted in AoI,
+// well inside this reach, so a well-behaved client never trips the gate; it only
+// catches interaction attempted from across the zone.
+inline constexpr float kNpcInteractionRangeM = kCreatureBasicAttackRangeM;  // 5 m
+static_assert(kNpcInteractionRangeM > 0.0f, "interaction range must be positive");
+
+// True iff the player may interact with the NPC named by `wire_guid`. Range is
+// enforced whenever the NPC's world position is knowable AND this session has
+// authoritative movement state (the player's position). The target position is
+// resolved TWO ways, because the client addresses an NPC by EITHER form:
+//   1. a SPAWNED world-entity guid (kWorldEntityGuidBase band) — the position is the
+//      entity's own authoritative position (a well-behaved client that targeted it); or
+//   2. a raw npc TEMPLATE id — the greybox / pre-spawn path: the env-default gossip
+//      npc, or the pre-spawn 1:1 guid==template mapping. A template can have MANY
+//      spawns, so we gate on the NEAREST spawned instance (the copy the player is next
+//      to). #842 LIVE BUG: this second resolution was MISSING — a template-id target
+//      returned "no spawned position" and the whole gate was SKIPPED, so interaction
+//      worked from ANY distance (the chibi realm's "both near AND far" symptom). "Server
+//      is law": the gate must not depend on the client sending the spawned guid.
+// Only a target with NO spawned position anywhere (a self-serve giver / a truly
+// un-spawned template / no world registry — the DB-less smoke path) stays ungated: there
+// is nothing to measure against. Horizontal (x,y) distance, mirroring the combat
+// cast-range check (aoi_grid.h horizontal_distance vs ability.range_m).
+bool player_in_interaction_range(const ConnCtx& ctx, std::uint64_t wire_guid) {
+    if (ctx.world == nullptr || !ctx.movement) return true;  // no positions to gate on
+    const Position& me = ctx.movement->authoritative();
+    std::optional<Position> npc = ctx.world->world_entity_position(wire_guid);
+    if (!npc) {
+        // Not a spawned-entity guid — treat it as a template id and gate on the nearest
+        // spawned instance of that template (nullopt only when the template has none).
+        npc = ctx.world->nearest_world_entity_of_template(
+            static_cast<std::uint32_t>(wire_guid), me);
+    }
+    if (!npc) return true;  // no spawned position anywhere — nothing to gate on
+    return horizontal_distance(me, *npc) <= kNpcInteractionRangeM;
 }
 
 mn::QuestTurnInStatus to_wire(TurnInStatus s) {
@@ -3151,6 +3198,16 @@ void Dispatcher::register_m0_stubs() {
             reply(mn::QuestAcceptStatus::WRONG_GIVER);
             return;
         }
+        // #842 PROXIMITY GATE: accepting a quest is an interaction with the giver, so
+        // it requires being within reach of the giver's spawned position. Out of range
+        // is surfaced as WRONG_GIVER — the existing "not a valid interaction with this
+        // giver" reject (the client renders any non-OK status as a generic rejection;
+        // a legit player is already gated at GOSSIP_HELLO and never reaches here far).
+        // Skipped for a self-serve giver (guid 0) or a giver with no spawned position.
+        if (giver_guid != 0 && !player_in_interaction_range(ctx, giver_guid)) {
+            reply(mn::QuestAcceptStatus::WRONG_GIVER);
+            return;
+        }
 
         const AcceptStatus st = ctx.quests->accept(quest_id, ctx.char_level);
         reply(to_wire(st));
@@ -3211,6 +3268,16 @@ void Dispatcher::register_m0_stubs() {
         }
         if (ctx.char_db == nullptr || ctx.char_id == 0) {  // defensive (unreachable in-world)
             reply(mn::QuestTurnInStatus::UNKNOWN_QUEST, 0, 0, {});
+            return;
+        }
+        // #842 PROXIMITY GATE: turning a quest in is an interaction with the turn-in
+        // NPC, so it requires being within reach of that NPC's spawned position. Out of
+        // range is surfaced as WRONG_NPC — the existing "this NPC is not the turn-in NPC"
+        // reject (a legit player is already gated at GOSSIP_HELLO). Skipped for guid 0 or
+        // a turn-in NPC with no spawned position (placeholder template path / no registry).
+        if (req->turn_in_guid() != 0 &&
+            !player_in_interaction_range(ctx, req->turn_in_guid())) {
+            reply(mn::QuestTurnInStatus::WRONG_NPC, 0, 0, {});
             return;
         }
 
@@ -3473,6 +3540,12 @@ void Dispatcher::register_m0_stubs() {
                                              encode_gossip_menu(npc_guid, none)));
         };
         if (ctx.phase != SessionPhase::kInWorld || !ctx.quests) { empty_menu(); return; }
+        // #842 PROXIMITY GATE: interaction requires being within reach of the NPC's
+        // spawned position. Too far -> no menu (the same empty-menu surface an unknown
+        // NPC gets), and NO deliver credit below — the whole interaction is refused.
+        // Skipped when the target has no spawned world position (placeholder template
+        // path / no registry); see player_in_interaction_range.
+        if (!player_in_interaction_range(ctx, npc_guid)) { empty_menu(); return; }
         // Resolve the clicked target to an npc_template id. When the client targets a
         // spawned world entity (#486), its wire guid is in the kWorldEntityGuidBase band
         // (not a template id) — map it back to the npc content it represents. Absent a

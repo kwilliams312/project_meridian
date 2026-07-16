@@ -404,6 +404,26 @@ public:
     // to the npc content it should serve gossip/trainer/vendor from (#486). Thread-safe.
     std::optional<std::uint32_t> npc_template_for_guid(AoiId guid) const;
 
+    // The authoritative WORLD position of the spawned world entity with wire guid
+    // `guid`, or nullopt if `guid` names no registered world entity (a session, a
+    // placeholder, or unknown). Returned BY VALUE (a copy taken under the lock) so
+    // the caller never dereferences an entity pointer outside the lock. The NPC
+    // interaction-range gate (GOSSIP_HELLO / quest accept + turn-in, #842) reads
+    // this to reject an interaction attempted from too far. Thread-safe.
+    std::optional<Position> world_entity_position(AoiId guid) const;
+
+    // The world position of the NEAREST spawned world entity of npc_template id
+    // `npc_template_id` to `from`, or nullopt if that template has NO spawned instance.
+    // The interaction-range gate (#842) uses this when the client addresses an NPC by
+    // its TEMPLATE id instead of a spawned world-entity guid — the greybox / pre-spawn
+    // path (env-default gossip npc, or the pre-spawn 1:1 guid==template mapping). Since
+    // a template can have MANY spawns, the interaction targets the closest one (you
+    // interact with the copy you are standing next to). Returned BY VALUE (copied under
+    // the lock). A template with no spawn returns nullopt (a genuinely un-positionable
+    // pre-spawn interaction stays ungated). Thread-safe.
+    std::optional<Position> nearest_world_entity_of_template(std::uint32_t npc_template_id,
+                                                             const Position& from) const;
+
     // Test/diagnostic: how many static world entities are registered.
     std::size_t world_entity_count() const;
 

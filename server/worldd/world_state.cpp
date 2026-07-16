@@ -331,6 +331,30 @@ std::optional<std::uint32_t> WorldState::npc_template_for_guid(AoiId guid) const
     return it->second.npc_template_id;
 }
 
+std::optional<Position> WorldState::world_entity_position(AoiId guid) const {
+    std::lock_guard<std::mutex> lk(mtx_);
+    auto it = entities_.find(guid);
+    if (it == entities_.end()) return std::nullopt;
+    return it->second.unit.position();  // copy under the lock (M1 entities are static)
+}
+
+std::optional<Position> WorldState::nearest_world_entity_of_template(
+    std::uint32_t npc_template_id, const Position& from) const {
+    std::lock_guard<std::mutex> lk(mtx_);
+    std::optional<Position> best;
+    float best_dist = 0.0f;
+    for (const auto& [guid, rec] : entities_) {
+        if (rec.npc_template_id != npc_template_id) continue;
+        const Position pos = rec.unit.position();  // copy under the lock
+        const float d = horizontal_distance(from, pos);
+        if (!best || d < best_dist) {
+            best = pos;
+            best_dist = d;
+        }
+    }
+    return best;  // nullopt when the template has no spawned instance
+}
+
 std::size_t WorldState::world_entity_count() const {
     std::lock_guard<std::mutex> lk(mtx_);
     return entities_.size();
