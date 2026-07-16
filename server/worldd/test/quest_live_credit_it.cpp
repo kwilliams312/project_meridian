@@ -40,6 +40,7 @@
 #include "creature_ai.h"
 #include "map_tick.h"
 #include "movement_validation.h"
+#include "npc_def.h"      // NpcStore / NpcDef / NpcQuestRef — the deliver-target gossip NPC
 #include "quest_def.h"
 
 #include "meridian/net/tls_listener.h"
@@ -68,6 +69,7 @@ using namespace meridian;
 namespace fb = flatbuffers;
 namespace mn = meridian::net;
 namespace mw = meridian::worldd;
+namespace np = meridian::npc;
 
 namespace {
 
@@ -119,6 +121,7 @@ public:
             q.id = kQDeliver;
             q.name = "Test Deliver";
             q.giver_npc_id = kGiverNpc;
+            q.turn_in_npc_id = kDeliverNpc;  // deliver-target NPC is also the turn-in
             mw::QuestObjective o;
             o.type = mw::ObjectiveType::kDeliver;
             o.item_id = kDeliverItem;
@@ -154,6 +157,29 @@ public:
 
 private:
     std::vector<mw::QuestDef> defs_;
+};
+
+// A minimal read-only NpcStore modeling the deliver-target NPC as the quest's
+// turn-in giver (NpcQuestRef turn_in=true). Needed so the gossip planner can surface
+// a QUEST_COMPLETE (turn-in) option once the deliver objective is satisfied — the
+// #850 first-interact ordering regression. Only kDeliverNpc is modeled (the only NPC
+// this test gossips); every other id resolves to nullptr (empty menu), unchanged.
+class TestNpcStore final : public np::NpcStore {
+public:
+    TestNpcStore() {
+        courier_.id = kDeliverNpc;
+        courier_.name = "Test Courier";
+        // Takes (turn_in) kQDeliver but does not give it — mirrors the placeholder
+        // "Deliver the Dispatch" courier (giver = sergeant, turn-in = courier).
+        courier_.quests.push_back(np::NpcQuestRef{kQDeliver, /*gives=*/false, /*turn_in=*/true});
+    }
+    const np::NpcDef* find(np::NpcId npc_id) const override {
+        return npc_id == kDeliverNpc ? &courier_ : nullptr;
+    }
+    std::vector<np::NpcId> ids() const override { return {kDeliverNpc}; }
+
+private:
+    np::NpcDef courier_;
 };
 
 // ---- Throwaway self-signed cert (OpenSSL API; mirrors the other wire tests) ---
@@ -334,6 +360,47 @@ Progress read_quest_progress(Client& c) {
     return Progress{0, 0, false, false};
 }
 
+// One GOSSIP_HELLO reply pass: read up to 8 frames, capturing BOTH the first
+// GOSSIP_MENU's options and the deliver QUEST_PROGRESS. The #850 fix credits the
+// deliver objective BEFORE building the menu, which flips the frame order (progress
+// now precedes the menu), so both must be captured in a single drain rather than two
+// order-dependent reads.
+struct GossipOpt { std::uint16_t kind; std::uint32_t target_id; };
+struct DeliverReply { std::vector<GossipOpt> options; bool got_menu; Progress progress; };
+DeliverReply read_deliver_reply(Client& c) {
+    DeliverReply out{};
+    for (int i = 0; i < 8; ++i) {
+        std::optional<Bytes> raw = c.recv_frame();
+        if (!raw) break;
+        std::optional<mw::Frame> rf = mw::decode_frame(*raw);
+        if (!rf) break;
+        Bytes pl(rf->payload, rf->payload + rf->payload_len);
+        if (rf->opcode == mn::Opcode::GOSSIP_MENU && !out.got_menu) {
+            if (const auto* gm = decode<mn::GossipMenu>(pl)) {
+                if (gm->options() != nullptr)
+                    for (const auto* o : *gm->options())
+                        out.options.push_back(GossipOpt{static_cast<std::uint16_t>(o->kind()),
+                                                        o->target_id()});
+                out.got_menu = true;
+            }
+        } else if (rf->opcode == mn::Opcode::QUEST_PROGRESS && !out.progress.got) {
+            if (const auto* qp = decode<mn::QuestProgress>(pl))
+                out.progress = Progress{qp->quest_id(), qp->have(), qp->complete(), true};
+        }
+        if (out.got_menu && out.progress.got) break;
+    }
+    return out;
+}
+
+// Whether a decoded gossip menu offers a turn-in (QUEST_COMPLETE) option for `quest_id`.
+bool menu_has_turn_in(const std::vector<GossipOpt>& options, std::uint32_t quest_id) {
+    for (const GossipOpt& o : options)
+        if (o.kind == static_cast<std::uint16_t>(mn::GossipOptionKind::QUEST_COMPLETE) &&
+            o.target_id == quest_id)
+            return true;
+    return false;
+}
+
 // Drive a real MapTick to kill ONE creature of `template_id` by `killer`, returning
 // the tick deltas (which carry the typed kCreatureKill the world loop routes; #396).
 std::vector<mw::TickEvent> map_tick_one_kill(mw::ObjectGuid killer, std::uint32_t template_id) {
@@ -381,9 +448,11 @@ int main() {
     std::printf("worldd LIVE quest objective crediting test (#396)\n");
 
     static TestQuestStore quest_store;
-    // Install the synthetic store GLOBALLY so encode_quest_log / the objective-source
-    // credit paths + the session's QuestLog all resolve the SAME quest content.
-    mw::install_content_stores(nullptr, nullptr, &quest_store, nullptr);
+    static TestNpcStore   npc_store;
+    // Install the synthetic stores GLOBALLY so encode_quest_log / the objective-source
+    // credit paths + the session's QuestLog all resolve the SAME quest content, and the
+    // gossip planner sees the deliver-target NPC as kQDeliver's turn-in giver (#850).
+    mw::install_content_stores(nullptr, nullptr, &quest_store, &npc_store);
 
     char tmpl[] = "/tmp/meridian-qlc-XXXXXX";
     char* dir = mkdtemp(tmpl);
@@ -531,12 +600,19 @@ int main() {
             check("kill advances the owning session's kill objective (QUEST_PROGRESS)",
                   kp.got && kp.quest_id == kQKill && kp.have == 1 && kp.complete);
 
-            // ===== DELIVER: talk to the deliver NPC → QUEST_PROGRESS =====
+            // ===== DELIVER: talk to the deliver NPC → QUEST_PROGRESS + turn-in menu =====
+            // #850: the FIRST interaction must credit the deliver objective BEFORE the
+            // gossip menu is built, so the menu the server serves on that first gossip
+            // already shows the turn-in (QUEST_COMPLETE) option — not a stale
+            // "in progress" row that only flips to turn-in on a SECOND interact.
             c.send_frame(mw::encode_frame(mn::Opcode::GOSSIP_HELLO, seq++,
                                           enc_gossip_hello(kDeliverNpc)));
-            Progress dp = read_quest_progress(c);  // skips the GOSSIP_MENU reply
+            DeliverReply dr = read_deliver_reply(c);
             check("deliver interaction advances the deliver objective (QUEST_PROGRESS)",
-                  dp.got && dp.quest_id == kQDeliver && dp.complete);
+                  dr.progress.got && dr.progress.quest_id == kQDeliver && dr.progress.complete);
+            check("#850: FIRST gossip at the deliver NPC already offers turn-in "
+                  "(QUEST_COMPLETE, credit applied before the menu is built)",
+                  dr.got_menu && menu_has_turn_in(dr.options, kQDeliver));
 
             // ===== EXPLORE: walk into the discovery volume → QUEST_PROGRESS =====
             // One legal walk step east (-320 → -319.80) crosses into the volume.
