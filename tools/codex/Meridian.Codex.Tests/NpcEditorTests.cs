@@ -195,7 +195,7 @@ public class NpcEditorTests
         var yaml = doc.ToYaml();
 
         // Required envelope + fields per npc.schema.yaml.
-        Assert.StartsWith("schema: meridian/npc@1\n", yaml);
+        Assert.StartsWith("schema: meridian/npc@2\n", yaml);
         Assert.Contains("id: core:npc.test_wolf", yaml);
         Assert.Contains("level: { min: 5, max: 7 }", yaml);
         Assert.Contains("creature_type: beast", yaml);
@@ -209,7 +209,7 @@ public class NpcEditorTests
         Assert.Equal(NpcRank.Elite, npc.Rank);
         Assert.Equal(240, npc.Stats.Health);
         Assert.Equal("ability.rend", npc.Ai!.Abilities![0].Ability.Id);
-        Assert.Equal("core:art.char.wolf.timber", npc.Visual!.Model.Id);
+        Assert.Equal("core:art.char.wolf.timber", npc.Visual!.Model!.Value.Id);
     }
 
     [Fact]

@@ -369,7 +369,7 @@ public class HeadlessShellTests
         {
             Width = 1100,
             Height = 700,
-            PreviewText = "schema: meridian/npc@1",
+            PreviewText = "schema: meridian/npc@2",
             FormContent = new TextBox { Text = "Form content" },
         };
         var window = new Window { Width = 1100, Height = 700, Content = split };
@@ -384,7 +384,7 @@ public class HeadlessShellTests
         Assert.True(split.IsPreviewOpen);
         Assert.InRange(split.PreviewWidth, 300, 560);
         Assert.Contains(split.GetVisualDescendants().OfType<TextBox>(), box =>
-            box.IsReadOnly && box.Text == "schema: meridian/npc@1");
+            box.IsReadOnly && box.Text == "schema: meridian/npc@2");
     }
 
     [AvaloniaFact]

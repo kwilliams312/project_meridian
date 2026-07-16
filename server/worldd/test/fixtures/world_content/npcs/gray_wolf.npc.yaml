@@ -1,4 +1,4 @@
-schema: meridian/npc@1
+schema: meridian/npc@2
 id: itm1:npc.gray_wolf
 name: Gray Wolf
 level: { min: 6, max: 7 }

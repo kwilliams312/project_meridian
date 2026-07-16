@@ -115,10 +115,12 @@ CONTENT_TYPES = (
 ASSET_PREFIXES = ("art", "mus", "sfx", "amb")
 
 # Per-type envelope schema version. Every type is @1 except those bumped here.
-# `item` went to @2 with the visual.worn modular-gear contract (contract ①/T2).
-# Keep this the single source so a future bump is a one-line change (mirrored in
+# `item` went to @2 with the visual.worn modular-gear contract (contract ①/T2);
+# `npc` went to @2 with the visual oneOf appearance mechanism (contract ①/§7 — an
+# NPC can now assemble like a player from an appearance_catalog). Keep this the single
+# source so a future bump is a one-line change (mirrored in
 # tools/mcc/src/stages/validate.cpp's expected_envelope helper for cross-tool parity).
-SCHEMA_VERSIONS: dict[str, int] = {"item": 2}
+SCHEMA_VERSIONS: dict[str, int] = {"item": 2, "npc": 2}
 
 # Armor slots whose gear is not rendered on the body (jewelry/held accessories):
 # items in these slots carry no visual.worn (contract ① §4). Weapons never use them.
@@ -913,6 +915,14 @@ def validate(
         if dtype == "appearance":
             # L082 — preset ids unique per preset list.
             res.errors.extend(check_appearance_presets(doc, rel(path)))
+
+        # NOTE: an NPC's @2 visual.appearance (assemble-like-a-player branch) needs no
+        # dedicated "resolves to an appearance_catalog" lint — the guarantee is already
+        # structural: the schema pins the value to appearanceRef (an `appearance.*`
+        # shape), L003 ties every `appearance.*` id to an appearance_catalog file, and
+        # L011 proves the ref resolves. A wrong-typed target can never register as a
+        # resolvable id (its own L001 rejects it first), so a separate type lint would
+        # be unreachable.
 
         if dtype == "quest":
             # L034 — explore objectives must name a POI the zone manifest defines.

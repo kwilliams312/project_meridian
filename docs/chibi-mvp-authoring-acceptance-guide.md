@@ -286,7 +286,7 @@ gate; a technically valid sidecar or a core placeholder does not satisfy this de
 
 ## 7. Author NPCs and mobs as distinct modes
 
-NPCs and mobs share the single runtime schema `meridian/npc@1`; they are not duplicate records or
+NPCs and mobs share the single runtime schema `meridian/npc@2`; they are not duplicate records or
 incompatible entity types. **NPC mode** and **Mob mode** are different authoring and readiness
 views over that same entity.
 

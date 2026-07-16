@@ -100,7 +100,7 @@ void write_pack(const fs::path& root, int compat, const std::string& npc_extra,
     write_file(root / "mini" / "pack.yaml", pack);
 
     write_file(root / "mini" / "npcs" / "a.npc.yaml",
-               "schema: meridian/npc@1\nid: mini:npc.a\nname: A\n" + npc_extra);
+               "schema: meridian/npc@2\nid: mini:npc.a\nname: A\n" + npc_extra);
 
     std::ostringstream lock;
     lock << "schema: meridian/idmap@1\nnamespace: mini\nband: 0\nreleased_watermark: 0\n"

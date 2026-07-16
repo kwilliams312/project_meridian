@@ -8,18 +8,18 @@ SET FOREIGN_KEY_CHECKS = 0;
 INSERT INTO world_manifest
   (pack_namespace, pack_version, id_band, content_hash, schema_version, compatibility_version, mcc_version, built_at)
 VALUES
-  ('core', '0.1.0', 0, '9f90580d23f2989b38810a1019299e3efd7dbba357c82d1e7e8924fc5209bce1', 1, 1, '0.0.0', '1970-01-01 00:00:00');
+  ('core', '0.1.0', 0, '47ad7f45ce91ca5d2dcf8464300056581bcaa981eefb6edc841d3283d2f80321', 1, 1, '0.0.0', '1970-01-01 00:00:00');
 
 -- npc_template (8 rows)
-INSERT INTO npc_template (id, name, subtitle, level_min, level_max, creature_type, `rank`, faction, stat_health, stat_mana, stat_armor, stat_damage_min, stat_damage_max, stat_attack_speed_ms, ai_behavior, ai_aggro_radius_m, ai_leash_radius_m, ai_call_for_help_radius_m, ai_flee_at_health_pct, move_walk_speed_mps, move_run_speed_mps, vendor_ref_id, loot_table_ref_id, loot_money_min, loot_money_max, visual_model_id, visual_scale, visual_sound_set_id) VALUES
-  (25, 'Kobold Digmaster', 'Mining Supervisor', 5, 5, 'humanoid', 'elite', 'hostile', 420, NULL, 90, 11, 16, 2200, 'aggressive', 22, 70, NULL, NULL, NULL, NULL, NULL, 21, 60, 140, 5, 1.15, 31),
-  (26, 'Kobold Miner', NULL, 3, 4, 'humanoid', 'normal', 'hostile', 120, NULL, 45, 6, 9, 2000, 'aggressive', 18, 55, 12, 15, NULL, NULL, NULL, 21, 12, 38, 6, NULL, 31),
-  (27, 'Quartermaster Bren', 'Emberfall Supplies', 10, 10, 'humanoid', 'normal', 'friendly', 800, NULL, 200, 15, 22, 2000, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 36, NULL, NULL, NULL, 4, NULL, 30),
-  (60, 'The Cindermaw', 'Terror of the Sunken Gallery', 8, 8, 'elemental', 'elite', 'hostile', 1400, NULL, 160, 24, 33, 2400, 'aggressive', 26, 90, NULL, 0, NULL, NULL, NULL, 57, 220, 480, 38, 1.6, 73),
-  (61, 'Ember Wisp', 'Ashvent Drift', 5, 6, 'elemental', 'normal', 'hostile', 95, NULL, 20, 8, 12, 1800, 'aggressive', 14, 45, NULL, 0, NULL, NULL, NULL, 58, 3, 14, 39, 0.9, 74),
-  (62, 'Foreman Dain', 'Cinderdeep Survivor', 8, 8, 'humanoid', 'normal', 'friendly', 640, NULL, 150, 12, 18, 2000, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 41, NULL, 30),
-  (63, 'Kobold Firecaller', 'Cinder Cultist', 5, 6, 'humanoid', 'normal', 'hostile', 140, NULL, 40, 9, 13, 2100, 'aggressive', 20, 60, 14, 20, NULL, NULL, NULL, 59, 20, 55, 6, 1.05, 31),
-  (64, 'Warden Sela', 'Emberfall Trailwarden', 10, 10, 'humanoid', 'normal', 'friendly', 900, NULL, 240, 18, 26, 1900, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 40, NULL, 30);
+INSERT INTO npc_template (id, name, subtitle, level_min, level_max, creature_type, `rank`, faction, stat_health, stat_mana, stat_armor, stat_damage_min, stat_damage_max, stat_attack_speed_ms, ai_behavior, ai_aggro_radius_m, ai_leash_radius_m, ai_call_for_help_radius_m, ai_flee_at_health_pct, move_walk_speed_mps, move_run_speed_mps, vendor_ref_id, loot_table_ref_id, loot_money_min, loot_money_max, visual_model_id, visual_scale, visual_sound_set_id, visual_appearance_race_id, visual_appearance_sex, visual_appearance_hair, visual_appearance_face, visual_appearance_skin) VALUES
+  (25, 'Kobold Digmaster', 'Mining Supervisor', 5, 5, 'humanoid', 'elite', 'hostile', 420, NULL, 90, 11, 16, 2200, 'aggressive', 22, 70, NULL, NULL, NULL, NULL, NULL, 21, 60, 140, 5, 1.15, 31, NULL, NULL, NULL, NULL, NULL),
+  (26, 'Kobold Miner', NULL, 3, 4, 'humanoid', 'normal', 'hostile', 120, NULL, 45, 6, 9, 2000, 'aggressive', 18, 55, 12, 15, NULL, NULL, NULL, 21, 12, 38, 6, NULL, 31, NULL, NULL, NULL, NULL, NULL),
+  (27, 'Quartermaster Bren', 'Emberfall Supplies', 10, 10, 'humanoid', 'normal', 'friendly', 800, NULL, 200, 15, 22, 2000, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 36, NULL, NULL, NULL, 4, NULL, 30, NULL, NULL, NULL, NULL, NULL),
+  (60, 'The Cindermaw', 'Terror of the Sunken Gallery', 8, 8, 'elemental', 'elite', 'hostile', 1400, NULL, 160, 24, 33, 2400, 'aggressive', 26, 90, NULL, 0, NULL, NULL, NULL, 57, 220, 480, 38, 1.6, 73, NULL, NULL, NULL, NULL, NULL),
+  (61, 'Ember Wisp', 'Ashvent Drift', 5, 6, 'elemental', 'normal', 'hostile', 95, NULL, 20, 8, 12, 1800, 'aggressive', 14, 45, NULL, 0, NULL, NULL, NULL, 58, 3, 14, 39, 0.9, 74, NULL, NULL, NULL, NULL, NULL),
+  (62, 'Foreman Dain', 'Cinderdeep Survivor', 8, 8, 'humanoid', 'normal', 'friendly', 640, NULL, 150, 12, 18, 2000, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 41, NULL, 30, NULL, NULL, NULL, NULL, NULL),
+  (63, 'Kobold Firecaller', 'Cinder Cultist', 5, 6, 'humanoid', 'normal', 'hostile', 140, NULL, 40, 9, 13, 2100, 'aggressive', 20, 60, 14, 20, NULL, NULL, NULL, 59, 20, 55, 6, 1.05, 31, NULL, NULL, NULL, NULL, NULL),
+  (64, 'Warden Sela', 'Emberfall Trailwarden', 10, 10, 'humanoid', 'normal', 'friendly', 900, NULL, 240, 18, 26, 1900, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 40, NULL, 30, NULL, NULL, NULL, NULL, NULL);
 
 -- npc_ability (3 rows)
 INSERT INTO npc_ability (npc_id, ability_id, priority, cooldown_override_ms, use_at_health_below_pct) VALUES

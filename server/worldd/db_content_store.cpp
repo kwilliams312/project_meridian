@@ -1239,7 +1239,9 @@ std::vector<SpawnPlacement> load_spawn_points(db::Connection& world_db) {
     db::Result tpl = world_db.execute(
         "SELECT id, name, level_min, faction, stat_health, stat_mana, stat_armor, "
         "       stat_damage_min, stat_damage_max, stat_attack_speed_ms, ai_behavior, "
-        "       ai_aggro_radius_m, ai_leash_radius_m, move_run_speed_mps "
+        "       ai_aggro_radius_m, ai_leash_radius_m, move_run_speed_mps, "
+        "       visual_appearance_race_id, visual_appearance_sex, visual_appearance_hair, "
+        "       visual_appearance_face, visual_appearance_skin "
         "FROM npc_template");
     struct TemplateCombat {
         std::string name;
@@ -1255,6 +1257,9 @@ std::vector<SpawnPlacement> load_spawn_points(db::Connection& world_db) {
         float aggro_radius_m = 0.0f;
         float leash_radius_m = 0.0f;
         float run_speed_mps = 0.0f;
+        // The npc@2 appearance projection (#821). Present iff visual_appearance_race_id
+        // is non-null — that NPC assembles like a player. nullopt = model-only NPC.
+        std::optional<CharacterVisual> appearance;
     };
     std::unordered_map<std::uint32_t, TemplateCombat> by_id;
     by_id.reserve(tpl.rows.size());
@@ -1273,6 +1278,24 @@ std::vector<SpawnPlacement> load_spawn_points(db::Connection& world_db) {
         tc.aggro_radius_m = as_f32(r[11]);
         tc.leash_radius_m = as_f32(r[12]);
         tc.run_speed_mps = as_f32(r[13]);
+        // visual_appearance_* (npc@2 branch B): the whole block is populated together
+        // (emit-sql writes all 5 or none), so the race_id being non-null is the gate.
+        // Build the exact CharacterVisual scalars a player carries so install_spawns
+        // relays them through the same EntityEnter appearance path (no NPC-specific
+        // wire). appearance_version is fixed at 1 (only v1 exists at M1), matching the
+        // player build_character_visual; hair/face/skin default to 1 if a column is
+        // somehow null (AppearanceRecord's 1-based bound).
+        if (r[14].has_value()) {
+            CharacterVisual vis;
+            vis.race = static_cast<std::uint8_t>(as_u32(r[14]));
+            vis.sex = static_cast<std::uint8_t>(as_u32(r[15]));
+            vis.appearance_version = 1;
+            vis.hair = static_cast<std::uint8_t>(as_u32(r[16], 1));
+            vis.face = static_cast<std::uint8_t>(as_u32(r[17], 1));
+            vis.skin = static_cast<std::uint8_t>(as_u32(r[18], 1));
+            // equipment stays empty — worn_items is not projected at M1 (YAGNI).
+            tc.appearance = std::move(vis);
+        }
         by_id.emplace(as_u32(r[0]), std::move(tc));
     }
 
@@ -1292,6 +1315,7 @@ std::vector<SpawnPlacement> load_spawn_points(db::Connection& world_db) {
         sp.aggro_radius_m = tc.aggro_radius_m;
         sp.leash_radius_m = tc.leash_radius_m;
         sp.run_speed_mps = tc.run_speed_mps;
+        sp.appearance = tc.appearance;  // nullopt for a model-only NPC
         if (tc.mana) {
             sp.stats.resource_type = ResourceType::kMana;
             sp.stats.max_resource = *tc.mana;

@@ -116,7 +116,7 @@ class IrField:
 class IrStruct:
     name: str  # generated type name, e.g. "Npc", "NpcStats", "NpcAiEntry"
     schema_type: str | None  # the `type` const suffix (e.g. "npc") for root structs
-    schema_tag: str | None = None  # root `schema.const`, e.g. "meridian/npc@1"
+    schema_tag: str | None = None  # root `schema.const`, e.g. "meridian/npc@2"
     fields: list[IrField] = field(default_factory=list)
     description: str | None = None
     # True when this struct is a flattened tagged union (oneOf of variants). Then

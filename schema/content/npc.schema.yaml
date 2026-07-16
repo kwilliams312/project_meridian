@@ -1,11 +1,11 @@
-# meridian/npc@1 — NPCs and mobs (NPC-01, NPC-02, CMB-02)
+# meridian/npc@2 — NPCs and mobs (NPC-01, NPC-02, CMB-02)
 $schema: "https://json-schema.org/draft/2020-12/schema"
 $id: "meridian://schema/content/npc.schema.yaml"
 type: object
 additionalProperties: false
 required: [schema, id, name, level, creature_type, faction, stats]
 properties:
-  schema: { const: "meridian/npc@1" }
+  schema: { const: "meridian/npc@2" }
   id:
     $ref: "#/$defs/contentId"
     x-meridian-ui:
@@ -198,16 +198,28 @@ properties:
           loot table (decision D-25) — both ranges are rolled and summed.
         $ref: "#/$defs/intRange"
 
-  # RESERVED (contract ① §7): visual becomes a oneOf in @2 — monolithic `model`
-  # OR assemble-like-a-player {appearance, worn_items}. Do not design against
-  # "NPC visual is always one mesh".
+  # visual — @2 (contract ① §7). EXACTLY ONE of two mutually-exclusive shapes:
+  #   branch A — the monolithic single-mesh creature carried since @1 (`model`), or
+  #   branch B — assemble the NPC LIKE A PLAYER from an appearance_catalog reference
+  #              (+ optional worn_items), so a data-driven NPC CAN carry a per-character
+  #              appearance/recolor.
+  # worldd projects branch B onto EntityIdentity.visual through the SAME player skin-
+  # mask/dye path (appearance -> race roster_id -> catalog -> body_material dye); an NPC
+  # authored with branch A stays model-only (identity.visual unset) and renders via the
+  # monolithic path exactly as before — do NOT design against "an NPC visual is always
+  # one mesh". `worn_items` is reserved for modular NPC gear but is NOT projected at M1
+  # (YAGNI — per-NPC recolor needs only `appearance`). The model-XOR-appearance rule is
+  # the `oneOf` below: `model` and `appearance` are sibling OPTIONAL properties (so the
+  # object stays one form for the Codex editor + the generated model), and the oneOf
+  # required/not pair enforces that exactly one is present — both, or neither, is
+  # rejected. scale/sound_set apply to whichever shape is used.
   visual:
     type: object
     additionalProperties: false
-    required: [model]
     x-meridian-ui: { group: presentation, label: Visual and audio }
     properties:
       model:
+        description: Branch A — a monolithic creature/mob mesh (the @1 shape).
         $ref: "#/$defs/artRef"
         x-meridian-ui:
           group: presentation
@@ -221,6 +233,31 @@ properties:
         x-meridian-asset:
           allowed_classes: [creature_model]
           eligible_generators: [meshy]
+      appearance:
+        description: >-
+          Branch B — the appearance_catalog entity this NPC renders as, the SAME
+          per-race/sex customization catalog players use. L011 resolves it (that an
+          appearance-shaped ref points at an appearance_catalog is guaranteed
+          structurally by L003). worldd projects it to EntityIdentity.visual (race
+          roster_id + sex + preset ids) so the client assembles + recolors the body
+          like a player.
+        $ref: "#/$defs/appearanceRef"
+        x-meridian-ui:
+          group: presentation
+          label: Appearance catalog
+          widget: reference_picker
+          reference_type: content:appearance
+          help: Assemble this NPC like a player from a per-race/sex appearance catalog.
+          example: chibi:appearance.red.male
+          constraint: Use an appearance_catalog id; the NPC renders/recolors via the player path.
+          documentation: schema/content/README.md
+      worn_items:
+        description: >-
+          RESERVED (contract ① §7): modular gear worn over the assembled body (branch B),
+          by item id. Optional and NOT projected at M1 (YAGNI — per-NPC recolor needs
+          only `appearance`); present so a future modular-NPC story is additive.
+        type: array
+        items: { $ref: "#/$defs/itemRef" }
       scale:
         type: number
         exclusiveMinimum: 0
@@ -231,7 +268,7 @@ properties:
           label: Model scale
           widget: number
           unit: scale
-          help: Multiplier applied to the source model size.
+          help: Multiplier applied to the source model / assembled body size.
           example: 1.0
           constraint: Greater than 0 and at most 10.
       sound_set:
@@ -244,3 +281,9 @@ properties:
         x-meridian-asset:
           allowed_classes: [sfx]
           eligible_generators: []
+    # EXACTLY ONE of model | appearance (contract ①/§7). required/not (not branch
+    # objects) so `visual` stays a single object for form/codegen tools while still
+    # rejecting an NPC that declares both shapes or neither.
+    oneOf:
+      - { required: [model], not: { required: [appearance] } }
+      - { required: [appearance], not: { required: [model] } }

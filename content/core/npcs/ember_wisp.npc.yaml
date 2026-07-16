@@ -1,4 +1,4 @@
-schema: meridian/npc@1
+schema: meridian/npc@2
 id: core:npc.ember_wisp
 name: Ember Wisp
 subtitle: Ashvent Drift

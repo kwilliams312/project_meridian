@@ -24,7 +24,7 @@ myzone:quest.welcome_to_emberfall     ← community pack
 - One entity per file, named `<name>.<type>.yaml` (e.g. `kobold_miner.npc.yaml`). The suffix must match the declared `schema` type — lint L001.
 - Every file starts with the envelope:
   ```yaml
-  schema: meridian/npc@1     # type @ schema major version
+  schema: meridian/npc@2     # type @ schema major version
   id: core:npc.kobold_miner
   ```
 - Pack layout:
@@ -52,7 +52,7 @@ myzone:quest.welcome_to_emberfall     ← community pack
 | Schema | File | Notes |
 |---|---|---|
 | `meridian/pack@1` | [pack.schema.yaml](pack.schema.yaml) | Pack manifest: namespace, version, engine pin, deps, license |
-| `meridian/npc@1` | [npc.schema.yaml](npc.schema.yaml) | NPCs & mobs: stats, AI, interaction, loot link (NPC-01/02, CMB-02) |
+| `meridian/npc@2` | [npc.schema.yaml](npc.schema.yaml) | NPCs & mobs: stats, AI, interaction, loot link (NPC-01/02, CMB-02); @2 makes `visual` model-XOR-appearance (an NPC can assemble like a player from an appearance_catalog, contract ①/§7) |
 | `meridian/item@2` | [item.schema.yaml](item.schema.yaml) | ITM-01; @2 adds `visual.worn` (modular-gear render contract, contract ①); stat-budget lint vs item_level arrives with ITM-03 (M2) |
 | `meridian/ability@1` | [ability.schema.yaml](ability.schema.yaml) | Spells/abilities incl. data-driven VFX/SFX hooks (CMB-01/04) |
 | `meridian/quest@1` | [quest.schema.yaml](quest.schema.yaml) | kill/collect/deliver/explore objectives (QST-01); `script` reserved for QST-02 |

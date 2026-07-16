@@ -185,11 +185,11 @@ int main() {
         const std::string ugly =
             "id:    core:npc.test   \n"
             "\n"
-            "schema: meridian/npc@1\n"
+            "schema: meridian/npc@2\n"
             "level: {min: 3, max: 4}\n"
             "name: Test Guy";
         const std::string want =
-            "schema: meridian/npc@1\n"
+            "schema: meridian/npc@2\n"
             "id: core:npc.test\n"
             "level: { min: 3, max: 4 }\n"
             "name: Test Guy\n";
@@ -254,7 +254,7 @@ int main() {
         // A flow map whose child is itself a collection MUST normalize to block
         // (flow is only for leaf collections — never squeeze structure inline).
         const std::string src =
-            "schema: meridian/npc@1\n"
+            "schema: meridian/npc@2\n"
             "id: core:npc.x\n"
             "stats: { damage: { min: 1, max: 2 }, health: 5 }\n";
         mcc::stages::FormatResult r = mcc::stages::format_yaml(src);
@@ -268,7 +268,7 @@ int main() {
     // --- (a)+(b) idempotency + semantic preservation on varied inputs --------
     std::cout << "[property] idempotency + semantic preservation\n";
     check_roundtrip("flow-map-npc",
-        "schema: meridian/npc@1\n"
+        "schema: meridian/npc@2\n"
         "id: core:npc.kobold_miner\n"
         "level: { min: 3, max: 4 }\n"
         "faction: hostile\n"
@@ -324,7 +324,7 @@ int main() {
         // Already-canonical file: --check returns 0.
         {
             const std::string canonical =
-                "schema: meridian/npc@1\n"
+                "schema: meridian/npc@2\n"
                 "id: core:npc.a\n"
                 "name: A\n";
             fs::path f = tmp / "clean.npc.yaml";
@@ -337,7 +337,7 @@ int main() {
 
         // Non-canonical file: --check returns 1 and does NOT modify the file.
         {
-            const std::string ugly = "id: core:npc.b\nschema: meridian/npc@1\nname: B\n";
+            const std::string ugly = "id: core:npc.b\nschema: meridian/npc@2\nname: B\n";
             fs::path f = tmp / "dirty.npc.yaml";
             { std::ofstream(f) << ugly; }
             std::ostringstream out, err;
@@ -351,8 +351,8 @@ int main() {
 
         // In-place write: rewrites the dirty file to canonical, second run is a no-op.
         {
-            const std::string ugly = "id: core:npc.c\nschema: meridian/npc@1\nname: C\n";
-            const std::string want = "schema: meridian/npc@1\nid: core:npc.c\nname: C\n";
+            const std::string ugly = "id: core:npc.c\nschema: meridian/npc@2\nname: C\n";
+            const std::string want = "schema: meridian/npc@2\nid: core:npc.c\nname: C\n";
             fs::path f = tmp / "write.npc.yaml";
             { std::ofstream(f) << ugly; }
             std::ostringstream out, err;

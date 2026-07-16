@@ -359,6 +359,26 @@ struct Ctx {
     // schema field, not an idmap band index.
     std::unordered_map<std::string, std::uint32_t> race_roster_by_id;
 
+    // appearance_catalog content-id (fully qualified) -> the flattened projection an
+    // npc@2 `visual.appearance` (assemble-like-a-player branch) lowers to on
+    // npc_template: the race ROSTER id + sex + the default preset ids. Built before
+    // the emit walk, mirroring race_roster_by_id (SP2.5 #695): the roster_id comes
+    // from the RACE that renders as this catalog (the race.appearance edge — the same
+    // append-only id character.race carries and the client keys `<race>|<sex>` on),
+    // sex + presets from the catalog itself. So an NPC referencing a catalog projects
+    // the exact CharacterVisual scalars worldd already sends for a player, reusing the
+    // proven skin-mask/dye path (no parallel structure). Only catalogs a race points
+    // at get an entry (the M1 male catalogs story 2 uses); an NPC referencing an
+    // unrostered catalog is an emit-time E001 (fail-fast, like race_roster()).
+    struct NpcAppearance {
+        std::uint32_t race_roster_id = 0;  // race.roster_id (1..255); the wire `race`
+        std::uint8_t sex = 0;              // 0 = male, 1 = female (appearance_catalog.sex)
+        std::uint8_t hair = 1;             // default preset id (1-based; catalog preset or 1)
+        std::uint8_t face = 1;
+        std::uint8_t skin = 1;
+    };
+    std::unordered_map<std::string, NpcAppearance> appearance_by_id;
+
     Table& tbl(const std::string& name) { return tables.at(name); }
     std::uint32_t ref(const YAML::Node& n, const std::string& ns, const std::string& file,
                       const std::string& where) {
@@ -387,6 +407,30 @@ struct Ctx {
             return 0;
         }
         return it->second;
+    }
+    // The 5 npc_template visual_appearance_* cells for an npc@2 `visual.appearance`
+    // (the assemble-like-a-player branch), in column order: race_id, sex, hair, face,
+    // skin. All NULL when the visual has no `appearance` key — every M1 NPC is
+    // model-only (branch A), so this round-trips NULL for the whole current corpus and
+    // worldd leaves identity.visual unset for them. When present, resolve the catalog
+    // ref to its prebuilt projection; an unrostered catalog is an E001 (fail-fast) and
+    // still emits NULLs so the row shape is intact.
+    std::vector<Val> appearance_cells(const YAML::Node& vis, const std::string& owner_ns,
+                                      const std::string& file) {
+        if (!has(vis, "appearance"))
+            return {Val::null(), Val::null(), Val::null(), Val::null(), Val::null()};
+        const std::string a = as_str(vis["appearance"]);
+        const std::string full = a.find(':') != std::string::npos ? a : owner_ns + ":" + a;
+        const auto it = appearance_by_id.find(full);
+        if (it == appearance_by_id.end()) {
+            diags.error("E001", file, "$.visual.appearance",
+                        "emit-sql: visual.appearance '" + full +
+                            "' has no race roster_id (no race renders as this catalog)");
+            return {Val::null(), Val::null(), Val::null(), Val::null(), Val::null()};
+        }
+        const NpcAppearance& ap = it->second;
+        return {Val::u(ap.race_roster_id), Val::u(ap.sex), Val::u(ap.hair),
+                Val::u(ap.face), Val::u(ap.skin)};
     }
 };
 
@@ -433,11 +477,17 @@ void emit_npc(std::uint32_t id, const YAML::Node& n, const std::string& ns,
         cx.ref_cell(loot, "table", ns, file),
         money.present ? Val::u(static_cast<std::uint64_t>(money.min)) : Val::null(),
         money.present ? Val::u(static_cast<std::uint64_t>(money.max)) : Val::null(),
-        // visual.*
+        // visual.* — branch A `model` (NULL for the assemble-like-a-player branch B);
+        // scale/sound_set apply to both branches.
         cx.ref_cell(vis, "model", ns, file),
         has(vis, "scale") ? Val::raw(fmt_double(as_double(vis["scale"]))) : Val::null(),
         cx.ref_cell(vis, "sound_set", ns, file),
     };
+
+    // visual_appearance_* (@2 branch B) — the 5 CharacterVisual scalars (race roster
+    // id, sex, hair/face/skin preset ids) an NPC that assembles like a player projects;
+    // all NULL for a model-only NPC (every M1 NPC), so this appends 5 NULLs today.
+    for (Val& c : cx.appearance_cells(vis, ns, file)) r.cells.push_back(std::move(c));
 
     // ai.abilities[] -> npc_ability
     if (has(ai, "abilities") && ai["abilities"].IsSequence()) {
@@ -1084,7 +1134,9 @@ std::map<std::string, Table> make_tables() {
         "stat_health","stat_mana","stat_armor","stat_damage_min","stat_damage_max","stat_attack_speed_ms",
         "ai_behavior","ai_aggro_radius_m","ai_leash_radius_m","ai_call_for_help_radius_m","ai_flee_at_health_pct",
         "move_walk_speed_mps","move_run_speed_mps","vendor_ref_id","loot_table_ref_id","loot_money_min",
-        "loot_money_max","visual_model_id","visual_scale","visual_sound_set_id"});
+        "loot_money_max","visual_model_id","visual_scale","visual_sound_set_id",
+        "visual_appearance_race_id","visual_appearance_sex","visual_appearance_hair",
+        "visual_appearance_face","visual_appearance_skin"});
     add("npc_ability", {"npc_id","ability_id","priority","cooldown_override_ms","use_at_health_below_pct"});
     add("npc_trainer", {"npc_id"});
     add("npc_trainer_ability", {"npc_id","ability_id","cost_copper","required_class","required_level"});
@@ -1197,7 +1249,7 @@ EmitSqlResult emit_sql(const model::ContentModel& model, const LinkResult& linke
     EmitSqlResult result;
     Resolver resolver(linked.idmaps, diags);
     std::map<std::string, Table> tables = make_tables();
-    Ctx cx{tables, resolver, diags, {}};
+    Ctx cx{tables, resolver, diags, {}, {}};
 
     // Single-pack selection (--pack <ns>, design §4). When set, this run emits ONE
     // pack's world DB: only its content rows + only its world_manifest row. Verify
@@ -1229,6 +1281,47 @@ EmitSqlResult emit_sql(const model::ContentModel& model, const LinkResult& linke
             cx.race_roster_by_id[pf.id] =
                 static_cast<std::uint32_t>(as_int(pf.root["roster_id"]));
         }
+    }
+
+    // Pre-pass: map every appearance_catalog a race renders as -> the CharacterVisual
+    // an npc@2 `visual.appearance` projects (contract ①/§7). Two hops, both reusing
+    // existing structure: (1) the race.appearance edge lowers a catalog to the race's
+    // roster_id (the same roster_id emit_class/character.race use); (2) the catalog's
+    // own sex + presets give the wire sex + default preset ids. Only catalogs a race
+    // points at get an entry — exactly the M1 male catalogs story 2's chibi NPCs use.
+    // First-preset-or-1 mirrors the player AppearanceRecord default (1-based; 0 means
+    // unset -> 1), so a chibi catalog (empty presets) projects the {hair,face,skin}=1
+    // default the client already handles.
+    std::unordered_map<std::string, std::uint32_t> roster_by_appearance_ref;
+    for (const auto& pf : model.files) {
+        if (!pf.parsed || pf.file.file_type != "race" || pf.id.empty()) continue;
+        if (!has(pf.root, "roster_id") || !has(pf.root, "appearance")) continue;
+        const std::string a = as_str(pf.root["appearance"]);
+        const std::string full =
+            a.find(':') != std::string::npos ? a : ns_of(pf.id) + ":" + a;
+        roster_by_appearance_ref[full] =
+            static_cast<std::uint32_t>(as_int(pf.root["roster_id"]));
+    }
+    auto first_preset_or_1 = [](const YAML::Node& presets, const char* list) -> std::uint8_t {
+        if (!has(presets, list) || !presets[list].IsSequence() || presets[list].size() == 0)
+            return 1;  // empty preset list -> the player default (AppearanceRecord: 1)
+        const YAML::Node& e0 = presets[list][0];
+        if (!has(e0, "id")) return 1;
+        const int v = static_cast<int>(as_int(e0["id"]));
+        return (v <= 0 || v > 255) ? 1 : static_cast<std::uint8_t>(v);
+    };
+    for (const auto& pf : model.files) {
+        if (!pf.parsed || pf.file.file_type != "appearance" || pf.id.empty()) continue;
+        const auto rit = roster_by_appearance_ref.find(pf.id);
+        if (rit == roster_by_appearance_ref.end()) continue;  // no race renders as it
+        Ctx::NpcAppearance ap;
+        ap.race_roster_id = rit->second;
+        ap.sex = (has(pf.root, "sex") && as_str(pf.root["sex"]) == "female") ? 1 : 0;
+        const YAML::Node presets = has(pf.root, "presets") ? pf.root["presets"] : YAML::Node();
+        ap.hair = first_preset_or_1(presets, "hair");
+        ap.face = first_preset_or_1(presets, "face");
+        ap.skin = first_preset_or_1(presets, "skin");
+        cx.appearance_by_id[pf.id] = ap;
     }
 
     // Spawn placements need per-placement numeric ids that don't collide with

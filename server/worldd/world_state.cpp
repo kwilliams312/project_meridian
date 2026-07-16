@@ -118,13 +118,16 @@ std::vector<std::uint8_t> encode_entity_enter_payload(const EntityIdentity& subj
     // Empty for the D-11 placeholder (no characters DB).
     auto name = b.CreateString(subject.name);
 
-    // Visual-assembly block (②/T1, #538): appearance + visible equipment for a
-    // PLAYER entity, resolved once at enter-world time (world_dispatch.cpp) and
-    // carried on `subject.visual`. Nested wire objects (Appearance / EquippedVisual
-    // / DyeChoice) MUST be built BEFORE the parent EntityEnter table starts, so
-    // they are created here first. An NPC/creature has no visual, so all four
-    // fields stay at their defaults (race/sex 0; appearance/equipment ABSENT) and
-    // the client falls back to the monolithic visual.model path.
+    // Visual-assembly block (②/T1, #538): appearance + visible equipment for any
+    // entity that assembles like a player — a PLAYER (resolved at enter-world time,
+    // world_dispatch.cpp) or, since npc@2 (contract ①/§7, #821), an NPC that carries
+    // an appearance_catalog (projected in install_spawns). Carried on `subject.visual`
+    // and emitted whenever it is set — NOT gated on player-vs-NPC. Nested wire objects
+    // (Appearance / EquippedVisual / DyeChoice) MUST be built BEFORE the parent
+    // EntityEnter table starts, so they are created here first. A model-only entity
+    // (every M1 NPC/creature) has no visual, so all four fields stay at their defaults
+    // (race/sex 0; appearance/equipment ABSENT) and the client falls back to the
+    // monolithic visual.model path.
     std::uint8_t race = 0;
     std::uint8_t sex = 0;
     fb::Offset<mn::Appearance> appearance = 0;

@@ -156,10 +156,13 @@ struct EntityIdentity {
                                   // for the D-11 placeholder (no characters DB): such a
                                   // session is unaddressable by whisper but still chats
                                   // spatially / on channels by guid.
-    // ②/T1 (#538): visual-assembly projection for PLAYER entities. nullopt for
-    // NPCs/creatures (WorldEntityRec never sets it) — their EntityEnter omits
-    // race/appearance/equipment entirely, so the client renders them via the
-    // monolithic visual.model path.
+    // ②/T1 (#538): the visual-assembly projection, set for ANY entity that assembles
+    // like a player — every PLAYER, and (npc@2, contract ①/§7, #821) an NPC that
+    // carries an appearance_catalog (install_spawns copies the DB projection here).
+    // nullopt for a model-only entity (every M1 NPC/creature): its EntityEnter omits
+    // race/appearance/equipment, so the client renders it via the monolithic
+    // visual.model path. The encoder is NOT gated on player-vs-NPC — it emits the
+    // block whenever this is set.
     std::optional<CharacterVisual> visual;
 };
 

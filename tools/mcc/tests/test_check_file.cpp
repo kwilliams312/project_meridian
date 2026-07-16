@@ -181,7 +181,7 @@ int main() {
     {
         // PARSE: malformed YAML carries a 1-based line and error severity.
         const fs::path f = content_root / "broken.npc.yaml";
-        write_file(f, "schema: meridian/npc@1\nid: : : broken\n  x\n");
+        write_file(f, "schema: meridian/npc@2\nid: : : broken\n  x\n");
         std::ostringstream out, err;
         int rc = mcc::stages::check_file(f.string(), content_root.string(),
                                          DiagFormat::Json, out, err);
@@ -269,7 +269,7 @@ int main() {
     std::cout << "[g] watch_file re-validates on change\n";
     {
         const fs::path f = content_root / "watched.npc.yaml";
-        write_file(f, "schema: meridian/npc@1\nid: core:npc.w\nname: W\n");
+        write_file(f, "schema: meridian/npc@2\nid: core:npc.w\nname: W\n");
         std::ostringstream out, err;
         std::atomic<int> ticks{0};
         // Stop after we have observed enough loop iterations to catch the edit.

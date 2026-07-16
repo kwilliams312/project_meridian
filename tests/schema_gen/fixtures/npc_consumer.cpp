@@ -51,7 +51,17 @@ int main() {
     assert(bren.stats.damage.max == 22);
     assert(bren.interaction.has_value());
     assert(bren.interaction->vendor.has_value());
-    assert(bren.visual->model.id == "core:art.char.human.male.quartermaster");
+    // npc@2: visual is model-XOR-appearance, so `model` is now optional (branch A).
+    assert(bren.visual->model.has_value() &&
+           bren.visual->model->id == "core:art.char.human.male.quartermaster");
+    assert(!bren.visual->appearance.has_value());  // branch B unused for this NPC
+
+    // Branch B (assemble-like-a-player) round-trips its own optional fields.
+    NpcVisual appearance_visual;
+    appearance_visual.appearance = AppearanceRef{"chibi:appearance.red.male"};
+    assert(appearance_visual.appearance.has_value() &&
+           appearance_visual.appearance->id == "chibi:appearance.red.male");
+    assert(!appearance_visual.model.has_value());
 
     // Optional-when-absent fields are correctly empty.
     assert(!bren.rank.has_value());

@@ -93,7 +93,7 @@ void write_pack(const fs::path& root) {
 
 void write_npc(const fs::path& root, const std::string& name) {
     write_file(root / "mini" / (name + ".npc.yaml"),
-               "schema: meridian/npc@1\n"
+               "schema: meridian/npc@2\n"
                "id: mini:npc." + name + "\n"
                "name: " + name + "\n"
                "level: 3\n");
