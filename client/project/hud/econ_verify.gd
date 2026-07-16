@@ -137,16 +137,22 @@ func _verify_event_bus_inventory() -> void:
 	_check("currency unknown before any snapshot", not bus.currency_known())
 
 	var inv_events: Array = []
+	var equip_events: Array = []
 	bus.inventory_changed.connect(func(m, it, cap): inv_events.append([m, it, cap]))
+	bus.equipment_changed.connect(func(eq): equip_events.append(eq))
 	var items := [
 		{"slot": 0, "item_template_id": 900007, "count": 5, "quality": 1, "binding": 0},
 		{"slot": 3, "item_template_id": 900012, "count": 1, "quality": 3, "binding": 1},
 	]
-	bus.publish_inventory_snapshot(4200, items, 16)
+	bus.publish_inventory_snapshot(4200, items, 16, [
+		{"slot": 13, "item_template_id": 900011, "quality": 2, "binding": 2},
+	])
 	_check("inventory known after snapshot", bus.inventory_known())
 	_check("inventory items stored (2)", bus.inventory_items().size() == 2)
 	_check("backpack capacity stored (16)", bus.backpack_slots() == 16)
 	_check("inventory_changed emitted", inv_events.size() == 1)
+	_check("equipment projection stored", bus.equipment_items().size() == 1)
+	_check("equipment_changed emitted", equip_events.size() == 1)
 	# The snapshot's money is server-authoritative → currency known from spawn.
 	_check("currency known from snapshot money", bus.currency_known())
 	_check("snapshot money applied (4200)", bus.copper() == 4200)
@@ -425,7 +431,7 @@ func _verify_bags_window() -> void:
 	bus.publish_inventory_snapshot(12345, [
 		{"slot": 0, "item_template_id": 900007, "count": 5, "quality": 1, "binding": 0},
 		{"slot": 3, "item_template_id": 900012, "count": 1, "quality": 3, "binding": 1},
-	], 16)
+	], 16, [{"slot": 13, "item_template_id": 900011, "quality": 2, "binding": 2}])
 	await _wait(1)
 	_check("bags shows server money after snapshot",
 		_find_label_containing(win, "1g 23s 45c") != null)
@@ -435,6 +441,28 @@ func _verify_bags_window() -> void:
 		_find_label_containing(win, "Item #900007 x5") != null)
 	_check("bags shows slot capacity (2 / 16)",
 		_find_label_containing(win, "2 / 16") != null)
+	_check("bags renders authoritative paperdoll row",
+		_find_label_containing(win, "Slot 13 — Item #900011") != null)
+	var equipment_intent := {"action": -1, "slot": -1}
+	bus.equipment_change_requested.connect(func(a, s):
+		equipment_intent["action"] = a; equipment_intent["slot"] = s)
+	var equip_button := _find_button_containing(win, "Equip")
+	_check("backpack item has keyboard-focusable Equip button", equip_button != null and
+		equip_button.focus_mode != Control.FOCUS_NONE)
+	_check("Equip button exposes item-specific accessible name", equip_button != null and
+		"900007" in equip_button.accessibility_name)
+	equip_button.emit_signal("pressed")
+	_check("Equip emits backpack slot intent", int(equipment_intent["action"]) == 0 and
+		int(equipment_intent["slot"]) == 0)
+	bus.publish_equipment_change_result({"status": 6, "action": 0, "slot": 0})
+	_check("typed rejection is actionable",
+		_find_label_containing(win, "not proficient") != null)
+	var unequip_button := _find_button_containing(win, "Unequip")
+	_check("Unequip button exposes slot-specific accessible name", unequip_button != null and
+		"slot 13" in unequip_button.accessibility_name)
+	unequip_button.emit_signal("pressed")
+	_check("Unequip emits paperdoll slot intent", int(equipment_intent["action"]) == 1 and
+		int(equipment_intent["slot"]) == 13)
 
 	# A re-pushed snapshot (after a purchase) re-renders the grid.
 	bus.publish_inventory_snapshot(95, [
@@ -460,6 +488,7 @@ func _verify_net_bridge() -> void:
 	_check("vendor_sell frame non-empty", net.build_vendor_sell_frame(42, 7, 3).size() > 0)
 	_check("vendor_buyback frame non-empty", net.build_vendor_buyback_frame(0).size() > 0)
 	_check("trainer_learn frame non-empty", net.build_trainer_learn_frame(64, 301).size() > 0)
+	_check("equipment_change frame non-empty", net.build_equipment_change_frame(0, 3).size() > 0)
 
 	# decode_econ_frame rejects a garbage body safely (kind "") for an econ op, and returns
 	# kind "" for a non-econ opcode.

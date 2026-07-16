@@ -20,7 +20,8 @@ find_package(Threads REQUIRED)
 # --- Dispatcher + world-process scaffold + IF-3 session as a library, so the
 #     integration tests can stand up the same serve loop the daemon runs. -------
 add_library(world-dispatch STATIC
-  world_dispatch.cpp
+    world_dispatch.cpp
+    equipment_service.cpp
   world_session.cpp
   world_boot.cpp
   movement_validation.cpp
@@ -829,6 +830,15 @@ target_link_libraries(worldd-equip-gating-db-test
 )
 set_target_properties(worldd-equip-gating-db-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-equip-gating-db COMMAND worldd-equip-gating-db-test)
+
+# Authoritative equipment placement transaction (#802): equip, occupied-slot
+# replacement, class rejection rollback, and unequip persistence in MariaDB.
+add_executable(worldd-equipment-service-db-test
+  test/equipment_service_db_it.cpp
+)
+target_link_libraries(worldd-equipment-service-db-test PRIVATE meridian::world-dispatch)
+set_target_properties(worldd-equipment-service-db-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-equipment-service-db COMMAND worldd-equipment-service-db-test)
 
 # --- Content SPAWN load + spawn-into-world DB-backed integration test (#486). ----
 # The acceptance bar for the spawn story: seed a world DB with authored spawn_point

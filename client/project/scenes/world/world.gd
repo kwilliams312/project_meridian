@@ -257,6 +257,7 @@ func _ready() -> void:
 	_bus.vendor_sell_requested.connect(_on_vendor_sell_requested)
 	_bus.vendor_buyback_requested.connect(_on_vendor_buyback_requested)
 	_bus.trainer_learn_requested.connect(_on_trainer_learn_requested)
+	_bus.equipment_change_requested.connect(_on_equipment_change_requested)
 	# Combat intent (CMB-01, D-10, #432): a slot press → CAST_REQUEST frame.
 	_bus.cast_requested.connect(_on_cast_requested)
 	# Combat presentation (CMB-04, #530): the server-authoritative CAST_RESULT the bus
@@ -556,8 +557,13 @@ func _on_entity_frame(opcode: int, _seq: int, payload: PackedByteArray) -> void:
 			"level_up":
 				# LEVEL_UP (CHR-03, #531): the level-up presentation + raised unit-frame caps.
 				_bus.publish_level_up(guid, d)
+	if kind == "equipment_visual":
+		_apply_equipment_visuals(guid, d.get("equipment", []))
+		return
 	if kind == "vitals" or kind == "xp" or kind == "level_up":
 		return  # a HUD-only delta — never spawns/moves a node
+	if kind == "enter":
+		_apply_self_enter_equipment(guid, d)
 
 	if guid == _my_guid and _my_guid != 0:
 		return  # never render ourselves as a remote
@@ -949,7 +955,9 @@ func _route_econ_frame(opcode: int, payload: PackedByteArray) -> void:
 	match String(e.get("kind", "")):
 		"inventory_snapshot":
 			_bus.publish_inventory_snapshot(int(e.get("money", 0)), e.get("items", []),
-				int(e.get("backpack_slots", 0)))
+				int(e.get("backpack_slots", 0)), e.get("equipment", []))
+		"equipment_change_result":
+			_bus.publish_equipment_change_result(e)
 		"vendor_list":
 			_bus.publish_vendor_list(int(e.get("vendor_id", 0)), e.get("items", []))
 		"loot_response":
@@ -1231,6 +1239,30 @@ func _on_vendor_buyback_requested(buyback_slot: int) -> void:
 func _on_trainer_learn_requested(npc_guid: int, ability_id: int) -> void:
 	_send_econ(_net.build_trainer_learn_frame(npc_guid, ability_id) if _net != null else PackedByteArray())
 	print("[world] TRAINER_LEARN -> npc=%d ability=%d" % [npc_guid, ability_id])
+
+
+func _on_equipment_change_requested(action: int, slot: int) -> void:
+	_send_econ(_net.build_equipment_change_frame(action, slot) if _net != null else PackedByteArray())
+	print("[world] EQUIPMENT_CHANGE -> action=%d slot=%d" % [action, slot])
+
+
+func _apply_equipment_visuals(guid: int, equipment: Array) -> void:
+	var body: Node = null
+	if guid == _my_guid and _my_guid != 0:
+		body = _body
+	elif _remote_nodes.has(guid):
+		var remote: Node3D = _remote_nodes[guid]
+		body = remote.get_node_or_null("Body")
+	if body != null and body.has_method("replace_equipment"):
+		body.call("replace_equipment", equipment)
+
+
+# EntityEnter is the reconnect/AoI source of truth. The local body was assembled
+# from the roster seed before this frame arrived, so explicitly replace its equipment
+# before the self-as-remote guard discards the rest of the enter-render path.
+func _apply_self_enter_equipment(guid: int, enter: Dictionary) -> void:
+	if guid == _my_guid and _my_guid != 0:
+		_apply_equipment_visuals(guid, enter.get("equipment", []))
 
 
 # Send an already-built econ frame at bulk priority (guards an empty build / offline net).

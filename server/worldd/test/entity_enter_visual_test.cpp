@@ -148,8 +148,61 @@ int main() {
         check("2: name still round-trips", e->name() && e->name()->str() == "Sentry");
     }
 
+    // ===== 3. Replacement update reaches owner + observer ===================
+    {
+        WorldState world;
+        std::vector<std::uint32_t> owner_items, observer_items, late_observer_items;
+        auto sink = [](std::vector<std::uint32_t>& out) {
+            return [&out](mn::Opcode op, const std::vector<std::uint8_t>& payload) {
+                if (op != mn::Opcode::EQUIPMENT_VISUAL_UPDATE) return true;
+                fb::Verifier v(payload.data(), payload.size());
+                if (!v.VerifyBuffer<mn::EquipmentVisualUpdate>(nullptr)) return false;
+                const auto* u = fb::GetRoot<mn::EquipmentVisualUpdate>(payload.data());
+                out.clear();
+                if (u->equipment()) for (const auto* row : *u->equipment())
+                    out.push_back(row->item_template());
+                return true;
+            };
+        };
+        EntityIdentity owner;
+        owner.entity_guid = 501; owner.char_class = 1; owner.name = "Owner";
+        owner.visual = CharacterVisual{};
+        EntityIdentity observer;
+        observer.entity_guid = 502; observer.char_class = 1; observer.name = "Observer";
+        observer.visual = CharacterVisual{};
+        world.enter(owner, at(-320.0f, -320.0f), sink(owner_items));
+        world.enter(observer, at(-320.0f, -320.0f), sink(observer_items));
+        EquippedVisualRec replacement;
+        replacement.slot = 13; replacement.item_template = 777001;
+        const auto recipients = world.update_equipment_visuals(501, {replacement});
+        check("3: visual replacement reaches owner + observer", recipients == 2);
+        check("3: owner receives full replacement", owner_items == std::vector<std::uint32_t>{777001});
+        check("3: observer receives full replacement", observer_items == std::vector<std::uint32_t>{777001});
+
+        // A session entering AoI after the mutation must receive the stored full
+        // replacement in EntityEnter (the reconnect/late-observer consistency seam).
+        EntityIdentity late;
+        late.entity_guid = 503; late.char_class = 1; late.name = "Late observer";
+        late.visual = CharacterVisual{};
+        world.enter(late, at(-320.0f, -320.0f),
+                    [&late_observer_items](mn::Opcode op,
+                                           const std::vector<std::uint8_t>& payload) {
+            if (op != mn::Opcode::ENTITY_ENTER) return true;
+            fb::Verifier v(payload.data(), payload.size());
+            if (!v.VerifyBuffer<mn::EntityEnter>(nullptr)) return false;
+            const auto* e = fb::GetRoot<mn::EntityEnter>(payload.data());
+            if (e->entity_guid() != 501) return true;
+            late_observer_items.clear();
+            if (e->equipment()) for (const auto* row : *e->equipment())
+                late_observer_items.push_back(row->item_template());
+            return true;
+        });
+        check("3: late observer EntityEnter carries stored replacement",
+              late_observer_items == std::vector<std::uint32_t>{777001});
+    }
+
     if (g_fail == 0) {
-        std::printf("PASS: EntityEnter visual broadcast (player round-trip + NPC absent)\n");
+        std::printf("PASS: EntityEnter + live equipment visual broadcast\n");
         return 0;
     }
     std::printf("FAIL: %d check(s) failed\n", g_fail);

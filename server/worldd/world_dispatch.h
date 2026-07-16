@@ -316,6 +316,12 @@ struct ConnCtx {
     // falls back to Roster::offline_full().
     const meridian::characters::Roster* roster = nullptr;
 
+    // Pack-loaded authoritative equipment eligibility catalogs (#802). Borrowed from
+    // WorldServer for the connection lifetime; item race eligibility is intentionally
+    // absent because item@2 defines no such gameplay field.
+    const ClassCatalog* class_catalog = nullptr;
+    const EquipTypeCatalog* equip_type_catalog = nullptr;
+
     // The enter-world spawn (C8 enter-as-chibi, #761). Points at the WorldServer's
     // boot-loaded start-zone spawn POSITION (set by serve_connection by address,
     // like `roster`) — the realm's START ZONE first graveyard (load_start_zone_spawn),
@@ -660,6 +666,10 @@ public:
     // BEFORE start(); not thread-safe. When never called, the catalog is empty and
     // every class's threat multiplier is 1.0 (a DB-less run's threat is unscaled).
     void set_class_catalog(ClassCatalog classes);
+
+    // Install the pack-loaded equipment-type vocabulary used by the live #802 equip
+    // handler together with ClassCatalog::usable_* proficiency sets.
+    void set_equip_type_catalog(EquipTypeCatalog equip_types);
 
     // Install the boot-loaded enter-world spawn (C8 enter-as-chibi, #761): the realm's
     // START ZONE first graveyard position (load_start_zone_spawn), already in the

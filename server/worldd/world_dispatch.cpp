@@ -25,6 +25,7 @@
 #include "currency.h"    // ECO-01 int64 copper: add_money / get_money (quest + trainer)
 #include "db_content_store.h"  // SpawnPlacement — authored spawn placements (#486)
 #include "economy_sanity.h"  // OPS-03b defense-in-depth economy delta checks (#421)
+#include "equipment_service.h"  // authoritative durable equip/unequip/replace (#802)
 #include "gm_command.h"  // OPS-02a GM command framework: registry + parse + gate + audit (#417)
 #include "gossip.h"      // NPC-01 gossip menu planner (#372)
 #include "item_store.h"  // ITM-01 durable item persistence: mint/place (loot + quest reward)
@@ -171,6 +172,8 @@ bool verify_payload_for(net::Opcode op, const Frame& f) {
         case net::Opcode::VENDOR_BUY_REQUEST:     return verify_table<mn::VendorBuyRequest>(f);
         case net::Opcode::VENDOR_SELL_REQUEST:    return verify_table<mn::VendorSellRequest>(f);
         case net::Opcode::VENDOR_BUYBACK_REQUEST: return verify_table<mn::VendorBuybackRequest>(f);
+        case net::Opcode::EQUIPMENT_CHANGE_REQUEST:
+            return verify_table<mn::EquipmentChangeRequest>(f);
         case net::Opcode::QUEST_ACCEPT:    return verify_table<mn::QuestAccept>(f);
         case net::Opcode::QUEST_TURN_IN:   return verify_table<mn::QuestTurnIn>(f);
         case net::Opcode::QUEST_LOG:       return verify_table<mn::QuestLog>(f);
@@ -337,6 +340,15 @@ Bytes encode_vendor_buyback_result(mn::VendorBuybackStatus status, std::uint32_t
     fb::FlatBufferBuilder b;
     b.Finish(mn::CreateVendorBuybackResult(b, status, template_id, quantity, item_guid,
                                            price, balance, buyback_slot));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
+
+Bytes encode_equipment_change_result(mn::EquipmentChangeStatus status,
+                                     mn::EquipmentChangeAction action,
+                                     std::uint16_t slot,
+                                     std::uint8_t equipped_slot = 255) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateEquipmentChangeResult(b, status, action, slot, equipped_slot));
     return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
 }
 
@@ -596,7 +608,21 @@ Bytes encode_inventory_snapshot(std::int64_t money, const itm::Inventory& inv) {
                                                template_quality(s->template_id), binding));
     }
     auto vec = b.CreateVector(rows);
-    b.Finish(mn::CreateInventorySnapshot(b, money, vec, inv.backpack_capacity()));
+    std::vector<fb::Offset<mn::EquipmentItem>> equipped;
+    const auto& paperdoll = inv.equipment();
+    equipped.reserve(paperdoll.size());
+    for (std::size_t i = 0; i < paperdoll.size(); ++i) {
+        const auto& item = paperdoll[i];
+        if (!item) continue;
+        std::uint8_t binding = 0;
+        if (const itm::ItemTemplate* t = item_templates().find(item->template_id))
+            binding = static_cast<std::uint8_t>(t->binding);
+        equipped.push_back(mn::CreateEquipmentItem(
+            b, static_cast<std::uint8_t>(i), item->template_id,
+            template_quality(item->template_id), binding));
+    }
+    b.Finish(mn::CreateInventorySnapshot(b, money, vec, inv.backpack_capacity(),
+                                         b.CreateVector(equipped)));
     return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
 }
 
@@ -2855,6 +2881,112 @@ void Dispatcher::register_m0_stubs() {
         }
     });
 
+    // --- 0x50xx EQUIPMENT: authoritative paperdoll mutations (#802) ------------
+    // The client names only one of its backpack/paperdoll slots. The server reloads
+    // ownership, validates class/level/hand rules, and commits the placement swap in
+    // one transaction. Every typed result is followed by a complete authoritative
+    // inventory snapshot, including rejects, so a stale UI always reconciles.
+    on(net::Opcode::EQUIPMENT_CHANGE_REQUEST,
+       [](net::Session& sess, const Frame& f, ConnCtx& ctx) {
+        if (!require_authenticated(ctx, "EQUIPMENT_CHANGE_REQUEST")) return;
+        const auto* req = fb::GetRoot<mn::EquipmentChangeRequest>(f.payload);
+        if (req == nullptr) return;
+        const mn::EquipmentChangeAction action = req->action();
+        const std::uint16_t slot = req->slot();
+
+        auto reject = [&](mn::EquipmentChangeStatus status) {
+            send_s2c(sess, ctx,
+                     encode_frame(net::Opcode::EQUIPMENT_CHANGE_RESULT, f.seq,
+                                  encode_equipment_change_result(status, action, slot,
+                                                                 255)));
+            push_inventory_snapshot(sess, ctx);
+        };
+
+        if (ctx.phase != SessionPhase::kInWorld) {
+            reject(mn::EquipmentChangeStatus::NOT_IN_WORLD);
+            return;
+        }
+        if (ctx.char_db == nullptr || ctx.char_id == 0 ||
+            ctx.class_catalog == nullptr || ctx.equip_type_catalog == nullptr) {
+            reject(mn::EquipmentChangeStatus::INTERNAL);
+            return;
+        }
+        const ClassRecord* cls = ctx.class_catalog->find(ctx.char_class);
+        if (cls == nullptr) {
+            reject(mn::EquipmentChangeStatus::UNKNOWN_CLASS);
+            return;
+        }
+
+        try {
+            // Read the unchanged money balance before mutation. Once COMMIT succeeds,
+            // reconciliation uses the transaction's own post-mutation Inventory so a
+            // transient follow-up read cannot strand this live session in stale state.
+            const std::int64_t money =
+                static_cast<std::int64_t>(itm::get_money(*ctx.char_db, ctx.char_id));
+            const EquipmentMutationResult changed = [&]() -> EquipmentMutationResult {
+                if (action == mn::EquipmentChangeAction::EQUIP) {
+                    return equip_owned_item(*ctx.char_db, ctx.char_id, slot, ctx.char_level,
+                                            *cls, *ctx.equip_type_catalog,
+                                            item_templates());
+                }
+                if (action == mn::EquipmentChangeAction::UNEQUIP) {
+                    if (slot >= itm::kEquipSlotCount)
+                        throw itm::InvalidSlot("paperdoll slot");
+                    return unequip_owned_item(*ctx.char_db, ctx.char_id,
+                                              static_cast<itm::EquipSlot>(slot),
+                                              item_templates());
+                }
+                throw itm::InvalidSlot("equipment action");
+            }();
+
+            const auto wire_slot = static_cast<std::uint8_t>(changed.equipped_slot);
+            send_s2c(sess, ctx,
+                     encode_frame(net::Opcode::EQUIPMENT_CHANGE_RESULT, f.seq,
+                                  encode_equipment_change_result(
+                                      mn::EquipmentChangeStatus::OK, action, slot,
+                                      wire_slot)));
+            send_s2c(sess, ctx,
+                     encode_frame(net::Opcode::INVENTORY_SNAPSHOT, 0,
+                                  encode_inventory_snapshot(money, changed.inventory)));
+
+            // A successful mutation replaces the visible equipment set for self and
+            // all current observers. WorldState also stores it for future EntityEnter.
+            if (ctx.world != nullptr && ctx.credit_guid != 0) {
+                ctx.world->update_equipment_visuals(
+                    ctx.credit_guid, visible_equipment_visuals(changed.inventory));
+            }
+        } catch (const itm::InvalidSlot&) {
+            reject(mn::EquipmentChangeStatus::INVALID_SLOT);
+        } catch (const itm::SlotEmpty&) {
+            reject(mn::EquipmentChangeStatus::SLOT_EMPTY);
+        } catch (const itm::NotEquippable&) {
+            reject(mn::EquipmentChangeStatus::NOT_EQUIPPABLE);
+        } catch (const itm::LevelTooLow&) {
+            reject(mn::EquipmentChangeStatus::LEVEL_TOO_LOW);
+        } catch (const EquipGateRejected& e) {
+            switch (e.gate()) {
+                case EquipGate::kNotProficient:
+                    reject(mn::EquipmentChangeStatus::NOT_PROFICIENT); break;
+                case EquipGate::kCategoryMismatch:
+                    reject(mn::EquipmentChangeStatus::CATEGORY_MISMATCH); break;
+                case EquipGate::kUnknownEquipType:
+                    reject(mn::EquipmentChangeStatus::UNKNOWN_EQUIP_TYPE); break;
+                case EquipGate::kAllowed:
+                    reject(mn::EquipmentChangeStatus::INTERNAL); break;
+            }
+        } catch (const itm::TwoHandNeedsOffHandEmpty&) {
+            reject(mn::EquipmentChangeStatus::TWO_HAND_CONFLICT);
+        } catch (const itm::OffHandBlockedByTwoHand&) {
+            reject(mn::EquipmentChangeStatus::TWO_HAND_CONFLICT);
+        } catch (const itm::InventoryFull&) {
+            reject(mn::EquipmentChangeStatus::INVENTORY_FULL);
+        } catch (const std::exception& e) {
+            log::warn(kCat, "EQUIPMENT_CHANGE_REQUEST failed",
+                      {log::field("error", e.what())});
+            reject(mn::EquipmentChangeStatus::INTERNAL);
+        }
+    });
+
     // --- 0x51xx VENDOR: server-authoritative buy / sell / buyback (ECO-01 #370) -
     // Each request is validated + applied entirely on the server (does the vendor
     // sell it / does the player own it / can they afford it / is there space)
@@ -3540,6 +3672,7 @@ struct WorldServer::Impl {
     // threat hook borrows it by address (set below). Empty -> threat_multiplier is
     // 1.0 for every class, so a DB-less run's threat is unscaled.
     ClassCatalog classes;
+    EquipTypeCatalog equip_types;
 
     // The enter-world spawn (C8 enter-as-chibi, #761): the realm's START ZONE first
     // graveyard position (load_start_zone_spawn), in the worldd Z-up runtime frame.
@@ -3743,6 +3876,10 @@ void WorldServer::set_class_catalog(ClassCatalog classes) {
     impl_->classes = std::move(classes);
 }
 
+void WorldServer::set_equip_type_catalog(EquipTypeCatalog equip_types) {
+    impl_->equip_types = std::move(equip_types);
+}
+
 void WorldServer::set_enter_spawn(std::optional<Position> spawn) {
     // Move-assign into the optional every ConnCtx borrows by address (ctx.enter_spawn
     // = &*impl_->enter_spawn). The optional's storage address is unchanged by an
@@ -3918,6 +4055,8 @@ void WorldServer::serve_connection(net::Session sess) {
     ctx.world = &impl_->world;  // shared AoI relay registry (#87)
     ctx.abilities = &impl_->abilities;  // shared ability template store (#343 / CMB-01)
     ctx.roster = &impl_->roster;  // runtime playable roster CHAR_CREATE validates against (#695)
+    ctx.class_catalog = &impl_->classes;
+    ctx.equip_type_catalog = &impl_->equip_types;
     // Enter-world spawn (C8 #761): borrow the boot-loaded start-zone graveyard position
     // by address when a start zone was loaded; nullptr keeps the D-11 placeholder.
     ctx.enter_spawn = impl_->enter_spawn ? &*impl_->enter_spawn : nullptr;

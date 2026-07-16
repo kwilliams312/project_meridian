@@ -171,6 +171,23 @@ std::vector<std::uint8_t> encode_vitals_update_payload(AoiId subject_guid, const
     return std::vector<std::uint8_t>(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
 }
 
+std::vector<std::uint8_t> encode_equipment_visual_update_payload(
+    AoiId subject_guid, const std::vector<EquippedVisualRec>& equipment) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::EquippedVisual>> rows;
+    rows.reserve(equipment.size());
+    for (const EquippedVisualRec& ev : equipment) {
+        std::vector<fb::Offset<mn::DyeChoice>> dyes;
+        dyes.reserve(ev.dyes.size());
+        for (const DyeChoiceRec& dye : ev.dyes)
+            dyes.push_back(mn::CreateDyeChoice(b, dye.channel, dye.dye_id));
+        rows.push_back(mn::CreateEquippedVisual(b, ev.slot, ev.item_template,
+                                                b.CreateVector(dyes)));
+    }
+    b.Finish(mn::CreateEquipmentVisualUpdate(b, subject_guid, b.CreateVector(rows)));
+    return {b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize()};
+}
+
 std::vector<std::uint8_t> encode_entity_update_payload(AoiId subject_guid,
                                                        const Position& pos) {
     fb::FlatBufferBuilder b;
@@ -701,6 +718,31 @@ std::size_t WorldState::broadcast_vitals(AoiId guid) {
     }
     log::debug(kCat, "vitals broadcast guid=" + std::to_string(guid) + " -> " +
                          std::to_string(recipients) + " recipient(s)");
+    return recipients;
+}
+
+std::size_t WorldState::update_equipment_visuals(
+    AoiId guid, std::vector<EquippedVisualRec> equipment) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    const std::optional<SessionSlot> subject = slot_of_guid(guid);
+    if (!subject) return 0;
+    auto sit = sessions_.find(*subject);
+    if (sit == sessions_.end() || !sit->second.identity.visual) return 0;
+
+    sit->second.identity.visual->equipment = std::move(equipment);
+    const auto payload = encode_equipment_visual_update_payload(
+        guid, sit->second.identity.visual->equipment);
+    std::size_t recipients = 0;
+    if (sit->second.egress) {
+        sit->second.egress(mn::Opcode::EQUIPMENT_VISUAL_UPDATE, payload);
+        ++recipients;
+    }
+    for (auto& [slot, rec] : sessions_) {
+        if (slot == *subject || rec.visible.find(*subject) == rec.visible.end() || !rec.egress)
+            continue;
+        rec.egress(mn::Opcode::EQUIPMENT_VISUAL_UPDATE, payload);
+        ++recipients;
+    }
     return recipients;
 }
 

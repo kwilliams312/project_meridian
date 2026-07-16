@@ -535,6 +535,7 @@ int main(int argc, char** argv) {
     // (threat_multiplier). No-op semantics when no world DB is wired: the catalog is
     // empty, so every class's multiplier is 1.0 and threat is unscaled.
     world.set_class_catalog(std::move(content.classes));
+    world.set_equip_type_catalog(std::move(content.equip_types));
 
     // Install the pack-loaded enter-world spawn (#761). The start-zone graveyard spawn is
     // M0-GATED in load_start_zone_spawn (returns nullopt until A-08 ships real terrain), so

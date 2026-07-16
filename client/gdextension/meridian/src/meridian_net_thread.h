@@ -212,6 +212,7 @@ public:
 			int quantity) const;
 	godot::PackedByteArray build_vendor_buyback_frame(int buyback_slot) const;
 	godot::PackedByteArray build_trainer_learn_frame(int64_t npc_guid, int ability_id) const;
+	godot::PackedByteArray build_equipment_change_frame(int action, int slot) const;
 
 	// Decode a raw loot/vendor/trainer S→C frame (opcode + FlatBuffer payload, as delivered
 	// by the `entity_frame` signal) into a scene-ready Dictionary the event bus publishes to

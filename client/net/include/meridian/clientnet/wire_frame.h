@@ -100,6 +100,9 @@ inline constexpr std::uint16_t kOpLootClosed     = 0x5006;  // S→C
 // at ENTER_WORLD and after every server-authoritative inventory change (loot/vendor/quest
 // reward/GM .additem). A DISPLAY projection — the client never predicts its bags.
 inline constexpr std::uint16_t kOpInventorySnapshot = 0x5007;  // S→C
+inline constexpr std::uint16_t kOpEquipmentChangeReq = 0x5008;  // C→S
+inline constexpr std::uint16_t kOpEquipmentChangeResult = 0x5009;  // S→C
+inline constexpr std::uint16_t kOpEquipmentVisualUpdate = 0x2005;  // S→C
 // Vendor transactions (M1 — ECO-01, #370/#441). buy / sell / buyback each ride ONE
 // C→S request paired with a typed S→C result; all prices/balances server-computed.
 inline constexpr std::uint16_t kOpVendorBuyReq      = 0x5101;  // C→S
