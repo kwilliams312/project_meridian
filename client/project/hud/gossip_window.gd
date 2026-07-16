@@ -42,6 +42,7 @@ func setup(bus: MeridianEventBus) -> void:
 	_bus = bus
 	_bus.gossip_menu_changed.connect(_on_gossip_menu_changed)
 	_bus.gossip_closed.connect(_on_gossip_closed)
+	_bus.quest_accept_result.connect(_on_quest_accept_result)
 
 
 func set_frame_visible(v: bool) -> void:
@@ -90,6 +91,18 @@ func _on_gossip_menu_changed(npc_guid: int, options: Array) -> void:
 
 func _on_gossip_closed() -> void:
 	hide_menu()
+
+
+# QST-01 (#838): the server is authoritative on accept and does NOT re-push the gossip
+# menu, so after a SUCCESSFUL accept re-request it for the open NPC — the server serves
+# the now state-gated menu (available → in-progress, then turn-in once completable),
+# transitioning the dialog instead of leaving the stale "Accept" row. A rejection
+# (status != OK) leaves the menu untouched. OK == 0 (world.fbs QuestAcceptStatus.OK).
+func _on_quest_accept_result(_quest_id: int, status: int) -> void:
+	if status != 0:
+		return
+	if _bus != null and visible and _npc_guid != 0:
+		_bus.request_gossip_hello(_npc_guid)
 
 
 # --- Rendering ---------------------------------------------------------------
