@@ -25,10 +25,19 @@ extends SceneTree
 const EventBus := preload("res://hud/event_bus.gd")
 const CharacterSheetWindow := preload("res://hud/character_sheet_window.gd")
 
+# The number of assertions this suite is EXPECTED to run. The exit code alone is a liar: a
+# suite that fails to load (or silently no-ops) asserts nothing and still exits 0, which reads
+# as green (this session has been bitten by exactly that). The guard in _initialize() fails
+# LOUDLY if fewer than this many checks actually ran — so a fail-to-load can never pass. Bump
+# this when adding checks; it only has to be a floor, not the exact count.
+const MIN_EXPECTED_CHECKS := 60
+
 var _fails := 0
+var _checks := 0  # total assertions actually executed (the check-count guard's evidence)
 
 
 func _check(name: String, ok: bool) -> void:
+	_checks += 1
 	print("  [%s] %s" % ["PASS" if ok else "FAIL", name])
 	if not ok:
 		_fails += 1
@@ -49,8 +58,19 @@ func _initialize() -> void:
 	await _verify_reject_feedback()
 	await _verify_refresh_on_snapshot()
 	await _verify_paperdoll()
+	await _verify_stats_panel()
 
-	print("\n%d failure(s)" % _fails)
+	# ⛔ CHECK-COUNT GUARD (never trust the exit code): if the suite asserted fewer than the
+	# expected floor, something failed to LOAD or run — treat that as a hard failure even
+	# though every check that DID run may have passed. This is what keeps a fail-to-load from
+	# masquerading as green.
+	print("\n%d check(s) ran (floor %d), %d failure(s)" % [_checks, MIN_EXPECTED_CHECKS, _fails])
+	if _checks < MIN_EXPECTED_CHECKS:
+		print("  [FAIL] check-count guard: only %d of >=%d expected checks ran — the suite did "
+			% [_checks, MIN_EXPECTED_CHECKS]
+			+ "not fully execute (fail-to-load / no-op). Failing loudly.")
+		quit(1)
+		return
 	quit(1 if _fails > 0 else 0)
 
 
@@ -390,7 +410,92 @@ func _verify_paperdoll() -> void:
 	win.queue_free()
 
 
+# --- Window: the stats sub-panel (#898) --------------------------------------
+
+func _verify_stats_panel() -> void:
+	print("[character_sheet/stats]")
+	var bus = EventBus.new()
+	var win = CharacterSheetWindow.new()
+	root.add_child(win)
+	await _wait(1)
+	win.setup(bus)
+	win.toggle()
+	await _wait(1)
+
+	# The panel HEADER always exists (the section is a fixed part of the sheet).
+	_check("stats section header present", _find_label_containing(win, "Stats") != null)
+
+	# NO-SHEET CASE — a content-less realm never pushes CHARACTER_STATS. The panel must show a
+	# graceful absent state, not a broken/half-rendered one, and never claim stats it lacks.
+	_check("stats unknown before any sheet", not bus.stats_known())
+	_check("absent state shown when no sheet arrived",
+		_find_label_containing(win, "not available") != null)
+	_check("no stat value is fabricated with no sheet",
+		_find_label_exact(win, "Gear Armor") == null)
+
+	# A CHARACTER_STATS lands (level 8, agility 14 + strength 27, gear armor 165). The panel
+	# renders a row per effective attribute (ref humanized), a Level row, and a DISTINCT Gear
+	# Armor row — every value read straight off the bus projection.
+	var stats_events: Array = []
+	bus.stats_changed.connect(func(lvl, attrs, ga): stats_events.append([lvl, attrs, ga]))
+	bus.publish_character_stats(8, [
+		{"ref": "core:attribute.agility", "value": 14},
+		{"ref": "core:attribute.strength", "value": 27},
+	], 165)
+	await _wait(1)
+	_check("stats_changed emitted", stats_events.size() == 1)
+	_check("stats known after a sheet", bus.stats_known())
+	_check("absent state replaced once a sheet lands",
+		_find_label_containing(win, "not available") == null)
+	_check("level row rendered", _find_label_exact(win, "Level") != null and
+		_find_label_exact(win, "8") != null)
+	_check("strength attribute humanized + valued",
+		_find_label_exact(win, "Strength") != null and _find_label_exact(win, "27") != null)
+	_check("agility attribute humanized + valued",
+		_find_label_exact(win, "Agility") != null and _find_label_exact(win, "14") != null)
+	_check("gear armor shown as its own distinct row",
+		_find_label_exact(win, "Gear Armor") != null and _find_label_exact(win, "165") != null)
+
+	# UPDATE ON EQUIP — an equip-triggered recompute pushes a fresh sheet; the panel follows it
+	# (server is law, never predicted). Strength 27 -> 31, gear armor 165 -> 190.
+	bus.publish_character_stats(8, [
+		{"ref": "core:attribute.agility", "value": 14},
+		{"ref": "core:attribute.strength", "value": 31},
+	], 190)
+	await _wait(1)
+	_check("a fresh sheet updates the changed attribute",
+		_find_label_exact(win, "31") != null and _find_label_exact(win, "27") == null)
+	_check("a fresh sheet updates gear armor",
+		_find_label_exact(win, "190") != null and _find_label_exact(win, "165") == null)
+
+	# The stats projection SURVIVES an equipment/inventory snapshot re-render (the sheet is not
+	# wiped when only bags/paperdoll change) — a _render_all() must keep showing the held stats.
+	bus.publish_inventory_snapshot(0, [], 16, [
+		{"slot": CharacterSheetWindow.SLOT_CHEST, "item_template_id": 900044,
+			"quality": 3, "binding": 0},
+	])
+	await _wait(1)
+	_check("stats survive an equipment snapshot re-render",
+		_find_label_exact(win, "Strength") != null and _find_label_exact(win, "31") != null)
+
+	# The accessor hands out a COPY — a view mutating it must not corrupt bus state.
+	var copy := bus.character_stats()
+	if not copy.is_empty():
+		(copy[0] as Dictionary)["value"] = 999
+	_check("character_stats() returns a copy",
+		int((bus.character_stats()[0] as Dictionary).get("value", 0)) != 999)
+
+	win.queue_free()
+
+
 # --- helpers -----------------------------------------------------------------
+
+func _find_label_exact(root_node: Node, text: String) -> Label:
+	for n in _walk(root_node):
+		if n is Label and (n as Label).text == text:
+			return n
+	return null
+
 
 func _find_button_containing(root_node: Node, needle: String) -> Button:
 	for n in _walk(root_node):

@@ -1140,6 +1140,37 @@ std::optional<EquipmentChangeResult> decode_equipment_change_result(const Bytes&
                                  t->equipped_slot()};
 }
 
+// ---- IF-2 CHARACTER_STATS (0x0022 — private owner stat sheet, #897/#866) ----
+
+Bytes encode_character_stats(const CharacterStats& in) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::CharacterStatEntry>> rows;
+    rows.reserve(in.attributes.size());
+    for (const auto& a : in.attributes) {
+        rows.push_back(mn::CreateCharacterStatEntry(b, b.CreateString(a.ref), a.value));
+    }
+    b.Finish(mn::CreateCharacterStats(b, in.level, b.CreateVector(rows), in.gear_armor));
+    return to_bytes(b);
+}
+
+std::optional<CharacterStats> decode_character_stats(const Bytes& buf) {
+    const mn::CharacterStats* t = verify_and_get<mn::CharacterStats>(buf);
+    if (t == nullptr) return std::nullopt;
+    CharacterStats out;
+    out.level = t->level();
+    out.gear_armor = t->gear_armor();
+    if (t->attributes() != nullptr) {
+        out.attributes.reserve(t->attributes()->size());
+        for (const auto* a : *t->attributes()) {
+            if (a == nullptr) continue;
+            out.attributes.push_back(
+                CharacterStatEntry{a->ref() != nullptr ? a->ref()->str() : std::string(),
+                                   a->value()});
+        }
+    }
+    return out;
+}
+
 // ---- IF-2 VENDOR (0x5101..0x5106 — ECO-01, #370/#441) ----------------------
 
 Bytes encode_vendor_buy_request(const VendorBuyRequest& in) {

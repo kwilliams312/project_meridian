@@ -1863,6 +1863,55 @@ void test_inventory_codec() {
     CHECK(!codec::decode_equipment_change_result(garbage).has_value());
 }
 
+void test_character_stats_codec() {
+    std::puts("[character_stats] CHARACTER_STATS (0x0022) round-trip + wrap + verifier");
+
+    // CHARACTER_STATS (S→C, private) — level + two effective attributes + gear armor.
+    codec::CharacterStats stats;
+    stats.level = 12;
+    stats.gear_armor = 165;
+    stats.attributes.push_back({/*ref=*/"core:attribute.agility", /*value=*/14});
+    stats.attributes.push_back({/*ref=*/"core:attribute.strength", /*value=*/27});
+    auto out = codec::decode_character_stats(codec::encode_character_stats(stats));
+    CHECK(out.has_value() && out->level == 12 && out->gear_armor == 165 &&
+          out->attributes.size() == 2);
+    if (out.has_value() && out->attributes.size() == 2) {
+        CHECK(out->attributes[0].ref == "core:attribute.agility" &&
+              out->attributes[0].value == 14);
+        CHECK(out->attributes[1].ref == "core:attribute.strength" &&
+              out->attributes[1].value == 27);
+    }
+
+    // gear_armor is a SIGNED field distinct from any armor attribute — a negative value (a net
+    // debuff) must survive the round-trip, not clamp.
+    codec::CharacterStats debuffed;
+    debuffed.level = 1;
+    debuffed.gear_armor = -30;
+    auto debuffed_out = codec::decode_character_stats(codec::encode_character_stats(debuffed));
+    CHECK(debuffed_out.has_value() && debuffed_out->gear_armor == -30 &&
+          debuffed_out->attributes.empty());
+
+    // The frame wraps at the real opcode 0x0022.
+    {
+        Bytes frame = encode_world_frame(kOpCharacterStats, 1,
+                                         codec::encode_character_stats(stats));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x0022 && f->opcode == kOpCharacterStats);
+    }
+
+    // An empty sheet (no attributes) round-trips to an empty vector, not a decode failure —
+    // the same tolerance a content-less realm's (never-sent) sheet demands of the client.
+    codec::CharacterStats empty;
+    auto empty_out = codec::decode_character_stats(codec::encode_character_stats(empty));
+    CHECK(empty_out.has_value() && empty_out->attributes.empty() && empty_out->level == 0 &&
+          empty_out->gear_armor == 0);
+
+    // Verify-before-GetRoot: garbage + empty rejected.
+    Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
+    CHECK(!codec::decode_character_stats(garbage).has_value());
+    CHECK(!codec::decode_character_stats(Bytes{}).has_value());
+}
+
 void test_vendor_list_codec() {
     std::puts("[vendor_list] VENDOR_LIST (0x5107) round-trip + wrap + verifier");
 
@@ -1932,6 +1981,20 @@ void test_golden_cross_decode() {
         CHECK(inv->items[1].slot == 3 && inv->items[1].item_template_id == 900012 &&
               inv->items[1].count == 1 && inv->items[1].quality == 3 &&
               inv->items[1].binding == 1);
+    }
+
+    // if2_character_stats.bin (#897/#866) — the CLIENT stats panel decodes the server-frozen
+    // CHARACTER_STATS: level 12, agility 14 + strength 27 (wire order lexicographic by ref),
+    // gear armor 165. Direct wire-compat proof the private stat sheet crosses tracks intact.
+    auto cs_bytes = read_golden("if2_character_stats.bin");
+    auto cs = cs_bytes.has_value() ? codec::decode_character_stats(*cs_bytes) : std::nullopt;
+    CHECK(cs.has_value() && cs->level == 12 && cs->gear_armor == 165 &&
+          cs->attributes.size() == 2);
+    if (cs.has_value() && cs->attributes.size() == 2) {
+        CHECK(cs->attributes[0].ref == "core:attribute.agility" &&
+              cs->attributes[0].value == 14);
+        CHECK(cs->attributes[1].ref == "core:attribute.strength" &&
+              cs->attributes[1].value == 27);
     }
 
     // if2_vendor_list.bin — vendor 990001, {900007,12,1,-1} + {900012,250,3,5}.
@@ -2078,6 +2141,7 @@ int main() {
     test_quest_codec();
     test_loot_codec();
     test_inventory_codec();
+    test_character_stats_codec();
     test_vendor_codec();
     test_vendor_list_codec();
     test_trainer_codec();

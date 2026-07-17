@@ -743,6 +743,14 @@ signal equipment_changed(equipment: Array)
 ## sole source of displayed backpack/paperdoll state.
 signal equipment_change_result(result: Dictionary)
 
+## A CHARACTER_STATS arrived (decode_econ_frame kind "character_stats"): the owning
+## character's private effective-stat sheet. `level` is the level it was computed at,
+## `attributes` is an Array of {ref,value} (every catalog attribute's effective value, wire
+## order), `gear_armor` is the summed armor of the equipped gear (distinct from any derived
+## armor attribute). The character sheet's stats panel re-renders. A content-less realm never
+## pushes this, so the panel must tolerate the signal NEVER firing (stats_known() stays false).
+signal stats_changed(level: int, attributes: Array, gear_armor: int)
+
 ## The local character's BODY identity (race/sex/appearance record) became known —
 ## seeded from the char-select row at ENTER_WORLD. Purely cosmetic input for the
 ## character sheet's paperdoll preview; carries NO equipment (that stays the
@@ -780,6 +788,10 @@ var _vendor_open_npc: int = 0        # the NPC whose vendor window is open (0 = 
 var _trainer_open_npc: int = 0       # the NPC whose trainer window is open (0 = none)
 var _inventory: Array = []           # backpack contents (INVENTORY_SNAPSHOT): {slot,item_template_id,count,quality,binding}
 var _equipment: Array = []           # occupied paperdoll rows from INVENTORY_SNAPSHOT
+var _stats_level: int = 0            # level the CHARACTER_STATS sheet was computed at
+var _stats_attributes: Array = []    # CHARACTER_STATS rows: {ref,value} (effective attributes)
+var _stats_gear_armor: int = 0       # summed armor of equipped gear (distinct from armor attr)
+var _stats_known: bool = false       # a CHARACTER_STATS has been seen (false on content-less realms)
 var _local_race: int = 0             # local character's race (char-select seed)
 var _local_sex: int = 0              # local character's sex (char-select seed)
 var _local_appearance: Dictionary = {}  # local character's appearance record ({} = unknown)
@@ -849,6 +861,20 @@ func publish_inventory_snapshot(money: int, items: Array, backpack_slots: int,
 
 func publish_equipment_change_result(result: Dictionary) -> void:
 	equipment_change_result.emit(result.duplicate(true))
+
+
+## Publish a CHARACTER_STATS (decode_econ_frame kind "character_stats"): the owning
+## character's private effective-stat sheet from the #896 aggregator. Replaces the held sheet
+## with the server's and emits stats_changed. SERVER IS LAW — the client never predicts its
+## stats; it renders exactly what worldd re-sends (on enter, on equip, on level-up). A
+## content-less realm never calls this, so stats_known() stays false and the panel shows its
+## empty state.
+func publish_character_stats(level: int, attributes: Array, gear_armor: int) -> void:
+	_stats_level = level
+	_stats_attributes = attributes.duplicate(true)
+	_stats_gear_armor = gear_armor
+	_stats_known = true
+	stats_changed.emit(_stats_level, character_stats(), _stats_gear_armor)
 
 
 ## Seed the local character's body identity (race/sex/appearance) from the char-select
@@ -1080,6 +1106,30 @@ func inventory_items() -> Array:
 ## Occupied paperdoll rows from the last authoritative INVENTORY_SNAPSHOT.
 func equipment_items() -> Array:
 	return _equipment.duplicate(true)
+
+
+## The effective-attribute rows from the last CHARACTER_STATS (copies), in wire order:
+## {ref,value}. Empty until a sheet arrives (content-less realms never push one).
+func character_stats() -> Array:
+	return _stats_attributes.duplicate(true)
+
+
+## The level the last CHARACTER_STATS sheet was computed at (0 until one arrives).
+func stats_level() -> int:
+	return _stats_level
+
+
+## The summed armor of the equipped gear from the last CHARACTER_STATS — kept DISTINCT from
+## any derived "armor" attribute so the panel can show item armor on its own (0 until a sheet
+## arrives).
+func stats_gear_armor() -> int:
+	return _stats_gear_armor
+
+
+## True once a CHARACTER_STATS has been seen. Stays false on a content-less realm (no attribute
+## vocabulary → no push), which the stats panel renders as a graceful absent state.
+func stats_known() -> bool:
+	return _stats_known
 
 
 ## The backpack grid capacity (cell count) from the last INVENTORY_SNAPSHOT.

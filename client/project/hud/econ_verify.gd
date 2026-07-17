@@ -501,6 +501,40 @@ func _verify_net_bridge() -> void:
 	var other: Dictionary = net.decode_econ_frame(0x2001, PackedByteArray())
 	_check("non-econ opcode → kind ''", String(other.get("kind", "x")) == "")
 
+	# CHARACTER_STATS (0x0022, #898): a garbage body is rejected as kind "" like the others.
+	var bad_cs: Dictionary = net.decode_econ_frame(0x0022, PackedByteArray([0xFF, 0xFF, 0xFF, 0xFF]))
+	_check("garbage CHARACTER_STATS → kind ''", String(bad_cs.get("kind", "x")) == "")
+
+	# POSITIVE native-seam proof: the native bridge decodes the SERVER-frozen CHARACTER_STATS
+	# golden (level 12, agility 14 + strength 27 in wire order, gear armor 165) and marshals it
+	# into the exact Dictionary the world scene routes to publish_character_stats. This closes
+	# the one seam the pure-GDScript panel verify cannot reach (the C++ Dictionary marshaling).
+	# The golden lives in the server conformance corpus, two levels above res:// (project dir →
+	# client → repo root); if a checkout cannot reach it, skip rather than false-fail.
+	var repo_root := ProjectSettings.globalize_path("res://").path_join("../..").simplify_path()
+	var golden_path := repo_root.path_join("server/libs/proto/conformance/golden/if2_character_stats.bin")
+	if FileAccess.file_exists(golden_path):
+		var f := FileAccess.open(golden_path, FileAccess.READ)
+		var bytes := f.get_buffer(f.get_length())
+		f.close()
+		var cs: Dictionary = net.decode_econ_frame(0x0022, bytes)
+		_check("golden CHARACTER_STATS → kind 'character_stats'",
+			String(cs.get("kind", "")) == "character_stats")
+		_check("golden CHARACTER_STATS marshals level 12", int(cs.get("level", -1)) == 12)
+		_check("golden CHARACTER_STATS marshals gear_armor 165",
+			int(cs.get("gear_armor", -1)) == 165)
+		var attrs: Array = cs.get("attributes", [])
+		_check("golden CHARACTER_STATS marshals both attribute rows", attrs.size() == 2)
+		if attrs.size() == 2:
+			var a0 := attrs[0] as Dictionary
+			var a1 := attrs[1] as Dictionary
+			_check("golden attr[0] = agility 14 (wire order)",
+				String(a0.get("ref", "")) == "core:attribute.agility" and int(a0.get("value", -1)) == 14)
+			_check("golden attr[1] = strength 27 (wire order)",
+				String(a1.get("ref", "")) == "core:attribute.strength" and int(a1.get("value", -1)) == 27)
+	else:
+		print("  (skip: CHARACTER_STATS golden not reachable at %s)" % golden_path)
+
 
 # --- helpers -----------------------------------------------------------------
 

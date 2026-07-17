@@ -924,6 +924,24 @@ Dictionary MeridianNetThread::decode_econ_frame(int opcode,
 		d["action"] = static_cast<int64_t>(r->action);
 		d["slot"] = static_cast<int64_t>(r->slot);
 		d["equipped_slot"] = static_cast<int64_t>(r->equipped_slot);
+	} else if (opcode == cn::kOpCharacterStats) {
+		// CHARACTER_STATS (0x0022, #897/#866): the owning character's private effective-stat
+		// sheet — level + every catalog attribute's effective value + summed gear armor. A
+		// content-less realm never pushes this, so its absence is a NORMAL state the panel
+		// tolerates; here we only surface what actually arrived.
+		auto r = cn::codec::decode_character_stats(buf);
+		if (!r) return d;
+		d["kind"] = String("character_stats");
+		d["level"] = static_cast<int64_t>(r->level);
+		d["gear_armor"] = static_cast<int64_t>(r->gear_armor);
+		Array attributes;
+		for (const auto &a : r->attributes) {
+			Dictionary row;
+			row["ref"] = String(a.ref.c_str());
+			row["value"] = static_cast<int64_t>(a.value);
+			attributes.push_back(row);
+		}
+		d["attributes"] = attributes;
 	} else if (opcode == cn::kOpVendorList) {
 		auto r = cn::codec::decode_vendor_list(buf);
 		if (!r) return d;

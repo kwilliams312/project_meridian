@@ -748,6 +748,29 @@ std::optional<EquipmentChangeRequest> decode_equipment_change_request(const Byte
 Bytes encode_equipment_change_result(const EquipmentChangeResult& in);
 std::optional<EquipmentChangeResult> decode_equipment_change_result(const Bytes& buf);
 
+// One effective-attribute row of the CHARACTER_STATS sheet (world.fbs CharacterStatEntry):
+// `ref` is the attribute's content-id (the AttributeCatalog key, e.g. "core:attribute.strength")
+// and `value` is its aggregated EFFECTIVE value. The client joins the panel labels on `ref`.
+struct CharacterStatEntry {
+    std::string ref;
+    std::int32_t value = 0;
+};
+
+// CHARACTER_STATS (S→C, 0x0022): the owning character's aggregated effective-stat sheet (the
+// #896 aggregator output — SP2.5 #897). PRIVATE to its owner (never on the AoI broadcast).
+// `level` is the level the sheet was computed at; `attributes` is every catalog attribute's
+// effective value (wire order is lexicographic by ref); `gear_armor` is the summed armor of
+// the equipped gear, kept DISTINCT from any derived "armor" attribute. A DISPLAY projection —
+// a content-less realm (no attribute vocabulary) never pushes this, so the client must tolerate
+// never receiving it.
+struct CharacterStats {
+    std::uint16_t level = 0;
+    std::vector<CharacterStatEntry> attributes;
+    std::int32_t gear_armor = 0;
+};
+Bytes encode_character_stats(const CharacterStats& in);  // test/mock symmetry (client decodes)
+std::optional<CharacterStats> decode_character_stats(const Bytes& buf);
+
 // LOOT_RELEASE (C→S): close the loot window on a corpse.
 struct LootRelease {
     std::uint64_t corpse_guid = 0;
