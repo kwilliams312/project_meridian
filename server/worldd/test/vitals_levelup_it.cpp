@@ -37,6 +37,7 @@
 #include "ability_store.h"
 #include "combat_unit.h"
 #include "creature_ai.h"
+#include "effective_stats.h"   // AttributeCatalog — seed for the CHARACTER_STATS push (#897)
 #include "leveling.h"
 #include "map_tick.h"
 #include "movement_validation.h"
@@ -255,6 +256,41 @@ Vitals recv_vitals(Client& c) {
     return {};
 }
 
+// A decoded CHARACTER_STATS sheet captured off the wire (#897 — the PRIVATE owner
+// stat push that rides the SAME level-up seam as VITALS_UPDATE via poll_vitals_egress).
+struct CharStats {
+    bool got = false;
+    std::uint16_t level = 0;
+    std::int32_t gear_armor = 0;
+    std::int32_t strength = 0;
+    std::size_t attr_count = 0;
+};
+
+// Read frames until a CHARACTER_STATS arrives (skipping interleaved MOVEMENT_STATE /
+// VITALS_UPDATE), or an empty CharStats if the stream ends first.
+CharStats recv_char_stats(Client& c) {
+    for (int i = 0; i < 12; ++i) {
+        std::optional<Bytes> fr = c.recv_frame();
+        if (!fr) return {};
+        std::optional<mw::Frame> rf = mw::decode_frame(*fr);
+        if (!rf) continue;
+        if (rf->opcode != mn::Opcode::CHARACTER_STATS) continue;
+        Bytes pl(rf->payload, rf->payload + rf->payload_len);
+        const auto* m = decode<mn::CharacterStats>(pl);
+        if (!m) continue;
+        std::int32_t str = 0;
+        if (m->attributes() != nullptr) {
+            for (const auto* e : *m->attributes()) {
+                if (e->ref() != nullptr && e->ref()->str() == "core:attribute.strength")
+                    str = e->value();
+            }
+        }
+        return CharStats{true, m->level(), m->gear_armor(), str,
+                         m->attributes() != nullptr ? m->attributes()->size() : 0};
+    }
+    return {};
+}
+
 mw::Position at(float x, float y) {
     mw::Position p;
     p.x = x;
@@ -326,6 +362,18 @@ int main() {
 
         mw::Dispatcher dispatcher;
         mw::WorldServer world(dispatcher, mw::WorldServerConfig{});
+
+        // Seed the attribute vocabulary so the level-up seam's CHARACTER_STATS push
+        // (#897) aggregates a REAL sheet: a Runcaller (class 2) strength +7 class mod.
+        // serve_connection wires ctx.attribute_catalog to this before the WORLD_HELLO
+        // stub runs, so poll_vitals_egress's recompute has a catalog to aggregate over.
+        {
+            mw::AttributeCatalog attrs;
+            attrs.add_attribute({"core:attribute.strength", "Strength",
+                                 mw::AttributeKind::kPrimary, 1});
+            attrs.add_class_mod(kRuncaller, "core:attribute.strength", 7);
+            world.set_attribute_catalog(std::move(attrs));
+        }
         world.start();
 
         // Also register a DIFFERENT session guid on the vitals bus (no live client) so
@@ -454,6 +502,23 @@ int main() {
                   v.got && v.power == v.max_power);
             check("4: the power_type is MANA (Runcaller)",
                   v.got && v.power_type == mn::PowerType::MANA);
+
+            // ===== #897: the SAME level-up seam ALSO pushed CHARACTER_STATS ========
+            // poll_vitals_egress recomputes + pushes the private stat sheet right after
+            // broadcast_vitals (the shared recompute seam). It rides the leveler's OWN
+            // egress — the same owner-only channel VITALS_UPDATE used above — so the
+            // isolation already asserted for vitals holds for the sheet too. The sheet
+            // reflects the NEW level (ctx.char_level was just advanced) and the live
+            // aggregation of the seeded strength +7 class mod (gearless: no DB, so
+            // gear_armor is 0 and only class/race mods contribute).
+            const CharStats cs = recv_char_stats(c);
+            check("5: the leveler received a CHARACTER_STATS on level-up", cs.got);
+            check("5: CHARACTER_STATS carries the NEW level (matches the snapshot)",
+                  cs.got && cs.level == snap.level && cs.level >= 2);
+            check("5: CHARACTER_STATS strength = seeded class mod 7 (live aggregation)",
+                  cs.got && cs.strength == 7);
+            check("5: CHARACTER_STATS gear_armor = 0 (no DB / no gear on this path)",
+                  cs.got && cs.gear_armor == 0);
         }  // client closes
 
         server.join();

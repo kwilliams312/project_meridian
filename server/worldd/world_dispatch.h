@@ -53,6 +53,7 @@
 #include "active_sessions.h"
 #include "buyback.h"  // vendor::BuybackQueue — per-session buyback state (ECO-01, #370)
 #include "combat_resolver.h"
+#include "effective_stats.h"  // AttributeCatalog — the #694 attribute vocabulary the CHARACTER_STATS push aggregates (#897)
 #include "gossip.h"   // npc::QuestMarker — the overhead quest-marker cache (#844/#849)
 #include "item_template.h"   // items::TemplateStore (content-store install seam, #390)
 #include "loot_registry.h"  // shared corpse loot registry (ITM-02 wire; #388)
@@ -254,6 +255,13 @@ struct ConnCtx {
     std::uint8_t char_class = 0;
     std::uint16_t char_level = 1;
 
+    // The spawned character's ROSTER RACE id (roster.h), captured at ENTER_WORLD from
+    // the loaded owned character (LoadedCharacter::race) alongside char_class/level.
+    // The CHARACTER_STATS aggregator (SP2.5 #897) keys the per-race attribute_mods off
+    // it — server-authoritative, read from the DB-loaded character, never a client
+    // field. 0 pre-spawn (the stat push is inert before kInWorld).
+    std::uint8_t char_race = 0;
+
     // OVERHEAD QUEST MARKERS (#844/#849). The last marker THIS session was told to
     // show over each visible NPC, keyed by the NPC's wire guid. push_quest_markers
     // recomputes each visible NPC's marker (npc::compute_quest_marker over ctx.quests)
@@ -345,6 +353,15 @@ struct ConnCtx {
     // absent because item@2 defines no such gameplay field.
     const ClassCatalog* class_catalog = nullptr;
     const EquipTypeCatalog* equip_type_catalog = nullptr;
+
+    // The boot-loaded attribute vocabulary + per-class/race attribute_mods (#694),
+    // borrowed from WorldServer for the connection lifetime (set by serve_connection
+    // by address, like class_catalog). The CHARACTER_STATS push (SP2.5 #897) feeds it
+    // to the #896 aggregator to compute the owning character's effective-stat sheet.
+    // nullptr on a directly-built ConnCtx (a DB-less dispatch smoke test) -> the stat
+    // push is skipped (nothing to aggregate/display) — as is an EMPTY catalog (a realm
+    // with no attribute content), similar to how `abilities` gates KNOWN_ABILITIES.
+    const AttributeCatalog* attribute_catalog = nullptr;
 
     // The enter-world spawn (C8 enter-as-chibi, #761). Points at the WorldServer's
     // boot-loaded start-zone spawn POSITION (set by serve_connection by address,
@@ -694,6 +711,16 @@ public:
     // Install the pack-loaded equipment-type vocabulary used by the live #802 equip
     // handler together with ClassCatalog::usable_* proficiency sets.
     void set_equip_type_catalog(EquipTypeCatalog equip_types);
+
+    // Install the boot-loaded attribute vocabulary + per-class/race attribute_mods
+    // (#694 EffectiveStats catalog, DB-loaded via load_db_attributes). Every ConnCtx
+    // borrows it by address (ctx.attribute_catalog), so the CHARACTER_STATS push (#897)
+    // can aggregate the owning character's effective stats. Move-assigned into the
+    // catalog every ConnCtx borrows, so its address stays valid. Call at boot BEFORE
+    // start(); not thread-safe. When never called (or called with an empty catalog),
+    // the CHARACTER_STATS push is skipped entirely — a realm with no attribute content
+    // has nothing to display, so no sheet frame is sent.
+    void set_attribute_catalog(AttributeCatalog attributes);
 
     // Install the boot-loaded enter-world spawn (C8 enter-as-chibi, #761): the realm's
     // START ZONE first graveyard position (load_start_zone_spawn), already in the

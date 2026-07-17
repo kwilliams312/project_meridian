@@ -22,11 +22,13 @@
 #include <vector>
 
 #include "aoi_grid.h"    // horizontal_distance — NPC interaction-range gate (#842)
+#include "character_stats_wire.h"  // CHARACTER_STATS (0x0022) encoder — private owner stat sheet (#897)
 #include "characters.h"  // meridian-characters CRUD: list/create/delete (#286 / D-35)
 #include "creature_ai.h"  // CreatureSpawnDef + kCreatureBasicAttackRangeM (#486/#842)
 #include "currency.h"    // ECO-01 int64 copper: add_money / get_money (quest + trainer)
 #include "db_content_store.h"  // SpawnPlacement — authored spawn placements (#486)
 #include "economy_sanity.h"  // OPS-03b defense-in-depth economy delta checks (#421)
+#include "effective_stats_aggregator.h"  // #896 aggregator — the CHARACTER_STATS push seam (#897)
 #include "equipment_service.h"  // authoritative durable equip/unequip/replace (#802)
 #include "gm_command.h"  // OPS-02a GM command framework: registry + parse + gate + audit (#417)
 #include "gossip.h"      // NPC-01 gossip menu planner (#372)
@@ -1078,6 +1080,71 @@ void push_known_abilities(net::Session& sess, ConnCtx& ctx) {
                                      encode_known_abilities(*ctx.abilities, ctx.learned)));
 }
 
+// ⭐⭐ THE SHARED STAT-RECOMPUTE SEAM (SP2.5 #897 S5b + the parallel #785 combat story).
+//
+// Recompute this character's effective-stat sheet via the #896 aggregator and push the
+// PRIVATE CHARACTER_STATS (0x0022) frame down the OWNING session's egress. This is the
+// SINGLE place a stat-affecting event funnels through, so the recompute lives in ONE
+// spot instead of being scattered across the events that trigger it. Called on the
+// three events that change the sheet: ENTER_WORLD, an EQUIPMENT_CHANGE success, and a
+// LEVEL_UP (all on THIS connection's own IO worker, so ctx is single-threaded here).
+//
+// ⭐ #785 EXTENSION POINT — combat's effective armor lands HERE, on the SAME seam.
+// #785 owns combat armor/weapon/coefficients; after `stats` is computed below it adds,
+// right where this comment sits, a single write of the aggregated gear armor onto the
+// owning world Unit — e.g.
+//     if (Unit* u = ctx.world ? ctx.world->unit_for_slot(ctx.slot) : nullptr)
+//         u->set_effective_armor(stats.gear_armor);
+// so combat armor and the display sheet recompute off the SAME aggregation on the SAME
+// events, instead of a divergent second hook. (Coordination note posted on #785.)
+// #897's lane is display ONLY: it does NOT write any combat field on the Unit and does
+// NOT touch health derivation (placeholder_player_stats' class curve stays #785/#360's).
+//
+// Best-effort, exactly like push_inventory_snapshot: no attribute vocabulary wired or
+// an EMPTY one (a DB-less dispatch smoke path, or a realm with no attribute content
+// loaded) -> skip, because there is literally nothing to display and pushing an empty
+// sheet would only add a wire frame every enter-world/equip/level-up for no gain. A
+// transient inventory-load fault degrades to the gearless sheet rather than throwing
+// into a handler (spec §6: content problems degrade, never crash). The equipped loadout
+// is resolved from the character's live inventory so the seam needs no in-hand Inventory
+// (enter-world / level-up have none), keeping every call site identical.
+void recompute_and_push_character_stats(net::Session& sess, ConnCtx& ctx) {
+    // No attribute vocabulary (DB-less smoke) or an empty one (no attribute content) ->
+    // nothing to aggregate/display. Skipping when empty also keeps the enter-world frame
+    // sequence unchanged for the M1 placeholder-store path (no world-content DB).
+    if (ctx.attribute_catalog == nullptr || ctx.attribute_catalog->attribute_count() == 0)
+        return;
+
+    // Resolve the equipped item templates from the character's durable inventory. All
+    // equipped slots count toward stats (unlike visible_equipment_visuals, which drops
+    // jewellery — rings/trinkets DO carry stats), so enumerate the whole paperdoll.
+    std::vector<const itm::ItemTemplate*> equipped;
+    if (ctx.char_db != nullptr && ctx.char_id != 0) {
+        try {
+            const itm::Inventory inv =
+                itm::load_inventory(*ctx.char_db, ctx.char_id, item_templates());
+            const auto& paperdoll = inv.equipment();
+            equipped.reserve(paperdoll.size());
+            for (const std::optional<itm::ItemInstance>& slot : paperdoll) {
+                if (slot.has_value())
+                    equipped.push_back(item_templates().find(slot->template_id));
+            }
+        } catch (const std::exception& e) {
+            log::warn(kCat, "CHARACTER_STATS inventory load failed (gearless sheet)",
+                      {log::field("error", e.what())});
+        }
+    }
+
+    const AggregatedCharacterStats stats = aggregate_character_stats(
+        *ctx.attribute_catalog, ctx.char_race, ctx.char_class, ctx.char_level, equipped);
+
+    // ⭐ #785 hooks its `unit->set_effective_armor(stats.gear_armor)` write HERE — same
+    // `stats`, same seam. #897 does not.
+
+    send_s2c(sess, ctx, encode_frame(net::Opcode::CHARACTER_STATS, 0,
+                                     encode_character_stats(stats)));
+}
+
 // Push the OVERHEAD QUEST MARKERS (#844/#849) for every NPC currently in this
 // session's interest set. For each visible content NPC (WorldState::visible_world_
 // entities — the relay-tracked visibility, quest-free/DB-free), resolve its template
@@ -1217,7 +1284,7 @@ void poll_quest_credits(net::Session& sess, ConnCtx& ctx) {
 // player off to the new max health/power): we mirror it onto the world-owned Unit,
 // then broadcast_vitals reads it straight back off that Unit. Cheap no-op when nothing
 // is pending.
-void poll_vitals_egress(net::Session& /*sess*/, ConnCtx& ctx) {
+void poll_vitals_egress(net::Session& sess, ConnCtx& ctx) {
     if (ctx.vitals_egress == nullptr || ctx.credit_guid == 0 || ctx.world == nullptr ||
         !ctx.entered)
         return;
@@ -1251,6 +1318,13 @@ void poll_vitals_egress(net::Session& /*sess*/, ConnCtx& ctx) {
 
     // Push the VITALS_UPDATE to the subject's own client + every observer in AoI.
     ctx.world->broadcast_vitals(ctx.credit_guid);
+
+    // A level-up changes the effective-stat sheet, so recompute + re-push the PRIVATE
+    // CHARACTER_STATS through the SHARED seam (#897 S5b). ctx.char_level was just set to
+    // the new level above, so the sheet reflects it. This runs on the leveler's OWN IO
+    // worker (draining the world→IO vitals bridge) — the established pattern for pushing
+    // a world-thread event to a client without touching egress from the world thread.
+    recompute_and_push_character_stats(sess, ctx);
 }
 
 // Apply a pending GM `.summon` forced move on THIS session's own IO worker (OPS-02b,
@@ -2358,6 +2432,9 @@ void Dispatcher::register_m0_stubs() {
            // in-memory at M1 (durable character_quest is a later story).
            ctx.char_class = pc.class_id;
            ctx.char_level = pc.level;
+           // Race id too (#897): the CHARACTER_STATS aggregator keys per-race
+           // attribute_mods off it. Server-authoritative — from the DB-loaded row.
+           ctx.char_race = pc.race;
            ctx.quests.emplace(quest_store());
 
            // OPS-05: this session is now IN WORLD. Bump CCU (meridian_ccu) and the
@@ -2476,6 +2553,17 @@ void Dispatcher::register_m0_stubs() {
                // knows nothing (empty set) and the set grows on TrainerLearn (re-pushed
                // there). Server-authoritative DISPLAY projection (Principle 1).
                push_known_abilities(sess, ctx);
+
+               // SELF CHARACTER-STATS SHEET AT SPAWN (#897, SP2.5 S5b; part of #866).
+               // Alongside the self vitals / inventory / known-abilities snapshots,
+               // push the character's aggregated effective-stat sheet (attributes +
+               // gear armor, computed live by the #896 aggregator from class/race mods
+               // + level + equipped gear) so the character sheet (S5c #898) renders REAL
+               // stats the instant the player is in-world. PRIVATE to this client — it
+               // goes down this session's own egress, NEVER the AoI broadcast (the
+               // EntityEnter attrs stay empty; leaking the sheet to observers is the
+               // ratified security no-go). Re-sent on the events that change it below.
+               recompute_and_push_character_stats(sess, ctx);
 
                // Explore (QST-01, #396): a character that spawns already standing in
                // a discovery volume fires it on enter — credit any explore objective
@@ -3174,6 +3262,15 @@ void Dispatcher::register_m0_stubs() {
             send_s2c(sess, ctx,
                      encode_frame(net::Opcode::INVENTORY_SNAPSHOT, 0,
                                   encode_inventory_snapshot(money, changed.inventory)));
+
+            // The gear set just changed, so the effective-stat sheet changed too:
+            // recompute + re-push CHARACTER_STATS through the SHARED seam (#897 S5b).
+            // This is the CROSS-SESSION seam #785 extends for combat effective-armor —
+            // one recompute site for every stat-affecting event (see the seam's header).
+            // After the durable INVENTORY_SNAPSHOT so the display sheet trails the
+            // authoritative inventory. Only on a SUCCESS (a rejected change touches no
+            // gear, so its reject() path deliberately re-pushes NEITHER).
+            recompute_and_push_character_stats(sess, ctx);
 
             // A successful mutation replaces the visible equipment set for self and
             // all current observers. WorldState also stores it for future EntityEnter.
@@ -3941,6 +4038,14 @@ struct WorldServer::Impl {
     ClassCatalog classes;
     EquipTypeCatalog equip_types;
 
+    // The boot-loaded attribute vocabulary + per-class/race attribute_mods (#694),
+    // installed by set_attribute_catalog. Every ConnCtx borrows it by address
+    // (ctx.attribute_catalog) so the CHARACTER_STATS push (#897) aggregates the owning
+    // character's effective stats. Empty until installed -> the CHARACTER_STATS push is
+    // skipped (nothing to display), so a DB-less run's enter-world frame sequence is
+    // unchanged. The move-assign in the setter preserves this address.
+    AttributeCatalog attributes;
+
     // The enter-world spawn (C8 enter-as-chibi, #761): the realm's START ZONE first
     // graveyard position (load_start_zone_spawn), in the worldd Z-up runtime frame.
     // std::nullopt until set_enter_spawn() installs it at boot; every ConnCtx borrows
@@ -4153,6 +4258,14 @@ void WorldServer::set_equip_type_catalog(EquipTypeCatalog equip_types) {
     impl_->equip_types = std::move(equip_types);
 }
 
+void WorldServer::set_attribute_catalog(AttributeCatalog attributes) {
+    // Move-assign into the catalog every ConnCtx borrows by address
+    // (ctx.attribute_catalog = &impl_->attributes, wired in serve_connection). The
+    // address is unchanged by a move-assign, so those pointers stay valid. Boot-time
+    // only (before start()), so no reader races the swap.
+    impl_->attributes = std::move(attributes);
+}
+
 void WorldServer::set_enter_spawn(std::optional<Position> spawn) {
     // Move-assign into the optional every ConnCtx borrows by address (ctx.enter_spawn
     // = &*impl_->enter_spawn). The optional's storage address is unchanged by an
@@ -4330,6 +4443,7 @@ void WorldServer::serve_connection(net::Session sess) {
     ctx.roster = &impl_->roster;  // runtime playable roster CHAR_CREATE validates against (#695)
     ctx.class_catalog = &impl_->classes;
     ctx.equip_type_catalog = &impl_->equip_types;
+    ctx.attribute_catalog = &impl_->attributes;  // #897 CHARACTER_STATS aggregation source
     // Enter-world spawn (C8 #761): borrow the boot-loaded start-zone graveyard position
     // by address when a start zone was loaded; nullptr keeps the D-11 placeholder.
     ctx.enter_spawn = impl_->enter_spawn ? &*impl_->enter_spawn : nullptr;

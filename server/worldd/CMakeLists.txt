@@ -37,6 +37,7 @@ add_library(world-dispatch STATIC
   aura_container.cpp
   effective_stats.cpp
   effective_stats_aggregator.cpp
+  character_stats_wire.cpp
   class_kernel.cpp
   talent_catalog.cpp
   death_state.cpp
@@ -1164,6 +1165,25 @@ target_link_libraries(worldd-effective-stats-aggregator-test
 )
 set_target_properties(worldd-effective-stats-aggregator-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-effective-stats-aggregator COMMAND worldd-effective-stats-aggregator-test)
+
+# --- CHARACTER_STATS wire + leak-guard UNIT test (SP2.5; #897, epic #866 S5b). --
+# DB-FREE / socket-FREE: proves the private owner stat-sheet contract in isolation —
+#   * the #896 aggregator's output (class/race mods + level + GEAR StatMods/armor)
+#     round-trips through encode_character_stats -> CharacterStats and decodes back to
+#     the same level / per-attribute values / gear_armor (deterministic sorted order);
+#   * ⛔ THE SECURITY INVARIANT: the AoI-broadcast encoders encode_entity_enter_payload
+#     and encode_entity_update_payload keep their `attrs` vector EMPTY, so a stat sheet
+#     can NEVER ride the observer broadcast (ratified decision — the sheet is private).
+# Always runs in the plain server ctest (no MariaDB).
+add_executable(worldd-character-stats-test
+  test/character_stats_push_test.cpp
+)
+target_link_libraries(worldd-character-stats-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-character-stats-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-character-stats COMMAND worldd-character-stats-test)
 
 # --- XP curve / leveling UNIT test (CHR-03 #360). -----------------------------
 # PURE (no DB, no socket, no clock, no RNG): drives the leveling curve directly —

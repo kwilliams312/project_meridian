@@ -402,6 +402,17 @@ int main() {
         wcfg.realm_id = realm_id;
         mw::Dispatcher dispatcher;
         mw::WorldServer world(dispatcher, wcfg);
+
+        // #897: seed the attribute vocabulary so ENTER_WORLD's CHARACTER_STATS push has
+        // a catalog to aggregate over (proves the enter-world trigger end-to-end over a
+        // real session). One primary attribute is enough — the value-correctness of the
+        // aggregation is covered by the DB-free unit + equipment tests.
+        {
+            mw::AttributeCatalog attrs;
+            attrs.add_attribute({"core:attribute.strength", "Strength",
+                                 mw::AttributeKind::kPrimary, 1});
+            world.set_attribute_catalog(std::move(attrs));
+        }
         world.start();
 
         std::thread server([&] {
@@ -439,6 +450,24 @@ int main() {
                       m && (m->abilities() == nullptr || m->abilities()->size() == 0));
             } else {
                 check("got an enter-world KNOWN_ABILITIES", false);
+            }
+
+            // --- #897: ENTER_WORLD also pushes the private CHARACTER_STATS sheet ----
+            // Rides the same enter-world snapshot batch as INVENTORY_SNAPSHOT /
+            // KNOWN_ABILITIES, down THIS session's own egress (never the AoI broadcast).
+            if (auto pl = read_until(c, mn::Opcode::CHARACTER_STATS)) {
+                const auto* m = decode<mn::CharacterStats>(*pl);
+                check("ENTER_WORLD pushes CHARACTER_STATS (#897 enter trigger)",
+                      m != nullptr);
+                // This character was set to level 5 (above); the sheet echoes the
+                // server-authoritative level, and the seeded strength attribute is on
+                // the wire (value 0 — no class mod seeded here).
+                check("enter-world CHARACTER_STATS carries the character level (5)",
+                      m && m->level() == 5);
+                check("enter-world CHARACTER_STATS carries the seeded attribute set",
+                      m && m->attributes() != nullptr && m->attributes()->size() == 1);
+            } else {
+                check("got an enter-world CHARACTER_STATS", false);
             }
 
             // --- GOSSIP_HELLO to the trainer NPC (drains the pushed TRAINER_LIST) ---
