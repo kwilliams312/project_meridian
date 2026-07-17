@@ -1,0 +1,100 @@
+{
+  "format_version": 1,
+  "zone": "chibi:zone.sprout_meadow",
+  "chunk_size_m": 128,
+  "origin": { "x": -384.0000, "z": -384.0000 },
+  "grid": { "min_cx": -1, "min_cz": -1, "max_cx": 1, "max_cz": 1 },
+  "far_ring": 6,
+  "chunks": [
+    {
+      "cx": -1, "cz": -1,
+      "hash": "blake3:323a8765b7466752e4b348ea2c49937c1053afb113f51261ea500a7c9ce68d1d",
+      "scene": "chibi:chunk.sprout_meadow.n1_n1.scene",
+      "proxy": "chibi:chunk.sprout_meadow.n1_n1.proxy",
+      "server": "chibi:chunk.sprout_meadow.n1_n1.server",
+      "deps": ["chibi:art.terrain.sprout_meadow_ground"],
+      "priority": 1,
+      "aabb": { "min": { "x": -512.0000, "y": -2.1032, "z": -512.0000 }, "max": { "x": -384.0000, "y": 2.0165, "z": -384.0000 } }
+    },
+    {
+      "cx": 0, "cz": -1,
+      "hash": "blake3:ab6fb43e59988da25cf1db022754c90402ceac9b1bc8fd341d90b01a597a48c5",
+      "scene": "chibi:chunk.sprout_meadow.0_n1.scene",
+      "proxy": "chibi:chunk.sprout_meadow.0_n1.proxy",
+      "server": "chibi:chunk.sprout_meadow.0_n1.server",
+      "deps": ["chibi:art.terrain.sprout_meadow_ground"],
+      "priority": 1,
+      "aabb": { "min": { "x": -384.0000, "y": -1.9856, "z": -512.0000 }, "max": { "x": -256.0000, "y": 0.0901, "z": -384.0000 } }
+    },
+    {
+      "cx": 1, "cz": -1,
+      "hash": "blake3:9de71dfd58f85ed059372de13adade7ae86dd12ccf68083e3f80e2ff41a2161e",
+      "scene": "chibi:chunk.sprout_meadow.1_n1.scene",
+      "proxy": "chibi:chunk.sprout_meadow.1_n1.proxy",
+      "server": "chibi:chunk.sprout_meadow.1_n1.server",
+      "deps": ["chibi:art.terrain.sprout_meadow_ground"],
+      "priority": 1,
+      "aabb": { "min": { "x": -256.0000, "y": -1.3748, "z": -512.0000 }, "max": { "x": -128.0000, "y": 1.8626, "z": -384.0000 } }
+    },
+    {
+      "cx": -1, "cz": 0,
+      "hash": "blake3:0a72d553a2721fce49a47018219a278423a8973fc667a8967140c782cba9d461",
+      "scene": "chibi:chunk.sprout_meadow.n1_0.scene",
+      "proxy": "chibi:chunk.sprout_meadow.n1_0.proxy",
+      "server": "chibi:chunk.sprout_meadow.n1_0.server",
+      "deps": ["chibi:art.terrain.sprout_meadow_ground"],
+      "priority": 1,
+      "aabb": { "min": { "x": -512.0000, "y": -0.8047, "z": -384.0000 }, "max": { "x": -384.0000, "y": 1.7663, "z": -256.0000 } }
+    },
+    {
+      "cx": 0, "cz": 0,
+      "hash": "blake3:70b05e1a5a103d408318422d7728f583afcbfa80f10ffeeb002fe3da9b029c46",
+      "scene": "chibi:chunk.sprout_meadow.0_0.scene",
+      "proxy": "chibi:chunk.sprout_meadow.0_0.proxy",
+      "server": "chibi:chunk.sprout_meadow.0_0.server",
+      "deps": ["chibi:art.terrain.sprout_meadow_ground"],
+      "priority": 0,
+      "aabb": { "min": { "x": -384.0000, "y": -1.0976, "z": -384.0000 }, "max": { "x": -256.0000, "y": 2.3677, "z": -256.0000 } }
+    },
+    {
+      "cx": 1, "cz": 0,
+      "hash": "blake3:7b6ec9c4fe83166ed0e855c98eb09243cdfd372e0e047f9d75b79414cf0e8f7a",
+      "scene": "chibi:chunk.sprout_meadow.1_0.scene",
+      "proxy": "chibi:chunk.sprout_meadow.1_0.proxy",
+      "server": "chibi:chunk.sprout_meadow.1_0.server",
+      "deps": ["chibi:art.terrain.sprout_meadow_ground"],
+      "priority": 1,
+      "aabb": { "min": { "x": -256.0000, "y": -0.7728, "z": -384.0000 }, "max": { "x": -128.0000, "y": 1.9848, "z": -256.0000 } }
+    },
+    {
+      "cx": -1, "cz": 1,
+      "hash": "blake3:551b4cfa9153d1c970f9297337654bca11640a330d67eb2725eaa659ef2b2790",
+      "scene": "chibi:chunk.sprout_meadow.n1_1.scene",
+      "proxy": "chibi:chunk.sprout_meadow.n1_1.proxy",
+      "server": "chibi:chunk.sprout_meadow.n1_1.server",
+      "deps": ["chibi:art.terrain.sprout_meadow_ground"],
+      "priority": 1,
+      "aabb": { "min": { "x": -512.0000, "y": -0.9377, "z": -256.0000 }, "max": { "x": -384.0000, "y": 1.1507, "z": -128.0000 } }
+    },
+    {
+      "cx": 0, "cz": 1,
+      "hash": "blake3:602ea2bae07865d6dfe43ccdb398d55ff2c1563db148b1f325fbf675775aec38",
+      "scene": "chibi:chunk.sprout_meadow.0_1.scene",
+      "proxy": "chibi:chunk.sprout_meadow.0_1.proxy",
+      "server": "chibi:chunk.sprout_meadow.0_1.server",
+      "deps": ["chibi:art.terrain.sprout_meadow_ground"],
+      "priority": 1,
+      "aabb": { "min": { "x": -384.0000, "y": -1.6857, "z": -256.0000 }, "max": { "x": -256.0000, "y": 1.5867, "z": -128.0000 } }
+    },
+    {
+      "cx": 1, "cz": 1,
+      "hash": "blake3:245f77821054f9c4c66d79566664e183cbf6ba6a34b979cea4543b91729e0fb3",
+      "scene": "chibi:chunk.sprout_meadow.1_1.scene",
+      "proxy": "chibi:chunk.sprout_meadow.1_1.proxy",
+      "server": "chibi:chunk.sprout_meadow.1_1.server",
+      "deps": ["chibi:art.terrain.sprout_meadow_ground"],
+      "priority": 1,
+      "aabb": { "min": { "x": -256.0000, "y": -1.3523, "z": -256.0000 }, "max": { "x": -128.0000, "y": 0.9503, "z": -128.0000 } }
+    }
+  ]
+}

@@ -335,6 +335,87 @@ float profile_height(HeightProfile profile, double wx, double wz, double grid_mi
     return fixture_height(wx, wz, grid_min_x, grid_min_z, center_x, center_z, chunk_size_m);
 }
 
+// ---- Per-profile SURFACE STYLE: render-mesh stride + ground material (#877) -
+//
+// ⛔ THE MESH STRIDE DECISION (#877, deferred from #875) — READ BEFORE CHANGING ⛔
+//
+// `mesh_stride` decimates the RENDER mesh only. The `.chunk.bin` Heightfield is
+// ALWAYS the full 129×129 lattice regardless of stride, and the client's
+// HeightfieldWorldQuery ground-samples THAT — so stride never touches movement,
+// ground-follow, or client/server parity. It is purely a fidelity-vs-size knob on
+// the drawn surface, and its only observable cost is the gap between where the
+// character's feet are placed (the true heightfield) and where the surface is
+// drawn (the decimated mesh).
+//
+// That gap was MEASURED against the `meadow` profile, sampling every 0.5 m across
+// the whole 3×3 grid (i.e. between mesh vertices, where the error actually peaks):
+//
+//   stride  verts/axis  tris/chunk  max dev   p99 dev   .tscn/chunk  3×3 total
+//        1         129       32768    1.8 mm    1.0 mm       884 KB     8.8 MB
+//        2          65        8192    7.1 mm    3.7 mm       222 KB     2.3 MB
+//        4          33        2048   27.8 mm   14.3 mm        58 KB     0.6 MB
+//        8          17         512  104.7 mm   54.5 mm        16 KB     0.2 MB
+//
+// DECISION: `meadow` renders at stride 2 (65×65). Why not 1, and why not 4:
+//
+//   * vs stride 1 — 4× the bytes (8.8 MB per 3×3) buys 5 mm of accuracy on a
+//     terrain whose gentlest feature is a 31 m wavelength. Those bytes are CHECKED
+//     IN and policed byte-for-byte by check-golden.sh, so every future profile
+//     tweak rewrites 8.8 MB of base64 into git history. 7.1 mm is far below any
+//     perceptible float/sink for a chibi character, and it costs 4× fewer
+//     triangles (295k → 74k for a 3×3 grid) on the Low tier's budget.
+//   * vs stride 4 — 27.8 mm is still small, but stride 4 is ALREADY the proxy's
+//     stride, so adopting it here would collapse the far-ring LOD into a byte-copy
+//     of the full mesh and force the proxy to 8 (a 105 mm error on the ring you
+//     see against the sky). Stride 2 keeps the proxy a genuine 4× coarser LOD.
+//
+// Decimation is cheap here precisely because build_surface() derives normals from
+// the FULL-resolution padded field at every stride — shading and cross-chunk
+// normal continuity are stride-INVARIANT, so only the silhouette coarsens.
+//
+// `fixture` deliberately stays at stride 1 with the neutral grey material: it is
+// the #553 Zone-01 client test fixture and its bytes are asserted 1:1 against the
+// heightfield by test_scene_is_terrain_arraymesh. Changing it would churn the
+// checked-in fixture for no gain — meadow is the profile that actually ships.
+struct GroundMaterial {
+    float albedo_r, albedo_g, albedo_b;
+    float roughness;
+    float metallic;
+    float specular;  // metallic_specular — the flat, non-shiny chibi look at 0
+};
+
+// Godot's StandardMaterial3D::metallic_specular default. A .tscn omits properties
+// left at their default, so the emitter writes the key only when it differs — which
+// is what keeps the `fixture` profile's scene bytes untouched by #877.
+constexpr float kGodotDefaultSpecular = 0.5f;
+
+struct SurfaceStyle {
+    int mesh_stride;   // full-detail render mesh decimation (1 = the heightfield 1:1)
+    int proxy_stride;  // far-ring LOD decimation
+    GroundMaterial ground;
+};
+
+// Sprout Meadow's ground: a bright, flat, unlit-looking chibi green. The theme is
+// literally "flat body colors" (docs/superpowers/specs/2026-07-14-sp5-chibi-theme
+// -content-design.md §1), so a saturated albedo at full roughness with the
+// specular highlight killed IS the chibi look — not a stand-in for a texture.
+// No new art: the relief reads entirely from the per-vertex normals under the
+// world's DirectionalLight3D.
+constexpr GroundMaterial kChibiMeadowGround{0.4900f, 0.7800f, 0.3100f, 0.9500f, 0.0f, 0.0f};
+
+// The #553 fixture's neutral grey (unchanged — see the note above).
+constexpr GroundMaterial kNeutralGround{0.5000f, 0.5000f, 0.5000f, 1.0000f, 0.0f, 0.5f};
+
+SurfaceStyle style_of(HeightProfile profile) {
+    switch (profile) {
+        case HeightProfile::Meadow:
+            return {2, 4, kChibiMeadowGround};
+        case HeightProfile::Fixture:
+            break;
+    }
+    return {1, 4, kNeutralGround};
+}
+
 // §3.2: 128 m @ 1 m spacing + the shared edge column/row.
 constexpr int kChunkSide = 129;
 
@@ -546,28 +627,41 @@ MeshSurface build_surface(const PaddedField& field, int stride, int chunk_size_m
 // the chunk's zone-local XZ corner at y=0, so the mesh's vertex heights are world
 // heights and neighbouring chunks tile exactly along their shared edge.
 //
-// The surface carries a StandardMaterial3D slot (a neutral placeholder; the chibi
-// ground material is T3's job) keyed to the chunk's existing shared terrain-ground
-// dep id. It is an embedded sub-resource rather than an ext_resource because that
-// dep has no on-disk payload at v0 — a dangling ext_resource would fail the load.
+// The surface carries a StandardMaterial3D slot keyed to the chunk's existing
+// shared terrain-ground dep id, styled per the selected profile (#877 — chibi
+// green for `meadow`, the neutral grey for `fixture`). It is an embedded
+// sub-resource rather than an ext_resource because that dep has no on-disk payload
+// at v0 — a dangling ext_resource would fail the load, and the chunk-pack verify
+// explicitly allows a payload-less dep (chunk_pack_core.h: deps "are REQUIRED TO
+// RESOLVE but NOT required to be present"). So the material ships INSIDE the scene
+// and needs no staged `.res`.
 //
-// The proxy is the same surface decimated 4× per axis (33×33 verts vs 129×129) —
-// a genuinely coarser LOD stand-in, not just a flag change.
+// Stride comes from the profile's SurfaceStyle (see THE MESH STRIDE DECISION
+// above), and the proxy is the same surface at the coarser proxy stride — a
+// genuinely coarser LOD stand-in, not just a flag change.
 std::string build_scene(const ChunkRecord& rec, const PaddedField& field, int chunk_size_m,
-                        const std::string& material_id, bool proxy) {
-    const int stride = proxy ? 4 : 1;
+                        const std::string& material_id, const SurfaceStyle& style, bool proxy) {
+    const int stride = proxy ? style.proxy_stride : style.mesh_stride;
     const MeshSurface m = build_surface(field, stride, chunk_size_m);
     const std::string node_name = (proxy ? "ChunkProxy_" : "Chunk_") + rec.tag;
 
     std::ostringstream s;
     s << "[gd_scene load_steps=3 format=3]\n\n";
 
-    // Placeholder ground material (T3 replaces the look; the SLOT is the contract).
+    // The zone's ground material, styled by the profile (#877). Key ORDER is exactly
+    // what #875 emitted, and `metallic_specular` is written only when it differs from
+    // Godot's 0.5 default (the engine omits default-valued properties from a .tscn) —
+    // so the `fixture` profile's bytes are unchanged by T3 and only `meadow` moves.
+    const GroundMaterial& g = style.ground;
     s << "[sub_resource type=\"StandardMaterial3D\" id=\"TerrainGround\"]\n";
     s << "resource_name = " << json_quote(material_id) << "\n";
-    s << "albedo_color = Color(0.5000, 0.5000, 0.5000, 1.0000)\n";
-    s << "roughness = 1.0000\n";
-    s << "metallic = 0.0000\n";
+    s << "albedo_color = Color(" << num(g.albedo_r) << ", " << num(g.albedo_g) << ", "
+      << num(g.albedo_b) << ", 1.0000)\n";
+    s << "roughness = " << num(g.roughness) << "\n";
+    s << "metallic = " << num(g.metallic) << "\n";
+    if (g.specular != kGodotDefaultSpecular) {
+        s << "metallic_specular = " << num(g.specular) << "\n";
+    }
     s << "\n";
 
     // Mesh-local AABB: XZ is the chunk footprint, Y the surface's own span.
@@ -675,6 +769,10 @@ ChunkEmitResult chunk_emit(const ChunkEmitOptions& opts, diag::Diagnostics& diag
     // walk C4). A real IF-8 asset id (type art) so it validates as an assetId.
     const std::string shared_dep = ns + ":art.terrain." + zb + "_ground";
 
+    // The profile's render-mesh stride + ground material (#877). Selected once here
+    // so every chunk in a zone is emitted with one consistent surface style.
+    const SurfaceStyle style = style_of(opts.profile);
+
     // ---- Generate every chunk (row-major by (cz, cx)) -----------------------
     for (int cz = min_c; cz <= max_c; ++cz) {
         for (int cx = min_c; cx <= max_c; ++cx) {
@@ -700,8 +798,10 @@ ChunkEmitResult chunk_emit(const ChunkEmitOptions& opts, diag::Diagnostics& diag
                 build_chunk_bin(rec, field, opts.origin_x, opts.origin_z, opts.chunk_size_m);
             // build_scene needs the chunk's zone-local corner, which build_chunk_bin
             // fills into rec — so it must run first.
-            rec.scn = build_scene(rec, field, opts.chunk_size_m, shared_dep, /*proxy=*/false);
-            rec.proxy_scn = build_scene(rec, field, opts.chunk_size_m, shared_dep, /*proxy=*/true);
+            rec.scn = build_scene(rec, field, opts.chunk_size_m, shared_dep, style,
+                                  /*proxy=*/false);
+            rec.proxy_scn = build_scene(rec, field, opts.chunk_size_m, shared_dep, style,
+                                        /*proxy=*/true);
             rec.entry_hash = entry_hash_of(rec.chunk_bin, rec.scn, rec.proxy_scn);
 
             result.chunks.push_back(std::move(rec));

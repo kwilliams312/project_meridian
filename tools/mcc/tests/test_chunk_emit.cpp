@@ -854,6 +854,115 @@ void test_meadow_emit_sprout_meadow() {
            "sanity: the `fixture` profile does NOT fit the +-3 m budget (why `meadow` exists)");
 }
 
+// ---- #877 T3: the meadow's SURFACE STYLE (mesh stride + ground material) -----
+//
+// Locks in the two decisions T3 made before staging, because the staged pack is
+// policed byte-for-byte: changing either silently would churn committed data.
+void test_meadow_surface_style() {
+    std::cout << "test_meadow_surface_style (#877: stride-2 render mesh + chibi ground)\n";
+    const mcc::stages::ChunkEmitResult res = run(meadow_opts());
+    if (!res.ok || res.chunks.empty()) { report(false, "meadow emit produced chunks"); return; }
+
+    // ---- The stride decision (#877, deferred from #875) ---------------------
+    // meadow renders at stride 2 (65x65 verts / 8192 tris); the proxy stays at
+    // stride 4 (33x33), so the far-ring LOD remains genuinely coarser than the
+    // full mesh rather than collapsing into a copy of it.
+    bool counts_ok = true, proxy_ok = true;
+    for (const auto& rec : res.chunks) {
+        counts_ok &= (tscn_field(rec.scn, "vertex_count") == "4225");    // 65*65
+        counts_ok &= (tscn_field(rec.scn, "index_count") == "24576");    // 64*64*2 tris
+        proxy_ok &= (tscn_field(rec.proxy_scn, "vertex_count") == "1089");  // 33*33
+        proxy_ok &= (tscn_field(rec.proxy_scn, "index_count") == "6144");   // 32*32*2 tris
+    }
+    report(counts_ok, "every meadow chunk renders at stride 2 (65x65 verts, 8192 tris)",
+           "got " + tscn_field(res.chunks[0].scn, "vertex_count") + " verts");
+    report(proxy_ok, "the proxy stays 4x-decimated (33x33) — a real coarser LOD, not a copy");
+    report(res.chunks[0].scn != res.chunks[0].proxy_scn,
+           "full mesh and proxy are genuinely different payloads");
+
+    // ---- The chibi ground material -----------------------------------------
+    // Flat + bright + non-shiny: the documented chibi look ("flat body colors").
+    bool mat_ok = true;
+    for (const auto& rec : res.chunks) {
+        for (const std::string* scn : {&rec.scn, &rec.proxy_scn}) {
+            mat_ok &= (scn->find("[sub_resource type=\"StandardMaterial3D\" id=\"TerrainGround\"]")
+                       != std::string::npos);
+            // Keyed to the shared IF-8 terrain-ground dep id (the T1 slot contract).
+            mat_ok &= (scn->find("resource_name = \"chibi:art.terrain.sprout_meadow_ground\"")
+                       != std::string::npos);
+            mat_ok &= (scn->find("albedo_color = Color(0.4900, 0.7800, 0.3100, 1.0000)")
+                       != std::string::npos);
+            mat_ok &= (scn->find("metallic_specular = 0.0000") != std::string::npos);
+            mat_ok &= (scn->find("\"material\": SubResource(\"TerrainGround\")") != std::string::npos);
+            // The material is EMBEDDED, never an ext_resource: the shared ground dep
+            // has no on-disk payload, and a dangling ext_resource would fail the load.
+            mat_ok &= (scn->find("[ext_resource") == std::string::npos);
+        }
+    }
+    report(mat_ok, "every meadow surface carries the embedded chibi ground material "
+                   "(bright flat green, specular killed), keyed to the shared dep id");
+
+    // The fixture profile keeps the neutral grey — T3 moved ONLY the meadow.
+    const mcc::stages::ChunkEmitResult fixture = run({});
+    report(!fixture.chunks.empty() &&
+               fixture.chunks[0].scn.find("albedo_color = Color(0.5000, 0.5000, 0.5000, 1.0000)")
+                   != std::string::npos &&
+               fixture.chunks[0].scn.find("metallic_specular") == std::string::npos,
+           "the `fixture` profile keeps its neutral grey and omits the default-valued "
+           "metallic_specular (its bytes are unchanged by #877)");
+    report(!fixture.chunks.empty() &&
+               tscn_field(fixture.chunks[0].scn, "vertex_count") == "16641",
+           "the `fixture` profile still renders the heightfield 1:1 at stride 1 (129x129)");
+
+    // ---- The fidelity the stride decision actually bought --------------------
+    // Stride is a RENDER-only knob: the .chunk.bin heightfield the client
+    // ground-samples stays full 129x129. So the deviation between the drawn surface
+    // and the sampled truth IS the visible float/sink budget. Recompute it from the
+    // EMITTED bytes (decode the mesh, compare against the emitted heightfield at the
+    // lattice points the mesh dropped) rather than trusting the design note.
+    const auto& rec = res.chunks[0];
+    const std::vector<float> hf = heightfield_of(rec.chunk_bin);
+    report(hf.size() == 129u * 129u,
+           "the meadow .chunk.bin heightfield is STILL full-res 129x129 at stride 2 "
+           "(ground-sample fidelity is stride-invariant)",
+           "got " + std::to_string(hf.size()) + " samples");
+
+    const std::string vd = b64_decode(tscn_packed_bytes_b64(rec.scn, "vertex_data"));
+    constexpr int kStride = 2;
+    constexpr int kN = 65;  // (129-1)/2 + 1
+    bool on_lattice = true;
+    float max_dev = 0.0f;
+    if (vd.size() >= static_cast<std::size_t>(kN) * kN * 12) {
+        // Every retained vertex must sit EXACTLY on its heightfield sample.
+        for (int j = 0; j < kN && on_lattice; ++j) {
+            for (int i = 0; i < kN; ++i) {
+                const std::size_t vi = static_cast<std::size_t>(j) * kN + i;
+                const float vy = le_f32(vd, vi * 12 + 4);
+                const float s = hf[static_cast<std::size_t>(j * kStride) * 129 + (i * kStride)];
+                if (vy != s) { on_lattice = false; break; }
+            }
+        }
+        // At the samples the mesh DROPPED (odd lattice points), the drawn surface is
+        // the edge midpoint — measure how far that is from the true height.
+        for (int j = 0; j < 129; j += kStride) {
+            for (int i = 1; i < 128; i += kStride) {
+                const float lo = hf[static_cast<std::size_t>(j) * 129 + (i - 1)];
+                const float hi = hf[static_cast<std::size_t>(j) * 129 + (i + 1)];
+                const float truth = hf[static_cast<std::size_t>(j) * 129 + i];
+                max_dev = std::max(max_dev, std::fabs((lo + hi) * 0.5f - truth));
+            }
+        }
+    }
+    report(on_lattice, "every retained stride-2 vertex still sits exactly on its "
+                       "heightfield sample (decimation drops samples, never moves them)");
+    // The measured worst case across the grid is ~7 mm; 5 cm is a generous ceiling
+    // that still fails loudly if someone coarsens the stride without re-deciding.
+    report(max_dev < 0.05f,
+           "the drawn stride-2 surface stays within 5 cm of the sampled heightfield "
+           "(imperceptible float/sink; measured ~7 mm)",
+           "max_dev=" + std::to_string(max_dev) + " m");
+}
+
 }  // namespace
 
 int main() {
@@ -867,6 +976,7 @@ int main() {
     test_determinism_and_disk();
     test_meadow_profile_height_budget();
     test_meadow_emit_sprout_meadow();
+    test_meadow_surface_style();
 
     std::cout << "\n" << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
     if (g_failures) {

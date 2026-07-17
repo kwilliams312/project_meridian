@@ -112,14 +112,23 @@ const AssembledCharacterScript := preload("res://characters/assembled_character.
 # scene falls back to the flat bootstrap so the networked demo keeps working.
 const WorldLoadingScreenScript := preload("res://scenes/world/world_loading_screen.gd")
 
-# Where the zone pack lives by default (overridable by env for dev / the headless
-# verify, and — later — by the char-select → enter-world session handoff). The chunk
-# manifest is `<dir>/<id>.chunks.json` + the asset table `<dir>/<id>.assets.json`
-# (IF-6). res:// today resolves nothing here (no shipped chunk content yet), so the
-# scene falls back to the flat bootstrap; a dev/verify points MERIDIAN_ZONE_DIR at a
-# staged pack. The `.chunk.bin` server heightfield per cell (Q1(a)) feeds the mover.
-const ZONE_DEFAULT_DIR := "res://meridian/core/chunks/zone01"
-const ZONE_DEFAULT_ID := "zone01"
+# Where a theme's zone packs live: res://meridian/<theme>/chunks/<zone>/ (the by-ID
+# pack layout mcc's chunk-emit writes and check-golden stages). The chunk manifest is
+# `<dir>/<id>.chunks.json` + the asset table `<dir>/<id>.assets.json` (IF-6), and the
+# `.chunk.bin` server heightfield per cell (Q1(a)) feeds the mover.
+#
+# The zone is DISCOVERED under the realm's theme rather than hardcoded (#877): the
+# theme already selects which pack the client mounts (MeridianContentDB.resolve_theme
+# — MERIDIAN_REALM_THEME, mirroring worldd's primary pack_namespace), so a theme that
+# ships terrain streams it and one that doesn't falls back to the flat bootstrap. That
+# keeps zone content out of client code — "pack = the theme" (#648) — and is why
+# MERIDIAN_REALM_THEME=chibi is all it takes to land in Sprout Meadow.
+#
+# NOTE this is the CLIENT path only. The zone's own `chunk_manifest:` field is still
+# schema-pinned to `type: "null"` (schema/content/zone.schema.yaml — "RESERVED, A-08"),
+# and un-reserving it (schema + 80_zone.sql + content_types.gen.hpp + the server's
+# manifest-origin translation) is the M0-exit epic #874, deliberately NOT pulled in here.
+const ZONE_CHUNKS_SUBDIR := "chunks"
 
 # The per-frame chunk instancing budget the streamer honours (Story C hitch gate:
 # ≤ 50 ms streaming/frame). Conservative default until the perf fleet (#31) tunes it.
@@ -1510,15 +1519,19 @@ func _build_world_terrain() -> void:
 	var assets_json := String(zone.get("assets", ""))
 	if chunks_json.is_empty() or assets_json.is_empty() \
 			or not FileAccess.file_exists(chunks_json) or not FileAccess.file_exists(assets_json):
-		# No zone pack -> the M0 flat bootstrap box + landmark grid (today's default,
-		# until real Zone-01 content ships). The mover keeps its FlatWorldQuery backend.
-		print("[world] no zone pack at %s — flat bootstrap" % String(zone.get("dir", ZONE_DEFAULT_DIR)))
+		# No zone pack -> the M0 flat bootstrap box + landmark grid (still the default for
+		# a theme that ships no terrain — e.g. core, until Forge #26/#315 land real
+		# Zone-01 content). The mover keeps its FlatWorldQuery backend.
+		var where := String(zone.get("dir", ""))
+		if where.is_empty():
+			where = "theme '%s' (no staged zone)" % MeridianContentDB.resolve_theme()
+		print("[world] no zone pack at %s — flat bootstrap" % where)
 		_build_ground()
 		_build_landmarks()
 		return
 	var spawn: Vector3 = zone.get("spawn", SPAWN)
 	var res: Dictionary = enter_streamed_zone(chunks_json, assets_json, spawn,
-		String(zone.get("id", ZONE_DEFAULT_ID)))
+		String(zone.get("id", "")))
 	if not bool(res.get("ok", false)):
 		# Fail-closed (A/#554): a present-but-broken pack must NEVER drop the player onto
 		# a guessed map. Surface the reason; build NO terrain and do NOT spawn on it.
@@ -1529,8 +1542,10 @@ func _build_world_terrain() -> void:
 
 
 # Resolve the zone manifest paths, in priority: the session handoff (production,
-# future), env overrides (dev / headless verify), then the built-in default. Returns
-# { "dir", "id", "chunks", "assets"[, "spawn": Vector3] }.
+# future), env overrides (dev / headless verify), then the realm THEME's staged zone
+# (#877). Returns { "dir", "id", "chunks", "assets"[, "spawn": Vector3] }; "dir" is
+# empty when no zone is configured/present at all, which _build_world_terrain reads as
+# "flat bootstrap" (the pre-#877 default for a theme that ships no terrain).
 func _resolve_zone_paths() -> Dictionary:
 	var zsession: Dictionary = _session.get("zone", {}) if _session.get("zone", null) is Dictionary else {}
 	var dir := String(zsession.get("dir", ""))
@@ -1539,11 +1554,16 @@ func _resolve_zone_paths() -> Dictionary:
 		dir = OS.get_environment("MERIDIAN_ZONE_DIR")
 	if id.is_empty():
 		id = OS.get_environment("MERIDIAN_ZONE_ID")
+	# Neither the (future) session handoff nor a dev override named a zone: fall back
+	# to whatever zone the realm's theme actually ships.
 	if dir.is_empty():
-		dir = ZONE_DEFAULT_DIR
-	if id.is_empty():
-		id = ZONE_DEFAULT_ID
+		var found := _discover_theme_zone()
+		dir = String(found.get("dir", ""))
+		if id.is_empty():
+			id = String(found.get("id", ""))
 	dir = dir.trim_suffix("/")
+	if dir.is_empty() or id.is_empty():
+		return {"dir": dir, "id": id}
 	var out := {
 		"dir": dir,
 		"id": id,
@@ -1553,6 +1573,40 @@ func _resolve_zone_paths() -> Dictionary:
 	if zsession.get("spawn", null) is Vector3:
 		out["spawn"] = zsession.get("spawn")
 	return out
+
+
+# The zone the realm's THEME ships, discovered under res://meridian/<theme>/chunks/
+# (#877). Returns { "dir", "id" } or an empty dict when the theme ships no terrain.
+#
+# A zone is a subdirectory holding `<name>.chunks.json`, so the zone id comes from the
+# staged content itself — chibi's `sprout_meadow` is never spelled in client code, and
+# a future theme's zone needs no client change.
+#
+# Ambiguity is NOT guessed: a theme shipping several zones cannot be resolved without
+# the session handoff that names the one the player is entering (production, future).
+# Picking one would risk dropping the player onto the WRONG map — the same class of
+# error the fail-closed mount exists to prevent — so it degrades to the flat bootstrap
+# and says why. Every theme ships exactly one zone today.
+func _discover_theme_zone() -> Dictionary:
+	var theme := MeridianContentDB.resolve_theme()
+	var root := "%s/%s/%s" % [MeridianContentDB.PACK_MOUNT_ROOT, theme, ZONE_CHUNKS_SUBDIR]
+	if not DirAccess.dir_exists_absolute(root):
+		return {}
+	var found: Array[Dictionary] = []
+	for zone_dir in DirAccess.get_directories_at(root):
+		var dir := "%s/%s" % [root, zone_dir]
+		if FileAccess.file_exists("%s/%s.chunks.json" % [dir, zone_dir]):
+			found.append({"dir": dir, "id": zone_dir})
+	if found.is_empty():
+		return {}
+	if found.size() > 1:
+		var ids := []
+		for f in found:
+			ids.append(f.get("id", ""))
+		ids.sort()
+		push_warning("[world] theme '%s' ships %d zones (%s) — cannot pick one without a session zone handoff; set MERIDIAN_ZONE_DIR/MERIDIAN_ZONE_ID. Falling back to the flat bootstrap." % [theme, found.size(), ", ".join(ids)])
+		return {}
+	return found[0]
 
 
 # The reusable enter-a-streamed-zone seam (the production _ready path AND the headless
@@ -1577,7 +1631,9 @@ func enter_streamed_zone(chunks_json: String, assets_json: String, spawn: Vector
 	_zone_origin = Vector3(float(geom.get("origin_x", 0.0)), 0.0, float(geom.get("origin_z", 0.0)))
 	_zone_chunk_size = float(geom.get("chunk_size_m", 128.0))
 	_zone_server_paths = geom.get("server_paths", {})
-	_zone_id = zone_id if not zone_id.is_empty() else String(geom.get("zone", ZONE_DEFAULT_ID))
+	# Fall back to the manifest's own zone id when the caller passed none (the
+	# manifest is the authority on what zone these chunks are).
+	_zone_id = zone_id if not zone_id.is_empty() else String(geom.get("zone", ""))
 	_zone_spawn = spawn
 
 	# 3. Stand up the streamer as the CHUNK ROOT (replaces _build_ground/_build_landmarks).
