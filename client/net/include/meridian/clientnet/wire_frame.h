@@ -47,6 +47,12 @@ inline constexpr std::uint16_t kOpEnterWorldResp = 0x0017;  // S→C
 // applied (the new health / secondary-resource caps) for the level-up presentation.
 inline constexpr std::uint16_t kOpXpGained       = 0x0020;  // S→C  XP award + progress
 inline constexpr std::uint16_t kOpLevelUp        = 0x0021;  // S→C  level increased + growth
+// CHARACTER_STATS (M1 — SP2.5 #897, epic #866 S5b/S5c). A PRIVATE owner-only stat sheet:
+// the #896 aggregator's effective attributes (base+class/race mods+summed gear StatMods)
+// plus the summed gear armor, pushed S→C to the OWNING client at ENTER_WORLD and re-sent on
+// every change (an equip; a level-up). NEVER rides the AoI broadcast (EntityEnter.attrs stay
+// empty) — the sheet is private to its owner. A pure DISPLAY projection.
+inline constexpr std::uint16_t kOpCharacterStats = 0x0022;  // S→C  private effective stat sheet
 inline constexpr std::uint16_t kOpMovementIntent = 0x1001;  // C→S
 inline constexpr std::uint16_t kOpMovementState  = 0x1002;  // S→C
 inline constexpr std::uint16_t kOpEntityEnter    = 0x2001;  // S→C

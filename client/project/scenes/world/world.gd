@@ -1047,6 +1047,12 @@ func _route_econ_frame(opcode: int, payload: PackedByteArray) -> void:
 				int(e.get("backpack_slots", 0)), e.get("equipment", []))
 		"equipment_change_result":
 			_bus.publish_equipment_change_result(e)
+		"character_stats":
+			# CHARACTER_STATS (0x0022, #897/#866): the owner-only effective stat sheet — the
+			# character sheet's stats panel reads it off the bus (never predicted). A
+			# content-less realm simply never sends this, so the panel stays in its empty state.
+			_bus.publish_character_stats(int(e.get("level", 0)), e.get("attributes", []),
+				int(e.get("gear_armor", 0)))
 		"vendor_list":
 			_bus.publish_vendor_list(int(e.get("vendor_id", 0)), e.get("items", []))
 		"loot_response":

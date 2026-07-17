@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Project Meridian — the CHARACTER SHEET window (#870, epic #866). The in-world paperdoll:
-# your character wearing its gear, the full set of equipment slots (occupied vs empty), and
-# click-to-equip / click-to-unequip against the server-authoritative equipment state.
+# your character wearing its gear, the full set of equipment slots (occupied vs empty),
+# click-to-equip / click-to-unequip against the server-authoritative equipment state, and a
+# STATS sub-panel (#898) showing the owning character's effective attributes + gear armor from
+# the private CHARACTER_STATS projection (refreshes on the sheet arriving / an equip).
 #
 # PURE UI WIRING. The equip/unequip backend (#802) already shipped: worldd validates and
 # persists every change, re-pushes an INVENTORY_SNAPSHOT (whose `equipment` array is the
@@ -109,6 +111,7 @@ const _RESULT_REASONS := {
 var _bus: MeridianEventBus
 var _paperdoll: SubViewportContainer
 var _slot_list: VBoxContainer
+var _stats_list: VBoxContainer
 var _backpack_list: VBoxContainer
 var _status_label: Label
 var _pending := false
@@ -135,6 +138,7 @@ func setup(bus: MeridianEventBus) -> void:
 	_bus.equipment_change_result.connect(_on_equipment_change_result)
 	_bus.inventory_changed.connect(_on_inventory_changed)
 	_bus.local_appearance_changed.connect(_on_local_appearance_changed)
+	_bus.stats_changed.connect(_on_stats_changed)
 	_render_all()
 
 
@@ -207,6 +211,20 @@ func _build() -> void:
 
 	root.add_child(HSeparator.new())
 
+	# The STATS sub-panel (#898): the owning character's effective attributes + gear armor,
+	# read straight off the bus's CHARACTER_STATS projection. Pure VIEW — it renders the last
+	# sheet worldd pushed (on enter / equip / level-up) and never computes a stat itself.
+	var stats_title := Label.new()
+	stats_title.text = "Stats"
+	stats_title.add_theme_font_size_override("font_size", 13)
+	root.add_child(stats_title)
+
+	_stats_list = VBoxContainer.new()
+	_stats_list.add_theme_constant_override("separation", 2)
+	root.add_child(_stats_list)
+
+	root.add_child(HSeparator.new())
+
 	var backpack_title := Label.new()
 	backpack_title.text = "Backpack"
 	backpack_title.add_theme_font_size_override("font_size", 13)
@@ -269,6 +287,13 @@ func _on_local_appearance_changed(_race: int, _sex: int, _appearance: Dictionary
 	_render_paperdoll()
 
 
+# A fresh CHARACTER_STATS landed (enter / equip / level-up) — re-render the stats sub-panel
+# from the bus projection. Never predicted: an equip's stat change shows only once worldd's
+# recomputed sheet arrives (the equipment_changed re-render meanwhile keeps the last sheet).
+func _on_stats_changed(_level: int, _attributes: Array, _gear_armor: int) -> void:
+	_render_stats()
+
+
 func _result_text(status: int) -> String:
 	return String(_RESULT_REASONS.get(status, "Equipment update was rejected."))
 
@@ -278,7 +303,90 @@ func _result_text(status: int) -> String:
 func _render_all() -> void:
 	_render_paperdoll()
 	_render_slots()
+	_render_stats()
 	_render_backpack()
+
+
+# The stats sub-panel: one row per effective attribute the server sent, plus a distinct Gear
+# Armor row. The wire carries every catalog attribute as {ref,value} in a stable order; the
+# client humanizes the ref for a label and never classifies primary-vs-derived itself (the
+# server owns the vocabulary). `gear_armor` is shown SEPARATELY from any derived "armor"
+# attribute row (they are kept distinct on the wire so combat can combine them later), so a
+# player reads item armor on its own line. A content-less realm never pushes a sheet, so the
+# panel shows a graceful absent state rather than half-rendering — stats_known() is the gate.
+func _render_stats() -> void:
+	if _stats_list == null:
+		return
+	for c in _stats_list.get_children():
+		c.queue_free()
+
+	if _bus == null or not _bus.stats_known():
+		var absent := Label.new()
+		absent.text = "Character stats are not available."
+		absent.add_theme_color_override("font_color", _EMPTY_COLOR)
+		absent.add_theme_font_size_override("font_size", 11)
+		_stats_list.add_child(absent)
+		return
+
+	var level := _bus.stats_level()
+	if level > 0:
+		_add_stat_row("Level", str(level))
+	for entry in _bus.character_stats():
+		var it := entry as Dictionary
+		var ref := String(it.get("ref", ""))
+		_add_stat_row(_humanize_ref(ref), str(int(it.get("value", 0))))
+	# Gear armor is a DISTINCT field on the wire (summed item armor), shown on its own line so
+	# it never blurs with a derived armor attribute the catalog may also carry above.
+	_add_stat_row("Gear Armor", str(_bus.stats_gear_armor()))
+
+
+# "core:attribute.strength" -> "Strength"; "derived.attack_power" -> "Attack Power". Takes the
+# last path segment (after the final '.' or ':'), splits on '_', and title-cases it — a pure
+# client-side humanization so the panel needs no catalog copy. An empty/odd ref falls back to
+# the raw string so nothing renders blank.
+func _humanize_ref(ref: String) -> String:
+	if ref.is_empty():
+		return "(unknown)"
+	var tail := ref
+	var dot := tail.rfind(".")
+	if dot != -1:
+		tail = tail.substr(dot + 1)
+	else:
+		var colon := tail.rfind(":")
+		if colon != -1:
+			tail = tail.substr(colon + 1)
+	if tail.is_empty():
+		return ref
+	var words: Array = []
+	for w in tail.split("_", false):
+		if String(w).is_empty():
+			continue
+		words.append(String(w).substr(0, 1).to_upper() + String(w).substr(1))
+	return " ".join(words) if not words.is_empty() else ref
+
+
+func _add_stat_row(label_text: String, value_text: String) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+
+	var name_label := Label.new()
+	name_label.text = label_text
+	name_label.custom_minimum_size = Vector2(160.0, 0.0)
+	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_label.add_theme_font_size_override("font_size", 11)
+	name_label.add_theme_color_override("font_color", Color(0.72, 0.74, 0.8))
+	row.add_child(name_label)
+
+	var value_label := Label.new()
+	value_label.text = value_text
+	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	value_label.add_theme_font_size_override("font_size", 11)
+	value_label.add_theme_color_override("font_color", Color(0.9, 0.88, 0.7))
+	value_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	value_label.add_theme_constant_override("outline_size", 3)
+	row.add_child(value_label)
+
+	_stats_list.add_child(row)
 
 
 # Mount the local body wearing the AUTHORITATIVE equipment set. The wire's paperdoll rows
