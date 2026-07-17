@@ -27,9 +27,14 @@
 #   4. THE POINT: the meadow's gradient — MEASURED off the real mesh's baked normals,
 #      not assumed — has materially more slope-to-slope contrast than the M0 baseline
 #      this story replaces, and its visible crests clear a readable floor.
-#   5. It didn't buy that contrast by going dark. A chibi meadow must stay BRIGHT, and
-#      "crush the ambient to zero" would ace check 4 while ruining the look, so the
-#      flat-ground luminance is held to a floor.
+#   5. It didn't buy that contrast by going dark — IN THE LAMBERT MODEL. A chibi meadow
+#      must stay BRIGHT, and "crush the ambient to zero" would ace check 4 while ruining
+#      the look, so the modelled flat-ground luminance is held to a floor. Read the
+#      caveat on this one: the model has NO SHADOW TERM, so this floor is blind to
+#      anything the shadow pass does to the ground — which is precisely how #887's first
+#      cut shipped a meadow 22% darker than M0 with this check green. The brightness
+#      GUARANTEE is measured on real pixels by terrain_lighting_render_verify.gd; this
+#      floor is only the cheap arithmetic net that catches the ambient-crush cheat.
 #
 # On "±2.4 m, ~5° slopes": that oversells it, and this verify deliberately does not
 # repeat it. Measured off the staged chunk's own normals, ~5° is the p99 — the MEDIAN
@@ -42,7 +47,14 @@
 # model of the renderer, not the renderer, so it pins the numbers and catches
 # regressions but is NOT the aesthetic proof. Whether the meadow READS as rolling is a
 # human judgement: see the UI E2E hand-off on the PR, and scenes/world/
-# terrain_lighting_render_probe.gd for the A/B render the eye actually judges.
+# terrain_lighting_render_verify.gd for the A/B render the eye actually judges.
+#
+# KNOW WHAT THIS MODEL CANNOT SEE. It has direct + ambient and nothing else — no shadow
+# pass, no self-shadowing, no acne. Every artifact #887's first cut shipped lived in
+# exactly that blind spot and this file was green throughout. Anything about SHADOWS is
+# not knowable here and must be asserted on pixels in
+# terrain_lighting_render_verify.gd; what this file can honestly do about them is bound
+# the CONFIGURATION that provably drives them (phase 1's angular_distance band).
 #
 # Exits 0 on success, 1 on any fail.
 
@@ -73,6 +85,16 @@ const MIN_P90_SLOPE_CONTRAST := 0.15
 # Chibi stays bright: the lit flat ground must not fall below this luminance. This is
 # the guard that stops "more contrast" being bought with darkness.
 const MIN_FLAT_LUMINANCE := 0.55
+# The soft-shadow filter's radius. Bounded, NOT floored — see the check for why, and
+# world.gd for the rendered sweep this number comes off. 0.1 is the largest value
+# measured to keep shadow acne at the hard-shadow floor (0.024 vs 0.023 at 0.0).
+const MAX_LIGHT_ANGULAR_DISTANCE := 0.1
+# light_angular_distance is stored as a FLOAT32, so the 0.1 world.gd assigns reads back as
+# 0.100000001490116…, which is > the float64 0.1 this file compares against. Without this
+# epsilon the bound rejects its own shipped value — the check fails at exactly the setting
+# it is there to bless. The epsilon is ~1e3 x the float32 gap and ~1e-3 x the distance to
+# the nearest measured-bad value (0.15), so it cannot mask a real regression.
+const LIGHT_ANGULAR_EPSILON := 1e-4
 # A sun this shallow sculpts; much higher and the meadow's ~2° stops registering at all.
 # (The M0 55° is what this rejects.)
 const MAX_SUN_ELEVATION_DEG := 40.0
@@ -204,8 +226,25 @@ func _verify() -> void:
 	_check("sun is off-axis in azimuth (lights hills across the view)",
 		absf(to_sun.x) > 0.05 or absf(to_sun.z) > 0.05)
 	_check("sun casts shadows (grounds the character on the hills)", light.shadow_enabled)
-	_check("shadows are soft, not harsh (angular distance > 0)",
-		light.light_angular_distance > 0.0)
+	# This check used to read `light_angular_distance > 0.0` ("shadows are soft, not
+	# harsh"), which was exactly backwards: it PASSED the 1.5 that broke the render and
+	# would have FAILED the ~0 that fixes it. A verify that mandates the defect is worse
+	# than no verify. What the pixels actually say (see world.gd's table, and
+	# terrain_lighting_render_verify.gd, which re-measures it on every run): on near-flat
+	# ground under a 26° sun, angular_distance buys nothing and costs everything — acne is
+	# flat at ~0.023 up to 0.1, then climbs (0.15 -> 0.822, 0.20 -> 3.619, 0.25 -> 4.484),
+	# and the character's grounding shadow smears away with it. So it is bounded, not
+	# floored, and the ceiling is the largest value MEASURED to hold acne at the
+	# hard-shadow baseline. Raising it means re-running the sweep, not editing the bound.
+	print("     light_angular_distance = %.3f (M0 n/a — M0 had shadows off)"
+		% light.light_angular_distance)
+	_check("light_angular_distance is in the measured-clean band [0, %.2f] — a wider "
+			% MAX_LIGHT_ANGULAR_DISTANCE
+			+ "penumbra self-shadows this near-flat ground and destroys the character's "
+			+ "grounding shadow",
+		light.light_angular_distance >= 0.0
+			and light.light_angular_distance
+				<= MAX_LIGHT_ANGULAR_DISTANCE + LIGHT_ANGULAR_EPSILON)
 	_check("shadows are not fully opaque (chibi shadow side stays open)",
 		light.shadow_opacity > 0.0 and light.shadow_opacity < 1.0)
 	# Near-flat ground raked by a low sun is the classic acne case.
@@ -311,10 +350,33 @@ func _verify() -> void:
 	print("\n-- 5. ...and it stays a BRIGHT chibi meadow (contrast not bought with dark) --")
 	var m0_flat := _luminance(_shade(albedo, M0_SUN_COLOR, M0_SUN_ENERGY,
 		M0_SUN_ELEVATION_DEG, M0_AMBIENT_COLOR, M0_AMBIENT_ENERGY, 0.0))
-	print("     lit flat ground luminance = %.3f (M0 %.3f, floor %.2f)"
+	print("     lit flat ground luminance = %.3f (M0 %.3f, floor %.2f)  [MODEL, no shadow term]"
 		% [now_flat, m0_flat, MIN_FLAT_LUMINANCE])
-	_check("lit flat ground holds the brightness floor (>= %.2f)" % MIN_FLAT_LUMINANCE,
-		now_flat >= MIN_FLAT_LUMINANCE)
+	_check("lit flat ground holds the brightness floor IN THE LAMBERT MODEL (>= %.2f)"
+			% MIN_FLAT_LUMINANCE, now_flat >= MIN_FLAT_LUMINANCE)
+	# ⚠️ THIS FLOOR IS NOT THE BRIGHTNESS GUARANTEE, AND MUST NOT BE READ AS ONE.
+	#
+	# It binds correctly against the cheat it was written for: crushing ambient to 0 scores
+	# MORE contrast (27.2%) but lands at 0.544 < 0.55 and is caught. But `_shade()` sums
+	# direct + ambient and stops — THERE IS NO SHADOW TERM IN IT. Nothing the shadow pass
+	# does to the ground is visible to this number, and the shadow pass is where #887's
+	# real damage was: shipped at angular_distance 1.5 the terrain self-shadowed and the
+	# RENDERED ground fell 0.678 -> 0.532 (-22%), while this model serenely reported 0.631
+	# and passed. The verify passed a scene its own rule should have failed.
+	#
+	# So the model is kept — it is a cheap, display-free regression net on the light/ambient
+	# arithmetic, and it is the thing that catches the ambient-crush cheat — but the
+	# brightness GUARANTEE now lives where it can actually see the shadow pass:
+	# terrain_lighting_render_verify.gd measures real pixels off a real GPU render.
+	#
+	# The model is only sound while the ground is NOT being self-shadowed, and that premise
+	# is exactly what the angular_distance bound and normal_bias checks in phase 1 already
+	# assert — they are not re-asserted here, because padding the count with duplicate
+	# checks is how "40/40" stops meaning anything.
+	print("     ^ MODEL only. It cannot see the shadow pass, so it is NOT the brightness")
+	print("       guarantee: terrain_lighting_render_verify.gd measures the real pixels.")
+	print("       It is sound here only because phase 1 bound angular_distance <= %.2f."
+		% MAX_LIGHT_ANGULAR_DISTANCE)
 	var deepest := _luminance(_shade(albedo, light.light_color, light.light_energy,
 		sun_elev_deg, env.ambient_light_color, env.ambient_light_energy, -slopes["p99"]))
 	_check("even the steepest away-facing slopes stay open, never crushed to black",

@@ -1542,13 +1542,43 @@ func _build_environment() -> void:
 	# Shadows ground the CHARACTER (the focal point) on the hills — under the M0 sun it
 	# read as a capsule FLOATING on a green sheet. They do nothing for the terrain's own
 	# relief (a 26° sun can never be occluded by a 2° slope), so they're tuned for
-	# readability, not drama: a soft penumbra and a deliberately non-opaque shadow keep
-	# the chibi look and stop the shadow side going muddy.
+	# readability, not drama: a deliberately non-opaque shadow keeps the chibi look and
+	# stops the shadow side going muddy.
 	light.shadow_enabled = true
 	light.shadow_opacity = 0.75
-	light.light_angular_distance = 1.5
-	# Near-flat ground raked by a low sun is exactly the acne case; lean on normal_bias
-	# (which offsets along the normal, so it costs nothing on a surface this flat).
+	# LIGHT_ANGULAR_DISTANCE IS A LOADED GUN ON THIS SCENE — keep it ~0. It fakes a sun
+	# of finite angular size by jittering the shadow lookup, and the penumbra it buys is
+	# paid for by sampling the depth map further and further from the shading point. On
+	# near-flat ground raked by a 26° sun — i.e. this scene, where the depth gradient per
+	# texel is enormous — those offset samples land under the ground and the terrain
+	# shadows ITSELF. It cost both of the artifacts this value was tuned to fix (rendered
+	# 3×3 chunks through the real 6 m TPS boom, mid-ground band, acne = mean |2nd
+	# difference| of luminance across ground pixels, in %):
+	#
+	#     angular_distance | acne  | ground luminance
+	#     0.0 (hard)       | 0.023 | 0.643
+	#     0.1  (SHIPPED)   | 0.024 | 0.643   <- indistinguishable from hard shadows
+	#     0.15             | 0.822 |	0.641
+	#     0.20             | 3.619 | 0.621
+	#     0.25             | 4.484 | 0.596
+	#     1.5  (the bug)   | 2.454 | 0.532   <- -22% vs M0's 0.678, and acne ~100x
+	#
+	# The second column is why "soft shadows" defeated their own purpose: at 1.5 the
+	# character's grounding shadow — the ONLY reason shadows are on at all — smeared into
+	# an unreadable sliver, and the self-shadowing dragged the whole meadow dark and
+	# muddy, which is the opposite of chibi. At 0.1 the shadow is a proper long soft-edged
+	# cast and the ground is back to full brightness. Do not raise this without
+	# re-rendering: world_lighting_verify.gd bounds it, and terrain_lighting_render_verify
+	# .gd measures the actual pixels.
+	light.light_angular_distance = 0.1
+	# Near-flat ground raked by a low sun is exactly the acne case, and normal_bias (which
+	# offsets along the normal, so it costs nothing on a surface this flat) is what
+	# actually answers it — but ONLY once angular_distance is sane. Measured at 0.1:
+	# normal_bias 0.0 -> acne 4.219, 1.0 -> 0.351, 2.0 -> 0.024, 5.0 -> 0.020. So 2.0 is
+	# the knee and it is doing real work (~175x better than none). It is NOT what fixes
+	# the 1.5 case — there no amount of bias helps (5.0 still leaves acne ~3.4), because
+	# the jittered samples miss by more than any normal offset can cover. shadow_bias 0.04
+	# is a smaller second-order help on top (at 0.1/nb2.0: 0.0 -> 0.109, 0.04 -> 0.024).
 	light.shadow_bias = 0.04
 	light.shadow_normal_bias = 2.0
 	light.directional_shadow_max_distance = 80.0
