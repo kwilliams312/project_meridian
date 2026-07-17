@@ -264,6 +264,19 @@ struct ConnCtx {
     // re-enter re-pushes from a clean slate. Empty until the first push.
     std::unordered_map<std::uint64_t, npc::QuestMarker> last_markers;
 
+    // MARKER LIVENESS heartbeat throttle (#861). The steady-clock ms of the last
+    // poll_quest_marker_heartbeat run — a LOW-FREQUENCY (~kMarkerHeartbeatMs, NOT
+    // per-frame) re-evaluation that credits DELIVER objectives whose turn-in NPC is
+    // in visual range (so the `?` lights proactively, before any interaction) and
+    // re-pushes the diffed overhead markers, so an objective completed while the
+    // player stands still lights the icon within ~1s. 0 = UNARMED: the first poll
+    // after entering only records the clock here (the immediate enter/movement/accept
+    // pushes already cover that instant) and the first heartbeat fires one interval
+    // later — so the safety net never races the event pushes. The diff-cache above
+    // suppresses redundant QUEST_MARKER_UPDATEs so a steady state never spams the
+    // wire. Single-threaded on this connection's IO worker.
+    std::uint64_t last_marker_heartbeat_ms = 0;
+
     // QUEST state (QST-01, #371). This session's quest state machine — accept /
     // objective progress / turn-in — a pure, in-memory per-character log (like the
     // combat/movement state above; single-threaded per connection). Emplaced at

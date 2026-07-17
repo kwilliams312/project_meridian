@@ -18,6 +18,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #include "aoi_grid.h"    // horizontal_distance — NPC interaction-range gate (#842)
@@ -1309,6 +1310,85 @@ void credit_deliver_at_npc(net::Session& sess, ConnCtx& ctx, std::uint32_t npc_i
         }
         return changed;
     });
+}
+
+// How often the marker-liveness heartbeat re-evaluates (#861). ~0.75s — inside the
+// story's 0.5–1s window: brisk enough that a `?` lights within ~1s of the quest
+// becoming completable, slow enough that the deliver scan + marker recompute is not
+// a per-frame cost (the client streams a movement keepalive ~10x/s, so this runs at
+// most ~1/13 of those frames). The diff-cache still suppresses redundant pushes.
+constexpr std::uint64_t kMarkerHeartbeatMs = 750;
+
+// Proactively credit a DELIVER objective the moment its turn-in NPC is VISIBLE in
+// this session's interest set — NOT only on the GOSSIP_HELLO interaction (#850). The
+// deliver item is granted on accept, so for an active deliver objective "the target
+// is in sight" already means "deliverable"; crediting it here lights the turn-in `?`
+// (compute_quest_marker -> kTurnInReady) as the player APPROACHES, and the first
+// interact is then the turn-in (#861). Drives the SAME on_deliver credit
+// credit_deliver_at_npc uses, but keyed by the visible-NPC set rather than the
+// gossiped guid — and it is idempotent (on_deliver returns changed=false once
+// satisfied, so no double-credit). apply_and_emit_progress pushes the QUEST_PROGRESS
+// delta + re-pushes the diffed markers when anything advanced. Cheap: only builds the
+// visible-template set and scans active deliver objectives; a no-op (no marker/wire
+// cost) when nothing newly credits. Returns whether any objective advanced.
+bool credit_deliver_for_visible_npcs(net::Session& sess, ConnCtx& ctx) {
+    if (!ctx.quests || ctx.world == nullptr || !ctx.entered) return false;
+    const std::vector<VisibleWorldEntity> visible =
+        ctx.world->visible_world_entities(ctx.slot);
+    if (visible.empty()) return false;
+    std::unordered_set<std::uint32_t> visible_templates;
+    visible_templates.reserve(visible.size());
+    for (const VisibleWorldEntity& e : visible) visible_templates.insert(e.npc_template_id);
+    return apply_and_emit_progress(sess, ctx, [&]() {
+        bool changed = false;
+        for (QuestId id : ctx.quests->active_quests()) {
+            const QuestDef* def = quest_store().find(id);
+            if (def == nullptr) continue;
+            for (const QuestObjective& obj : def->objectives) {
+                if (obj.type == ObjectiveType::kDeliver &&
+                    visible_templates.count(obj.to_npc_id) != 0)
+                    changed |= ctx.quests->on_deliver(obj.to_npc_id, obj.item_id);
+            }
+        }
+        return changed;
+    });
+}
+
+// MARKER-LIVENESS heartbeat (#861). A THROTTLED (~kMarkerHeartbeatMs, NOT per-frame)
+// re-evaluation of this session's currently-visible NPCs, polled on the serve loop
+// after each handled frame (next to poll_quest_credits) so ctx.quests / ctx.last_
+// markers stay single-threaded. It closes the event-driven marker push's gap: when
+// the player completes an objective while STANDING STILL — or a deliver becomes
+// completable just by the target coming into view — the marker would otherwise stay
+// stale until the next accept/turn-in/movement event. Each fire:
+//   (a) credits DELIVER objectives whose turn-in NPC is now visible (the item was
+//       granted on accept) — lighting the turn-in `?` without an interaction; then
+//   (b) recomputes + re-pushes the overhead markers, DIFFED against ctx.last_markers
+//       so an unchanged icon never re-hits the wire (no spam when nothing changed).
+// Net: an objective completing in range lights the `?` within ~1s. Cheap no-op before
+// spawn or before the throttle window elapses.
+//
+// This is a periodic SAFETY NET, not an immediate re-push: the IMMEDIATE cases
+// (enter-world / on-movement / accept / turn-in) are already served by the
+// event-driven push_quest_markers hooks. So the FIRST poll after entering only ARMS
+// the throttle (records the clock, pushes nothing) — the first heartbeat fires one
+// full interval later. This keeps the heartbeat from racing the enter/movement pushes
+// (which would consume the diff and suppress the event push the client expects).
+void poll_quest_marker_heartbeat(net::Session& sess, ConnCtx& ctx, std::uint64_t now_ms) {
+    if (ctx.world == nullptr || !ctx.entered || !ctx.quests) return;
+    if (ctx.last_marker_heartbeat_ms == 0) {  // first poll after entering — arm, do not fire
+        ctx.last_marker_heartbeat_ms = now_ms;
+        return;
+    }
+    if (now_ms - ctx.last_marker_heartbeat_ms < kMarkerHeartbeatMs) return;  // throttled
+    ctx.last_marker_heartbeat_ms = now_ms;
+    // (a) deliver-on-visual-range: credit + (via apply_and_emit_progress) push progress
+    //     and the freshly-lit turn-in marker.
+    credit_deliver_for_visible_npcs(sess, ctx);
+    // (b) refresh every visible NPC's marker off current state (diffed). Idempotent
+    //     after (a)'s own push; catches ANY marker change (e.g. a kill/collect
+    //     objective completing while idle) the event hooks did not already emit.
+    push_quest_markers(sess, ctx);
 }
 
 // Whether a chat body is empty or all-whitespace (#367). Not a content filter —
@@ -4198,6 +4278,12 @@ void WorldServer::serve_connection(net::Session sess) {
                 // #418: apply a pending GM `.summon` forced move so an idle summoned
                 // player snaps on its next action (any frame), not only on a move.
                 drain_forced_move(sess, ctx);
+                // #861: THROTTLED marker-liveness heartbeat (~kMarkerHeartbeatMs, not
+                // per-frame) — credit a deliver whose target came into view + re-push
+                // the diffed overhead markers, so a `?` lights within ~1s even when the
+                // player completes an objective standing still. Cheap no-op until the
+                // throttle window elapses (the client keepalive drives this ~10x/s).
+                poll_quest_marker_heartbeat(sess, ctx, steady_now_ms());
                 continue;
             }
 

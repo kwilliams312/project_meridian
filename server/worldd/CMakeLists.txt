@@ -547,6 +547,28 @@ target_link_libraries(worldd-quest-live-credit-test
 set_target_properties(worldd-quest-live-credit-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-quest-live-credit COMMAND worldd-quest-live-credit-test)
 
+# --- MARKER LIVENESS integration test (#861). ---------------------------------
+# Proves the turn-in `?` over a DELIVER quest's target NPC lights PROACTIVELY when
+# the target is in visual range and the quest is completable (item granted on
+# accept) — WITHOUT any GOSSIP_HELLO — driven by the throttled marker-liveness
+# heartbeat (poll_quest_marker_heartbeat) the serve loop polls: accept -> greyed
+# `?`, then standing still the next heartbeat credits the deliver on visual range
+# and flips the marker to a lit `?` within ~1s; a later heartbeat neither
+# re-credits (on_deliver idempotent) nor re-pushes the (diffed) marker. DB-free
+# (synthetic quest + courier NpcStore + a stub WORLD_HELLO), so it always runs in
+# the plain server ctest.
+add_executable(worldd-quest-marker-liveness-test
+  test/quest_marker_liveness_it.cpp
+)
+target_link_libraries(worldd-quest-marker-liveness-test
+  PRIVATE
+    meridian::world-dispatch
+    meridian::npc
+    Threads::Threads
+)
+set_target_properties(worldd-quest-marker-liveness-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-quest-marker-liveness COMMAND worldd-quest-marker-liveness-test)
+
 # --- LIVE MapTick level-up → VITALS_UPDATE egress integration test (UI-01; #437). -
 # Proves that a kill routed through a REAL MapTick which LEVELS a live player up emits
 # a VITALS_UPDATE carrying the new level + max_health/max_power to that player's own
