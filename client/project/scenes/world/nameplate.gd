@@ -21,6 +21,12 @@
 # identically and stay aligned at any camera angle: a full-width dark background and a fill
 # whose QuadMesh shrinks from the RIGHT (via size + center_offset) so it empties left-anchored
 # exactly like a 2D bar. Recolour/scale happen only on a vitals event, never per frame.
+#
+# NPC MODE (#859): a quest/friendly NPC has NO health bar — the server pushes it a giver
+# marker (`!`/`?`) that floats overhead, and the bar just crowds that glyph. When the manager
+# marks a plate as an NPC (set_is_npc), the bar quads hide, the name drops to NAME_Y_NPC so the
+# overhead marker has clear space above it, and the name renders ~80% translucent so the bright
+# marker reads as the focal point. Players/mobs keep the full opaque name + health bar.
 
 extends Node3D
 
@@ -28,7 +34,9 @@ extends Node3D
 const BAR_WIDTH := 1.2       # full health-bar width over a ~1.8 m capsule
 const BAR_HEIGHT := 0.16     # a THIN bar (WoW-style nameplate)
 const BAR_Y := 2.15          # bar sits just above the head
-const NAME_Y := 2.5          # name rides above the bar
+const NAME_Y := 2.5          # name rides above the bar (player/mob — has a health bar)
+const NAME_Y_NPC := 2.1      # NPC name sits lower (no bar) so the overhead !/? clears it (#859)
+const NAME_ALPHA_NPC := 0.8  # NPC name ~80% translucent so the overhead marker is the focal cue
 
 # --- Neutral styling (no faction on the M1 wire → neutral) -------------------
 const COL_NAME := Color(0.92, 0.92, 0.95)          # neutral light (readable on any tint)
@@ -46,6 +54,7 @@ var _fill_mat: StandardMaterial3D
 var _cur := 0        # last known current health (server-authoritative)
 var _max := 0        # last known max health (0 = unknown → empty bar)
 var _alpha := 1.0    # distance-fade alpha the manager drives
+var _is_npc := false # NPC mode (#859): no health bar, lowered + translucent name
 
 
 func _ready() -> void:
@@ -124,6 +133,19 @@ func set_alpha(alpha_value: float) -> void:
 	_apply_alpha()
 
 
+# Toggle NPC mode (#859): a quest/friendly NPC hides its health bar, drops its name to
+# NAME_Y_NPC (clearing space for the overhead !/? marker) and renders the name translucent.
+# Reset to false when a pooled plate is recycled onto a player/mob so the bar comes back.
+func set_is_npc(value: bool) -> void:
+	_is_npc = value
+	if _name_label != null:
+		_name_label.position.y = NAME_Y_NPC if value else NAME_Y
+	if _bar_bg != null:
+		_bar_bg.visible = not value
+	_apply_health()   # fill visibility now respects NPC mode
+	_apply_alpha()    # name base-alpha now respects NPC mode
+
+
 # --- Introspection (verification / debug) ------------------------------------
 
 func health_ratio() -> float:
@@ -140,6 +162,13 @@ func fill_width() -> float:
 func alpha() -> float:
 	return _alpha
 
+func is_npc() -> bool:
+	return _is_npc
+
+# The name label's current on-screen alpha (base translucency folded with the fade alpha).
+func name_alpha() -> float:
+	return _name_label.modulate.a if _name_label != null else 0.0
+
 
 # --- Internals ---------------------------------------------------------------
 
@@ -151,15 +180,19 @@ func _apply_health() -> void:
 	var ratio := health_ratio()
 	_fill_mesh.size = Vector2(BAR_WIDTH * ratio, BAR_HEIGHT)
 	_fill_mesh.center_offset = Vector3(-BAR_WIDTH * (1.0 - ratio) * 0.5, 0.0, 0.0)
-	_bar_fill.visible = ratio > 0.0
+	# NPCs (#859) never show the fill; players/mobs show it whenever they have health.
+	_bar_fill.visible = (not _is_npc) and ratio > 0.0
 
 
 # Fold the fade alpha into every element's base color (kept event-driven: only on set_alpha).
 func _apply_alpha() -> void:
 	if _name_label == null:
 		return
+	# NPC names carry a base translucency (#859); the fade alpha multiplies onto it so distance
+	# culling still works and the name is ~0.8 at full opacity.
+	var base_a := NAME_ALPHA_NPC if _is_npc else 1.0
 	var nc := COL_NAME
-	nc.a = _alpha
+	nc.a = base_a * _alpha
 	_name_label.modulate = nc
 	var bc := COL_BAR_BG
 	bc.a = COL_BAR_BG.a * _alpha

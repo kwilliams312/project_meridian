@@ -66,6 +66,9 @@ func attach(guid: int, host: Node3D, entity_name: String, current_hp: int, max_h
 		np.get_parent().remove_child(np)
 	host.add_child(np)
 	np.position = Vector3.ZERO
+	# Fresh attach: a recycled plate may have been an NPC last life — reset to the default
+	# player/mob look (health bar shown, opaque name) until/unless a giver marker re-flags it.
+	np.set_is_npc(false)
 	np.set_name_text(entity_name)
 	np.set_health(current_hp, max_hp)
 	np.set_alpha(1.0)
@@ -84,6 +87,14 @@ func update_vitals(guid: int, current_hp: int, max_hp: int) -> void:
 func update_name(guid: int, entity_name: String) -> void:
 	if _active.has(guid) and not entity_name.is_empty():
 		_active[guid].set_name_text(entity_name)
+
+
+# Flag a live plate as a quest/friendly NPC (#859): the server pushed it a giver marker, so
+# it drops the health bar and lowers + fades its name to clear the overhead !/? glyph. No-op
+# if the guid has no plate (the marker handler only calls this for a spawned remote).
+func mark_npc(guid: int) -> void:
+	if _active.has(guid):
+		_active[guid].set_is_npc(true)
 
 
 # Detach the plate for `guid` and return it to the pool (hidden). Reparents it back to the
