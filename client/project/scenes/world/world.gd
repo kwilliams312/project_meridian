@@ -107,6 +107,14 @@ const AssembledCharacterScript := preload("res://characters/assembled_character.
 # bare class name) for the same headless-verify reason as AssembledCharacterScript.
 const LocomotionDriverScript := preload("res://characters/locomotion_driver.gd")
 
+# Remote-entity locomotion drive (CHR-02, #909 W1c). Remotes have NO MoveMode on the
+# wire (EntityUpdate carries only x/y/z/orientation, world.fbs:338-347), so this driver
+# DERIVES the locomotion — differencing the interpolated position each tick into a
+# smoothed planar speed → set_locomotion. One STATEFUL instance per remote (it must
+# remember the previous position), keyed by guid in _remote_drivers below. Preloaded by
+# path for the same headless-verify reason as AssembledCharacterScript.
+const RemoteLocomotionDriverScript := preload("res://characters/remote_locomotion_driver.gd")
+
 # Enter-world terrain streaming (WLD-01, Epic #22 Story E, #558). The full chain —
 # fail-closed pack mount+verify (A/#554), the MeridianChunkStream chunk root (B/#555)
 # fed the predicted player position, its proxy far-ring + hitch gate (C/#556), and the
@@ -160,6 +168,10 @@ var _camera: Node3D
 
 var _remotes: Node3D                       # container for remote-player nodes
 var _remote_nodes: Dictionary = {}         # guid:int -> Node3D
+# One MeridianRemoteLocomotionDriver per remote (#909 W1c): remembers the remote's
+# previous interpolated position to derive its planar speed each tick. Parallel to
+# _remote_nodes — created in _spawn_remote, erased in _despawn_remote.
+var _remote_drivers: Dictionary = {}       # guid:int -> MeridianRemoteLocomotionDriver
 
 # --- Enter-world terrain streaming (WLD-01, Story E, #558) --------------------
 # The streamer node whose children ARE the resident chunks (replaces the flat
@@ -534,6 +546,17 @@ func _update_remotes() -> void:
 				if bool(g.get("walkable", false)):
 					y = float(g.get("height", y))
 			node.position = Vector3(x, y, z)
+			# Locomotion animation (CHR-02, #909 W1c): derive the remote's planar
+			# speed from its INTERPOLATED motion (no MoveMode on the wire) and drive
+			# its AssembledCharacter's AnimationTree. Fed the raw interpolated x/z
+			# (pre-snap; snap only moves y, so planar motion is untouched) over the
+			# sim tick dt (TICK_MS). No-op on the capsule fallback. Only runs when the
+			# sample carried real data (kind != 0), so a not-yet-buffered remote holds
+			# its default idle rather than differencing garbage.
+			var driver = _remote_drivers.get(guid, null)
+			if driver != null:
+				driver.drive(node.get_node_or_null("Body"),
+					Vector3(x, y, z), float(TICK_MS) / 1000.0)
 	# Keep the selection ring glued to the (moving) target each frame (#496).
 	if _target_ring != null and _target_ring.visible:
 		_position_target_ring()
@@ -745,6 +768,10 @@ func _spawn_remote(guid: int, d: Dictionary) -> void:
 
 	_remotes.add_child(node)
 	_remote_nodes[guid] = node
+	# One stateful locomotion driver per remote (#909 W1c) — remembers this remote's
+	# previous interpolated position to derive its planar speed each tick in
+	# _update_remotes. Erased in _despawn_remote alongside the node.
+	_remote_drivers[guid] = RemoteLocomotionDriverScript.new()
 
 	# Nameplates (CMB-03, #535): float a pooled name+health-bar plate over this remote. Only
 	# remotes reach here (the local player is guarded out in _on_entity_frame), so the local
@@ -867,6 +894,7 @@ func _despawn_remote(guid: int) -> void:
 	if node != null:
 		node.queue_free()
 	_remote_nodes.erase(guid)
+	_remote_drivers.erase(guid)   # drop this remote's locomotion driver (#909 W1c)
 	print("[world] remote LEAVE guid=%d (%d remotes)" % [guid, _remote_nodes.size()])
 
 
