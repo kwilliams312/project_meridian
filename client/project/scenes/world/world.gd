@@ -494,16 +494,31 @@ func _move_debug_gate() -> void:
 func _update_remotes() -> void:
 	if _interp == null:
 		return
+	# #885: the server's ground model is still flat (kFlatGroundZ = 0), so every
+	# remote's wire height arrives as 0 while the client renders real terrain —
+	# remotes sink into any ground that rises. Snap their render height to the
+	# same heightfield the local player is already snapped to (#557), exactly as
+	# _try_reveal_world() does for us. Hoisted out of the loop: one null/active
+	# check per frame, not per entity.
+	var snap: bool = _mover != null and _mover.is_heightfield_active()
 	for guid in _remote_nodes.keys():
 		var node: Node3D = _remote_nodes[guid]
 		if node == null:
 			continue
 		var sample: Dictionary = _interp.sample_entity(int(guid), _client_ms)
 		if int(sample.get("kind", 0)) != 0:  # 0 = empty (nothing buffered yet)
-			node.position = Vector3(
-				float(sample.get("x", 0.0)),
-				float(sample.get("y", 0.0)),
-				float(sample.get("z", 0.0)))
+			var x := float(sample.get("x", 0.0))
+			var y := float(sample.get("y", 0.0))
+			var z := float(sample.get("z", 0.0))
+			# Only the HEIGHT comes from terrain — x/z keep the interpolator's
+			# smoothing untouched (no jitter on slopes). Ground that is not
+			# walkable (cell not streamed in yet, or a hole) has no meaningful
+			# height: keep the wire y rather than slamming the entity to 0.
+			if snap:
+				var g: Dictionary = _mover.sample_ground(x, z)
+				if bool(g.get("walkable", false)):
+					y = float(g.get("height", y))
+			node.position = Vector3(x, y, z)
 	# Keep the selection ring glued to the (moving) target each frame (#496).
 	if _target_ring != null and _target_ring.visible:
 		_position_target_ring()
