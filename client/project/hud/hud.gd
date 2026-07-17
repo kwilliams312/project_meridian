@@ -31,6 +31,8 @@ const LootWindow := preload("res://hud/loot_window.gd")
 const VendorWindow := preload("res://hud/vendor_window.gd")
 const TrainerWindow := preload("res://hud/trainer_window.gd")
 const BagsWindow := preload("res://hud/bags_window.gd")
+# Character sheet (#870, epic #866) — paperdoll + equipment slots; same MVVM binding.
+const CharacterSheetWindow := preload("res://hud/character_sheet_window.gd")
 # Chat panel (SOC-01, #434) — same MVVM binding as the other views.
 const ChatPanel := preload("res://hud/chat_panel.gd")
 const DeathOverlay := preload("res://hud/death_overlay.gd")
@@ -48,6 +50,7 @@ var _loot: MeridianLootWindow
 var _vendor: MeridianVendorWindow
 var _trainer: MeridianTrainerWindow
 var _bags: MeridianBagsWindow
+var _character_sheet: MeridianCharacterSheetWindow
 var _chat: MeridianChatPanel
 var _death_overlay: MeridianDeathOverlay
 
@@ -81,6 +84,8 @@ func setup(bus: MeridianEventBus) -> void:
 		_trainer.setup(bus)
 	if _bags != null:
 		_bags.setup(bus)
+	if _character_sheet != null:
+		_character_sheet.setup(bus)
 	# Chat panel subscribes to the SAME bus (SOC-01, #434).
 	if _chat != null:
 		_chat.setup(bus)
@@ -117,6 +122,12 @@ func toggle_quest_log() -> void:
 func toggle_bags() -> void:
 	if _bags != null:
 		_bags.toggle()
+
+
+# Toggle the character sheet (bound to [C] by the world scene, #870/#866).
+func toggle_character_sheet() -> void:
+	if _character_sheet != null:
+		_character_sheet.toggle()
 
 
 # Focus the chat input so the player can type (bound to Enter by the world scene, SOC-01 #434).
@@ -200,6 +211,14 @@ func _build() -> void:
 	_bags.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	add_child(_bags)
 
+	# Character sheet: left-center, toggled with [C] (default hidden, #870). Kept clear of
+	# the bags window (bottom-right) so both can sit open while equipping from bags.
+	_character_sheet = CharacterSheetWindow.new()
+	_character_sheet.name = "CharacterSheetWindow"
+	_character_sheet.set_anchors_preset(Control.PRESET_CENTER_LEFT)
+	_character_sheet.position = Vector2(24.0, -220.0)
+	add_child(_character_sheet)
+
 	# Action bar: bottom-center, always visible (CMB-01, #432). Anchored to the bottom edge
 	# and grown upward so the row of slots sits above the screen bottom.
 	_action_bar = ActionBar.new()
@@ -251,6 +270,7 @@ func _build() -> void:
 		_vendor.setup(_bus)
 		_trainer.setup(_bus)
 		_bags.setup(_bus)
+		_character_sheet.setup(_bus)
 		_chat.setup(_bus)
 		_action_bar.setup(_bus)
 		_cast_bar.setup(_bus)

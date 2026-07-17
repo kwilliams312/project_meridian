@@ -733,6 +733,12 @@ signal equipment_changed(equipment: Array)
 ## sole source of displayed backpack/paperdoll state.
 signal equipment_change_result(result: Dictionary)
 
+## The local character's BODY identity (race/sex/appearance record) became known —
+## seeded from the char-select row at ENTER_WORLD. Purely cosmetic input for the
+## character sheet's paperdoll preview; carries NO equipment (that stays the
+## authoritative INVENTORY_SNAPSHOT projection, equipment_changed).
+signal local_appearance_changed(race: int, sex: int, appearance: Dictionary)
+
 ## A VENDOR_LIST arrived (decode_econ_frame kind "vendor_list"): the vendor's for-sale
 ## catalog. `items` is an Array of {item_template_id,price,quality,stock}. The vendor
 ## window's BUY tab re-renders with the server-computed prices.
@@ -764,6 +770,10 @@ var _vendor_open_npc: int = 0        # the NPC whose vendor window is open (0 = 
 var _trainer_open_npc: int = 0       # the NPC whose trainer window is open (0 = none)
 var _inventory: Array = []           # backpack contents (INVENTORY_SNAPSHOT): {slot,item_template_id,count,quality,binding}
 var _equipment: Array = []           # occupied paperdoll rows from INVENTORY_SNAPSHOT
+var _local_race: int = 0             # local character's race (char-select seed)
+var _local_sex: int = 0              # local character's sex (char-select seed)
+var _local_appearance: Dictionary = {}  # local character's appearance record ({} = unknown)
+var _local_appearance_known: bool = false
 var _backpack_slots: int = 0         # backpack grid capacity (cell count)
 var _inventory_known: bool = false   # an INVENTORY_SNAPSHOT has been seen
 var _buyback: Array = []             # buyback queue: {buyback_slot,item_template_id,quantity,price}
@@ -829,6 +839,36 @@ func publish_inventory_snapshot(money: int, items: Array, backpack_slots: int,
 
 func publish_equipment_change_result(result: Dictionary) -> void:
 	equipment_change_result.emit(result.duplicate(true))
+
+
+## Seed the local character's body identity (race/sex/appearance) from the char-select
+## row the world scene entered with. Cosmetic ONLY — the paperdoll preview's body. The
+## gear it wears still comes from the authoritative INVENTORY_SNAPSHOT projection, so
+## this never becomes a second source of equipment truth.
+func seed_local_appearance(race: int, sex: int, appearance: Dictionary) -> void:
+	_local_race = race
+	_local_sex = sex
+	_local_appearance = appearance.duplicate(true)
+	_local_appearance_known = true
+	local_appearance_changed.emit(_local_race, _local_sex, local_appearance())
+
+
+## The local character's appearance record (a copy; {} until seeded).
+func local_appearance() -> Dictionary:
+	return _local_appearance.duplicate(true)
+
+
+func local_race() -> int:
+	return _local_race
+
+
+func local_sex() -> int:
+	return _local_sex
+
+
+## True once seed_local_appearance() has run (the paperdoll can mount a real body).
+func local_appearance_known() -> bool:
+	return _local_appearance_known
 
 
 ## Publish a VENDOR_LIST (decode_econ_frame kind "vendor_list"). Stores the open vendor's

@@ -527,6 +527,13 @@ func _on_movement_state(state: Dictionary) -> void:
 			_bus.seed_identity(_my_guid, String(_character.get("name", "")),
 				int(_character.get("level", 0)), int(_character.get("class", 0)))
 			_bus.set_local_player(_my_guid)
+			# The character sheet's paperdoll needs the local BODY (race/sex/appearance),
+			# which — like name/level/class above — only char-select carries (#870). The
+			# GEAR it wears is NOT seeded here: that stays the authoritative
+			# INVENTORY_SNAPSHOT projection worldd pushes at ENTER_WORLD.
+			if _character.has("appearance"):
+				_bus.seed_local_appearance(int(_character.get("race", 0)),
+					int(_character.get("sex", 0)), _character.get("appearance", {}))
 			# CMB-01 (#456/#457/#472): the action bar's known-ability set is NO LONGER
 			# greybox-seeded here — worldd pushes the character's REAL KNOWN_ABILITIES
 			# (0x3005) at ENTER_WORLD (and re-pushes after a growing TRAINER_LEARN), which
@@ -875,6 +882,13 @@ func _input(event: InputEvent) -> void:
 		KEY_B:
 			if _hud != null:
 				_hud.toggle_bags()  # toggle the bags/inventory window (ITM-01, #441)
+			get_viewport().set_input_as_handled()
+		KEY_C:
+			# Toggle the character sheet: paperdoll + equipment slots (#870, epic #866).
+			# [C] is the genre convention and clashes with nothing here — the movement keys
+			# are WASD and the other windows are G/L/B/F.
+			if _hud != null:
+				_hud.toggle_character_sheet()
 			get_viewport().set_input_as_handled()
 		KEY_F:
 			# ITM-02 (#441): open the loot window on the current NPC/corpse. Corpse entities
