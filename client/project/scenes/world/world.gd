@@ -101,6 +101,12 @@ const NameplateManagerScript := preload("res://scenes/world/nameplate_manager.gd
 # which don't populate the global class cache, resolve it identically to the running app.
 const AssembledCharacterScript := preload("res://characters/assembled_character.gd")
 
+# Local-player locomotion drive (CHR-02, #908 W1b). Maps the mover's per-tick output
+# (state_flags → MoveMode, predicted velocity → planar speed, is_grounded) into the
+# local body's AssembledCharacter.set_locomotion (#907). Preloaded by path (never the
+# bare class name) for the same headless-verify reason as AssembledCharacterScript.
+const LocomotionDriverScript := preload("res://characters/locomotion_driver.gd")
+
 # Enter-world terrain streaming (WLD-01, Epic #22 Story E, #558). The full chain —
 # fail-closed pack mount+verify (A/#554), the MeridianChunkStream chunk root (B/#555)
 # fed the predicted player position, its proxy far-ring + hitch gate (C/#556), and the
@@ -442,6 +448,15 @@ func _tick_local_player() -> void:
 	var move := MovementBasis.character_relative_move(fwd, strafe, yaw)
 
 	var intent: Dictionary = _mover.predict(move, false, false, yaw, _client_ms)
+
+	# Drive the local body's locomotion animation from THIS tick's predicted state
+	# (CHR-02, #908 W1b): mode from state_flags, planar speed + grounded from the
+	# mover. Runs every tick — independent of the throttled intent emit below — so the
+	# animation tracks movement smoothly, and it is a no-op on the capsule fallback.
+	# (Jump/walk inputs are still hard-false here pending #905; the driver already
+	# reacts correctly to whatever mode/grounded the mover reports.)
+	LocomotionDriverScript.drive(_body, _mover, int(intent.get("state_flags", 0)))
+
 	if _mover.should_emit_intent(_client_ms, int(intent.get("state_flags", 0))):
 		var frame: PackedByteArray = _net.build_movement_intent_frame(intent)
 		if frame.size() > 0:
