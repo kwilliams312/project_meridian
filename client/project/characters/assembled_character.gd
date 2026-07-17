@@ -216,6 +216,22 @@ func set_equipment_slot(slot: int, item_template: int, dyes: Array) -> void:
 	_apply_hides()
 
 
+## Replace the complete visible equipment set from an authoritative server update.
+## Omitted slots are unequipped; this intentionally performs no client prediction.
+func replace_equipment(equipment: Array) -> void:
+	if not _assembled:
+		return
+	for slot in _slots.keys():
+		_unequip(int(slot))
+	_slots.clear()
+	for entry in equipment:
+		if typeof(entry) != TYPE_DICTIONARY:
+			continue
+		set_equipment_slot(int(entry.get("slot", 0)),
+			int(entry.get("item_template", 0)), entry.get("dyes", []))
+	_apply_hides()
+
+
 ## Tear down everything assemble() and set_equipment_slot() built. The
 ## once-per-asset-id assembly_failed guard intentionally survives (per-session
 ## telemetry discipline, spec §6).

@@ -62,6 +62,7 @@ enum Opcode : uint16 {
   ENTITY_UPDATE  = 0x2002,   // S→C  delta update for an in-AoI entity
   ENTITY_LEAVE   = 0x2003,   // S→C  entity leaves AoI
   VITALS_UPDATE  = 0x2004,   // S→C  a unit's vitals changed (health/power/level) — HUD delta (#430)
+  EQUIPMENT_VISUAL_UPDATE = 0x2005, // S→C authoritative visible paperdoll replacement (#802)
 
   // --- 0x3xxx  combat            (M1 — CMB-01: ability use + GCD/cast, D-10) ---
   CAST_REQUEST = 0x3001,     // C→S  use an ability (id + target + client_time)
@@ -141,6 +142,8 @@ enum Opcode : uint16 {
   // predicts inventory (Principle 1, "server is law"). Appended after loot in the
   // inventory/loot low sub-band (0x5001..0x500F); never renumber.
   INVENTORY_SNAPSHOT = 0x5007,  // S→C  the character's backpack items + money balance
+  EQUIPMENT_CHANGE_REQUEST = 0x5008, // C→S equip from backpack or unequip a paperdoll slot (#802)
+  EQUIPMENT_CHANGE_RESULT  = 0x5009, // S→C typed authoritative outcome (#802)
 
   // --- 0x5xxx  inventory / economy : vendors  (M1 — ECO-01: vendors, #370, epic #20) ---
   // Server-authoritative vendor transactions (server PRD §4-M1 ECO-01). buy /
@@ -377,6 +380,15 @@ table VitalsUpdate {
   max_power:uint32;        // secondary-power cap (0 when power_type = NONE)
   power_type:PowerType = NONE;  // which secondary pool (mana/energy/rage/none)
   level:uint16 = 0;        // unit level after the change (level-up)
+}
+
+/// S→C. Full replacement of one player's VISIBLE equipped set after an authoritative
+/// equip/unequip/replacement. Sent to the owning client and current AoI observers.
+/// An empty vector explicitly clears all visible gear. Jewellery remains absent because
+/// it has no rendered model; the owning client's InventorySnapshot carries every slot.
+table EquipmentVisualUpdate {
+  entity_guid:uint64;
+  equipment:[EquippedVisual];
 }
 
 // ===========================================================================
@@ -1159,6 +1171,57 @@ table InventorySnapshot {
   money:int64;                // copper balance (server-authoritative)
   items:[InventoryItem];      // occupied backpack slots (empty = nothing carried)
   backpack_slots:uint16 = 0;  // backpack grid capacity (cell count)
+  equipment:[EquipmentItem];  // occupied paperdoll slots; full authoritative replacement (#802)
+}
+
+/// One occupied paperdoll slot in the owning client's authoritative equipment snapshot.
+/// Unlike EquippedVisual this includes non-rendered jewellery and UI metadata.
+table EquipmentItem {
+  slot:uint8;                 // EquipSlot id (server/items/src/inventory.h)
+  item_template_id:uint32;    // -> world DB item_template (IF-9)
+  quality:uint8 = 0;          // rarity tier (Rarity)
+  binding:uint8 = 0;          // bind rule (Binding)
+}
+
+/// The equipment mutation the client requests. Replacement is EQUIP into a slot that is
+/// already occupied; the displaced item returns to the named backpack position.
+enum EquipmentChangeAction : uint8 {
+  EQUIP   = 0,
+  UNEQUIP = 1,
+}
+
+/// C→S. Ask the server to equip the item at backpack grid `slot`, or unequip the
+/// paperdoll `slot`. The session's character is implicit and never client supplied.
+table EquipmentChangeRequest {
+  action:EquipmentChangeAction = EQUIP;
+  slot:uint16;
+}
+
+/// Typed authoritative outcome. Every rejection leaves inventory/equipment unchanged;
+/// worldd follows the result with a full InventorySnapshot so the client can reconcile.
+enum EquipmentChangeStatus : uint16 {
+  OK                    = 0,
+  NOT_IN_WORLD          = 1,
+  INVALID_SLOT          = 2,
+  SLOT_EMPTY            = 3,
+  NOT_EQUIPPABLE        = 4,
+  LEVEL_TOO_LOW         = 5,
+  NOT_PROFICIENT        = 6,
+  CATEGORY_MISMATCH     = 7,
+  UNKNOWN_EQUIP_TYPE    = 8,
+  TWO_HAND_CONFLICT     = 9,
+  INVENTORY_FULL        = 10,
+  UNKNOWN_CLASS         = 11,
+  INTERNAL              = 12,
+}
+
+/// S→C. Result of EquipmentChangeRequest. `slot` echoes the request and
+/// `equipped_slot` identifies the affected paperdoll position on OK.
+table EquipmentChangeResult {
+  status:EquipmentChangeStatus = OK;
+  action:EquipmentChangeAction = EQUIP;
+  slot:uint16;
+  equipped_slot:uint8 = 255;  // 255 when rejected/unknown
 }
 
 // ===========================================================================

@@ -489,6 +489,12 @@ public:
     // Returns the recipient count (0 if `guid` is not an entered unit). Thread-safe.
     std::size_t broadcast_vitals(AoiId guid);
 
+    // Replace a player's visible equipped set and broadcast it to the owner plus every
+    // current AoI observer (#802). The stored EntityEnter projection is updated too, so
+    // later observers receive the same authoritative set. Jewellery is not included.
+    std::size_t update_equipment_visuals(AoiId guid,
+                                         std::vector<EquippedVisualRec> equipment);
+
     // Test/diagnostic: how many sessions are currently entered.
     std::size_t session_count() const;
 
@@ -702,6 +708,9 @@ std::vector<std::uint8_t> encode_vitals_update_payload(AoiId subject_guid, const
 // EntityUpdate payload for `subject_guid` (position delta).
 std::vector<std::uint8_t> encode_entity_update_payload(AoiId subject_guid,
                                                        const Position& pos);
+
+std::vector<std::uint8_t> encode_equipment_visual_update_payload(
+    AoiId subject_guid, const std::vector<EquippedVisualRec>& equipment);
 
 // EntityLeave payload for `subject_guid`.
 std::vector<std::uint8_t> encode_entity_leave_payload(AoiId subject_guid,

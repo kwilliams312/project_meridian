@@ -57,6 +57,8 @@ void test_table() {
           rate_class_for(mn::Opcode::VENDOR_BUY_REQUEST) == RateClass::kAction);
     check("A: LOOT_TAKE -> action", rate_class_for(mn::Opcode::LOOT_TAKE) == RateClass::kAction);
     check("A: CAST_REQUEST -> action", rate_class_for(mn::Opcode::CAST_REQUEST) == RateClass::kAction);
+    check("A: EQUIPMENT_CHANGE_REQUEST -> action",
+          rate_class_for(mn::Opcode::EQUIPMENT_CHANGE_REQUEST) == RateClass::kAction);
     // Limits + names are the closed, documented set.
     check("A: chat limit", rate_class_limit(RateClass::kChat) == kChatRatePerWindow);
     check("A: action limit is the interactive flood ceiling",

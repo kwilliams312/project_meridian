@@ -47,6 +47,7 @@ RateClass rate_class_for(net::Opcode op) {
         case net::Opcode::VENDOR_BUY_REQUEST:
         case net::Opcode::VENDOR_SELL_REQUEST:
         case net::Opcode::VENDOR_BUYBACK_REQUEST:
+        case net::Opcode::EQUIPMENT_CHANGE_REQUEST:
         case net::Opcode::GOSSIP_HELLO:
         case net::Opcode::TRAINER_LEARN:
             return RateClass::kAction;

@@ -162,6 +162,16 @@ func _initialize() -> void:
 	var lbody: Node = world2.get_node_or_null("Player/Body")
 	_check("local player body is an AssembledCharacter when the char carries appearance",
 		lbody != null and lbody.has_method("body_skeleton"))
+	# #802 reconnect path: the roster seed deliberately has no equipment; the self
+	# EntityEnter that follows must replace the local assembled body's equipment.
+	world2._my_guid = 8001
+	world2._apply_self_enter_equipment(8001, {
+		"equipment": [{"slot": 1, "item_template": pickaxe, "dyes": []}],
+	})
+	var local_equipped: Array = lbody.equipped_nodes(1) if lbody != null else []
+	_check("self EntityEnter restores persisted equipment after reconnect",
+		local_equipped.size() == 1 and local_equipped[0] is BoneAttachment3D
+		and String(local_equipped[0].bone_name) == "socket_main_hand")
 	world2.queue_free()
 	await _wait(1)
 

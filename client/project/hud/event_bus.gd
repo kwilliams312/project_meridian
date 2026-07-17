@@ -725,6 +725,14 @@ signal currency_changed(copper: int, known: bool)
 ## binding}; `backpack_slots` is the grid capacity. The bags window re-renders.
 signal inventory_changed(money: int, items: Array, backpack_slots: int)
 
+## The authoritative paperdoll projection from INVENTORY_SNAPSHOT. Each row is
+## {slot,item_template_id,quality,binding}; empty slots are omitted.
+signal equipment_changed(equipment: Array)
+
+## Typed EQUIPMENT_CHANGE_RESULT; the following inventory snapshot is still the
+## sole source of displayed backpack/paperdoll state.
+signal equipment_change_result(result: Dictionary)
+
 ## A VENDOR_LIST arrived (decode_econ_frame kind "vendor_list"): the vendor's for-sale
 ## catalog. `items` is an Array of {item_template_id,price,quality,stock}. The vendor
 ## window's BUY tab re-renders with the server-computed prices.
@@ -739,6 +747,7 @@ signal vendor_buy_requested(vendor_id: int, item_template_id: int, quantity: int
 signal vendor_sell_requested(vendor_id: int, backpack_slot: int, quantity: int)
 signal vendor_buyback_requested(buyback_slot: int)
 signal trainer_learn_requested(npc_guid: int, ability_id: int)
+signal equipment_change_requested(action: int, slot: int)
 
 # --- Loot/vendor/trainer/currency registry state -----------------------------
 var _loot_corpse: int = 0            # the corpse whose loot window is open (0 = none)
@@ -754,6 +763,7 @@ var _vendor_catalog: Array = []      # the open vendor's VENDOR_LIST rows: {item
 var _vendor_open_npc: int = 0        # the NPC whose vendor window is open (0 = none)
 var _trainer_open_npc: int = 0       # the NPC whose trainer window is open (0 = none)
 var _inventory: Array = []           # backpack contents (INVENTORY_SNAPSHOT): {slot,item_template_id,count,quality,binding}
+var _equipment: Array = []           # occupied paperdoll rows from INVENTORY_SNAPSHOT
 var _backpack_slots: int = 0         # backpack grid capacity (cell count)
 var _inventory_known: bool = false   # an INVENTORY_SNAPSHOT has been seen
 var _buyback: Array = []             # buyback queue: {buyback_slot,item_template_id,quantity,price}
@@ -806,12 +816,19 @@ func publish_loot_closed(corpse_guid: int) -> void:
 ## held backpack contents + capacity with the server's, applies the authoritative `money`
 ## balance (so currency is known from spawn), and emits inventory_changed. SERVER IS LAW —
 ## the client never predicts its bags; it renders exactly what worldd re-sends.
-func publish_inventory_snapshot(money: int, items: Array, backpack_slots: int) -> void:
+func publish_inventory_snapshot(money: int, items: Array, backpack_slots: int,
+		equipment: Array = []) -> void:
 	_inventory = items.duplicate(true)
+	_equipment = equipment.duplicate(true)
 	_backpack_slots = backpack_slots
 	_inventory_known = true
 	_apply_balance(money)
 	inventory_changed.emit(money, inventory_items(), _backpack_slots)
+	equipment_changed.emit(equipment_items())
+
+
+func publish_equipment_change_result(result: Dictionary) -> void:
+	equipment_change_result.emit(result.duplicate(true))
 
 
 ## Publish a VENDOR_LIST (decode_econ_frame kind "vendor_list"). Stores the open vendor's
@@ -927,6 +944,14 @@ func request_trainer_learn(npc_guid: int, ability_id: int) -> void:
 	trainer_learn_requested.emit(npc_guid, ability_id)
 
 
+func request_equip(backpack_slot: int) -> void:
+	equipment_change_requested.emit(0, backpack_slot)
+
+
+func request_unequip(equipment_slot: int) -> void:
+	equipment_change_requested.emit(1, equipment_slot)
+
+
 ## Open the vendor window on `vendor_id` (called by the world scene when the gossip vendor
 ## entry fires). UI-only — no server frame (the wire has no vendor-catalog opcode; gap).
 func open_vendor(vendor_id: int) -> void:
@@ -1000,6 +1025,11 @@ func vendor_catalog() -> Array:
 ## {slot,item_template_id,count,quality,binding}.
 func inventory_items() -> Array:
 	return _inventory.duplicate(true)
+
+
+## Occupied paperdoll rows from the last authoritative INVENTORY_SNAPSHOT.
+func equipment_items() -> Array:
+	return _equipment.duplicate(true)
 
 
 ## The backpack grid capacity (cell count) from the last INVENTORY_SNAPSHOT.

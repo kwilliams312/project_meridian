@@ -706,6 +706,28 @@ std::vector<Message> build_corpus() {
                  }
                }});
 
+  c.push_back({"if2_equipment_visual_update", "IF-2", "EQUIPMENT_VISUAL_UPDATE (0x2005)",
+               "S->C full visible-equipment replacement for owner and observers",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::EquippedVisual>> rows;
+                 rows.push_back(mn::CreateEquippedVisual(b, 13u, 42002u));
+                 b.Finish(mn::CreateEquipmentVisualUpdate(
+                     b, 0x00000000000000ABULL, b.CreateVector(rows)));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::EquipmentVisualUpdate>(nullptr),
+                             "if2_equipment_visual_update verifies")) return;
+                 const auto* m = fb::GetRoot<mn::EquipmentVisualUpdate>(buf.data());
+                 expect(m->entity_guid() == 0xABULL, "if2_equipment_visual_update.guid");
+                 expect(m->equipment() && m->equipment()->size() == 1 &&
+                            m->equipment()->Get(0)->slot() == 13u &&
+                            m->equipment()->Get(0)->item_template() == 42002u,
+                        "if2_equipment_visual_update replacement row");
+               }});
+
   // EntityUpdate exercises the OPTIONAL float fields (x/y/z/orientation =
   // null). Canonical instance sets position (moved) but omits orientation, so
   // the golden pins BOTH the present-optional and absent-optional encodings.
@@ -1899,8 +1921,13 @@ std::vector<Message> build_corpus() {
                                                          /*count=*/1u, /*quality=*/3u,
                                                          /*binding=*/1u));
                  auto iv = b.CreateVector(items);
-                 b.Finish(mn::CreateInventorySnapshot(b, /*money=*/4200, iv,
-                                                      /*backpack_slots=*/16u));
+                 std::vector<fb::Offset<mn::EquipmentItem>> equipment;
+                 equipment.push_back(mn::CreateEquipmentItem(
+                     b, /*slot=*/13u, /*template=*/900011u, /*quality=*/2u,
+                     /*binding=*/2u));
+                 b.Finish(mn::CreateInventorySnapshot(
+                     b, /*money=*/4200, iv, /*backpack_slots=*/16u,
+                     b.CreateVector(equipment)));
                  return finish_to_bytes(b);
                },
                [](const Bytes& buf) {
@@ -1912,6 +1939,10 @@ std::vector<Message> build_corpus() {
                  expect(m->money() == 4200, "if2_inventory_snapshot.money");
                  expect(m->backpack_slots() == 16u,
                         "if2_inventory_snapshot.backpack_slots");
+                 expect(m->equipment() && m->equipment()->size() == 1 &&
+                            m->equipment()->Get(0)->slot() == 13u &&
+                            m->equipment()->Get(0)->item_template_id() == 900011u,
+                        "if2_inventory_snapshot.equipment");
                  const auto* items = m->items();
                  if (!expect(items != nullptr && items->size() == 2,
                              "if2_inventory_snapshot has 2 items"))
@@ -1926,6 +1957,45 @@ std::vector<Message> build_corpus() {
                             i1->count() == 1u && i1->quality() == 3u &&
                             i1->binding() == 1u,
                         "if2_inventory_snapshot.items[1] (bound rare)");
+               }});
+
+  c.push_back({"if2_equipment_change_request", "IF-2", "EQUIPMENT_CHANGE_REQUEST (0x5008)",
+               "C->S equip the owned item in backpack slot 3",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateEquipmentChangeRequest(
+                     b, mn::EquipmentChangeAction::EQUIP, 3u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::EquipmentChangeRequest>(nullptr),
+                             "if2_equipment_change_request verifies")) return;
+                 const auto* m = fb::GetRoot<mn::EquipmentChangeRequest>(buf.data());
+                 expect(m->action() == mn::EquipmentChangeAction::EQUIP,
+                        "if2_equipment_change_request.action");
+                 expect(m->slot() == 3u, "if2_equipment_change_request.slot");
+               }});
+
+  c.push_back({"if2_equipment_change_result", "IF-2", "EQUIPMENT_CHANGE_RESULT (0x5009)",
+               "S->C typed class-proficiency rejection without predicted state",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 b.Finish(mn::CreateEquipmentChangeResult(
+                     b, mn::EquipmentChangeStatus::NOT_PROFICIENT,
+                     mn::EquipmentChangeAction::EQUIP, 3u, 255u));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::EquipmentChangeResult>(nullptr),
+                             "if2_equipment_change_result verifies")) return;
+                 const auto* m = fb::GetRoot<mn::EquipmentChangeResult>(buf.data());
+                 expect(m->status() == mn::EquipmentChangeStatus::NOT_PROFICIENT,
+                        "if2_equipment_change_result.status");
+                 expect(m->action() == mn::EquipmentChangeAction::EQUIP && m->slot() == 3u &&
+                            m->equipped_slot() == 255u,
+                        "if2_equipment_change_result correlation");
                }});
 
   // ==== IF-2 inventory / economy: vendors (world.fbs; ECO-01 #370) ==========

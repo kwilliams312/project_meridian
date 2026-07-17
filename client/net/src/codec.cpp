@@ -241,6 +241,46 @@ std::optional<VitalsUpdate> decode_vitals_update(const Bytes& buf) {
     return out;
 }
 
+Bytes encode_equipment_visual_update(const EquipmentVisualUpdate& in) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::EquippedVisual>> rows;
+    rows.reserve(in.equipment.size());
+    for (const auto& ev : in.equipment) {
+        std::vector<fb::Offset<mn::DyeChoice>> dyes;
+        dyes.reserve(ev.dyes.size());
+        for (const auto& dye : ev.dyes)
+            dyes.push_back(mn::CreateDyeChoice(b, dye.channel, dye.dye_id));
+        rows.push_back(mn::CreateEquippedVisual(b, ev.slot, ev.item_template,
+                                                b.CreateVector(dyes)));
+    }
+    b.Finish(mn::CreateEquipmentVisualUpdate(b, in.entity_guid, b.CreateVector(rows)));
+    return to_bytes(b);
+}
+
+std::optional<EquipmentVisualUpdate> decode_equipment_visual_update(const Bytes& buf) {
+    const mn::EquipmentVisualUpdate* t = verify_and_get<mn::EquipmentVisualUpdate>(buf);
+    if (t == nullptr) return std::nullopt;
+    EquipmentVisualUpdate out;
+    out.entity_guid = t->entity_guid();
+    if (t->equipment() != nullptr) {
+        out.equipment.reserve(t->equipment()->size());
+        for (const auto* ev : *t->equipment()) {
+            if (ev == nullptr) continue;
+            EquippedVisual row;
+            row.slot = ev->slot();
+            row.item_template = ev->item_template();
+            if (ev->dyes() != nullptr) {
+                row.dyes.reserve(ev->dyes()->size());
+                for (const auto* dye : *ev->dyes()) {
+                    if (dye != nullptr) row.dyes.push_back({dye->channel(), dye->dye_id()});
+                }
+            }
+            out.equipment.push_back(std::move(row));
+        }
+    }
+    return out;
+}
+
 // ---- IF-2 PROGRESSION: XpGained / LevelUp (CHR-03, #531) -------------------
 
 Bytes encode_xp_gained(const XpGained& in) {
@@ -1035,8 +1075,14 @@ Bytes encode_inventory_snapshot(const InventorySnapshot& in) {
         items.push_back(mn::CreateInventoryItem(b, it.slot, it.item_template_id, it.count,
                                                 it.quality, it.binding));
     }
+    std::vector<fb::Offset<mn::EquipmentItem>> equipment;
+    equipment.reserve(in.equipment.size());
+    for (const auto& it : in.equipment) {
+        equipment.push_back(mn::CreateEquipmentItem(b, it.slot, it.item_template_id,
+                                                    it.quality, it.binding));
+    }
     b.Finish(mn::CreateInventorySnapshot(b, in.money, b.CreateVector(items),
-                                         in.backpack_slots));
+                                         in.backpack_slots, b.CreateVector(equipment)));
     return to_bytes(b);
 }
 
@@ -1054,7 +1100,44 @@ std::optional<InventorySnapshot> decode_inventory_snapshot(const Bytes& buf) {
                                               it->count(), it->quality(), it->binding()});
         }
     }
+    if (t->equipment() != nullptr) {
+        out.equipment.reserve(t->equipment()->size());
+        for (const auto* it : *t->equipment()) {
+            if (it == nullptr) continue;
+            out.equipment.push_back(InventorySnapshot::EquipmentItem{
+                it->slot(), it->item_template_id(), it->quality(), it->binding()});
+        }
+    }
     return out;
+}
+
+Bytes encode_equipment_change_request(const EquipmentChangeRequest& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateEquipmentChangeRequest(
+        b, static_cast<mn::EquipmentChangeAction>(in.action), in.slot));
+    return to_bytes(b);
+}
+
+std::optional<EquipmentChangeRequest> decode_equipment_change_request(const Bytes& buf) {
+    const mn::EquipmentChangeRequest* t = verify_and_get<mn::EquipmentChangeRequest>(buf);
+    if (t == nullptr) return std::nullopt;
+    return EquipmentChangeRequest{static_cast<std::uint8_t>(t->action()), t->slot()};
+}
+
+Bytes encode_equipment_change_result(const EquipmentChangeResult& in) {
+    fb::FlatBufferBuilder b;
+    b.Finish(mn::CreateEquipmentChangeResult(
+        b, static_cast<mn::EquipmentChangeStatus>(in.status),
+        static_cast<mn::EquipmentChangeAction>(in.action), in.slot, in.equipped_slot));
+    return to_bytes(b);
+}
+
+std::optional<EquipmentChangeResult> decode_equipment_change_result(const Bytes& buf) {
+    const mn::EquipmentChangeResult* t = verify_and_get<mn::EquipmentChangeResult>(buf);
+    if (t == nullptr) return std::nullopt;
+    return EquipmentChangeResult{static_cast<std::uint16_t>(t->status()),
+                                 static_cast<std::uint8_t>(t->action()), t->slot(),
+                                 t->equipped_slot()};
 }
 
 // ---- IF-2 VENDOR (0x5101..0x5106 — ECO-01, #370/#441) ----------------------

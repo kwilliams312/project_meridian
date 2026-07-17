@@ -178,6 +178,14 @@ struct VitalsUpdate {
 Bytes encode_vitals_update(const VitalsUpdate& in);
 std::optional<VitalsUpdate> decode_vitals_update(const Bytes& buf);
 
+// Full authoritative replacement of one entity's visible equipped set (#802).
+struct EquipmentVisualUpdate {
+    std::uint64_t entity_guid = 0;
+    std::vector<EquippedVisual> equipment;
+};
+Bytes encode_equipment_visual_update(const EquipmentVisualUpdate& in);
+std::optional<EquipmentVisualUpdate> decode_equipment_visual_update(const Bytes& buf);
+
 // ---------------------------------------------------------------------------
 // IF-2 (world.fbs) — PROGRESSION: XpGained (0x0020) and LevelUp (0x0021), both S→C
 // (CHR-03, #531). The server awards XP and dings the character; the client only
@@ -713,9 +721,32 @@ struct InventorySnapshot {
     std::int64_t money = 0;
     std::vector<InventoryItem> items;
     std::uint16_t backpack_slots = 0;
+    struct EquipmentItem {
+        std::uint8_t slot = 0;
+        std::uint32_t item_template_id = 0;
+        std::uint8_t quality = 0;
+        std::uint8_t binding = 0;
+    };
+    std::vector<EquipmentItem> equipment;
 };
 Bytes encode_inventory_snapshot(const InventorySnapshot& in);  // test/mock symmetry
 std::optional<InventorySnapshot> decode_inventory_snapshot(const Bytes& buf);
+
+// Authoritative equip/unequip/replacement intent and typed outcome (#802).
+struct EquipmentChangeRequest {
+    std::uint8_t action = 0;  // EquipmentChangeAction: 0 equip, 1 unequip
+    std::uint16_t slot = 0;   // backpack grid index or EquipSlot
+};
+struct EquipmentChangeResult {
+    std::uint16_t status = 0;  // EquipmentChangeStatus
+    std::uint8_t action = 0;
+    std::uint16_t slot = 0;
+    std::uint8_t equipped_slot = 255;
+};
+Bytes encode_equipment_change_request(const EquipmentChangeRequest& in);
+std::optional<EquipmentChangeRequest> decode_equipment_change_request(const Bytes& buf);
+Bytes encode_equipment_change_result(const EquipmentChangeResult& in);
+std::optional<EquipmentChangeResult> decode_equipment_change_result(const Bytes& buf);
 
 // LOOT_RELEASE (C→S): close the loot window on a corpse.
 struct LootRelease {

@@ -399,6 +399,14 @@ void test_entity_codec() {
     CHECK(av_out->equipment[2].dyes.size() == 1);
     CHECK(av_out->equipment[2].dyes[0].channel == 1 && av_out->equipment[2].dyes[0].dye_id == 78);
 
+    codec::EquipmentVisualUpdate visual_update;
+    visual_update.entity_guid = av.entity_guid;
+    visual_update.equipment = {chest};  // full replacement: weapon/legs omitted
+    auto vu_out = codec::decode_equipment_visual_update(
+        codec::encode_equipment_visual_update(visual_update));
+    CHECK(vu_out.has_value() && vu_out->entity_guid == av.entity_guid &&
+          vu_out->equipment.size() == 1 && vu_out->equipment[0].item_template == 88);
+
     // #328/#430: char_class + vitals default to 0 / empty when a producer omits them —
     // additive fields are backward-compatible (a pre-#430 EntityEnter decodes to 0). An
     // NPC/creature EntityEnter (②/T4) carries NO appearance/equipment: race stays 0, the
@@ -846,7 +854,13 @@ void test_char_enter_codec() {
     // empty account, so the wire distinguishes the two.
     codec::CharListResponse ok_roster;
     ok_roster.status = 0;  // CharListStatus OK
-    ok_roster.characters.push_back(codec::CharSummary{42ull, "Aldric", 1, 1, 7});
+    codec::CharSummary aldric;
+    aldric.character_id = 42ull;
+    aldric.name = "Aldric";
+    aldric.race = 1;
+    aldric.char_class = 1;
+    aldric.level = 7;
+    ok_roster.characters.push_back(aldric);
     auto ok_rt = codec::decode_char_list_response(
         codec::encode_char_list_response(ok_roster));
     CHECK(ok_rt.has_value());
@@ -859,7 +873,12 @@ void test_char_enter_codec() {
     // (contract ① T5) so char-select re-assembles the preview on roster selection.
     codec::CharListResponse looked;
     looked.status = 0;
-    codec::CharSummary sum{7ull, "Sylwen", 3, 2, 5};
+    codec::CharSummary sum;
+    sum.character_id = 7ull;
+    sum.name = "Sylwen";
+    sum.race = 3;
+    sum.char_class = 2;
+    sum.level = 5;
     sum.has_appearance = true;
     sum.appearance = codec::Appearance{1, 4, 5, 2};
     looked.characters.push_back(sum);
@@ -1080,9 +1099,11 @@ void test_wire_frame_edge_cases() {
     const std::uint16_t opcodes[] = {
         0x0000, 0xFFFF, kOpWorldHello, kOpHandshakeOk, kOpDisconnect, kOpClockSync,
         kOpMovementIntent, kOpMovementState, kOpEntityEnter, kOpEntityUpdate,
+        kOpEquipmentVisualUpdate,
         kOpEntityLeave, kOpCastRequest, kOpCastStart, kOpCastFailed, kOpCastResult,
         kOpGossipHello, kOpGossipMenu, kOpLootRequest, kOpLootResponse,
         kOpLootTake, kOpLootResult, kOpLootRelease, kOpLootClosed, kOpInventorySnapshot,
+        kOpEquipmentChangeReq, kOpEquipmentChangeResult,
         kOpVendorBuyReq, kOpVendorBuyResult, kOpVendorSellReq, kOpVendorSellResult,
         kOpVendorBuybackReq, kOpVendorBuybackResult, kOpVendorList, kOpTrainerList,
         kOpTrainerLearn, kOpTrainerLearnResult,
@@ -1791,15 +1812,36 @@ void test_inventory_codec() {
     snap.backpack_slots = 16;
     snap.items.push_back({/*slot=*/0, /*tmpl=*/900007, /*count=*/5, /*quality=*/1, /*binding=*/0});
     snap.items.push_back({/*slot=*/3, /*tmpl=*/900012, /*count=*/1, /*quality=*/3, /*binding=*/1});
+    snap.equipment.push_back({/*slot=*/13, /*tmpl=*/900011, /*quality=*/2, /*binding=*/2});
     auto snap_out = codec::decode_inventory_snapshot(codec::encode_inventory_snapshot(snap));
     CHECK(snap_out.has_value() && snap_out->money == 4200 && snap_out->backpack_slots == 16 &&
-          snap_out->items.size() == 2);
+          snap_out->items.size() == 2 && snap_out->equipment.size() == 1);
     CHECK(snap_out->items[0].slot == 0 && snap_out->items[0].item_template_id == 900007 &&
           snap_out->items[0].count == 5 && snap_out->items[0].quality == 1 &&
           snap_out->items[0].binding == 0);
     CHECK(snap_out->items[1].slot == 3 && snap_out->items[1].item_template_id == 900012 &&
           snap_out->items[1].count == 1 && snap_out->items[1].quality == 3 &&
           snap_out->items[1].binding == 1);
+    CHECK(snap_out->equipment[0].slot == 13 &&
+          snap_out->equipment[0].item_template_id == 900011 &&
+          snap_out->equipment[0].quality == 2 && snap_out->equipment[0].binding == 2);
+
+    codec::EquipmentChangeRequest equip{/*action=EQUIP*/ 0, /*backpack slot=*/3};
+    auto equip_out = codec::decode_equipment_change_request(
+        codec::encode_equipment_change_request(equip));
+    CHECK(equip_out.has_value() && equip_out->action == 0 && equip_out->slot == 3);
+    codec::EquipmentChangeResult rejected{/*NOT_PROFICIENT*/ 6, /*EQUIP*/ 0,
+                                           /*slot=*/3, /*equipped_slot=*/255};
+    auto rejected_out = codec::decode_equipment_change_result(
+        codec::encode_equipment_change_result(rejected));
+    CHECK(rejected_out.has_value() && rejected_out->status == 6 &&
+          rejected_out->slot == 3 && rejected_out->equipped_slot == 255);
+    {
+        Bytes frame = encode_world_frame(kOpEquipmentChangeReq, 2,
+                                         codec::encode_equipment_change_request(equip));
+        auto f = decode_world_frame(frame);
+        CHECK(f.has_value() && f->opcode == 0x5008);
+    }
     {
         Bytes frame = encode_world_frame(kOpInventorySnapshot, 1,
                                          codec::encode_inventory_snapshot(snap));
@@ -1818,6 +1860,7 @@ void test_inventory_codec() {
     Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
     CHECK(!codec::decode_inventory_snapshot(garbage).has_value());
     CHECK(!codec::decode_inventory_snapshot(Bytes{}).has_value());
+    CHECK(!codec::decode_equipment_change_result(garbage).has_value());
 }
 
 void test_vendor_list_codec() {

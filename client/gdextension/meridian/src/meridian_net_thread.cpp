@@ -139,6 +139,8 @@ void MeridianNetThread::_bind_methods() {
 	                     &MeridianNetThread::build_vendor_buyback_frame);
 	ClassDB::bind_method(D_METHOD("build_trainer_learn_frame", "npc_guid", "ability_id"),
 	                     &MeridianNetThread::build_trainer_learn_frame);
+	ClassDB::bind_method(D_METHOD("build_equipment_change_frame", "action", "slot"),
+	                     &MeridianNetThread::build_equipment_change_frame);
 	ClassDB::bind_method(D_METHOD("decode_econ_frame", "opcode", "payload"),
 	                     &MeridianNetThread::decode_econ_frame);
 
@@ -451,6 +453,28 @@ Dictionary MeridianNetThread::decode_entity_frame(int opcode,
 		d["guid"] = static_cast<int64_t>(l->entity_guid);
 		d["has_position"] = false;
 		d["reason"] = static_cast<int64_t>(l->reason);
+	} else if (opcode == cn::kOpEquipmentVisualUpdate) {
+		auto u = cn::codec::decode_equipment_visual_update(buf);
+		if (!u) return d;
+		d["kind"] = String("equipment_visual");
+		d["guid"] = static_cast<int64_t>(u->entity_guid);
+		d["has_position"] = false;
+		Array equipment;
+		for (const auto &ev : u->equipment) {
+			Dictionary row;
+			row["slot"] = static_cast<int64_t>(ev.slot);
+			row["item_template"] = static_cast<int64_t>(ev.item_template);
+			Array dyes;
+			for (const auto &dc : ev.dyes) {
+				Dictionary dye;
+				dye["channel"] = static_cast<int64_t>(dc.channel);
+				dye["dye_id"] = static_cast<int64_t>(dc.dye_id);
+				dyes.push_back(dye);
+			}
+			row["dyes"] = dyes;
+			equipment.push_back(row);
+		}
+		d["equipment"] = equipment;
 	}
 	return d;  // kind stays "" for a non-entity opcode / undecodable payload
 }
@@ -851,6 +875,14 @@ PackedByteArray MeridianNetThread::build_trainer_learn_frame(int64_t npc_guid,
 	return to_pba(cn::encode_world_frame(cn::kOpTrainerLearn, /*seq=*/1, payload));
 }
 
+PackedByteArray MeridianNetThread::build_equipment_change_frame(int action, int slot) const {
+	cn::codec::EquipmentChangeRequest in;
+	in.action = static_cast<std::uint8_t>(action);
+	in.slot = static_cast<std::uint16_t>(slot);
+	net::Bytes payload = cn::codec::encode_equipment_change_request(in);
+	return to_pba(cn::encode_world_frame(cn::kOpEquipmentChangeReq, /*seq=*/1, payload));
+}
+
 Dictionary MeridianNetThread::decode_econ_frame(int opcode,
 		const PackedByteArray &payload) const {
 	Dictionary d;
@@ -874,6 +906,24 @@ Dictionary MeridianNetThread::decode_econ_frame(int opcode,
 			items.push_back(row);
 		}
 		d["items"] = items;
+		Array equipment;
+		for (const auto &it : r->equipment) {
+			Dictionary row;
+			row["slot"] = static_cast<int64_t>(it.slot);
+			row["item_template_id"] = static_cast<int64_t>(it.item_template_id);
+			row["quality"] = static_cast<int64_t>(it.quality);
+			row["binding"] = static_cast<int64_t>(it.binding);
+			equipment.push_back(row);
+		}
+		d["equipment"] = equipment;
+	} else if (opcode == cn::kOpEquipmentChangeResult) {
+		auto r = cn::codec::decode_equipment_change_result(buf);
+		if (!r) return d;
+		d["kind"] = String("equipment_change_result");
+		d["status"] = static_cast<int64_t>(r->status);
+		d["action"] = static_cast<int64_t>(r->action);
+		d["slot"] = static_cast<int64_t>(r->slot);
+		d["equipped_slot"] = static_cast<int64_t>(r->equipped_slot);
 	} else if (opcode == cn::kOpVendorList) {
 		auto r = cn::codec::decode_vendor_list(buf);
 		if (!r) return d;
