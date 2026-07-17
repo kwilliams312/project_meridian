@@ -1257,6 +1257,48 @@ std::vector<Message> build_corpus() {
                         "if2_known_abilities.abilities[1] (mana cast-time heal)");
                }});
 
+  // ==== IF-2 character stats (world.fbs; SP2.5 S5b #897) ====================
+
+  // CharacterStats — S->C PRIVATE owner stat sheet: level + two effective attributes
+  // (strength raised by gear, agility base) + summed gear armor. The private analogue
+  // of KnownAbilities/InventorySnapshot; NEVER the AoI-broadcast EntityEnter.attrs.
+  c.push_back({"if2_character_stats", "IF-2", "CHARACTER_STATS (0x0022)",
+               "S->C private stat sheet: level 12, str 27 + agi 14, gear armor 165",
+               [] {
+                 fb::FlatBufferBuilder b;
+                 std::vector<fb::Offset<mn::CharacterStatEntry>> rows;
+                 // Sorted by ref (the encoder's deterministic order): agility < strength.
+                 rows.push_back(mn::CreateCharacterStatEntry(
+                     b, b.CreateString("core:attribute.agility"), 14));
+                 rows.push_back(mn::CreateCharacterStatEntry(
+                     b, b.CreateString("core:attribute.strength"), 27));
+                 auto attrs = b.CreateVector(rows);
+                 b.Finish(mn::CreateCharacterStats(b, /*level=*/12u, attrs,
+                                                   /*gear_armor=*/165));
+                 return finish_to_bytes(b);
+               },
+               [](const Bytes& buf) {
+                 fb::Verifier v(buf.data(), buf.size());
+                 if (!expect(v.VerifyBuffer<mn::CharacterStats>(nullptr),
+                             "if2_character_stats verifies"))
+                   return;
+                 const auto* m = fb::GetRoot<mn::CharacterStats>(buf.data());
+                 expect(m->level() == 12u, "if2_character_stats.level == 12");
+                 expect(m->gear_armor() == 165, "if2_character_stats.gear_armor == 165");
+                 const auto* a = m->attributes();
+                 if (!expect(a != nullptr && a->size() == 2,
+                             "if2_character_stats has 2 attributes"))
+                   return;
+                 expect(a->Get(0)->ref() != nullptr &&
+                            a->Get(0)->ref()->str() == "core:attribute.agility" &&
+                            a->Get(0)->value() == 14,
+                        "if2_character_stats.attributes[0] (agility 14)");
+                 expect(a->Get(1)->ref() != nullptr &&
+                            a->Get(1)->ref()->str() == "core:attribute.strength" &&
+                            a->Get(1)->value() == 27,
+                        "if2_character_stats.attributes[1] (strength 27)");
+               }});
+
   // ==== IF-2 death / resurrect (world.fbs; CMB-03 #359) =====================
 
   // DeathState — S->C you died: corpse guid + auto-release countdown.

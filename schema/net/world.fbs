@@ -53,6 +53,17 @@ enum Opcode : uint16 {
   XP_GAINED = 0x0020,  // S→C  XP earned (e.g. a kill) + progress toward next level
   LEVEL_UP  = 0x0021,  // S→C  level increased + the stat growth applied
 
+  // The character's aggregated effective-stat SHEET (SP2.5 #897; epic #866 S5b).
+  // PRIVATE to the OWNING client — pushed ONLY down that session's own egress, NEVER
+  // the AoI broadcast (the EntityEnter/EntityUpdate `attrs` vectors stay hardcoded
+  // empty: a stat sheet on the AoI broadcast would leak every player's build to every
+  // observer — a ratified security decision). It lives in the character-progression
+  // band next to LEVEL_UP because a level-up is one of the events that recomputes it
+  // (the others: enter-world and an equipment change). Deliberately NOT in the 0x2xxx
+  // entity/AoI band — that band is observer-broadcast by construction. Additive S→C
+  // display projection: the client never predicts its own stats (Principle 1).
+  CHARACTER_STATS = 0x0022,  // S→C  the owning character's effective attributes + gear armor (private)
+
   // --- 0x1xxx  movement  (M0) ---
   MOVEMENT_INTENT = 0x1001,  // C→S  client movement intent (validated OPS-03)
   MOVEMENT_STATE  = 0x1002,  // S→C  authoritative movement state broadcast
@@ -808,6 +819,37 @@ table LevelUp {
   new_level:uint16;
   max_health:uint32;        // new health cap after stat growth
   max_resource:uint32;      // new secondary-resource cap after stat growth
+}
+
+/// One effective attribute the owning client displays (a row of the character-sheet
+/// stats panel). `ref` is the attribute's content-id ref string — e.g.
+/// "core:attribute.strength" — the SAME key the server AttributeCatalog / aura ledger
+/// use, so the client joins on one string. `value` is the aggregated EFFECTIVE value:
+/// base(0) + class_mod + race_mod + summed equipped-gear StatMods, computed by the
+/// #896 aggregator over the #694 EffectiveStats kernel (so it can never diverge from
+/// the kernel's math). Primary attributes include the gear contribution; derived
+/// attributes reflect class/race mods only (no item StatMod feeds a derived attribute
+/// in the M1 vocabulary).
+table CharacterStatEntry {
+  ref:string;               // attribute content-id ref (AttributeCatalog key)
+  value:int32;              // aggregated effective value
+}
+
+/// S→C, PRIVATE to the OWNING client. The character's aggregated effective-stat sheet
+/// (SP2.5 #897; epic #866 S5b) — the #896 aggregator's output for the owning
+/// character: every catalog attribute's effective value plus the summed armor of the
+/// equipped gear. ⛔ This NEVER rides the AoI broadcast (EntityEnter.attrs /
+/// EntityUpdate.attrs stay empty): the sheet is private to its owner — pushing it to
+/// every in-range observer would expose every player's build (ratified security
+/// decision). Pushed at ENTER_WORLD and re-sent whenever the sheet changes (an
+/// equipment change; a level-up). `gear_armor` is kept DISTINCT from any derived
+/// "armor" attribute so the client can display item armor on its own (and #785's
+/// combat consumes the same aggregation for effective armor). A DISPLAY projection —
+/// the client never predicts its stats (Principle 1, "server is law").
+table CharacterStats {
+  level:uint16;                       // the level the sheet was computed at
+  attributes:[CharacterStatEntry];    // every catalog attribute's effective value
+  gear_armor:int32;                   // summed armor of equipped items (distinct from the armor attribute)
 }
 
 // ===========================================================================

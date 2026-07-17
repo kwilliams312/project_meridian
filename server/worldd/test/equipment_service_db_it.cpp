@@ -216,6 +216,13 @@ struct EquipmentReply {
     mn::EquipmentChangeStatus status = mn::EquipmentChangeStatus::INTERNAL;
     bool result_before_snapshot = false;
     std::size_t equipped_count = 0;
+    // #897: a SUCCESSFUL equip/unequip re-pushes the private CHARACTER_STATS sheet
+    // (the shared recompute seam) right AFTER the INVENTORY_SNAPSHOT — the display
+    // sheet trails the authoritative inventory. A rejected change touches no gear, so
+    // it re-pushes NEITHER (only the reject result + reconciling snapshot).
+    bool got_stats = false;
+    std::uint16_t stats_level = 0;
+    std::int32_t stats_strength = 0;
 };
 
 EquipmentReply receive_equipment_reply(Client& client) {
@@ -237,6 +244,28 @@ EquipmentReply receive_equipment_reply(Client& client) {
         if (v.VerifyBuffer<mn::InventorySnapshot>(nullptr)) {
             const auto* snapshot = fb::GetRoot<mn::InventorySnapshot>(snapshot_frame->payload);
             out.equipped_count = snapshot->equipment() ? snapshot->equipment()->size() : 0;
+        }
+    }
+    // #897: on a SUCCESS the seam re-pushes CHARACTER_STATS as the third frame. Drain +
+    // decode it so it never bleeds into the NEXT reply's frame accounting (and so we
+    // can assert the equip-change trigger). A reject sends no third frame.
+    if (out.status == mn::EquipmentChangeStatus::OK) {
+        const auto third = client.recv_frame();
+        const auto stats_frame = third ? decode_frame(*third) : std::nullopt;
+        if (stats_frame && stats_frame->opcode == mn::Opcode::CHARACTER_STATS) {
+            fb::Verifier v(stats_frame->payload, stats_frame->payload_len);
+            if (v.VerifyBuffer<mn::CharacterStats>(nullptr)) {
+                const auto* m = fb::GetRoot<mn::CharacterStats>(stats_frame->payload);
+                out.got_stats = true;
+                out.stats_level = m->level();
+                if (m->attributes() != nullptr) {
+                    for (const auto* e : *m->attributes()) {
+                        if (e->ref() != nullptr &&
+                            e->ref()->str() == "core:attribute.strength")
+                            out.stats_strength = e->value();
+                    }
+                }
+            }
         }
     }
     return out;
@@ -277,6 +306,14 @@ int main() {
     ClassRecord allowed; allowed.roster_id = 1; allowed.usable_weapon_types.insert(77);
     ClassRecord denied; denied.roster_id = 2;
 
+    // #897: seed an attribute catalog so a SUCCESSFUL equip re-pushes a REAL
+    // CHARACTER_STATS sheet (class-1 strength +5 base). Proves the equip-change trigger
+    // fires the shared recompute seam over the owning session's egress.
+    AttributeCatalog attr_catalog;
+    attr_catalog.add_attribute({"core:attribute.strength", "Strength",
+                                AttributeKind::kPrimary, 1});
+    attr_catalog.add_class_mod(1, "core:attribute.strength", 5);
+
     // Drive the real verifier + Dispatcher handler over TLS, not only the service.
     // The request has no character id: ctx.char_id is the sole ownership binding.
     install_content_stores(&store, nullptr, nullptr, nullptr);
@@ -309,6 +346,7 @@ int main() {
                 ctx.char_level = 1;
                 ctx.class_catalog = &classes;
                 ctx.equip_type_catalog = &types;
+                ctx.attribute_catalog = &attr_catalog;  // #897 CHARACTER_STATS source
                 for (int request_index = 0; request_index < 3; ++request_index) {
                     ctx.char_class = request_index == 1 ? 2 : 1;
                     const Bytes frame = session.read_frame();
@@ -335,6 +373,13 @@ int main() {
             check("wire result precedes authoritative snapshot",
                   equipped.result_before_snapshot);
             check("wire equip snapshot contains paperdoll item", equipped.equipped_count == 1);
+            // #897: the equip-change trigger re-pushed the private stat sheet.
+            check("wire equip re-pushes CHARACTER_STATS (#897 equip-change trigger)",
+                  equipped.got_stats);
+            check("wire equip CHARACTER_STATS carries the character level (1)",
+                  equipped.stats_level == 1);
+            check("wire equip CHARACTER_STATS strength = class-1 mod 5 (live aggregation)",
+                  equipped.stats_strength == 5);
 
             client.send_frame(encode_frame(
                 mn::Opcode::EQUIPMENT_CHANGE_REQUEST, 102,
@@ -344,6 +389,9 @@ int main() {
                   rejected.status == mn::EquipmentChangeStatus::NOT_PROFICIENT);
             check("wire reject still reconciles authoritative snapshot",
                   rejected.result_before_snapshot && rejected.equipped_count == 1);
+            // #897: a REJECT touched no gear, so it re-pushed NO CHARACTER_STATS.
+            check("wire reject does NOT re-push CHARACTER_STATS (no stat change)",
+                  !rejected.got_stats);
 
             client.send_frame(encode_frame(
                 mn::Opcode::EQUIPMENT_CHANGE_REQUEST, 103,
@@ -353,6 +401,11 @@ int main() {
             check("wire unequip returns OK", unequipped.status == mn::EquipmentChangeStatus::OK);
             check("wire unequip snapshot clears paperdoll",
                   unequipped.result_before_snapshot && unequipped.equipped_count == 0);
+            // #897: an unequip is also a stat change -> re-pushes CHARACTER_STATS.
+            check("wire unequip re-pushes CHARACTER_STATS (#897 equip-change trigger)",
+                  unequipped.got_stats);
+            check("wire unequip CHARACTER_STATS strength back to class-1 base 5 (no gear)",
+                  unequipped.stats_strength == 5);
         }
         server.join();
         check("all equipment requests dispatched through live handler", dispatch_ok);

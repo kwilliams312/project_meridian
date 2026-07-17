@@ -537,6 +537,12 @@ int main(int argc, char** argv) {
     world.set_class_catalog(std::move(content.classes));
     world.set_equip_type_catalog(std::move(content.equip_types));
 
+    // Install the pack-loaded attribute vocabulary + per-class/race attribute_mods
+    // (#694) so the CHARACTER_STATS push (#897) aggregates a character's effective-stat
+    // sheet from real content. No-op semantics without a world DB: the catalog is empty,
+    // so the CHARACTER_STATS push is skipped entirely (nothing to display).
+    world.set_attribute_catalog(std::move(content.attributes));
+
     // Install the pack-loaded enter-world spawn (#761). The start-zone graveyard spawn is
     // M0-GATED in load_start_zone_spawn (returns nullopt until A-08 ships real terrain), so
     // content.enter_spawn is nullopt today and the enter-world handler keeps the flat-
