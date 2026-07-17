@@ -57,6 +57,19 @@ const ContentDbScript := preload("res://content/content_db.gd")
 # ShaderMaterial off this shader with its mask + per-channel colours.
 const DyeShader := preload("res://characters/dye_tint.gdshader")
 
+# The locomotion animation scaffold (story #907, W1a). Preload-by-path (not the
+# bare MeridianLocomotion class name) — same stale-class-cache guard the rest of
+# this file uses for content_db.gd.
+const LocomotionScript := preload("res://characters/locomotion.gd")
+
+# MoveMode mirror (movement_constants.h:76 — the C++ enum is not bound to
+# GDScript, so the values are duplicated here as the wire contract). set_locomotion
+# takes the int a driver decoded from state_flags; W1b/W1c wire the drivers.
+const MOVE_IDLE: int = 0
+const MOVE_WALK: int = 1
+const MOVE_RUN: int = 2
+const MOVE_JUMP: int = 3
+
 # A dyeable piece's dye mask asset id is its model content id + this suffix
 # (e.g. core:art.item.armor.warden_chest → ..._mask), staged as an RGB PNG.
 const _DYE_MASK_SUFFIX: String = "_mask"
@@ -74,6 +87,12 @@ var _sex: int = 0
 var _assembled: bool = false
 var _body_root: Node3D = null
 var _skeleton: Skeleton3D = null
+# Locomotion scaffold (story #907, W1a): an AnimationPlayer holding the
+# placeholder clip library + an AnimationTree state machine that blends them by
+# planar speed. Both null on the capsule fallback (no skeleton) so set_locomotion
+# is a safe no-op there.
+var _anim_player: AnimationPlayer = null
+var _anim_tree: AnimationTree = null
 # The BODY's geoset MeshInstance3Ds, recorded at assemble() time so worn-gear
 # meshes re-parented onto the skeleton later can never be hidden as geosets.
 var _body_geosets: Array = []
@@ -124,6 +143,11 @@ func assemble(race: int, sex: int, appearance: Dictionary, equipment: Array) -> 
 	_skeleton = skeletons[0]
 	_body_geosets = body.find_children(_GEOSET_PREFIX + "*", "MeshInstance3D", true, false)
 	_assembled = true
+	# Attach the locomotion state machine to the live canonical skeleton (story
+	# #907, W1a). One place for both local and remote bodies — every body routes
+	# through this single assemble() seam. The drivers that CALL set_locomotion are
+	# W1b (#908, local) / W1c (#909, remote); this only builds the machine + clips.
+	_build_locomotion()
 	# Establish the LOD0-only visibility invariant immediately (before any gear):
 	# a real body ships an authored LOD0-3 chain, and all levels import VISIBLE —
 	# without this a body-only assemble would draw all 4 LODs stacked. Equipment
@@ -232,6 +256,29 @@ func replace_equipment(equipment: Array) -> void:
 	_apply_hides()
 
 
+## Drive the locomotion state machine (story #907, W1a). `mode` is a MoveMode int
+## (movement_constants.h:76 — Idle/Walk/Run/Jump); `planar_speed` (m/s) drives the
+## walk↔run blend; `grounded` false selects the air/jump state regardless of mode.
+## A safe no-op on the capsule fallback / an unassembled body (no AnimationTree).
+## Idempotent per tick: the drivers (W1b/W1c) call it every frame.
+func set_locomotion(mode: int, planar_speed: float, grounded: bool) -> void:
+	if _anim_tree == null:
+		return
+	var playback: AnimationNodeStateMachinePlayback = _anim_tree.get("parameters/playback")
+	if playback == null:
+		return
+	if not grounded or mode == MOVE_JUMP:
+		playback.travel(LocomotionScript.STATE_AIR)
+	elif mode == MOVE_IDLE:
+		playback.travel(LocomotionScript.STATE_IDLE)
+	else:
+		# Walk / Run (or any grounded moving mode): the ground blend space, with
+		# the blend position tracking planar speed so walk↔run cross-blend.
+		_anim_tree.set("parameters/%s/blend_position" % LocomotionScript.STATE_GROUND,
+			planar_speed)
+		playback.travel(LocomotionScript.STATE_GROUND)
+
+
 ## Tear down everything assemble() and set_equipment_slot() built. The
 ## once-per-asset-id assembly_failed guard intentionally survives (per-session
 ## telemetry discipline, spec §6).
@@ -239,6 +286,14 @@ func clear() -> void:
 	for slot in _slots.keys():
 		_unequip(slot)
 	_slots.clear()
+	# Tear down the locomotion scaffold (children of self, siblings of the body —
+	# freeing _body_root does not reach them, so free them explicitly).
+	if _anim_tree != null and is_instance_valid(_anim_tree):
+		_anim_tree.free()
+	_anim_tree = null
+	if _anim_player != null and is_instance_valid(_anim_player):
+		_anim_player.free()
+	_anim_player = null
 	if _body_root != null and is_instance_valid(_body_root):
 		_body_root.free()
 	_body_root = null
@@ -260,6 +315,13 @@ func is_assembled() -> bool:
 ## The single canonical Skeleton3D of the assembled body (null when unassembled).
 func body_skeleton() -> Skeleton3D:
 	return _skeleton
+
+
+## The locomotion AnimationTree driven by set_locomotion (null on the capsule
+## fallback / unassembled). Diagnostics + headless verify — the running app only
+## needs set_locomotion.
+func locomotion_tree() -> AnimationTree:
+	return _anim_tree
 
 
 ## The RESOLVED catalog preset entry {id, model} applied for `kind`
@@ -298,6 +360,47 @@ func body_geosets() -> Array:
 
 
 # --- Internals -----------------------------------------------------------------
+
+# Build the locomotion scaffold on the live canonical skeleton (story #907, W1a):
+# an AnimationPlayer holding the placeholder clip library + an AnimationTree state
+# machine that blends the clips by planar speed. The AnimationPlayer's root_node
+# is THIS node, so bone tracks resolve against the runtime-imported skeleton
+# (GLTFDocument.append_from_buffer bypasses Godot's importer — no importer-side
+# retarget here; that is Wave 2). Guarded on _skeleton so the capsule fallback,
+# which has no skeleton, never reaches this (set_locomotion then no-ops).
+func _build_locomotion() -> void:
+	if _skeleton == null:
+		return
+	var player := AnimationPlayer.new()
+	player.name = "LocomotionPlayer"
+	add_child(player)
+	# root_node = self, so a bone track path is "<self→skeleton>:<bone>".
+	player.root_node = player.get_path_to(self)
+	var skel_path: NodePath = get_path_to(_skeleton)
+	var lib: AnimationLibrary = LocomotionScript.build_library(_skeleton, skel_path)
+	player.add_animation_library(LocomotionScript.LIBRARY_NAME, lib)
+
+	var tree: AnimationTree = LocomotionScript.build_tree()
+	add_child(tree)
+	# anim_player + root_node must be set AFTER both nodes are parented under self —
+	# the paths are only computable once they share an ancestor. AnimationTree is
+	# itself an AnimationMixer: it resolves bone-track paths against ITS OWN
+	# root_node (default ".."), NOT the linked AnimationPlayer's — so it must point
+	# at self too, or the clips resolve against the wrong node and pose nothing.
+	tree.anim_player = tree.get_path_to(player)
+	tree.root_node = tree.get_path_to(self)
+	# Default IDLE callback mode drives the tree every process frame in the running
+	# app; the headless verify steps it deterministically with tree.advance(dt),
+	# which works regardless of callback mode.
+	tree.active = true
+	_anim_player = player
+	_anim_tree = tree
+	# Establish the entry state now that the tree is active + in-tree (Godot 4 has
+	# no AnimationNodeStateMachine.set_start_node — the playback is started here).
+	var playback: AnimationNodeStateMachinePlayback = tree.get("parameters/playback")
+	if playback != null:
+		playback.start(LocomotionScript.STATE_IDLE)
+
 
 # Resolve one appearance preset: the catalog entry whose id matches `wanted`,
 # else catalog entry 1 + assembly_failed (spec §6 "unknown preset id → catalog
