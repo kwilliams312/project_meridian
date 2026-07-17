@@ -228,6 +228,66 @@ CHIBI_STAGED_ART=(
   "content/chibi/assets/art/chibi_pill_body/chibi_pill_body_recolor_bc.png:art/chibi_pill_body_recolor_base.png"
 )
 
+# --- The CHIBI staged CHUNK pack (story #877, epic #872). --------------------
+# Sprout Meadow's terrain: the first zone to stream real chunks instead of the M0
+# flat bootstrap. `mcc chunk-emit --profile meadow` is the GENERATOR (the bytes are
+# generated from source on demand, never hand-authored), and the emitted pack is
+# staged at res://meridian/chibi/chunks/sprout_meadow so the client mounts it.
+#
+# ⛔ WHY ONLY *SOME* OF chunk-emit's OUTPUT IS STAGED (the #877 pack reconciliation)
+#
+# `chunk-emit --out` writes, alongside the chunk payloads, its own
+# `pack.manifest.json` + `pack.contents.jsonl` (a `meridian/pack-manifest@1` doc it
+# renders for the standalone Story-0 fixture). Those two files are DELIBERATELY NOT
+# STAGED, because `emit-pck --pack chibi` already writes the authoritative
+# `meridian/pack-manifest@1` for this namespace at the mount ROOT
+# ($CHIBI_STAGED_DIR/pack.manifest.json, gated in §7). Staging both would put two
+# manifests for one namespace into the same mount, each listing a DISJOINT entry set
+# with a different content_hash — the "competing pack manifest" the #872 scout
+# flagged. Nothing would even read the second one:
+#
+#   * the client's zone mount (MeridianPackMount.verify_chunk_index, world.gd
+#     _resolve_zone_paths) reads ONLY `<zone>.chunks.json` + `<zone>.assets.json`
+#     and resolves payloads by the res:// paths in the asset table;
+#   * the pack mount (pack_manifest_core) reads `<pack dir>/pack.manifest.json` —
+#     i.e. emit-pck's, at the root, not one nested under chunks/<zone>/;
+#   * the checked-in Story-0 chunkpack fixture likewise ships no pack.manifest.json.
+#
+# So the reconciliation is a SCOPE split, not a merge: emit-pck owns the pack
+# manifest, chunk-emit owns the chunk payloads + the IF-6/IF-8 zone index. The two
+# never write the same path. (Folding the chunk entries INTO emit-pck's manifest is
+# a real option later — it would let the pack's content_hash cover terrain too — but
+# it needs the IF-5 content-hash tie at enter-world, which is not wired at M0, and
+# it is not required for the client to mount and stream. Out of scope for #877.)
+CHIBI_CHUNK_ZONE="chibi:zone.sprout_meadow"
+CHIBI_CHUNK_ZONE_BARE="sprout_meadow"
+CHIBI_CHUNK_PROFILE="meadow"          # the #876 gentle-rolling profile (+-3 m R5 budget)
+CHIBI_CHUNK_GRID=3                    # 3x3 @ 128 m ...
+CHIBI_CHUNK_ORIGIN="-384"             # ... at zone01's geometry => zone-local [-512,-128]
+CHIBI_CHUNK_STAGED_DIR="client/project/meridian/chibi/chunks/sprout_meadow"
+
+# Emit Sprout Meadow's chunks into $1/, flattened to exactly the file set the client
+# mount consumes (see the reconciliation note above). chunk-emit takes no --built-at:
+# its output is a pure function of the geometry + profile, so it is reproducible with
+# no timestamp to pin.
+emit_chibi_chunks_into() {  # $1 = target dir
+  local dir="$1"
+  local tmp="$dir/.emit"
+  mkdir -p "$dir"
+  "$REPO_ROOT/$MCC" chunk-emit --zone "$CHIBI_CHUNK_ZONE" --profile "$CHIBI_CHUNK_PROFILE" \
+      --grid "$CHIBI_CHUNK_GRID" --origin-x "$CHIBI_CHUNK_ORIGIN" \
+      --origin-z "$CHIBI_CHUNK_ORIGIN" --out "$tmp" >/dev/null
+  local src="$tmp/meridian/${CHIBI_PACK_NS}/chunks/${CHIBI_CHUNK_ZONE_BARE}"
+  [ -d "$src" ] || die "chunk-emit wrote no chunk dir at $src"
+  # The IF-6 manifest + IF-8 asset table + every chunk payload (.chunk.bin server
+  # heightfield, .tscn scene, .proxy.tscn LOD). NOT pack.manifest.json /
+  # pack.contents.jsonl — see above.
+  cp "$src/${CHIBI_CHUNK_ZONE_BARE}.chunks.json" "$dir/"
+  cp "$src/${CHIBI_CHUNK_ZONE_BARE}.assets.json" "$dir/"
+  cp "$src"/*.chunk.bin "$src"/*.tscn "$dir/"
+  rm -rf "$tmp"
+}
+
 # Emit ONLY the chibi client pack (emit-pck --pack chibi) into $1/, flattened to
 # the same flat shape as the staged files. No world.sql/index — this gate polices
 # the staged CLIENT mount only. Same fixed built_at as the golden so the
@@ -281,7 +341,12 @@ if [ "$UPDATE_GOLDEN" -eq 1 ]; then
   done
   rm -rf "$CHIBI_TMP"
   ok "Chibi staged client pack refreshed: $CHIBI_STAGED_DIR/{${CHIBI_STAGED_FILES[*]// /,}} + ${#CHIBI_STAGED_ART[@]} model source(s)"
-  warn "Review the golden diff like a content diff, then commit tools/mcc/golden/, $STAGED_DIR/ AND $CHIBI_STAGED_DIR/ together."
+  # Sprout Meadow's staged CHUNK pack (#877) — regenerated in the same lockstep.
+  # Wiped first so a chunk dropped from the emit cannot linger as a staged orphan.
+  rm -rf "$CHIBI_CHUNK_STAGED_DIR"
+  emit_chibi_chunks_into "$CHIBI_CHUNK_STAGED_DIR"
+  ok "Chibi staged chunk pack refreshed: $CHIBI_CHUNK_STAGED_DIR ($(find "$CHIBI_CHUNK_STAGED_DIR" -type f | wc -l | tr -d ' ') files)"
+  warn "Review the golden diff like a content diff, then commit tools/mcc/golden/, $STAGED_DIR/, $CHIBI_STAGED_DIR/ AND $CHIBI_CHUNK_STAGED_DIR/ together."
   exit 0
 fi
 
@@ -404,4 +469,43 @@ else
   die "python3 not found — cannot run the chibi staged-model coverage gate (tools/check_staged_models.py); install python3 and re-run."
 fi
 
-log "${_B}Determinism gate passed.${_R} Golden corpus, staged client pack (core + chibi), and mcc output are all current and deterministic."
+# --- 8. CHIBI STAGED CHUNK PACK (story #877): the committed Sprout Meadow terrain
+# under res://meridian/chibi/chunks/sprout_meadow matches a fresh
+# `chunk-emit --profile meadow`. This is what keeps the FIRST zone with real terrain
+# honest: the staged chunks are generated bytes, so a profile/stride/material change
+# that forgets the stage would ship terrain that no longer matches its generator —
+# and the per-chunk BLAKE3 in the IF-6 manifest would stop matching the payloads,
+# which fails the client's fail-closed verify AT ENTER-WORLD (a black-screen bug
+# every other gate would wave through). Byte-for-byte, in BOTH directions, so a
+# stale orphan left behind by a shrinking grid is caught too.
+log "Chibi staged chunk pack: comparing $CHIBI_CHUNK_STAGED_DIR against a fresh chunk-emit --profile $CHIBI_CHUNK_PROFILE"
+[ -d "$CHIBI_CHUNK_STAGED_DIR" ] || die "chibi staged chunk pack missing: $CHIBI_CHUNK_STAGED_DIR — run 'scripts/check-golden.sh --update-golden' to create it"
+CHIBI_CHUNK_RUN="$(mktemp -d)"
+emit_chibi_chunks_into "$CHIBI_CHUNK_RUN"
+chunk_stale=0
+# (a) every freshly emitted file is staged, byte-identical.
+while IFS= read -r f; do
+  rel="${f#"$CHIBI_CHUNK_RUN"/}"
+  if [ ! -f "$CHIBI_CHUNK_STAGED_DIR/$rel" ]; then
+    chunk_stale=1
+    warn "MISSING staged chunk file $CHIBI_CHUNK_STAGED_DIR/$rel (the fresh emit produced it)"
+  elif ! cmp -s "$f" "$CHIBI_CHUNK_STAGED_DIR/$rel"; then
+    chunk_stale=1
+    warn "STALE staged chunk file $CHIBI_CHUNK_STAGED_DIR/$rel vs fresh emit"
+  fi
+done < <(find "$CHIBI_CHUNK_RUN" -type f)
+# (b) nothing EXTRA is staged (an orphan the generator no longer emits).
+while IFS= read -r f; do
+  rel="${f#"$CHIBI_CHUNK_STAGED_DIR"/}"
+  if [ ! -f "$CHIBI_CHUNK_RUN/$rel" ]; then
+    chunk_stale=1
+    warn "ORPHAN staged chunk file $CHIBI_CHUNK_STAGED_DIR/$rel (the fresh emit does NOT produce it)"
+  fi
+done < <(find "$CHIBI_CHUNK_STAGED_DIR" -type f)
+rm -rf "$CHIBI_CHUNK_RUN"
+if [ "$chunk_stale" -ne 0 ]; then
+  die "chibi staged chunk pack is STALE — regenerate it with 'scripts/check-golden.sh --update-golden' and commit $CHIBI_CHUNK_STAGED_DIR/."
+fi
+ok "Chibi staged chunk pack matches a fresh chunk-emit (Sprout Meadow terrain is current)"
+
+log "${_B}Determinism gate passed.${_R} Golden corpus, staged client pack (core + chibi), Sprout Meadow chunks, and mcc output are all current and deterministic."

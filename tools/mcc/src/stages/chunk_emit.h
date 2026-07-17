@@ -36,13 +36,20 @@
 //       Forge/#315 — ships binary `.scn` the loader reads directly; this is a
 //       FIXTURE-correctness choice.)
 //       Each scene holds a MeshInstance3D with an `ArrayMesh` BAKED FROM THE
-//       CHUNK'S OWN HEIGHTFIELD (#875): 129×129 vertices (the samples 1:1), per-
-//       vertex normals, UVs spanning the chunk 0..1, and a StandardMaterial3D
-//       slot keyed to the shared terrain-ground dep id. The node is translated to
-//       the chunk's zone-local XZ corner at y=0, so a vertex's Y *is* its world
-//       height and neighbours tile exactly along the shared edge. The proxy is the
-//       same surface decimated 4× per axis (33×33). Before #875 these scenes were a
-//       single BoxMesh per chunk — mounting a zone drew giant boxes, not terrain.
+//       CHUNK'S OWN HEIGHTFIELD (#875), per-vertex normals, UVs spanning the chunk
+//       0..1, and a StandardMaterial3D carrying the zone's GROUND MATERIAL, keyed
+//       to the shared terrain-ground dep id (#877). The node is translated to the
+//       chunk's zone-local XZ corner at y=0, so a vertex's Y *is* its world height
+//       and neighbours tile exactly along the shared edge. Before #875 these scenes
+//       were a single BoxMesh per chunk — mounting a zone drew giant boxes.
+//       The render mesh's resolution is the PROFILE's mesh stride (#877):
+//         fixture — 129×129 (the heightfield 1:1), proxy 33×33; neutral grey.
+//         meadow  — 65×65 (stride 2, max 7.1 mm from the true surface), proxy
+//                   33×33; the flat bright chibi green.
+//       Stride decimates the RENDER MESH ONLY — the `.chunk.bin` heightfield stays
+//       the full 129×129 lattice at every stride, so the client's ground-sample and
+//       client/server parity are stride-INVARIANT. See THE MESH STRIDE DECISION in
+//       chunk_emit.cpp for the measured fidelity/size table behind the choice.
 //
 // GODOT MESH ENCODING (the one place mcc is coupled to the engine): Godot
 //   serialises an ArrayMesh surface as base64 PackedByteArray blobs whose layout —
@@ -111,6 +118,12 @@ namespace mcc::stages {
 //             stood on by a validated player (see the R5 budget below).
 //   Meadow  — gentle rolling hills within ±3 m of z=0 (#876/#872 T2). Suitable
 //             for a zone players actually walk TODAY.
+//
+// A profile selects the whole SURFACE — its heightfield, its render-mesh stride,
+// and its ground material (#877) — so a new zone's look is a profile, not a new
+// emit path or a CLI knob. Baking the stride/material into the profile (rather than
+// exposing them as flags) is deliberate: the staged pack is policed byte-for-byte
+// by check-golden.sh, so `--profile meadow` must mean exactly one set of bytes.
 //
 // ⛔ THE ±3 m R5 HEIGHT BUDGET (why `meadow` exists) — see MEADOW HEIGHT BUDGET
 //    in chunk_emit.cpp. worldd's ground model is the CONSTANT plane z=0 and R5

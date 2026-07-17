@@ -854,6 +854,251 @@ void test_meadow_emit_sprout_meadow() {
            "sanity: the `fixture` profile does NOT fit the +-3 m budget (why `meadow` exists)");
 }
 
+// ---- #877 T3: the meadow's SURFACE STYLE (mesh stride + ground material) -----
+//
+// Locks in the two decisions T3 made before staging, because the staged pack is
+// policed byte-for-byte: changing either silently would churn committed data.
+void test_meadow_surface_style() {
+    std::cout << "test_meadow_surface_style (#877: profile render stride + chibi ground)\n";
+    const mcc::stages::ChunkEmitResult res = run(meadow_opts());
+    if (!res.ok || res.chunks.empty()) { report(false, "meadow emit produced chunks"); return; }
+
+    // ---- The stride decision (#877, deferred from #875) ---------------------
+    // meadow renders at stride 2 (65x65 verts / 8192 tris); the proxy stays at
+    // stride 4 (33x33), so the far-ring LOD remains genuinely coarser than the
+    // full mesh rather than collapsing into a copy of it.
+    bool counts_ok = true, proxy_ok = true;
+    for (const auto& rec : res.chunks) {
+        counts_ok &= (tscn_field(rec.scn, "vertex_count") == "4225");    // 65*65
+        counts_ok &= (tscn_field(rec.scn, "index_count") == "24576");    // 64*64*2 tris
+        proxy_ok &= (tscn_field(rec.proxy_scn, "vertex_count") == "1089");  // 33*33
+        proxy_ok &= (tscn_field(rec.proxy_scn, "index_count") == "6144");   // 32*32*2 tris
+    }
+    report(counts_ok, "every meadow chunk renders at stride 2 (65x65 verts, 8192 tris)",
+           "got " + tscn_field(res.chunks[0].scn, "vertex_count") + " verts");
+    report(proxy_ok, "the proxy stays 4x-decimated (33x33) — a real coarser LOD, not a copy");
+    report(res.chunks[0].scn != res.chunks[0].proxy_scn,
+           "full mesh and proxy are genuinely different payloads");
+
+    // ---- The chibi ground material -----------------------------------------
+    // Flat + bright + non-shiny: the documented chibi look ("flat body colors").
+    bool mat_ok = true;
+    for (const auto& rec : res.chunks) {
+        for (const std::string* scn : {&rec.scn, &rec.proxy_scn}) {
+            mat_ok &= (scn->find("[sub_resource type=\"StandardMaterial3D\" id=\"TerrainGround\"]")
+                       != std::string::npos);
+            // Keyed to the shared IF-8 terrain-ground dep id (the T1 slot contract).
+            mat_ok &= (scn->find("resource_name = \"chibi:art.terrain.sprout_meadow_ground\"")
+                       != std::string::npos);
+            mat_ok &= (scn->find("albedo_color = Color(0.4900, 0.7800, 0.3100, 1.0000)")
+                       != std::string::npos);
+            mat_ok &= (scn->find("metallic_specular = 0.0000") != std::string::npos);
+            mat_ok &= (scn->find("\"material\": SubResource(\"TerrainGround\")") != std::string::npos);
+            // The material is EMBEDDED, never an ext_resource: the shared ground dep
+            // has no on-disk payload, and a dangling ext_resource would fail the load.
+            mat_ok &= (scn->find("[ext_resource") == std::string::npos);
+        }
+    }
+    report(mat_ok, "every meadow surface carries the embedded chibi ground material "
+                   "(bright flat green, specular killed), keyed to the shared dep id");
+
+    // The fixture profile keeps the neutral grey — T3 moved ONLY the meadow.
+    const mcc::stages::ChunkEmitResult fixture = run({});
+    report(!fixture.chunks.empty() &&
+               fixture.chunks[0].scn.find("albedo_color = Color(0.5000, 0.5000, 0.5000, 1.0000)")
+                   != std::string::npos &&
+               fixture.chunks[0].scn.find("metallic_specular") == std::string::npos,
+           "the `fixture` profile keeps its neutral grey and omits the default-valued "
+           "metallic_specular (its bytes are unchanged by #877)");
+    report(!fixture.chunks.empty() &&
+               tscn_field(fixture.chunks[0].scn, "vertex_count") == "16641",
+           "the `fixture` profile still renders the heightfield 1:1 at stride 1 (129x129)");
+
+    // ---- The fidelity the stride decision actually bought --------------------
+    // Stride is a RENDER-only knob: the .chunk.bin heightfield the client
+    // ground-samples stays full 129x129. So the deviation between the drawn surface
+    // and the sampled truth IS the visible float/sink budget. Recompute it from the
+    // EMITTED bytes (decode the mesh, compare against the emitted heightfield at the
+    // lattice points the mesh dropped) rather than trusting the design note.
+    const auto& rec = res.chunks[0];
+    const std::vector<float> hf = heightfield_of(rec.chunk_bin);
+    report(hf.size() == 129u * 129u,
+           "the meadow .chunk.bin heightfield is STILL full-res 129x129 at stride 2 "
+           "(ground-sample fidelity is stride-invariant)",
+           "got " + std::to_string(hf.size()) + " samples");
+
+    const std::string vd = b64_decode(tscn_packed_bytes_b64(rec.scn, "vertex_data"));
+    // DERIVE the stride from the mesh the emitter actually shipped rather than
+    // spelling it here: the stride belongs to the profile's SurfaceStyle, so a
+    // hardcoded 2 would make every message below lie the day a profile re-strides.
+    // The assertion that it IS 2 today lives above (vertex_count == 4225) — that is
+    // the decision gate; this block measures whatever was emitted and says so.
+    const int kN = static_cast<int>(std::lround(std::sqrt(
+        static_cast<double>(std::stoi(tscn_field(rec.scn, "vertex_count"))))));
+    const int kStride = (kN > 1) ? 128 / (kN - 1) : 0;
+    report(kN > 1 && 128 % (kN - 1) == 0 && kStride * (kN - 1) == 128,
+           "derived the render stride from the emitted vertex count (stride " +
+               std::to_string(kStride) + ", " + std::to_string(kN) + "x" +
+               std::to_string(kN) + " verts)",
+           "vertex_count=" + tscn_field(rec.scn, "vertex_count"));
+    const std::string stride_s = std::to_string(kStride);
+    bool on_lattice = true;
+    float max_dev = 0.0f;
+    if (vd.size() >= static_cast<std::size_t>(kN) * kN * 12) {
+        // Every retained vertex must sit EXACTLY on its heightfield sample.
+        for (int j = 0; j < kN && on_lattice; ++j) {
+            for (int i = 0; i < kN; ++i) {
+                const std::size_t vi = static_cast<std::size_t>(j) * kN + i;
+                const float vy = le_f32(vd, vi * 12 + 4);
+                const float s = hf[static_cast<std::size_t>(j * kStride) * 129 + (i * kStride)];
+                if (vy != s) { on_lattice = false; break; }
+            }
+        }
+        // At the samples the mesh DROPPED (odd lattice points), the drawn surface is
+        // the edge midpoint — measure how far that is from the true height.
+        for (int j = 0; j < 129; j += kStride) {
+            for (int i = 1; i < 128; i += kStride) {
+                const float lo = hf[static_cast<std::size_t>(j) * 129 + (i - 1)];
+                const float hi = hf[static_cast<std::size_t>(j) * 129 + (i + 1)];
+                const float truth = hf[static_cast<std::size_t>(j) * 129 + i];
+                max_dev = std::max(max_dev, std::fabs((lo + hi) * 0.5f - truth));
+            }
+        }
+    }
+    report(on_lattice, "every retained stride-" + stride_s + " vertex still sits exactly on its "
+                       "heightfield sample (decimation drops samples, never moves them)");
+    // The measured worst case across the grid is ~7 mm; 5 cm is a generous ceiling
+    // that still fails loudly if someone coarsens the stride without re-deciding.
+    report(max_dev < 0.05f,
+           "the drawn stride-" + stride_s + " surface stays within 5 cm of the sampled "
+           "heightfield (imperceptible float/sink; measured ~7 mm)",
+           "max_dev=" + std::to_string(max_dev) + " m");
+}
+
+// ---- #877 QA: the emit is a pure function of its INPUT, not of the toolchain --
+//
+// THE REGRESSION THIS EXISTS FOR: #884 staged 29 chunk files from an arm64 macOS
+// build (Apple clang, -ffp-contract=on by default) and CI's x86-64 GCC declared
+// every one of them stale — ~55% of heightfield samples differed by up to 1.9e-6 m.
+// Nobody had changed the source. The compiler had fused `a*b + c` into a single
+// FMA on one machine and not the other, and BLAKE3 does not grade on magnitude.
+// chunk.fbs: any nondeterminism is a P0.
+//
+// -ffp-contract=off is now pinned in CMakeLists.txt, but A FLAG IS NOT A PROOF —
+// it is scoped to one build system, one set of compilers, one set of arches. This
+// test is the DETECTOR that outlives it: it pins the emitted floats to a golden
+// BLAKE3, so any toolchain that computes them differently — the flag dropped, an
+// -Ofast crept in, a new arch, x87 excess precision, a libm swap, a float/double
+// promotion changed — fails HERE, on the machine that did it, naming the emit as
+// the thing that moved.
+//
+// LAYERING (deliberate): this hashes the FLOAT VALUES, not the serialized files.
+// check-golden.sh gate 8 polices the whole artifact byte-for-byte and would also
+// trip on a FlatBuffers layout or .tscn formatting change. Hashing the values here
+// keeps THIS test's failure message unambiguous: the math moved, not the container.
+//
+// IF THIS FAILS, DO NOT JUST RE-BAKE THE GOLDEN. The staged pack moves with these
+// bytes, so a "harmless" update here silently rewrites shipped terrain. Find out
+// which rule broke (see THE DETERMINISM INVARIANT in chunk_emit.cpp) first.
+//
+// Goldens measured on Apple clang 21 / arm64 AND GCC / x86-64 with contraction
+// pinned off — the two toolchains that disagreed. They must never need updating
+// for a platform reason again; that is the entire point.
+constexpr const char* kGoldenMeadowHeightfields =
+    "7dd87962247780489744828e307b2a25c97b5e0dcd6dc56658f04af9fc34d066";
+constexpr const char* kGoldenMeadowMeshes =
+    "d70e47d73d6e460c634d8b4b22db731c0a406bc19801dd15878a877da1f965e6";
+constexpr const char* kGoldenFixtureHeightfields =
+    "96529cf65862ee8580ca898ee0fceb1bdbcf20c4332a45af945922ef90f0f089";
+
+// Hash a float span by its IEEE-754 BIT PATTERN, serialized explicitly
+// little-endian. Not memcpy of the raw array: that would bake this machine's
+// endianness into the golden, turning a portability test into a portability
+// assumption.
+void hash_floats(mcc::hash::Blake3& h, const std::vector<float>& v) {
+    for (const float f : v) {
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &f, sizeof(bits));
+        const unsigned char le[4] = {
+            static_cast<unsigned char>(bits & 0xFF),
+            static_cast<unsigned char>((bits >> 8) & 0xFF),
+            static_cast<unsigned char>((bits >> 16) & 0xFF),
+            static_cast<unsigned char>((bits >> 24) & 0xFF)};
+        h.update(reinterpret_cast<const char*>(le), 4);
+    }
+}
+
+void test_emit_is_toolchain_independent() {
+    std::cout << "test_emit_is_toolchain_independent (#877 QA: FP contraction / FMA)\n";
+
+    const mcc::stages::ChunkEmitResult meadow = run(meadow_opts());
+    if (!meadow.ok || meadow.chunks.empty()) {
+        report(false, "meadow emit produced chunks");
+        return;
+    }
+
+    // (1) The heightfield the SERVER/client ground-samples. This is the surface
+    // #884 moved: smootherstep's Horner chain + value_noise's bilinear blend are
+    // both `a*b + c`, the exact shape a compiler fuses.
+    mcc::hash::Blake3 hf_h;
+    std::size_t samples = 0;
+    for (const auto& rec : meadow.chunks) {
+        const std::vector<float> hf = heightfield_of(rec.chunk_bin);
+        samples += hf.size();
+        hash_floats(hf_h, hf);
+    }
+    report(samples == 9u * 129u * 129u,
+           "hashed every meadow heightfield sample (9 chunks x 129x129)",
+           "got " + std::to_string(samples));
+    const std::string hf_hex = hf_h.hex();
+    report(hf_hex == kGoldenMeadowHeightfields,
+           "the meadow heightfield floats match their golden BLAKE3 — the emit is "
+           "toolchain-INDEPENDENT (this is the #884 FMA-contraction gate)",
+           "got  " + hf_hex + "\n       want " + kGoldenMeadowHeightfields +
+               "\n       The emitted floats MOVED. Do NOT re-bake this golden until you know\n"
+               "       why: check -ffp-contract=off is still pinned on mcc_stages (CMakeLists.txt),\n"
+               "       that no -ffast-math/-Ofast leaked in, and that no transcendental or\n"
+               "       non-correctly-rounded libm call entered the height path. The staged pack\n"
+               "       under client/project/meridian/chibi/chunks/ moves with these bytes.");
+
+    // (2) The RENDER path too — normals are accumulated and normalized per vertex
+    // (mul+add, then sqrt), so the mesh is contraction-sensitive independently of
+    // the heightfield. The .tscn carries them as base64 vertex_data.
+    mcc::hash::Blake3 mesh_h;
+    for (const auto& rec : meadow.chunks) {
+        mesh_h.update(rec.scn.data(), rec.scn.size());
+        mesh_h.update("\0", 1);
+        mesh_h.update(rec.proxy_scn.data(), rec.proxy_scn.size());
+        mesh_h.update("\0", 1);
+    }
+    const std::string mesh_hex = mesh_h.hex();
+    report(mesh_hex == kGoldenMeadowMeshes,
+           "the meadow render meshes match their golden BLAKE3 — the normal/mesh "
+           "path is toolchain-independent too",
+           "got  " + mesh_hex + "\n       want " + kGoldenMeadowMeshes);
+
+    // (3) The `fixture` profile shares the same float discipline and is emitted by
+    // the same code paths, so gate it identically — it is not staged, so nothing
+    // else would ever catch a drift in it.
+    //
+    // NOTE — this leg does NOT guard the same thing as (1) and (2). `fixture`'s
+    // height math measured contraction-INSENSITIVE: it emits identical bytes under
+    // -ffp-contract=on and =off (verified, 31/31 files), so unlike the meadow it
+    // would not have caught #884. It is here for the OTHER drift classes the golden
+    // catches — a libm swap, x87 excess precision, a promotion change, a refactor
+    // of the shared emit path — and to keep an unstaged profile from rotting
+    // silently. Do not read a green fixture leg as evidence that contraction is off.
+    const mcc::stages::ChunkEmitResult fixture = run({});
+    mcc::hash::Blake3 fx_h;
+    if (fixture.ok) {
+        for (const auto& rec : fixture.chunks) hash_floats(fx_h, heightfield_of(rec.chunk_bin));
+    }
+    const std::string fx_hex = fx_h.hex();
+    report(fixture.ok && fx_hex == kGoldenFixtureHeightfields,
+           "the `fixture` profile's heightfield floats match their golden BLAKE3",
+           "got  " + fx_hex + "\n       want " + kGoldenFixtureHeightfields);
+}
+
 }  // namespace
 
 int main() {
@@ -867,6 +1112,8 @@ int main() {
     test_determinism_and_disk();
     test_meadow_profile_height_budget();
     test_meadow_emit_sprout_meadow();
+    test_meadow_surface_style();
+    test_emit_is_toolchain_independent();
 
     std::cout << "\n" << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
     if (g_failures) {

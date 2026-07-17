@@ -134,6 +134,72 @@ add_library(mcc_stages STATIC
     src/stages/chunk_emit.cpp
     src/hash/blake3.cpp)
 
+# ---- ⛔ FLOATING-POINT CONTRACTION MUST STAY OFF (#877 QA) ------------------
+#
+# mcc's emitted bytes are a CONTENT-ADDRESSED artifact: the chunk payloads are
+# staged in git, hashed with BLAKE3 into the IF-6 manifest, and policed
+# byte-for-byte by check-golden.sh gate 8. chunk.fbs's doctrine is explicit —
+# "any nondeterminism is a P0" — so the emit must be a pure function of its
+# INPUT, not of the toolchain that compiled it.
+#
+# It was not. `-ffp-contract` is a per-compiler default, and it silently rewrites
+# `a*b + c` into a single fused multiply-add — one rounding step instead of two.
+# The meadow profile's smootherstep and bilinear noise blend are exactly that
+# shape, so the emitted heightfield changed with the compiler's mood:
+#
+#   Apple clang 21 / arm64, `chunk-emit --profile meadow --grid 3`, SAME source:
+#     -ffp-contract=on   (clang default) -> corpus sha256 6a4f2f074657518b
+#     -ffp-contract=fast (gcc default)   -> corpus sha256 69b13b48b05d1c89
+#     -ffp-contract=off  (pinned here)   -> corpus sha256 c36c5a0554f86791
+#
+# THREE different byte streams from one source tree. That is what broke #884: the
+# pack was staged from a contract=on macOS build, while CI's x86-64 GCC (whose
+# baseline ISA has no FMA to contract INTO) emitted the un-fused values and
+# declared all 29 staged files stale. ~55% of heightfield samples differed, by up
+# to ~1.9e-6 m — visually nothing, but BLAKE3 does not grade on magnitude.
+#
+# Pinning it off makes both roundings happen everywhere, so every arch/optimizer
+# agrees. MEASURED, not assumed — the same `--profile meadow --grid 3` corpus,
+# emitted with contraction pinned off:
+#
+#   macOS  arm64  / Apple clang 21.0.0 -> c36c5a0554f86791
+#   Linux  arm64  / GCC 13.3.0         -> c36c5a0554f86791
+#   Linux  x86-64 / GCC 13.3.0         -> c36c5a0554f86791   <-- the CI arch (#884's failure)
+#
+# Two OSes, two compilers, two stdlibs, two arches, one hash — and on x86-64 the
+# fresh emit is byte-identical to all 29 committed staged files. Also verified on
+# Apple clang 21/arm64 that with contraction off, -O0 and -O3 emit IDENTICAL bytes
+# (with it on, they need not).
+#
+# Scoped to mcc_stages ON PURPOSE: this is the library holding every emitter, and
+# the flag is a correctness requirement for THEM, not a global build opinion.
+# Cost is nil — mcc is a build-time CLI, not a hot loop.
+#
+# MSVC (VS2022+) needs no flag: /fp:precise — its default — forbids contraction
+# there, and it only fuses under /fp:fast or /fp:contract, neither of which we
+# pass. Scoped to VS2022+ deliberately: PRE-VS2022, /fp:precise implied
+# fp_contract(ON), so an old MSVC WOULD fuse and WOULD emit different bytes.
+# Nothing builds mcc on MSVC today (no MSVC CI, and mcc is C++20), so this is
+# theoretical — and the golden test below is the backstop that would catch it
+# rather than let it ship. Should mcc ever gain an MSVC build, pin it here.
+#
+# THE FLAG IS THE ENFORCEMENT, NOT THE PROOF. test_chunk_emit.cpp's
+# test_emit_is_toolchain_independent pins the emitted heightfield to a golden
+# BLAKE3, so ANY future toolchain/flag/arch that shifts the bytes fails at test
+# time on the machine that did it — even one this flag cannot reach.
+#
+# And that backstop has NO ESCAPE HATCH, which is the point. Its goldens are
+# `constexpr` in the test source — there is no --update-golden path to them. This
+# matters because gate 8's own failure message recommends
+# `check-golden.sh --update-golden`, and that command RE-BAKES the staged pack
+# from whatever the local toolchain emits: run it on a contracting build and gate
+# 8 goes green on wrong bytes. It cannot silence this test. Re-baking these
+# goldens takes a deliberate source edit, which is exactly the friction #884
+# needed and did not have.
+if(NOT MSVC)
+    target_compile_options(mcc_stages PRIVATE -ffp-contract=off)
+endif()
+
 # chunk_emit.cpp #includes the flatc-generated chunk_generated.h — make the stage
 # lib depend on the codegen and see the generated dir + the flatbuffers runtime.
 add_dependencies(mcc_stages mcc-chunk-codegen)
