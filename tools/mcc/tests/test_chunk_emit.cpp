@@ -96,6 +96,62 @@ const std::regex kAssetId(R"(^[a-z][a-z0-9_]{1,31}:(art|mus|sfx|amb)\.[a-z0-9_]+
 const std::regex kContentHash(R"(^blake3:[0-9a-f]{64}$)");
 const std::regex kZoneId(R"(^[a-z][a-z0-9_]{1,31}:zone\.[a-z0-9_]+(\.[a-z0-9_]+)*$)");
 
+// Cross-check a manifest against the REAL schema's `required` lists (top-level +
+// per-entry). Shared by the zone01 fixture and the chibi meadow emit.
+bool schema_required_ok(const YAML::Node& m) {
+    bool ok = true;
+    try {
+        const YAML::Node schema = YAML::LoadFile(MCC_CHUNK_MANIFEST_SCHEMA);
+        for (const auto& req : schema["required"]) {
+            const std::string key = req.as<std::string>();
+            if (!m[key]) {
+                ok = false;
+                std::cout << "       missing top-level required: " << key << "\n";
+            }
+        }
+        const YAML::Node entry_req = schema["$defs"]["chunkEntry"]["required"];
+        const YAML::Node e0 = m["chunks"][0];
+        for (const auto& req : entry_req) {
+            const std::string key = req.as<std::string>();
+            if (!e0[key]) {
+                ok = false;
+                std::cout << "       missing chunkEntry required: " << key << "\n";
+            }
+        }
+    } catch (const std::exception& ex) {
+        ok = false;
+        std::cout << "       schema load failed: " << ex.what() << "\n";
+    }
+    return ok;
+}
+
+// Decode a chunk's ServerChunk heightfield samples (129x129, row-major z-outer).
+std::vector<float> heightfield_of(const std::string& chunk_bin) {
+    const auto* buf = reinterpret_cast<const uint8_t*>(chunk_bin.data());
+    flatbuffers::Verifier v(buf, chunk_bin.size());
+    if (!meridian::chunk::VerifyServerChunkBuffer(v)) return {};
+    const auto* hf = meridian::chunk::GetServerChunk(buf)->heightfield();
+    if (!hf || !hf->samples()) return {};
+    std::vector<float> out;
+    out.reserve(hf->samples()->size());
+    for (flatbuffers::uoffset_t i = 0; i < hf->samples()->size(); ++i)
+        out.push_back(hf->samples()->Get(i));
+    return out;
+}
+
+// The canonical Sprout Meadow emit: the `meadow` profile at zone01's EXISTING
+// geometry (origin -384, 3x3 grid => zone-local [-512,-128]), so the server's
+// spawn (-320,-320) and bounds constants need no change.
+mcc::stages::ChunkEmitOptions meadow_opts() {
+    mcc::stages::ChunkEmitOptions o;
+    o.zone = "chibi:zone.sprout_meadow";
+    o.profile = mcc::stages::HeightProfile::Meadow;
+    o.grid = 3;
+    o.origin_x = -384.0;
+    o.origin_z = -384.0;
+    return o;
+}
+
 // (a) manifest well-formed + schema-required-field coverage ------------------
 void test_manifest_wellformed() {
     std::cout << "test_manifest_wellformed (IF-6 <zone>.chunks.json)\n";
@@ -125,31 +181,7 @@ void test_manifest_wellformed() {
     report(m["far_ring"].as<int>(-1) >= 0, "far_ring present");
     report(m["chunks"].IsSequence() && m["chunks"].size() == 9, "9 chunk entries");
 
-    // Cross-check against the REAL schema's `required` lists (top-level + entry).
-    bool schema_ok = true;
-    try {
-        const YAML::Node schema = YAML::LoadFile(MCC_CHUNK_MANIFEST_SCHEMA);
-        for (const auto& req : schema["required"]) {
-            const std::string key = req.as<std::string>();
-            if (!m[key]) {
-                schema_ok = false;
-                std::cout << "       missing top-level required: " << key << "\n";
-            }
-        }
-        const YAML::Node entry_req = schema["$defs"]["chunkEntry"]["required"];
-        const YAML::Node e0 = m["chunks"][0];
-        for (const auto& req : entry_req) {
-            const std::string key = req.as<std::string>();
-            if (!e0[key]) {
-                schema_ok = false;
-                std::cout << "       missing chunkEntry required: " << key << "\n";
-            }
-        }
-    } catch (const std::exception& ex) {
-        schema_ok = false;
-        std::cout << "       schema load failed: " << ex.what() << "\n";
-    }
-    report(schema_ok, "every schema-required property is emitted (top-level + entry)");
+    report(schema_required_ok(m), "every schema-required property is emitted (top-level + entry)");
 
     // Per-entry grammar: refs, hash, aabb, deps, priority.
     bool refs_ok = true, hash_ok = true, aabb_ok = true, deps_ok = true;
@@ -653,6 +685,175 @@ void test_determinism_and_disk() {
     fs::remove_all(base, ec);
 }
 
+// (f) the `meadow` height profile + the Sprout Meadow emit (#876) ------------
+//
+// THE LOAD-BEARING TEST of epic #872's "zero server changes" premise. worldd's
+// ground model is the CONSTANT plane z=0 (movement_validation.cpp:45
+// `ground_sample() -> kFlatGroundZ`) and R5 rejects any move whose
+// |z - ground| exceeds kHeightTolerance = 4.0 m (movement_constants.h:202).
+// The client walks the real heightfield, so every metre of terrain height is a
+// metre of R5 error budget spent. A meadow authored within +-3 m of z=0 passes
+// R5 today, unmodified, with 1 m of headroom for jumps/slope-follow jitter.
+// If this assertion ever fails, players standing on the meadow get their moves
+// REJECTED — the epic would then need the (much larger) server-side chunk
+// ingestion work of epic #874 before it could ship.
+void test_meadow_profile_height_budget() {
+    std::cout << "test_meadow_profile_height_budget (the +-3 m R5 budget, #876)\n";
+    const mcc::stages::ChunkEmitResult res = run(meadow_opts());
+    report(res.ok, "meadow emit reports ok");
+    report(res.chunks.size() == 9, "3x3 Sprout Meadow grid -> 9 chunks",
+           "got " + std::to_string(res.chunks.size()));
+    if (res.chunks.empty()) return;
+
+    // Mirror of the server's own numbers, asserted here rather than assumed.
+    constexpr float kServerHeightTolerance = 4.0f;  // movement_constants.h:202
+    constexpr float kServerFlatGroundZ = 0.0f;      // movement_constants.h:233
+    constexpr float kBudget = 3.0f;                 // the authored budget (#876)
+    static_assert(kBudget < kServerHeightTolerance, "meadow budget must fit inside R5");
+
+    float lo = std::numeric_limits<float>::infinity();
+    float hi = -std::numeric_limits<float>::infinity();
+    bool any_nan = false;
+    bool all_decoded = true;
+    // Steepest 1 m step anywhere in the field — "gentle rolling hills", not spikes.
+    float max_step = 0.0f;
+    for (const auto& rec : res.chunks) {
+        const std::vector<float> h = heightfield_of(rec.chunk_bin);
+        if (h.size() != 129u * 129u) { all_decoded = false; continue; }
+        for (int lz = 0; lz < 129; ++lz) {
+            for (int lx = 0; lx < 129; ++lx) {
+                const float s = h[static_cast<std::size_t>(lz) * 129 + lx];
+                if (std::isnan(s)) any_nan = true;
+                lo = std::min(lo, s);
+                hi = std::max(hi, s);
+                if (lx > 0)
+                    max_step = std::max(max_step, std::fabs(s - h[static_cast<std::size_t>(lz) * 129 + (lx - 1)]));
+                if (lz > 0)
+                    max_step = std::max(max_step, std::fabs(s - h[static_cast<std::size_t>(lz - 1) * 129 + lx]));
+            }
+        }
+    }
+    report(all_decoded, "every meadow .chunk.bin verifies with a 129x129 heightfield");
+    report(!any_nan, "no NaN samples in the meadow heightfield");
+
+    const std::string span = "min=" + std::to_string(lo) + " max=" + std::to_string(hi);
+    // ⛔ THE CONSTRAINT. Both bounds, against the server's own ground plane.
+    report(std::fabs(lo - kServerFlatGroundZ) <= kBudget &&
+               std::fabs(hi - kServerFlatGroundZ) <= kBudget,
+           "EVERY meadow sample is within +-3 m of z=0 (R5 passes with no server change)", span);
+    report(std::fabs(lo) <= kServerHeightTolerance && std::fabs(hi) <= kServerHeightTolerance,
+           "meadow stays inside the server's R5 kHeightTolerance (4.0 m) with headroom", span);
+
+    // Gentle + genuinely rolling: real hills AND real hollows about z=0, no cliffs.
+    report((hi - lo) > 2.0f, "meadow is genuinely non-flat (span > 2 m)", span);
+    report(lo < -0.5f && hi > 0.5f, "meadow rolls both above and below z=0 (centred, not offset)",
+           span);
+    report(max_step < 0.5f, "no 1 m step exceeds 0.5 m (gentle rolling hills, not spikes)",
+           "max_step=" + std::to_string(max_step));
+
+    // The AABB the manifest publishes must reflect those same real bounds.
+    bool aabb_ok = true;
+    for (const auto& rec : res.chunks)
+        aabb_ok &= (rec.min_y >= -kBudget && rec.max_y <= kBudget && rec.min_y <= rec.max_y);
+    report(aabb_ok, "every chunk's published AABB y-range sits inside the +-3 m budget");
+}
+
+// The Sprout Meadow emit itself: right zone, right geometry, valid manifest,
+// deterministic, seam-free — and the zone01 fixture profile is untouched.
+void test_meadow_emit_sprout_meadow() {
+    std::cout << "test_meadow_emit_sprout_meadow (chibi:zone.sprout_meadow, #876)\n";
+    const mcc::stages::ChunkEmitResult res = run(meadow_opts());
+    if (!res.ok || res.chunks.empty()) { report(false, "meadow emit produced chunks"); return; }
+
+    report(res.zone == "chibi:zone.sprout_meadow" && res.ns == "chibi" &&
+               res.zone_bare == "sprout_meadow",
+           "emits under the chibi namespace as zone sprout_meadow",
+           res.ns + " / " + res.zone_bare);
+
+    YAML::Node m;
+    bool parsed = true;
+    try { m = YAML::Load(res.manifest_json); } catch (const std::exception&) { parsed = false; }
+    report(parsed && m.IsMap(), "meadow manifest parses");
+    if (!parsed) return;
+    report(std::regex_match(m["zone"].as<std::string>(""), kZoneId), "manifest zone matches the zone-id grammar");
+    report(schema_required_ok(m), "meadow manifest carries every schema-required property");
+    report(m["chunks"].IsSequence() && m["chunks"].size() == 9, "9 meadow chunk entries");
+
+    // Authored at zone01's EXISTING geometry so spawn/bounds need no change: a
+    // 3x3 grid at origin -384 spans zone-local [-512, -128] on both axes, which
+    // covers the server's spawn placeholder kZoneSpawnXY = (-320, -320).
+    report(m["origin"]["x"].as<double>(0) == -384.0 && m["origin"]["z"].as<double>(0) == -384.0,
+           "origin is -384 (zone01's geometry — spawn/bounds unchanged)");
+    report(m["grid"]["min_cx"].as<int>(0) == -1 && m["grid"]["max_cx"].as<int>(0) == 1 &&
+               m["grid"]["min_cz"].as<int>(0) == -1 && m["grid"]["max_cz"].as<int>(0) == 1,
+           "grid indices span [-1,1] on both axes");
+    report(m["chunk_size_m"].as<int>(0) == 128, "chunk_size_m == 128");
+
+    // The play area around spawn (-320,-320) is covered by a real chunk.
+    const double gmin = -384.0 + (-1) * 128.0;  // -512
+    const double gmax = gmin + 3 * 128.0;       // -128
+    report(gmin <= -320.0 && -320.0 <= gmax,
+           "the emitted grid covers the spawn point (-320,-320)",
+           "grid spans [" + std::to_string(gmin) + ", " + std::to_string(gmax) + "]");
+
+    bool hash_ok = true, deps_ok = true;
+    for (const auto& e : m["chunks"]) {
+        hash_ok &= std::regex_match(e["hash"].as<std::string>(""), kContentHash);
+        for (const auto& d : e["deps"]) deps_ok &= std::regex_match(d.as<std::string>(""), kAssetId);
+    }
+    report(hash_ok, "every meadow entry hash matches blake3:<64hex>");
+    report(deps_ok, "meadow deps (chibi:art.terrain.sprout_meadow_ground) match the assetId grammar");
+
+    // Determinism: re-emitting the meadow is byte-identical (pack verification).
+    const mcc::stages::ChunkEmitResult again = run(meadow_opts());
+    bool bytes_equal = again.manifest_json == res.manifest_json &&
+                       again.pack_manifest_json == res.pack_manifest_json &&
+                       again.content_hash == res.content_hash &&
+                       again.chunks.size() == res.chunks.size();
+    for (std::size_t i = 0; bytes_equal && i < res.chunks.size(); ++i)
+        bytes_equal &= (again.chunks[i].chunk_bin == res.chunks[i].chunk_bin &&
+                        again.chunks[i].scn == res.chunks[i].scn &&
+                        again.chunks[i].proxy_scn == res.chunks[i].proxy_scn);
+    report(bytes_equal, "re-emitting the meadow is byte-identical (deterministic)");
+
+    // Seam-free: height is a pure function of world coords, so a chunk's east
+    // edge column must equal its neighbour's west edge column EXACTLY.
+    const mcc::stages::ChunkRecord* left = nullptr;
+    const mcc::stages::ChunkRecord* right = nullptr;
+    for (const auto& rec : res.chunks) {
+        if (rec.cx == -1 && rec.cz == 0) left = &rec;
+        if (rec.cx == 0 && rec.cz == 0) right = &rec;
+    }
+    report(left && right, "found the (-1,0) and (0,0) meadow neighbours");
+    if (left && right) {
+        const std::vector<float> lh = heightfield_of(left->chunk_bin);
+        const std::vector<float> rh = heightfield_of(right->chunk_bin);
+        bool edge_ok = lh.size() == 129u * 129u && rh.size() == 129u * 129u;
+        for (int lz = 0; edge_ok && lz < 129; ++lz)
+            edge_ok &= (lh[static_cast<std::size_t>(lz) * 129 + 128] ==
+                        rh[static_cast<std::size_t>(lz) * 129 + 0]);
+        report(edge_ok, "meadow chunks share their edge samples exactly (no seam)");
+    }
+
+    // The profile is OPT-IN: the default zone01 fixture emit is byte-for-byte
+    // unchanged by this story (its golden/staged pack must not move).
+    mcc::stages::ChunkEmitOptions dflt;
+    report(dflt.profile == mcc::stages::HeightProfile::Fixture,
+           "the default height profile is still `fixture` (zone01 output unchanged)");
+    const mcc::stages::ChunkEmitResult fixture = run({});
+    bool differs = !fixture.chunks.empty() && !res.chunks.empty() &&
+                   fixture.chunks[0].chunk_bin != res.chunks[0].chunk_bin;
+    report(differs, "the meadow profile actually produces a different surface than `fixture`");
+
+    // And the fixture profile still blows the R5 budget (it was never authored to
+    // fit) — which is exactly why `meadow` had to exist rather than reusing it.
+    const std::vector<float> fh = heightfield_of(fixture.chunks[0].chunk_bin);
+    bool fixture_exceeds = false;
+    for (const float s : fh) if (std::fabs(s) > 3.0f) fixture_exceeds = true;
+    report(fixture_exceeds,
+           "sanity: the `fixture` profile does NOT fit the +-3 m budget (why `meadow` exists)");
+}
+
 }  // namespace
 
 int main() {
@@ -664,6 +865,8 @@ int main() {
     test_hash_roundtrip();
     test_pack_completeness();
     test_determinism_and_disk();
+    test_meadow_profile_height_budget();
+    test_meadow_emit_sprout_meadow();
 
     std::cout << "\n" << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
     if (g_failures) {

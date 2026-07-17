@@ -224,6 +224,117 @@ float fixture_height(double wx, double wz, double grid_min_x, double grid_min_z,
     return 8.0f + ramp + bowl;
 }
 
+// ---- The `meadow` profile (#876) -------------------------------------------
+//
+// ⛔ MEADOW HEIGHT BUDGET — READ BEFORE CHANGING AN AMPLITUDE ⛔
+//
+// worldd does NOT sample terrain. Its entire ground model is the CONSTANT plane
+// z = 0 (`server/worldd/movement_validation.cpp:45` — `ground_sample()` returns
+// `kFlatGroundZ`; worldd cannot even read a chunk, chunk.fbs is not on the server
+// build graph). Movement rule R5 rejects any position with
+//
+//     |proposed_z − ground(x,y)| > kHeightTolerance      // = 4.0 m
+//                                                        // movement_constants.h:202
+//
+// The CLIENT, however, does sample the real heightfield and walks the player over
+// it. So for a player standing on this terrain, |proposed_z − 0| IS the terrain
+// height at their feet: every metre of authored height spends a metre of R5's
+// error budget. Terrain taller than 4 m ⇒ the server REJECTS the moves of anyone
+// standing on it.
+//
+// Hence the budget: |height| ≤ kMeadowMaxAbsM (3 m), leaving ≥1 m of headroom for
+// jump arcs and client/server ground-follow jitter. Staying inside it is precisely
+// what lets epic #872 ship visible rolling terrain with ZERO server changes. The
+// static_asserts below make the budget a build-time invariant, and
+// test_meadow_profile_height_budget asserts the EMITTED min/max — that test is the
+// gate, do not weaken it.
+//
+// Lifting the budget is NOT a tuning exercise: it requires the server to actually
+// ingest chunks and sample the heightfield (epic #874 — ServerChunk loader + real
+// ground_sample). Until that lands, these numbers are load-bearing.
+constexpr float kMeadowMaxAbsM = 3.0f;      // authored budget about z=0
+constexpr float kMeadowAmpCoarse = 2.0f;    // broad rolling hills
+constexpr float kMeadowAmpFine = 0.6f;      // gentle surface undulation
+// Value noise is a convex blend of lattice values in [-1,1], so |octave| ≤ its
+// amplitude and the sum is bounded ANALYTICALLY — no clamp, no empirical tuning.
+static_assert(kMeadowAmpCoarse + kMeadowAmpFine <= kMeadowMaxAbsM,
+              "meadow amplitude exceeds the +-3 m R5 budget (movement_constants.h kHeightTolerance"
+              " = 4.0 m vs worldd's constant ground 0) — players standing on it would be rejected");
+static_assert(kMeadowMaxAbsM < 4.0f, "the budget must stay strictly inside worldd's kHeightTolerance");
+
+// Lattice wavelengths in metres. Chosen coprime-ish so the two octaves do not
+// re-phase into a visible grid over the zone's ~384 m extent.
+constexpr double kMeadowWaveCoarse = 96.0;
+constexpr double kMeadowWaveFine = 31.0;
+
+// A deterministic integer hash of a lattice cell. All arithmetic is on uint32, so
+// wraparound is DEFINED (signed overflow would be UB) and identical everywhere.
+std::uint32_t lattice_hash(std::int32_t ix, std::int32_t iz) {
+    std::uint32_t h = static_cast<std::uint32_t>(ix) * 0x27d4eb2du;
+    h ^= static_cast<std::uint32_t>(iz) * 0x165667b1u;
+    h ^= h >> 15;
+    h *= 0x2c1b3c6du;
+    h ^= h >> 12;
+    h *= 0x297a2d39u;
+    h ^= h >> 15;
+    return h;
+}
+
+// The lattice value at a cell, EXACTLY in [-1, 1] (both endpoints attainable).
+float lattice_value(std::int32_t ix, std::int32_t iz) {
+    const std::uint32_t h = lattice_hash(ix, iz) & 0xFFFFFFu;  // 24 bits -> exact in f32
+    return static_cast<float>(h) / 16777215.0f * 2.0f - 1.0f;
+}
+
+// Smootherstep (6t^5 − 15t^4 + 10t^3): C2-continuous, maps [0,1] onto [0,1], and
+// is a polynomial — no transcendentals, so it stays inside the determinism rules.
+float smootherstep(float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); }
+
+// One octave of value noise, |result| ≤ 1: bilinear interpolation is a convex
+// combination of the four lattice values (weights in [0,1] summing to 1), so it
+// cannot exceed the largest of them. Pure function of world coords ⇒ seam-free.
+float value_noise(double wx, double wz, double wavelength) {
+    const double fx = wx / wavelength;
+    const double fz = wz / wavelength;
+    const double bx = std::floor(fx);  // exact in IEEE-754 (no rounding) => deterministic
+    const double bz = std::floor(fz);
+    const auto ix = static_cast<std::int32_t>(bx);
+    const auto iz = static_cast<std::int32_t>(bz);
+    const float ux = smootherstep(static_cast<float>(fx - bx));
+    const float uz = smootherstep(static_cast<float>(fz - bz));
+
+    const float v00 = lattice_value(ix, iz);
+    const float v10 = lattice_value(ix + 1, iz);
+    const float v01 = lattice_value(ix, iz + 1);
+    const float v11 = lattice_value(ix + 1, iz + 1);
+    const float a = v00 + (v10 - v00) * ux;
+    const float b = v01 + (v11 - v01) * ux;
+    return a + (b - a) * uz;
+}
+
+// Sprout Meadow's surface: two octaves of value noise about z=0 — broad rolling
+// hills plus a gentle finer undulation. Centred on 0 (not offset like `fixture`)
+// so the whole amplitude budget buys visible relief in BOTH directions, and
+// bounded by |kMeadowAmpCoarse| + |kMeadowAmpFine| = 2.6 m ≤ the 3 m budget.
+// Like every profile it is a pure function of zone-local world coords, so shared
+// chunk edges join with no seam for free.
+float meadow_height(double wx, double wz) {
+    return kMeadowAmpCoarse * value_noise(wx, wz, kMeadowWaveCoarse) +
+           kMeadowAmpFine * value_noise(wx, wz, kMeadowWaveFine);
+}
+
+// Dispatch to the selected named profile.
+float profile_height(HeightProfile profile, double wx, double wz, double grid_min_x,
+                     double grid_min_z, double center_x, double center_z, int chunk_size_m) {
+    switch (profile) {
+        case HeightProfile::Meadow:
+            return meadow_height(wx, wz);
+        case HeightProfile::Fixture:
+            break;
+    }
+    return fixture_height(wx, wz, grid_min_x, grid_min_z, center_x, center_z, chunk_size_m);
+}
+
 // §3.2: 128 m @ 1 m spacing + the shared edge column/row.
 constexpr int kChunkSide = 129;
 
@@ -243,9 +354,9 @@ struct PaddedField {
     }
 };
 
-PaddedField build_padded_field(const ChunkRecord& rec, double origin_x, double origin_z,
-                               double grid_min_x, double grid_min_z, double center_x,
-                               double center_z, int chunk_size_m) {
+PaddedField build_padded_field(const ChunkRecord& rec, HeightProfile profile, double origin_x,
+                               double origin_z, double grid_min_x, double grid_min_z,
+                               double center_x, double center_z, int chunk_size_m) {
     PaddedField f;
     const int n = kChunkSide + 2;
     f.v.reserve(static_cast<std::size_t>(n) * n);
@@ -253,8 +364,8 @@ PaddedField build_padded_field(const ChunkRecord& rec, double origin_x, double o
         const double wz = origin_z + static_cast<double>(rec.cz) * chunk_size_m + lz;
         for (int lx = -1; lx <= kChunkSide; ++lx) {
             const double wx = origin_x + static_cast<double>(rec.cx) * chunk_size_m + lx;
-            f.v.push_back(fixture_height(wx, wz, grid_min_x, grid_min_z, center_x, center_z,
-                                         chunk_size_m));
+            f.v.push_back(profile_height(profile, wx, wz, grid_min_x, grid_min_z, center_x,
+                                         center_z, chunk_size_m));
         }
     }
     return f;
@@ -509,6 +620,12 @@ std::string entry_hash_of(const std::string& server_bytes, const std::string& sc
 
 }  // namespace
 
+bool parse_height_profile(const std::string& name, HeightProfile& out) {
+    if (name == "fixture") { out = HeightProfile::Fixture; return true; }
+    if (name == "meadow") { out = HeightProfile::Meadow; return true; }
+    return false;
+}
+
 ChunkEmitResult chunk_emit(const ChunkEmitOptions& opts, diag::Diagnostics& diags) {
     ChunkEmitResult result;
     result.zone = opts.zone;
@@ -577,8 +694,8 @@ ChunkEmitResult chunk_emit(const ChunkEmitOptions& opts, diag::Diagnostics& diag
             // inner window) and the render mesh (which needs the pad ring for
             // seam-free normals).
             const PaddedField field =
-                build_padded_field(rec, opts.origin_x, opts.origin_z, grid_min_x, grid_min_z,
-                                   center_x, center_z, opts.chunk_size_m);
+                build_padded_field(rec, opts.profile, opts.origin_x, opts.origin_z, grid_min_x,
+                                   grid_min_z, center_x, center_z, opts.chunk_size_m);
             rec.chunk_bin =
                 build_chunk_bin(rec, field, opts.origin_x, opts.origin_z, opts.chunk_size_m);
             // build_scene needs the chunk's zone-local corner, which build_chunk_bin
