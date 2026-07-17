@@ -1481,18 +1481,89 @@ func _position_target_ring() -> void:
 
 # --- Scene construction (built in code, like camera_demo.gd) -----------------
 
+# Sun + sky for the CHIBI MEADOW's gentle relief (#887, epic #872 T5).
+#
+# The M0-era numbers here (sun 55° up, ambient energy 0.7) were written for a FLAT
+# box bootstrap, where nothing had to shade. Under them the meadow read as a flat
+# plane even though the relief is real and correct (±2.4 m — #882/#884): lighting,
+# not amplitude, was what hid it. The epic is capped at ±3 m on purpose (worldd still
+# ground-samples a constant 0 and rejects |Δz| > 4 m — epic #874), so more height is
+# NOT available; the fix has to come out of the shading.
+#
+# What actually makes a gentle slope read, and why these numbers:
+#
+#   * SUN ELEVATION is the dominant term. Lambert gives a facet of elevation-angle θ
+#     an N·L of sin(θ), so a slope swings N·L by ~cos(θ) per radian — the SHALLOWER
+#     the sun, the bigger the swing AND the smaller the base it rides on, so relative
+#     contrast climbs fast. Measured on the real mesh at the meadow's MEDIAN 1.77°
+#     slope (see below): the old 55° sun yields 3.1% slope-to-slope contrast — which
+#     is simply invisible, and is the bug. A mid-morning 26° yields 10.9%. Below ~22°
+#     the gain flattens out while the scene starts reading as late-afternoon, so 26°
+#     is the knee: grazing enough to sculpt, high enough to still read as daytime.
+#   * AMBIENT IS THE FLATTENER. A uniform fill adds the same value to every facet, so
+#     it dilutes the only term that carries shape. At energy 0.7 it contributed ~0.32
+#     of flat wash against a ~0.02 slope-to-slope delta — it was drowning the signal.
+#     Cutting it to 0.24 keeps the shadow side open (chibi never goes muddy) without
+#     paying for it in form.
+#   * HUE, NOT JUST VALUE, carries the form — this is what keeps it CHEERFUL rather
+#     than a realism/contrast pass. A WARM sun against a COOL sky-blue fill means a
+#     sun-facing slope shifts warm and an away-facing slope shifts cool, so hills have
+#     shape even where the luminance difference alone would be subtle. Everything
+#     stays bright; the terrain just stops being one flat green.
+#
+# Net effect on slope-to-slope contrast: ~3.5× at every slope angle (world_lighting_
+# verify.gd measures it against the real built scene and the real mesh).
+#
+# HOW FLAT THE MEADOW ACTUALLY IS — the honest number, because "±2.4 m, ~5° slopes"
+# oversells it. Measured off the staged 0_0 chunk's baked normals (4225 verts): the
+# ~5° figure is the p99. The MEDIAN slope is 1.77° and the mean is 2.04°; the whole
+# chunk spans 3.47 m over 128 m, a ~2.7% grade. So the meadow genuinely IS nearly
+# flat, and lighting cannot make 1.77° read as "rolling hills" — what it can do, and
+# what this does, is take the relief from invisible (3.1% contrast) to legible (10.9%
+# at the median, ~23% on the p90 slopes that form the visible crests). If the human
+# still wants more after this, the remaining lever is amplitude, and that is gated on
+# epic #874 — not on anything in this file.
+#
+# The ground material is NOT the problem and is deliberately untouched: chunk_emit's
+# chibi green is a plain StandardMaterial3D (roughness 0.95, metallic/specular 0) —
+# a proper diffuse surface that already responds to the full-res per-vertex normals
+# T1 bakes at 129×129. It had nothing to reveal because the light gave it nothing.
 func _build_environment() -> void:
 	var light := DirectionalLight3D.new()
-	light.rotation = Vector3(deg_to_rad(-55.0), deg_to_rad(35.0), 0.0)
+	light.name = "Sun"
+	# Mid-morning: 26° above the horizon (see above), swung to 35° in azimuth so the
+	# hills are lit ACROSS the default camera's view rather than straight down it —
+	# a sun behind the camera flattens everything it lights.
+	light.rotation = Vector3(deg_to_rad(-26.0), deg_to_rad(35.0), 0.0)
+	# Warm daylight, and bright enough that dropping the ambient fill doesn't dim the
+	# meadow overall — the contrast goes UP while the scene stays cheerful.
+	light.light_color = Color(1.0, 0.95, 0.85)
+	light.light_energy = 1.9
+	# Shadows ground the CHARACTER (the focal point) on the hills — under the M0 sun it
+	# read as a capsule FLOATING on a green sheet. They do nothing for the terrain's own
+	# relief (a 26° sun can never be occluded by a 2° slope), so they're tuned for
+	# readability, not drama: a soft penumbra and a deliberately non-opaque shadow keep
+	# the chibi look and stop the shadow side going muddy.
+	light.shadow_enabled = true
+	light.shadow_opacity = 0.75
+	light.light_angular_distance = 1.5
+	# Near-flat ground raked by a low sun is exactly the acne case; lean on normal_bias
+	# (which offsets along the normal, so it costs nothing on a surface this flat).
+	light.shadow_bias = 0.04
+	light.shadow_normal_bias = 2.0
+	light.directional_shadow_max_distance = 80.0
 	add_child(light)
 
 	var we := WorldEnvironment.new()
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.30, 0.40, 0.52)
+	# A brighter, cleaner sky-blue than the M0 slate — it reads as a chibi daytime sky
+	# and is the same cool the ambient fill is tinted with.
+	env.background_color = Color(0.45, 0.62, 0.85)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.45, 0.45, 0.5)
-	env.ambient_light_energy = 0.7
+	# Cool sky fill, at the low energy that lets the sun do the sculpting.
+	env.ambient_light_color = Color(0.42, 0.54, 0.72)
+	env.ambient_light_energy = 0.24
 	we.environment = env
 	add_child(we)
 
