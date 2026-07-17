@@ -1080,6 +1080,14 @@ void test_emit_is_toolchain_independent() {
     // (3) The `fixture` profile shares the same float discipline and is emitted by
     // the same code paths, so gate it identically — it is not staged, so nothing
     // else would ever catch a drift in it.
+    //
+    // NOTE — this leg does NOT guard the same thing as (1) and (2). `fixture`'s
+    // height math measured contraction-INSENSITIVE: it emits identical bytes under
+    // -ffp-contract=on and =off (verified, 31/31 files), so unlike the meadow it
+    // would not have caught #884. It is here for the OTHER drift classes the golden
+    // catches — a libm swap, x87 excess precision, a promotion change, a refactor
+    // of the shared emit path — and to keep an unstaged profile from rotting
+    // silently. Do not read a green fixture leg as evidence that contraction is off.
     const mcc::stages::ChunkEmitResult fixture = run({});
     mcc::hash::Blake3 fx_h;
     if (fixture.ok) {

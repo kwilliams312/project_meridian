@@ -148,7 +148,7 @@ add_library(mcc_stages STATIC
 # shape, so the emitted heightfield changed with the compiler's mood:
 #
 #   Apple clang 21 / arm64, `chunk-emit --profile meadow --grid 3`, SAME source:
-#     -ffp-contract=on   (clang default) -> corpus sha256 6a4f2f0746575186
+#     -ffp-contract=on   (clang default) -> corpus sha256 6a4f2f074657518b
 #     -ffp-contract=fast (gcc default)   -> corpus sha256 69b13b48b05d1c89
 #     -ffp-contract=off  (pinned here)   -> corpus sha256 c36c5a0554f86791
 #
@@ -175,14 +175,27 @@ add_library(mcc_stages STATIC
 # the flag is a correctness requirement for THEM, not a global build opinion.
 # Cost is nil — mcc is a build-time CLI, not a hot loop.
 #
-# MSVC needs no flag: /fp:precise (its default) already forbids contraction; it
-# only fuses under /fp:fast or /fp:contract, neither of which we pass. Should
-# that ever change, this is the place to pin it.
+# MSVC (VS2022+) needs no flag: /fp:precise — its default — forbids contraction
+# there, and it only fuses under /fp:fast or /fp:contract, neither of which we
+# pass. Scoped to VS2022+ deliberately: PRE-VS2022, /fp:precise implied
+# fp_contract(ON), so an old MSVC WOULD fuse and WOULD emit different bytes.
+# Nothing builds mcc on MSVC today (no MSVC CI, and mcc is C++20), so this is
+# theoretical — and the golden test below is the backstop that would catch it
+# rather than let it ship. Should mcc ever gain an MSVC build, pin it here.
 #
 # THE FLAG IS THE ENFORCEMENT, NOT THE PROOF. test_chunk_emit.cpp's
 # test_emit_is_toolchain_independent pins the emitted heightfield to a golden
 # BLAKE3, so ANY future toolchain/flag/arch that shifts the bytes fails at test
 # time on the machine that did it — even one this flag cannot reach.
+#
+# And that backstop has NO ESCAPE HATCH, which is the point. Its goldens are
+# `constexpr` in the test source — there is no --update-golden path to them. This
+# matters because gate 8's own failure message recommends
+# `check-golden.sh --update-golden`, and that command RE-BAKES the staged pack
+# from whatever the local toolchain emits: run it on a contracting build and gate
+# 8 goes green on wrong bytes. It cannot silence this test. Re-baking these
+# goldens takes a deliberate source edit, which is exactly the friction #884
+# needed and did not have.
 if(NOT MSVC)
     target_compile_options(mcc_stages PRIVATE -ffp-contract=off)
 endif()
