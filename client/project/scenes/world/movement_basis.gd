@@ -38,3 +38,19 @@ static func character_relative_move(fwd: float, strafe: float, yaw: float) -> Ve
 	# Rotate by the Body's yaw using Godot's own Y-rotation (Basis(UP, yaw) * v),
 	# so the result is parallel to the visible Body's forward/right for ALL yaws.
 	return local.rotated(Vector3.UP, yaw)
+
+
+# Gate a raw jump-key press into the `jump` intent fed to the controller (#905).
+# Jump launches ONLY from the ground: MeridianMovementController integrate_tick
+# launches on `prev.grounded && input.jump`, and encode_state_flags stamps kJump
+# (bit 7) whenever `input.jump` is set — regardless of grounded. So a raw press
+# while airborne would emit a spurious kJump intent to the server without ever
+# launching. Gating the press on the mover's grounded state here means:
+#   * grounded + pressed  → true  (launch this tick; kJump emitted, as intended)
+#   * airborne + pressed  → false (NO air-jump / double-jump; no spurious kJump)
+#   * not pressed         → false
+# Shared (not inlined in world.gd) so _tick_local_player and its headless verify
+# assert ONE definition of "may jump this tick" — same pattern as
+# character_relative_move above (see jump_input_verify.gd).
+static func grounded_jump(jump_pressed: bool, grounded: bool) -> bool:
+	return jump_pressed and grounded
