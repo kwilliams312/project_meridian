@@ -394,9 +394,9 @@ int cmd_emit_pck(const std::vector<std::string>& args) {
                                          select_ns);
 }
 
-// mcc chunk-emit [--zone <id>] [--grid <N>] [--out <dir>] [--origin-x <m>]
-//                [--origin-z <m>] [--built-at "<ts>"] [--godot-version <v>]
-//                [--diag-format=...]
+// mcc chunk-emit [--zone <id>] [--profile <fixture|meadow>] [--grid <N>]
+//                [--out <dir>] [--origin-x <m>] [--origin-z <m>]
+//                [--built-at "<ts>"] [--godot-version <v>] [--diag-format=...]
 //   Emit a procedural N×N chunk fixture pack for a zone (Tools SAD §3, IF-6): the
 //   v0 slice of the real mcc chunk stage in fixture mode (#553). Goes through the
 //   real chunk.fbs `ServerChunk` schema + chunk-manifest.schema.yaml + real BLAKE3
@@ -405,13 +405,27 @@ int cmd_emit_pck(const std::vector<std::string>& args) {
 //   table, IF-5 pack, per-chunk .chunk.bin/.tscn/.proxy.tscn) lands under
 //   <dir>/meridian/<ns>/chunks/<zone>/. Deliberately non-flat heightfields so
 //   downstream flat-vs-sloped bugs are catchable.
+//
+//   --profile selects the named height surface (default `fixture` — the #553
+//   Zone-01 surface, unchanged). `meadow` (#876) is gentle rolling hills capped
+//   within ±3 m of z=0, which is what keeps a walkable zone inside worldd's R5
+//   height tolerance (constant ground 0, ±4 m) with NO server change — see the
+//   MEADOW HEIGHT BUDGET block in chunk_emit.cpp. Sprout Meadow:
+//     mcc chunk-emit --zone chibi:zone.sprout_meadow --profile meadow \
+//                    --grid 3 --origin-x -384 --origin-z -384 --out <dir>
 int cmd_chunk_emit(const std::vector<std::string>& args) {
     mcc::stages::ChunkEmitOptions opts;
     std::string out_dir;
     mcc::stages::DiagFormat format = mcc::stages::DiagFormat::Text;
     // Small typed-flag parser: each `want_*` remembers a pending value token.
-    enum class Want { None, Zone, Grid, Out, OriginX, OriginZ, BuiltAt, Godot };
+    enum class Want { None, Zone, Grid, Out, OriginX, OriginZ, BuiltAt, Godot, Profile };
     Want want = Want::None;
+    auto take_profile = [](const std::string& s, mcc::stages::ChunkEmitOptions& o) -> bool {
+        if (mcc::stages::parse_height_profile(s, o.profile)) return true;
+        std::cerr << kProg << " chunk-emit: --profile must be 'fixture' or 'meadow' (got '" << s
+                  << "')\n";
+        return false;
+    };
     auto take_double = [](const std::string& s, double& dst) -> bool {
         try { dst = std::stod(s); return true; } catch (...) { return false; }
     };
@@ -443,6 +457,9 @@ int cmd_chunk_emit(const std::vector<std::string>& args) {
                     break;
                 case Want::BuiltAt: opts.built_at = a; break;
                 case Want::Godot: opts.godot_version = a; break;
+                case Want::Profile:
+                    if (!take_profile(a, opts)) return 2;
+                    break;
                 case Want::None: break;
             }
             want = Want::None;
@@ -470,7 +487,11 @@ int cmd_chunk_emit(const std::vector<std::string>& args) {
                 std::cerr << kProg << " chunk-emit: --origin-z needs a number\n";
                 return 2;
             }
-        } else if (a == "--built-at") want = Want::BuiltAt;
+        } else if (a == "--profile") want = Want::Profile;
+        else if (a.rfind("--profile=", 0) == 0) {
+            if (!take_profile(a.substr(std::strlen("--profile=")), opts)) return 2;
+        }
+        else if (a == "--built-at") want = Want::BuiltAt;
         else if (a.rfind("--built-at=", 0) == 0) opts.built_at = a.substr(std::strlen("--built-at="));
         else if (a == "--godot-version") want = Want::Godot;
         else if (a.rfind("--godot-version=", 0) == 0) opts.godot_version = a.substr(std::strlen("--godot-version="));
@@ -667,7 +688,7 @@ const Command kCommands[] = {
     {"refs",      "find-usages / backlinks for an id (refs <id> --json)",                        cmd_refs},
     {"emit-sql",  "emit IF-4 world DB SQL + world_manifest (--out <file>, --built-at, --pack <ns>)", cmd_emit_sql},
     {"emit-pck",  "emit IF-5 client pack + pack.manifest.json (--out <dir>, --built-at)",       cmd_emit_pck},
-    {"chunk-emit","emit a procedural N×N chunk fixture pack (IF-6) (--zone, --grid, --out)",     cmd_chunk_emit},
+    {"chunk-emit","emit a procedural N×N chunk fixture pack (IF-6) (--zone, --profile, --grid, --out)", cmd_chunk_emit},
     {"fmt",       "canonically format /content YAML; --check for CI/pre-commit",       cmd_fmt},
     {"diff",      "classify pack changes additive/breaking: diff <old> <new> [--json]", cmd_diff},
     {"content-hash", "print the per-pack content_hash: content-hash [dir] [--json]",    cmd_content_hash},

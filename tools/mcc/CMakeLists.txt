@@ -332,6 +332,12 @@ add_test(NAME mcc-emit-pck-unit COMMAND mcc-emit-pck-tests)
 # .tscn ships a real terrain ArrayMesh — decoded out of the emitted text and
 # cross-checked vertex-for-vertex against the .chunk.bin heightfield — rather than
 # the old BoxMesh placeholder.
+#
+# And (#876) the `meadow` height profile + the chibi:zone.sprout_meadow emit: the
+# LOAD-BEARING assertion that every emitted sample sits within ±3 m of z=0, which
+# is what keeps a walkable zone inside worldd's R5 height tolerance (constant
+# ground 0, ±4 m — movement_constants.h:202) with ZERO server changes. If that
+# check fails, players standing on the meadow get their moves rejected.
 add_executable(mcc-chunk-emit-tests
     tests/test_chunk_emit.cpp)
 target_link_libraries(mcc-chunk-emit-tests PRIVATE mcc_stages)
