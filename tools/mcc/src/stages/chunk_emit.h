@@ -27,14 +27,32 @@
 //       — the contract-critical artifact the client reads the heightfield from
 //       (Q1(a)); a flat-vs-sloped bug in HeightfieldWorldQuery / visuals is
 //       catchable against it.
-//     * per chunk <cx>_<cz>.tscn + <cx>_<cz>.proxy.tscn — minimal but VALID Godot
-//       TEXT scenes the streamer can instance directly. They carry the `.tscn`
-//       extension (not `.scn`) so Godot's ResourceLoader routes them to the TEXT
-//       loader — a text payload under a `.scn` name is rejected by the BINARY
-//       loader ("Unrecognized binary resource file", #579). The box mesh's Y
-//       extent is derived from the chunk's own height span so it is visibly
-//       non-flat per chunk. (The real content pipeline — Forge/#315 — ships binary
-//       `.scn` the loader reads directly; this is a FIXTURE-correctness choice.)
+//     * per chunk <cx>_<cz>.tscn + <cx>_<cz>.proxy.tscn — VALID Godot TEXT scenes
+//       the streamer can instance directly. They carry the `.tscn` extension (not
+//       `.scn`) so Godot's ResourceLoader routes them to the TEXT loader — a text
+//       payload under a `.scn` name is rejected by the BINARY loader
+//       ("Unrecognized binary resource file", #579). (The real content pipeline —
+//       Forge/#315 — ships binary `.scn` the loader reads directly; this is a
+//       FIXTURE-correctness choice.)
+//       Each scene holds a MeshInstance3D with an `ArrayMesh` BAKED FROM THE
+//       CHUNK'S OWN HEIGHTFIELD (#875): 129×129 vertices (the samples 1:1), per-
+//       vertex normals, UVs spanning the chunk 0..1, and a StandardMaterial3D
+//       slot keyed to the shared terrain-ground dep id. The node is translated to
+//       the chunk's zone-local XZ corner at y=0, so a vertex's Y *is* its world
+//       height and neighbours tile exactly along the shared edge. The proxy is the
+//       same surface decimated 4× per axis (33×33). Before #875 these scenes were a
+//       single BoxMesh per chunk — mounting a zone drew giant boxes, not terrain.
+//
+// GODOT MESH ENCODING (the one place mcc is coupled to the engine): Godot
+//   serialises an ArrayMesh surface as base64 PackedByteArray blobs whose layout —
+//   tight f32 positions, then OCTAHEDRON-encoded unorm16 normal+tangent pairs, a
+//   separate UV attribute buffer, u16 indices — is fixed by the engine's mesh
+//   array-format VERSION (the high bits of the surface `format` word). mcc is C++
+//   and cannot link Godot, so it writes those bytes itself. The emitted `format`
+//   is asserted in the tests against what the PINNED engine (client/ENGINE_VERSION,
+//   Godot 4.7-stable) itself produces for the same surface; that assertion is the
+//   tripwire if an engine bump changes the layout. Re-verify against the new engine
+//   at each milestone pin bump rather than hand-editing the constant.
 //     * <zone>.assets.json — the IF-8 asset-ID table so the C2 refs resolve
 //       (id → local index → IF-9 numeric id, band 0, allocated lexicographically).
 //     * a client pack (pack.manifest.json + M0 pack.contents.jsonl, the same
@@ -49,8 +67,11 @@
 // change to any payload invalidates the entry (walk C5/C8). Rendered `blake3:<hex>`.
 //
 // DETERMINISM: identical options ⇒ identical bytes. All geometry is pure integer/
-// float arithmetic (no libm transcendentals, no wall-clock, no map iteration in
-// output order). Nondeterminism here is a P0 — it breaks pack verification.
+// float arithmetic (no wall-clock, no map iteration in output order). The only
+// libm calls are sqrt/fabs in the mesh normal path — both IEEE-754
+// correctly-rounded and therefore bit-identical across platforms, unlike the
+// transcendentals (sin/exp), which stay banned. Nondeterminism here is a P0 — it
+// breaks pack verification.
 
 #ifndef MCC_STAGES_CHUNK_EMIT_H
 #define MCC_STAGES_CHUNK_EMIT_H

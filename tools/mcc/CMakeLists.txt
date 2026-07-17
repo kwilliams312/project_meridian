@@ -328,7 +328,10 @@ add_test(NAME mcc-emit-pck-unit COMMAND mcc-emit-pck-tests)
 # FlatBuffers verifier as a ServerChunk with a NON-FLAT 129×129 heightfield, the
 # recomputed per-chunk BLAKE3 (over both payloads) matches the manifest, the IF-5
 # pack contains every referenced asset incl. the server chunk, and the whole emit
-# is deterministic (byte-identical across runs).
+# is deterministic (byte-identical across runs). Also (#875) that each rendered
+# .tscn ships a real terrain ArrayMesh — decoded out of the emitted text and
+# cross-checked vertex-for-vertex against the .chunk.bin heightfield — rather than
+# the old BoxMesh placeholder.
 add_executable(mcc-chunk-emit-tests
     tests/test_chunk_emit.cpp)
 target_link_libraries(mcc-chunk-emit-tests PRIVATE mcc_stages)

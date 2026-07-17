@@ -24,9 +24,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -221,6 +224,293 @@ void test_chunk_bin_flatbuffer() {
     report(shared_edge, "adjacent chunks share their edge exactly (shared-edge convention)");
 }
 
+// ---- .tscn parsing helpers (independent of the stage's own writers) --------
+
+// The stage renders reals as %.4f; mirror that to compare a formatted field.
+std::string num_str(double v) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.4f", v);
+    return std::string(buf);
+}
+
+// Value of a `"key": <value>,` entry inside the _surfaces dict, unquoted/untrimmed.
+std::string tscn_field(const std::string& scn, const std::string& key) {
+    const std::string needle = "\"" + key + "\": ";
+    const std::size_t at = scn.find(needle);
+    if (at == std::string::npos) return "";
+    const std::size_t start = at + needle.size();
+    std::size_t end = scn.find('\n', start);
+    if (end == std::string::npos) end = scn.size();
+    std::string v = scn.substr(start, end - start);
+    while (!v.empty() && (v.back() == ',' || v.back() == '\r')) v.pop_back();
+    return v;
+}
+
+// The base64 payload inside `PackedByteArray("....")` for a given key.
+std::string tscn_packed_bytes_b64(const std::string& scn, const std::string& key) {
+    const std::string raw = tscn_field(scn, key);  // PackedByteArray("....")
+    const std::size_t q1 = raw.find('"');
+    const std::size_t q2 = raw.rfind('"');
+    if (q1 == std::string::npos || q2 == std::string::npos || q2 <= q1) return "";
+    return raw.substr(q1 + 1, q2 - q1 - 1);
+}
+
+// Independent base64 decoder — the test must not borrow the stage's encoder.
+std::string b64_decode(const std::string& in) {
+    auto val = [](char c) -> int {
+        if (c >= 'A' && c <= 'Z') return c - 'A';
+        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+        if (c >= '0' && c <= '9') return c - '0' + 52;
+        if (c == '+') return 62;
+        if (c == '/') return 63;
+        return -1;
+    };
+    std::string out;
+    int buf = 0, bits = 0;
+    for (const char c : in) {
+        const int v = val(c);
+        if (v < 0) continue;  // '=' padding / whitespace
+        buf = (buf << 6) | v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<char>((buf >> bits) & 0xFF));
+        }
+    }
+    return out;
+}
+
+// Bounds-checked readers: a scene MISSING the buffer entirely (e.g. the old
+// BoxMesh emit) must make the checks FAIL cleanly, never crash the test binary.
+float le_f32(const std::string& b, std::size_t off) {
+    if (off + 4 > b.size()) return std::numeric_limits<float>::quiet_NaN();
+    const std::uint32_t u = static_cast<std::uint8_t>(b[off]) |
+                            (static_cast<std::uint32_t>(static_cast<std::uint8_t>(b[off + 1])) << 8) |
+                            (static_cast<std::uint32_t>(static_cast<std::uint8_t>(b[off + 2])) << 16) |
+                            (static_cast<std::uint32_t>(static_cast<std::uint8_t>(b[off + 3])) << 24);
+    float f;
+    std::memcpy(&f, &u, sizeof(f));
+    return f;
+}
+
+std::uint16_t le_u16(const std::string& b, std::size_t off) {
+    if (off + 2 > b.size()) return 0xFFFF;  // out of range -> fails the range check
+    return static_cast<std::uint16_t>(static_cast<std::uint8_t>(b[off]) |
+                                      (static_cast<std::uint16_t>(static_cast<std::uint8_t>(b[off + 1])) << 8));
+}
+
+// (b2) the RENDERED scene is a real terrain ArrayMesh, not a BoxMesh ----------
+//
+// The regression this locks down (#875): chunk-emit used to render ONE BoxMesh per
+// chunk, so mounting chunks drew giant boxes rather than terrain. The heightfield
+// existed only in the server payload. These checks assert the .tscn now carries an
+// ArrayMesh whose geometry IS the chunk's heightfield — decoded straight out of the
+// emitted text and cross-checked against the .chunk.bin samples, so a mesh that
+// merely *looks* structurally valid but doesn't follow the terrain still fails.
+void test_scene_is_terrain_arraymesh() {
+    std::cout << "test_scene_is_terrain_arraymesh (#875: real terrain mesh, not a BoxMesh)\n";
+    const mcc::stages::ChunkEmitResult res = run({});
+    report(!res.chunks.empty(), "have chunks to inspect");
+    if (res.chunks.empty()) return;
+
+    bool no_box = true, is_array = true, has_material = true, counts_ok = true;
+    for (const auto& rec : res.chunks) {
+        for (const std::string* scn : {&rec.scn, &rec.proxy_scn}) {
+            no_box &= (scn->find("BoxMesh") == std::string::npos);
+            is_array &= (scn->find("[sub_resource type=\"ArrayMesh\"") != std::string::npos);
+            // A material SLOT the chunk can reference (T3 fills in the chibi look).
+            has_material &= (scn->find("\"material\": SubResource(") != std::string::npos);
+            has_material &= (scn->find("[sub_resource type=\"StandardMaterial3D\"") != std::string::npos);
+        }
+        // The full-detail surface is the heightfield 1:1; the proxy is decimated 4x.
+        counts_ok &= (tscn_field(rec.scn, "vertex_count") == "16641");     // 129*129
+        counts_ok &= (tscn_field(rec.scn, "index_count") == "98304");      // 128*128*2 tris
+        counts_ok &= (tscn_field(rec.proxy_scn, "vertex_count") == "1089");  // 33*33
+        counts_ok &= (tscn_field(rec.proxy_scn, "index_count") == "6144");   // 32*32*2 tris
+    }
+    report(no_box, "no chunk scene ships a BoxMesh any more (the #875 regression)");
+    report(is_array, "every chunk scene ships an ArrayMesh sub-resource");
+    report(has_material, "every surface carries a referenceable material slot");
+    report(counts_ok, "full mesh = 129x129 verts / 32768 tris; proxy decimated to 33x33");
+
+    // The Godot array-format bits the emitter writes. Byte-for-byte what Godot
+    // 4.7-stable (client/ENGINE_VERSION) itself serialises for a
+    // VERTEX|NORMAL|TANGENT|TEX_UV|INDEX surface: 4119 | (1 << 35). If an engine
+    // bump changes the mesh array format, THIS is the tripwire — regenerate against
+    // the new engine rather than hand-editing the constant.
+    report(tscn_field(res.chunks[0].scn, "format") == "34359742487",
+           "surface format matches Godot 4.7's own VERTEX|NORMAL|TANGENT|TEX_UV|INDEX bits",
+           "got " + tscn_field(res.chunks[0].scn, "format"));
+    report(tscn_field(res.chunks[0].scn, "primitive") == "3",
+           "primitive == 3 (PRIMITIVE_TRIANGLES)");
+
+    // ---- The geometry IS the heightfield -----------------------------------
+    // Decode the vertex buffer and compare every vertex's Y against the SAME
+    // sample in the emitted .chunk.bin. This is the check that would have caught
+    // the box: a BoxMesh has no per-sample heights at all.
+    const auto& rec = res.chunks[0];
+    const auto* sc = meridian::chunk::GetServerChunk(
+        reinterpret_cast<const uint8_t*>(rec.chunk_bin.data()));
+    const auto* hf = sc->heightfield();
+
+    const std::string vd = b64_decode(tscn_packed_bytes_b64(rec.scn, "vertex_data"));
+    const std::size_t vcount = 16641;
+    report(vd.size() == vcount * 12 + vcount * 8,
+           "vertex_data size == 129*129 * (12B pos + 8B normal/tangent)",
+           "got " + std::to_string(vd.size()));
+
+    bool heights_match = true, xz_match = true;
+    float mesh_lo = 1e30f, mesh_hi = -1e30f;
+    std::size_t mismatches = 0;
+    for (int lz = 0; lz < 129 && heights_match; ++lz) {
+        for (int lx = 0; lx < 129; ++lx) {
+            const std::size_t vi = static_cast<std::size_t>(lz) * 129 + lx;
+            const float vx = le_f32(vd, vi * 12 + 0);
+            const float vy = le_f32(vd, vi * 12 + 4);
+            const float vz = le_f32(vd, vi * 12 + 8);
+            // Mesh-local XZ: the node transform carries the chunk's world corner.
+            if (vx != static_cast<float>(lx) || vz != static_cast<float>(lz)) xz_match = false;
+            const float sample = hf->samples()->Get(static_cast<flatbuffers::uoffset_t>(vi));
+            if (vy != sample) {
+                if (++mismatches <= 3)
+                    std::cout << "       height mismatch at (" << lx << "," << lz << "): mesh="
+                              << vy << " heightfield=" << sample << "\n";
+                heights_match = false;
+            }
+            mesh_lo = std::min(mesh_lo, vy);
+            mesh_hi = std::max(mesh_hi, vy);
+        }
+    }
+    report(xz_match, "every vertex sits on the 1 m heightfield lattice (mesh-local XZ)");
+    report(heights_match, "EVERY vertex Y equals the .chunk.bin heightfield sample (exact)");
+
+    // Sampled height: the mesh is genuinely non-flat and spans the same range the
+    // manifest AABB advertises.
+    report((mesh_hi - mesh_lo) > 0.5f, "mesh surface is non-flat (Y span > 0.5 m)",
+           "span=" + std::to_string(mesh_hi - mesh_lo));
+    report(mesh_lo == rec.min_y && mesh_hi == rec.max_y,
+           "mesh Y span matches the chunk's manifest AABB Y bounds",
+           "mesh=[" + std::to_string(mesh_lo) + "," + std::to_string(mesh_hi) + "] manifest=[" +
+               std::to_string(rec.min_y) + "," + std::to_string(rec.max_y) + "]");
+
+    // The surface's own declared AABB must bound the real geometry.
+    const std::string aabb = tscn_field(rec.scn, "aabb");
+    const std::string want_aabb = "AABB(0, " + num_str(rec.min_y) + ", 0, 128.0000, " +
+                                  num_str(rec.max_y - rec.min_y) + ", 128.0000)";
+    report(aabb == want_aabb, "surface aabb bounds the chunk footprint and the real height span",
+           "got " + aabb + " want " + want_aabb);
+
+    // Normals: an independent octahedron DECODE (mirroring Godot's
+    // Vector3::octahedron_decode) must recover unit vectors that point up. A
+    // mis-encoded normal block is the most likely silent breakage — the scene still
+    // loads, the terrain just lights wrong — so decode rather than trust.
+    bool normals_up = (vd.size() == vcount * 20);
+    float worst_y = 1.0f;
+    for (std::size_t i = 0; normals_up && i < vcount; ++i) {
+        const std::size_t off = vcount * 12 + i * 8;
+        const float fx = static_cast<float>(le_u16(vd, off + 0)) / 65535.0f * 2.0f - 1.0f;
+        const float fy = static_cast<float>(le_u16(vd, off + 2)) / 65535.0f * 2.0f - 1.0f;
+        float nx = fx, ny = fy, nz = 1.0f - std::fabs(fx) - std::fabs(fy);
+        const float t = std::max(0.0f, std::min(-nz, 1.0f));
+        nx += (nx >= 0.0f ? -t : t);
+        ny += (ny >= 0.0f ? -t : t);
+        const float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+        ny /= len;
+        worst_y = std::min(worst_y, ny);
+        // Gentle terrain: every normal is firmly world-up (+Y).
+        if (!(ny > 0.9f)) normals_up = false;
+    }
+    report(normals_up, "every decoded octahedral normal is unit-length and points up (+Y)",
+           "worst normal.y=" + std::to_string(worst_y));
+
+    // Indices reference real vertices and form whole triangles.
+    const std::string id = b64_decode(tscn_packed_bytes_b64(rec.scn, "index_data"));
+    report(id.size() == 98304u * 2, "index_data is 98304 u16 indices",
+           "got " + std::to_string(id.size()));
+    // Non-empty guard: an absent index buffer must FAIL here, not pass vacuously
+    // because the loop below never runs.
+    bool idx_in_range = !id.empty() && (id.size() % 6 == 0);
+    for (std::size_t i = 0; i + 1 < id.size(); i += 2) {
+        if (le_u16(id, i) >= vcount) { idx_in_range = false; break; }
+    }
+    report(idx_in_range, "every index is in range (a closed, well-formed triangle list)");
+
+    // WINDING — the terrain must FACE UP. Godot's front faces are clockwise: for an
+    // up-facing surface the right-hand-rule normal (B-A)x(C-A) points DOWN (-Y).
+    // (Ground truth: Godot's own PlaneMesh, declared normal +Y, winds exactly so.)
+    // Get this wrong and the mesh is INVISIBLE — it loads fine and reads back
+    // correct arrays, but backface culling drops every triangle for a camera above
+    // it. Nothing else in this suite can see that, so assert it per triangle.
+    bool winding_ok = !id.empty();
+    std::size_t bad_tris = 0;
+    const std::size_t nidx = id.size() / 2;
+    for (std::size_t t = 0; t + 2 < nidx; t += 3) {
+        const std::size_t ia = le_u16(id, (t + 0) * 2);
+        const std::size_t ib = le_u16(id, (t + 1) * 2);
+        const std::size_t ic = le_u16(id, (t + 2) * 2);
+        if (ia >= vcount || ib >= vcount || ic >= vcount) { winding_ok = false; break; }
+        const float ax = le_f32(vd, ia * 12 + 0), az = le_f32(vd, ia * 12 + 8);
+        const float bx = le_f32(vd, ib * 12 + 0), bz = le_f32(vd, ib * 12 + 8);
+        const float cx = le_f32(vd, ic * 12 + 0), cz = le_f32(vd, ic * 12 + 8);
+        // Only the Y component of the cross product matters for facing.
+        const float ux = bx - ax, uz = bz - az;
+        const float wx = cx - ax, wz = cz - az;
+        // (u x w).y — must be negative for an up-facing Godot triangle.
+        const float ny_rh = uz * wx - ux * wz;
+        if (!(ny_rh < 0.0f)) { ++bad_tris; winding_ok = false; }
+    }
+    report(winding_ok,
+           "every triangle is wound to FACE UP (Godot front-face convention; a flipped "
+           "winding renders the terrain invisible)",
+           "wrong-facing triangles=" + std::to_string(bad_tris));
+
+    // UVs span the chunk 0..1 so a ground material can tile over it.
+    const std::string ad = b64_decode(tscn_packed_bytes_b64(rec.scn, "attribute_data"));
+    report(ad.size() == vcount * 8, "attribute_data is one UV (2xf32) per vertex");
+    report(le_f32(ad, 0) == 0.0f && le_f32(ad, 4) == 0.0f &&
+               le_f32(ad, (vcount - 1) * 8) == 1.0f && le_f32(ad, (vcount - 1) * 8 + 4) == 1.0f,
+           "UVs run (0,0) at the chunk's min corner to (1,1) at its max corner");
+}
+
+// (b3) the render mesh joins seamlessly across a shared chunk edge ------------
+// Height is a pure function of world coords, so the east column of a chunk must
+// equal the west column of its +X neighbour — for the MESH, not just the payload.
+void test_mesh_shared_edge() {
+    std::cout << "test_mesh_shared_edge (render mesh tiles without a seam)\n";
+    const mcc::stages::ChunkEmitResult res = run({});
+    auto find = [&](int cx, int cz) -> const mcc::stages::ChunkRecord* {
+        for (const auto& r : res.chunks) if (r.cx == cx && r.cz == cz) return &r;
+        return nullptr;
+    };
+    const auto* left = find(-1, -1);
+    const auto* right = find(0, -1);
+    report(left && right, "found the (-1,-1) and (0,-1) neighbours");
+    if (!left || !right) return;
+
+    const std::string lvd = b64_decode(tscn_packed_bytes_b64(left->scn, "vertex_data"));
+    const std::string rvd = b64_decode(tscn_packed_bytes_b64(right->scn, "vertex_data"));
+    const std::size_t vcount = 16641;
+
+    // Both meshes must actually HAVE a full vertex buffer, or the comparisons below
+    // would compare nothing and pass vacuously.
+    bool edge_ok = (lvd.size() == vcount * 20) && (rvd.size() == vcount * 20);
+    bool normals_ok = edge_ok;
+    for (int lz = 0; edge_ok && lz < 129; ++lz) {
+        // left's east column (lx=128) vs right's west column (lx=0)
+        const std::size_t li = static_cast<std::size_t>(lz) * 129 + 128;
+        const std::size_t ri = static_cast<std::size_t>(lz) * 129 + 0;
+        if (le_f32(lvd, li * 12 + 4) != le_f32(rvd, ri * 12 + 4)) edge_ok = false;
+        // Normals must agree too, or the terrain lights with a visible seam — this
+        // is what the padded-field central differences buy.
+        for (int k = 0; k < 4; ++k) {
+            if (le_u16(lvd, vcount * 12 + li * 8 + k * 2) !=
+                le_u16(rvd, vcount * 12 + ri * 8 + k * 2)) { normals_ok = false; break; }
+        }
+    }
+    report(edge_ok, "shared-edge vertex heights match exactly across neighbouring meshes");
+    report(normals_ok, "shared-edge NORMALS match exactly (no lighting seam)");
+}
+
 // (c) manifest hash is the real recomputed BLAKE3 over both payloads ---------
 void test_hash_roundtrip() {
     std::cout << "test_hash_roundtrip (per-chunk BLAKE3 over both payloads)\n";
@@ -369,6 +659,8 @@ int main() {
     std::cout << "mcc chunk-emit (IF-6 procedural Zone-01 fixture) round-trip tests\n\n";
     test_manifest_wellformed();
     test_chunk_bin_flatbuffer();
+    test_scene_is_terrain_arraymesh();
+    test_mesh_shared_edge();
     test_hash_roundtrip();
     test_pack_completeness();
     test_determinism_and_disk();
