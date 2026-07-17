@@ -168,6 +168,59 @@ func _verify_event_bus_inventory() -> void:
 	_check("empty snapshot yields no items", bus.inventory_items().is_empty())
 	_check("empty snapshot keeps inventory known", bus.inventory_known())
 
+	_verify_event_bus_equipment()
+
+
+# --- Event bus: own equipped set (#867) --------------------------------------
+# The player's OWN paperdoll rides on INVENTORY_SNAPSHOT — the character sheet's only
+# source for it (EntityEnter's EquippedVisual describes OTHER entities).
+
+func _verify_event_bus_equipment() -> void:
+	print("[event_bus/equipment]")
+	var bus = EventBus.new()
+
+	_check("equipment empty before any snapshot", bus.equipment().is_empty())
+	_check("equipped_at() on an unknown slot yields {}", bus.equipped_at(3).is_empty())
+
+	var eq_events: Array = []
+	bus.equipment_changed.connect(func(eq): eq_events.append(eq))
+
+	# slot ids are server EquipSlot values: 3 = kChest, 10 = kFinger (JEWELLERY).
+	var equipped := [
+		{"slot": 3, "item_template": 900004, "dyes": []},
+		{"slot": 10, "item_template": 900006, "dyes": [{"channel": 0, "dye_id": 77}]},
+	]
+	bus.publish_inventory_snapshot(4200, [], 16, equipped)
+	_check("equipment stored (2)", bus.equipment().size() == 2)
+	_check("equipment_changed emitted", eq_events.size() == 1)
+	_check("equipped_at(3) -> the chest template",
+		int(bus.equipped_at(3).get("item_template", 0)) == 900004)
+	# Jewellery is deliberately present: this snapshot reaches only the owning client.
+	_check("equipped_at(10) -> the ring (jewellery) + its dye",
+		int(bus.equipped_at(10).get("item_template", 0)) == 900006 and
+		(bus.equipped_at(10).get("dyes", []) as Array).size() == 1)
+	_check("equipped_at() on an EMPTY paperdoll position yields {}",
+		bus.equipped_at(0).is_empty())
+
+	# A re-pushed snapshot REPLACES the paperdoll (server is law — unequip must shrink it).
+	bus.publish_inventory_snapshot(4200, [], 16, [
+		{"slot": 3, "item_template": 900004, "dyes": []},
+	])
+	_check("re-pushed snapshot replaces equipment (1)", bus.equipment().size() == 1)
+	_check("the unequipped ring is gone", bus.equipped_at(10).is_empty())
+
+	# A BARE character (and a pre-#867 server, whose snapshot omits the appended field)
+	# yields an empty set rather than an error — the default arg covers both.
+	bus.publish_inventory_snapshot(0, [], 16)
+	_check("omitted equipped arg yields a bare paperdoll", bus.equipment().is_empty())
+	_check("equipment_changed still emitted for a bare paperdoll", eq_events.size() == 3)
+
+	# The accessor hands out COPIES — a caller must not be able to mutate bus state.
+	var snapshot_copy := bus.equipment()
+	snapshot_copy.append({"slot": 99, "item_template": 1, "dyes": []})
+	_check("equipment() returns a copy (bus state is immutable to callers)",
+		bus.equipment().is_empty())
+
 
 # --- Event bus: vendor + currency --------------------------------------------
 

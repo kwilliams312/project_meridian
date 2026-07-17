@@ -1813,6 +1813,37 @@ void test_inventory_codec() {
     empty.backpack_slots = 16;
     auto empty_out = codec::decode_inventory_snapshot(codec::encode_inventory_snapshot(empty));
     CHECK(empty_out.has_value() && empty_out->items.empty() && empty_out->backpack_slots == 16);
+    // A snapshot with no `equipped` (bare paperdoll) decodes to an empty vector — this is
+    // also the shape a PRE-#867 writer produces, since `equipped` is an appended field.
+    CHECK(empty_out->equipped.empty());
+
+    // The OWN equipped set (#867) round-trips: an undyed chest + a DYED FINGER. Jewellery
+    // is deliberately present — unlike EntityEnter's EquippedVisual (an AoI broadcast that
+    // omits it), this snapshot reaches only the owning client, so the sheet sees rings.
+    codec::InventorySnapshot eq;
+    eq.money = 10;
+    eq.backpack_slots = 16;
+    eq.equipped.push_back({/*slot=*/3, /*item_template=*/900101, /*dyes=*/{}});
+    codec::EquippedItem ring;
+    ring.slot = 10;
+    ring.item_template = 900204;
+    ring.dyes.push_back({/*channel=*/0, /*dye_id=*/77});
+    ring.dyes.push_back({/*channel=*/2, /*dye_id=*/9});
+    eq.equipped.push_back(ring);
+    auto eq_out = codec::decode_inventory_snapshot(codec::encode_inventory_snapshot(eq));
+    CHECK(eq_out.has_value() && eq_out->equipped.size() == 2 && eq_out->items.empty());
+    if (eq_out.has_value() && eq_out->equipped.size() == 2) {
+        CHECK(eq_out->equipped[0].slot == 3 && eq_out->equipped[0].item_template == 900101 &&
+              eq_out->equipped[0].dyes.empty());
+        CHECK(eq_out->equipped[1].slot == 10 && eq_out->equipped[1].item_template == 900204 &&
+              eq_out->equipped[1].dyes.size() == 2);
+        if (eq_out->equipped[1].dyes.size() == 2) {
+            CHECK(eq_out->equipped[1].dyes[0].channel == 0 &&
+                  eq_out->equipped[1].dyes[0].dye_id == 77);
+            CHECK(eq_out->equipped[1].dyes[1].channel == 2 &&
+                  eq_out->equipped[1].dyes[1].dye_id == 9);
+        }
+    }
 
     // Verify-before-GetRoot: garbage + empty rejected.
     Bytes garbage = bytes_of({0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x01, 0x02, 0x03});
@@ -1878,7 +1909,8 @@ void test_golden_cross_decode() {
         std::puts("  (skip: golden corpus not reachable from this build)");
         return;
     }
-    // if2_inventory_snapshot.bin — money 4200, 16 slots, {0,900007,5,1,0} + {3,900012,1,3,1}.
+    // if2_inventory_snapshot.bin — money 4200, 16 slots, {0,900007,5,1,0} + {3,900012,1,3,1},
+    // equipped {3(kChest),900101,-} + {10(kFinger),900204,dye{0,77}} (#867).
     auto inv = codec::decode_inventory_snapshot(*inv_bytes);
     CHECK(inv.has_value() && inv->money == 4200 && inv->backpack_slots == 16 &&
           inv->items.size() == 2);
@@ -1889,6 +1921,17 @@ void test_golden_cross_decode() {
         CHECK(inv->items[1].slot == 3 && inv->items[1].item_template_id == 900012 &&
               inv->items[1].count == 1 && inv->items[1].quality == 3 &&
               inv->items[1].binding == 1);
+    }
+    CHECK(inv.has_value() && inv->equipped.size() == 2);
+    if (inv.has_value() && inv->equipped.size() == 2) {
+        CHECK(inv->equipped[0].slot == 3 && inv->equipped[0].item_template == 900101 &&
+              inv->equipped[0].dyes.empty());
+        CHECK(inv->equipped[1].slot == 10 && inv->equipped[1].item_template == 900204 &&
+              inv->equipped[1].dyes.size() == 1);
+        if (inv->equipped[1].dyes.size() == 1) {
+            CHECK(inv->equipped[1].dyes[0].channel == 0 &&
+                  inv->equipped[1].dyes[0].dye_id == 77);
+        }
     }
 
     // if2_vendor_list.bin — vendor 990001, {900007,12,1,-1} + {900012,250,3,5}.

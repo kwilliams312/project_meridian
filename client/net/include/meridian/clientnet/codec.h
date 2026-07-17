@@ -705,14 +705,27 @@ struct InventoryItem {
     std::uint8_t binding = 0;
 };
 
-// INVENTORY_SNAPSHOT (S→C): the character's backpack contents + copper balance. Pushed to
-// the OWNING client at ENTER_WORLD and after every server-authoritative inventory change
-// (loot/vendor/quest-reward/GM .additem). `items` lists ONLY occupied slots (empty ones
-// are omitted); `backpack_slots` is the grid capacity. A pure DISPLAY projection.
+// One EQUIPPED item on the owning character's paperdoll, carried in an INVENTORY_SNAPSHOT
+// (#867). `slot` is the server's EquipSlot id. Unlike the EquippedVisual on EntityEnter
+// (an AoI broadcast, visible slots only), this is the FULL paperdoll — jewellery included
+// — because the snapshot reaches only the owning client. `dyes` is empty at M1.
+struct EquippedItem {
+    std::uint8_t slot = 0;
+    std::uint32_t item_template = 0;
+    std::vector<DyeChoice> dyes;
+};
+
+// INVENTORY_SNAPSHOT (S→C): the character's backpack contents + copper balance + equipped
+// set. Pushed to the OWNING client at ENTER_WORLD and after every server-authoritative
+// inventory change (loot/vendor/quest-reward/GM .additem). `items` lists ONLY occupied
+// slots (empty ones are omitted); `backpack_slots` is the grid capacity. `equipped` lists
+// ONLY occupied paperdoll positions and is the client's ONLY source for its OWN gear (the
+// character sheet reads it). A pure DISPLAY projection.
 struct InventorySnapshot {
     std::int64_t money = 0;
     std::vector<InventoryItem> items;
     std::uint16_t backpack_slots = 0;
+    std::vector<EquippedItem> equipped;
 };
 Bytes encode_inventory_snapshot(const InventorySnapshot& in);  // test/mock symmetry
 std::optional<InventorySnapshot> decode_inventory_snapshot(const Bytes& buf);

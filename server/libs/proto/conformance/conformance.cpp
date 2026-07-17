@@ -1886,7 +1886,8 @@ std::vector<Message> build_corpus() {
 
   // InventorySnapshot — S->C money + a common stack + a bound rare in a 16-cell bag.
   c.push_back({"if2_inventory_snapshot", "IF-2", "INVENTORY_SNAPSHOT (0x5007)",
-               "S->C bags: 4200 copper + a common stack + a soulbound rare",
+               "S->C bags: 4200 copper + a common stack + a soulbound rare + a 2-slot "
+               "paperdoll (chest + a dyed ring)",
                [] {
                  fb::FlatBufferBuilder b;
                  std::vector<fb::Offset<mn::InventoryItem>> items;
@@ -1899,8 +1900,24 @@ std::vector<Message> build_corpus() {
                                                          /*count=*/1u, /*quality=*/3u,
                                                          /*binding=*/1u));
                  auto iv = b.CreateVector(items);
+                 // The owning player's OWN paperdoll (#867). Pins the appended `equipped`
+                 // field: a visual slot (chest) AND a JEWELLERY slot (finger) — jewellery
+                 // is omitted from EntityEnter's EquippedVisual but MUST ride here, since
+                 // this snapshot reaches only the owning client. The ring carries a dye to
+                 // pin the nested DyeChoice shape (worldd sends dyes empty at M1; the
+                 // corpus exercises the populated shape with hand-seeded ids).
+                 std::vector<fb::Offset<mn::EquippedItem>> equipped;
+                 equipped.push_back(mn::CreateEquippedItem(b, /*slot=*/3u,  // kChest
+                                                           /*item_template=*/900101u,
+                                                           /*dyes=*/0));
+                 std::vector<fb::Offset<mn::DyeChoice>> dyes;
+                 dyes.push_back(mn::CreateDyeChoice(b, /*channel=*/0u, /*dye_id=*/77u));
+                 equipped.push_back(mn::CreateEquippedItem(b, /*slot=*/10u,  // kFinger
+                                                           /*item_template=*/900204u,
+                                                           b.CreateVector(dyes)));
+                 auto ev = b.CreateVector(equipped);
                  b.Finish(mn::CreateInventorySnapshot(b, /*money=*/4200, iv,
-                                                      /*backpack_slots=*/16u));
+                                                      /*backpack_slots=*/16u, ev));
                  return finish_to_bytes(b);
                },
                [](const Bytes& buf) {
@@ -1926,6 +1943,21 @@ std::vector<Message> build_corpus() {
                             i1->count() == 1u && i1->quality() == 3u &&
                             i1->binding() == 1u,
                         "if2_inventory_snapshot.items[1] (bound rare)");
+                 const auto* equipped = m->equipped();
+                 if (!expect(equipped != nullptr && equipped->size() == 2,
+                             "if2_inventory_snapshot has 2 equipped"))
+                   return;
+                 const auto* e0 = equipped->Get(0);
+                 expect(e0->slot() == 3u && e0->item_template() == 900101u &&
+                            (e0->dyes() == nullptr || e0->dyes()->size() == 0),
+                        "if2_inventory_snapshot.equipped[0] (chest, undyed)");
+                 const auto* e1 = equipped->Get(1);
+                 expect(e1->slot() == 10u && e1->item_template() == 900204u,
+                        "if2_inventory_snapshot.equipped[1] (finger — jewellery rides here)");
+                 const auto* e1d = e1->dyes();
+                 expect(e1d != nullptr && e1d->size() == 1 && e1d->Get(0)->channel() == 0u &&
+                            e1d->Get(0)->dye_id() == 77u,
+                        "if2_inventory_snapshot.equipped[1].dyes[0]");
                }});
 
   // ==== IF-2 inventory / economy: vendors (world.fbs; ECO-01 #370) ==========

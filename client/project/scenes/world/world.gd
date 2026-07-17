@@ -1000,7 +1000,7 @@ func _route_econ_frame(opcode: int, payload: PackedByteArray) -> void:
 	match String(e.get("kind", "")):
 		"inventory_snapshot":
 			_bus.publish_inventory_snapshot(int(e.get("money", 0)), e.get("items", []),
-				int(e.get("backpack_slots", 0)))
+				int(e.get("backpack_slots", 0)), e.get("equipped", []))
 		"vendor_list":
 			_bus.publish_vendor_list(int(e.get("vendor_id", 0)), e.get("items", []))
 		"loot_response":

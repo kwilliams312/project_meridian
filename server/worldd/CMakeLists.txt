@@ -329,6 +329,21 @@ target_link_libraries(worldd-entity-enter-visual-test
 set_target_properties(worldd-entity-enter-visual-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-entity-enter-visual COMMAND worldd-entity-enter-visual-test)
 
+# --- INVENTORY_SNAPSHOT own-equipped-set (#867, epic #866). --------------------
+# DB-free: drives encode_inventory_snapshot() against a hand-seeded Inventory to
+# prove the additive `equipped` field — every occupied EquipSlot is projected
+# (jewellery INCLUDED, unlike EntityEnter's observer-facing EquippedVisual), empty
+# positions are omitted, and the money/backpack projection is unchanged.
+add_executable(worldd-inventory-snapshot-test
+  test/inventory_snapshot_test.cpp
+)
+target_link_libraries(worldd-inventory-snapshot-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-inventory-snapshot-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-inventory-snapshot COMMAND worldd-inventory-snapshot-test)
+
 # --- GM COMMAND FRAMEWORK UNIT test (OPS-02a; #417). --------------------------
 # PURE (no DB, no socket, no session): drives the gm_command framework directly
 # with CAPTURING reply + audit sinks (both std::function seams), so it asserts the

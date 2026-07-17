@@ -1035,8 +1035,22 @@ Bytes encode_inventory_snapshot(const InventorySnapshot& in) {
         items.push_back(mn::CreateInventoryItem(b, it.slot, it.item_template_id, it.count,
                                                 it.quality, it.binding));
     }
-    b.Finish(mn::CreateInventorySnapshot(b, in.money, b.CreateVector(items),
-                                         in.backpack_slots));
+    auto items_vec = b.CreateVector(items);
+
+    std::vector<fb::Offset<mn::EquippedItem>> equipped;
+    equipped.reserve(in.equipped.size());
+    for (const auto& eq : in.equipped) {
+        fb::Offset<fb::Vector<fb::Offset<mn::DyeChoice>>> dyes = 0;
+        if (!eq.dyes.empty()) {
+            std::vector<fb::Offset<mn::DyeChoice>> dcs;
+            dcs.reserve(eq.dyes.size());
+            for (const auto& dc : eq.dyes) dcs.push_back(mn::CreateDyeChoice(b, dc.channel, dc.dye_id));
+            dyes = b.CreateVector(dcs);
+        }
+        equipped.push_back(mn::CreateEquippedItem(b, eq.slot, eq.item_template, dyes));
+    }
+    b.Finish(mn::CreateInventorySnapshot(b, in.money, items_vec, in.backpack_slots,
+                                         b.CreateVector(equipped)));
     return to_bytes(b);
 }
 
@@ -1052,6 +1066,22 @@ std::optional<InventorySnapshot> decode_inventory_snapshot(const Bytes& buf) {
             if (it == nullptr) continue;
             out.items.push_back(InventoryItem{it->slot(), it->item_template_id(),
                                               it->count(), it->quality(), it->binding()});
+        }
+    }
+    // `equipped` is an APPENDED field: a pre-#867 writer omits it ⇒ null ⇒ bare paperdoll.
+    if (t->equipped() != nullptr) {
+        out.equipped.reserve(t->equipped()->size());
+        for (const auto* eq : *t->equipped()) {
+            if (eq == nullptr) continue;
+            EquippedItem row;
+            row.slot = eq->slot();
+            row.item_template = eq->item_template();
+            if (eq->dyes() != nullptr) {
+                row.dyes.reserve(eq->dyes()->size());
+                for (const auto* d : *eq->dyes())
+                    row.dyes.push_back(DyeChoice{d->channel(), d->dye_id()});
+            }
+            out.equipped.push_back(std::move(row));
         }
     }
     return out;

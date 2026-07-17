@@ -874,6 +874,24 @@ Dictionary MeridianNetThread::decode_econ_frame(int opcode,
 			items.push_back(row);
 		}
 		d["items"] = items;
+		// The owning player's own paperdoll (#867) — the character sheet's only source
+		// for its own gear. Absent from a pre-#867 server ⇒ an empty array (bare).
+		Array equipped;
+		for (const auto &eq : r->equipped) {
+			Dictionary row;
+			row["slot"] = static_cast<int64_t>(eq.slot);
+			row["item_template"] = static_cast<int64_t>(eq.item_template);
+			Array dyes;
+			for (const auto &dc : eq.dyes) {
+				Dictionary dye;
+				dye["channel"] = static_cast<int64_t>(dc.channel);
+				dye["dye_id"] = static_cast<int64_t>(dc.dye_id);
+				dyes.push_back(dye);
+			}
+			row["dyes"] = dyes;
+			equipped.push_back(row);
+		}
+		d["equipped"] = equipped;
 	} else if (opcode == cn::kOpVendorList) {
 		auto r = cn::codec::decode_vendor_list(buf);
 		if (!r) return d;

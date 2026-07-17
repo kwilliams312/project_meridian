@@ -68,6 +68,13 @@
 #include "vendor_catalog.h"  // vendor::VendorCatalog (content-store install seam, #390)
 #include "world_generated.h"
 #include "world_metrics.h"
+
+// The character's item container (items lib). Forward-declared: only
+// encode_inventory_snapshot's signature needs it, so the full inventory.h stays
+// out of every world_dispatch.h consumer's include graph.
+namespace meridian::items {
+class Inventory;
+}  // namespace meridian::items
 #include "world_session.h"
 #include "world_state.h"
 
@@ -133,6 +140,13 @@ Bytes make_disconnect(net::DisconnectReason reason, const std::string& message,
 // truly unknown value, so a client probing a not-yet-implemented domain gets a
 // defined answer rather than a crash.
 bool is_reserved_range(std::uint16_t opcode);
+
+// Encode an INVENTORY_SNAPSHOT (0x5007) payload: the owning character's copper
+// balance + occupied backpack slots + FULL equipped set (#453; `equipped` #867).
+// A pure projection of `inv` — no DB, no session — exported (like
+// encode_entity_enter_payload in world_state.h) so the wire shape is provable by
+// a DB-free unit test rather than only end-to-end through a live session.
+Bytes encode_inventory_snapshot(std::int64_t money, const items::Inventory& inv);
 
 // The outcome of dispatching one frame — drives the serve loop (keep the
 // connection open, or send a Disconnect and close).

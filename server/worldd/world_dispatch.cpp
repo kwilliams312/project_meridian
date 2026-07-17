@@ -660,28 +660,12 @@ Bytes encode_loot_closed(std::uint64_t corpse_guid) {
 
 // ---- inventory-snapshot encoder (S→C, world.fbs; ITM-01 #453) ----------------
 
-// The character's backpack contents + money (INVENTORY_SNAPSHOT S→C, #453). Only
-// OCCUPIED backpack slots are emitted, keyed by their GRID index (0-based); each
-// carries the item's rarity + bind rule from its template for the bags window.
-// EQUIPMENT is intentionally excluded at M1 (bags window shows loose items only).
-Bytes encode_inventory_snapshot(std::int64_t money, const itm::Inventory& inv) {
-    fb::FlatBufferBuilder b;
-    std::vector<fb::Offset<mn::InventoryItem>> rows;
-    const auto& slots = inv.backpack();
-    rows.reserve(slots.size());
-    for (std::uint16_t i = 0; i < slots.size(); ++i) {
-        const std::optional<itm::ItemInstance>& s = slots[i];
-        if (!s.has_value()) continue;  // omit empty slots
-        std::uint8_t binding = 0;
-        if (const itm::ItemTemplate* t = item_templates().find(s->template_id))
-            binding = static_cast<std::uint8_t>(t->binding);
-        rows.push_back(mn::CreateInventoryItem(b, i, s->template_id, s->stack,
-                                               template_quality(s->template_id), binding));
-    }
-    auto vec = b.CreateVector(rows);
-    b.Finish(mn::CreateInventorySnapshot(b, money, vec, inv.backpack_capacity()));
-    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
-}
+// NOTE: encode_inventory_snapshot's DEFINITION lives outside this anonymous
+// namespace (below the `}  // namespace` close) because it is declared in
+// world_dispatch.h and so needs EXTERNAL linkage — the DB-free unit test
+// (test/inventory_snapshot_test.cpp, #867) links against it. Calls from inside
+// this anonymous namespace resolve to that enclosing declaration, which
+// world_dispatch.h has already made visible.
 
 // ---- EntityEnter visual-assembly builder (S→C; ②/T1 #538) --------------------
 
@@ -1471,6 +1455,56 @@ void poll_completed_cast(net::Session& sess, ConnCtx& ctx, std::uint64_t now_ms)
 }
 
 }  // namespace
+
+// ---- inventory-snapshot encoder (S→C, world.fbs; ITM-01 #453 / #867) ---------
+
+// The character's backpack contents + money + equipped set (INVENTORY_SNAPSHOT S→C,
+// #453; `equipped` added by #867). Only OCCUPIED backpack slots are emitted, keyed by
+// their GRID index (0-based); each carries the item's rarity + bind rule from its
+// template for the bags window.
+//
+// `equipped` is the OWNING player's FULL paperdoll — every occupied EquipSlot, keyed
+// by its EquipSlot id. Deliberately NOT filtered through is_visual_equip_slot(): that
+// filter exists because EntityEnter is an AoI broadcast to every observer, whereas this
+// snapshot is pushed ONLY to the owning client (push_inventory_snapshot → that session),
+// so jewellery is included — your own sheet shows your own rings. This is the client's
+// ONLY source for its own gear; EquippedVisual describes other entities. `dyes` is left
+// EMPTY at M1 for the same reason visible_equipment_visuals leaves it empty: dye@1 is
+// pck-only (#467) and no dye-application path writes item_instance.dyes yet.
+//
+// Declared in world_dispatch.h (external linkage) so the DB-free unit test can prove
+// the wire shape directly; see the note where the anonymous namespace once held it.
+Bytes encode_inventory_snapshot(std::int64_t money, const itm::Inventory& inv) {
+    fb::FlatBufferBuilder b;
+    std::vector<fb::Offset<mn::InventoryItem>> rows;
+    const auto& slots = inv.backpack();
+    rows.reserve(slots.size());
+    for (std::uint16_t i = 0; i < slots.size(); ++i) {
+        const std::optional<itm::ItemInstance>& s = slots[i];
+        if (!s.has_value()) continue;  // omit empty slots
+        std::uint8_t binding = 0;
+        if (const itm::ItemTemplate* t = item_templates().find(s->template_id))
+            binding = static_cast<std::uint8_t>(t->binding);
+        rows.push_back(mn::CreateInventoryItem(b, i, s->template_id, s->stack,
+                                               template_quality(s->template_id), binding));
+    }
+    auto vec = b.CreateVector(rows);
+
+    std::vector<fb::Offset<mn::EquippedItem>> eq_rows;
+    const auto& equipped = inv.equipment();
+    eq_rows.reserve(equipped.size());
+    for (std::size_t i = 0; i < equipped.size(); ++i) {
+        const std::optional<itm::ItemInstance>& s = equipped[i];
+        if (!s.has_value()) continue;  // omit empty paperdoll positions
+        eq_rows.push_back(mn::CreateEquippedItem(b, static_cast<std::uint8_t>(i),
+                                                 s->template_id,
+                                                 /*dyes=*/0));  // empty at M1 (see above)
+    }
+    auto eq_vec = b.CreateVector(eq_rows);
+
+    b.Finish(mn::CreateInventorySnapshot(b, money, vec, inv.backpack_capacity(), eq_vec));
+    return Bytes(b.GetBufferPointer(), b.GetBufferPointer() + b.GetSize());
+}
 
 // ---------------------------------------------------------------------------
 // Content-store installation seam (#390)

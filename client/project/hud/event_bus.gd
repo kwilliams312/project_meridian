@@ -725,6 +725,13 @@ signal currency_changed(copper: int, known: bool)
 ## binding}; `backpack_slots` is the grid capacity. The bags window re-renders.
 signal inventory_changed(money: int, items: Array, backpack_slots: int)
 
+## The player's OWN equipped set changed (carried on the same INVENTORY_SNAPSHOT as
+## inventory_changed, #867). `equipped` is an Array of {slot,item_template,dyes} for the
+## OCCUPIED paperdoll positions only (`slot` = server EquipSlot id; a bare character emits
+## an empty Array). This is the client's ONLY source for its own gear — the EquippedVisual
+## on EntityEnter describes OTHER entities. The character sheet consumes this.
+signal equipment_changed(equipped: Array)
+
 ## A VENDOR_LIST arrived (decode_econ_frame kind "vendor_list"): the vendor's for-sale
 ## catalog. `items` is an Array of {item_template_id,price,quality,stock}. The vendor
 ## window's BUY tab re-renders with the server-computed prices.
@@ -756,6 +763,7 @@ var _trainer_open_npc: int = 0       # the NPC whose trainer window is open (0 =
 var _inventory: Array = []           # backpack contents (INVENTORY_SNAPSHOT): {slot,item_template_id,count,quality,binding}
 var _backpack_slots: int = 0         # backpack grid capacity (cell count)
 var _inventory_known: bool = false   # an INVENTORY_SNAPSHOT has been seen
+var _equipment: Array = []           # own paperdoll (INVENTORY_SNAPSHOT #867): {slot,item_template,dyes}
 var _buyback: Array = []             # buyback queue: {buyback_slot,item_template_id,quantity,price}
 var _trainer_npc: int = 0            # the trainer whose list we hold (0 = none)
 var _trainer_entries: Array = []     # the held TRAINER_LIST rows
@@ -803,15 +811,22 @@ func publish_loot_closed(corpse_guid: int) -> void:
 
 
 ## Publish an INVENTORY_SNAPSHOT (decode_econ_frame kind "inventory_snapshot"). Replaces the
-## held backpack contents + capacity with the server's, applies the authoritative `money`
-## balance (so currency is known from spawn), and emits inventory_changed. SERVER IS LAW —
-## the client never predicts its bags; it renders exactly what worldd re-sends.
-func publish_inventory_snapshot(money: int, items: Array, backpack_slots: int) -> void:
+## held backpack contents + capacity + equipped set with the server's, applies the
+## authoritative `money` balance (so currency is known from spawn), and emits
+## inventory_changed then equipment_changed. SERVER IS LAW — the client never predicts its
+## bags or its paperdoll; it renders exactly what worldd re-sends.
+##
+## `equipped` defaults to [] so a caller (or a pre-#867 server whose snapshot omits the
+## appended field) yields a bare paperdoll rather than an error.
+func publish_inventory_snapshot(money: int, items: Array, backpack_slots: int,
+		equipped: Array = []) -> void:
 	_inventory = items.duplicate(true)
 	_backpack_slots = backpack_slots
 	_inventory_known = true
+	_equipment = equipped.duplicate(true)
 	_apply_balance(money)
 	inventory_changed.emit(money, inventory_items(), _backpack_slots)
+	equipment_changed.emit(equipment())
 
 
 ## Publish a VENDOR_LIST (decode_econ_frame kind "vendor_list"). Stores the open vendor's
@@ -1010,6 +1025,21 @@ func backpack_slots() -> int:
 ## True once an INVENTORY_SNAPSHOT has been seen (bags contents are authoritative).
 func inventory_known() -> bool:
 	return _inventory_known
+
+
+## The player's OWN equipped set from the last INVENTORY_SNAPSHOT (copies), in wire order:
+## {slot,item_template,dyes}. Only OCCUPIED paperdoll positions appear — a bare character
+## yields []. `slot` is the server EquipSlot id. The character sheet reads this (#867).
+func equipment() -> Array:
+	return _equipment.duplicate(true)
+
+
+## The equipped item at server EquipSlot `slot`, or {} when that position is empty.
+func equipped_at(slot: int) -> Dictionary:
+	for eq in _equipment:
+		if int((eq as Dictionary).get("slot", -1)) == slot:
+			return (eq as Dictionary).duplicate(true)
+	return {}
 
 
 ## The buyback queue (copies), in queue order.

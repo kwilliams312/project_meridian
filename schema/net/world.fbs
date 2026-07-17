@@ -1149,16 +1149,39 @@ table InventoryItem {
   binding:uint8 = 0;        // bind rule (Binding: 0 none / 1 on-pickup / 2 on-equip)
 }
 
-/// S→C. The character's backpack contents + money. `money` is the copper balance
-/// (server-authoritative, int64 copper — the same balance the vendor/trainer
-/// results carry). `items` lists ONLY occupied backpack slots (empty slots are
-/// omitted; an empty backpack yields an empty vector). `backpack_slots` is the
-/// grid capacity so the client can render the right number of cells. A DISPLAY
-/// projection — the client never predicts inventory (Principle 1).
+/// S→C. One EQUIPPED item on the OWNING character's paperdoll, for that player's
+/// own character sheet (#867, epic #866). Distinct from EquippedVisual despite the
+/// matching field layout — the two have DIFFERENT contracts and must not be merged:
+///   * EquippedVisual rides on EntityEnter, an AoI BROADCAST to every observer, so
+///     it carries only VISUALLY-rendered slots (jewellery is omitted — it would leak
+///     equipment state to onlookers for no render gain).
+///   * EquippedItem rides on InventorySnapshot, which worldd pushes ONLY to the
+///     owning client, so it carries the FULL paperdoll — jewellery included. Your
+///     own sheet shows your own rings; nobody else's client ever sees this table.
+/// An EMPTY paperdoll position is omitted entirely (an item_template is never 0).
+/// `slot` is the server's EquipSlot id (server/items/src/inventory.h).
+table EquippedItem {
+  slot:uint8;            // server EquipSlot id (0-based; inventory.h)
+  item_template:uint32;  // IF-9 item_template world id (never 0 on the wire)
+  dyes:[DyeChoice];      // per-instance dye state; empty = authored colours
+}
+
+/// S→C. The character's backpack contents + money + equipped set. `money` is the
+/// copper balance (server-authoritative, int64 copper — the same balance the
+/// vendor/trainer results carry). `items` lists ONLY occupied backpack slots (empty
+/// slots are omitted; an empty backpack yields an empty vector). `backpack_slots` is
+/// the grid capacity so the client can render the right number of cells. `equipped`
+/// lists ONLY occupied paperdoll positions (a bare character yields an empty vector)
+/// — it is how the owning client learns its OWN gear, which no other message carries
+/// (EquippedVisual on EntityEnter describes OTHER entities). A DISPLAY projection —
+/// the client never predicts inventory (Principle 1).
 table InventorySnapshot {
   money:int64;                // copper balance (server-authoritative)
   items:[InventoryItem];      // occupied backpack slots (empty = nothing carried)
   backpack_slots:uint16 = 0;  // backpack grid capacity (cell count)
+  equipped:[EquippedItem];    // occupied paperdoll positions (empty = bare). APPENDED
+                              // field — additive-field FlatBuffers evolution (README):
+                              // old readers skip it; old writers omit it ⇒ absent.
 }
 
 // ===========================================================================
