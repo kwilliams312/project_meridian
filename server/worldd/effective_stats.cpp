@@ -7,6 +7,7 @@
 
 #include "effective_stats.h"
 
+#include <algorithm>
 #include <cstdlib>
 
 namespace meridian::worldd {
@@ -88,6 +89,19 @@ std::size_t AttributeCatalog::primary_count() const {
 
 std::size_t AttributeCatalog::derived_count() const {
     return attributes_.size() - primary_count();
+}
+
+std::vector<AttributeDef> AttributeCatalog::attributes() const {
+    std::vector<AttributeDef> out;
+    out.reserve(attributes_.size());
+    for (const auto& [ref, def] : attributes_) out.push_back(def);
+    // Deterministic order: by content_id, then ref (a stable tie-break for the
+    // legacy/seed 0 content_id or any duplicate id from a malformed load).
+    std::sort(out.begin(), out.end(), [](const AttributeDef& a, const AttributeDef& b) {
+        if (a.content_id != b.content_id) return a.content_id < b.content_id;
+        return a.ref < b.ref;
+    });
+    return out;
 }
 
 // ---------------------------------------------------------------------------

@@ -36,6 +36,7 @@ add_library(world-dispatch STATIC
   combat_resolver.cpp
   aura_container.cpp
   effective_stats.cpp
+  effective_stats_aggregator.cpp
   class_kernel.cpp
   talent_catalog.cpp
   death_state.cpp
@@ -1145,6 +1146,24 @@ target_link_libraries(worldd-effective-stats-test
 )
 set_target_properties(worldd-effective-stats-test PROPERTIES CXX_EXTENSIONS OFF)
 add_test(NAME worldd-effective-stats COMMAND worldd-effective-stats-test)
+
+# --- Effective-stat AGGREGATOR UNIT test (SP2.5; #896, epic #866 S5a). ---------
+# PURE (no DB, no socket, no Unit, no wire, no client): drives the per-character
+# aggregate_character_stats over an in-memory catalog + hand-built ItemTemplates —
+# gear StatMods fold into the matching primary attribute through the #694 kernel,
+# gear armor surfaces distinctly, and re-aggregating a changed loadout drops a
+# removed item's contribution exactly once. Cross-checks its numbers straight
+# against EffectiveStats::effective(). The shared #871/S5b + #785 seam. Always runs
+# in the plain server ctest.
+add_executable(worldd-effective-stats-aggregator-test
+  test/effective_stats_aggregator_test.cpp
+)
+target_link_libraries(worldd-effective-stats-aggregator-test
+  PRIVATE
+    meridian::world-dispatch
+)
+set_target_properties(worldd-effective-stats-aggregator-test PROPERTIES CXX_EXTENSIONS OFF)
+add_test(NAME worldd-effective-stats-aggregator COMMAND worldd-effective-stats-aggregator-test)
 
 # --- XP curve / leveling UNIT test (CHR-03 #360). -----------------------------
 # PURE (no DB, no socket, no clock, no RNG): drives the leveling curve directly —

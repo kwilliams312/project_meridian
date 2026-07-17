@@ -49,6 +49,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "aura_container.h"  // AttributeDelta / AuraContainer — the live buff/debuff layer
 
@@ -111,6 +112,14 @@ public:
     std::size_t attribute_count() const { return attributes_.size(); }
     std::size_t primary_count() const;
     std::size_t derived_count() const;
+
+    // Every registered attribute definition, ordered by content_id (then ref for a
+    // stable tie-break) so a consumer that walks the vocabulary — e.g. the
+    // per-character aggregator (effective_stats_aggregator.h) computing an effective
+    // value for each attribute — gets a deterministic order independent of the
+    // unordered_map's bucketing. Read-only view; cheap to build (the catalog is
+    // small and boot-time immutable).
+    std::vector<AttributeDef> attributes() const;
 
 private:
     // ref -> definition.
