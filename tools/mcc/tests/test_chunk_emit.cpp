@@ -859,7 +859,7 @@ void test_meadow_emit_sprout_meadow() {
 // Locks in the two decisions T3 made before staging, because the staged pack is
 // policed byte-for-byte: changing either silently would churn committed data.
 void test_meadow_surface_style() {
-    std::cout << "test_meadow_surface_style (#877: stride-2 render mesh + chibi ground)\n";
+    std::cout << "test_meadow_surface_style (#877: profile render stride + chibi ground)\n";
     const mcc::stages::ChunkEmitResult res = run(meadow_opts());
     if (!res.ok || res.chunks.empty()) { report(false, "meadow emit produced chunks"); return; }
 
@@ -928,8 +928,20 @@ void test_meadow_surface_style() {
            "got " + std::to_string(hf.size()) + " samples");
 
     const std::string vd = b64_decode(tscn_packed_bytes_b64(rec.scn, "vertex_data"));
-    constexpr int kStride = 2;
-    constexpr int kN = 65;  // (129-1)/2 + 1
+    // DERIVE the stride from the mesh the emitter actually shipped rather than
+    // spelling it here: the stride belongs to the profile's SurfaceStyle, so a
+    // hardcoded 2 would make every message below lie the day a profile re-strides.
+    // The assertion that it IS 2 today lives above (vertex_count == 4225) — that is
+    // the decision gate; this block measures whatever was emitted and says so.
+    const int kN = static_cast<int>(std::lround(std::sqrt(
+        static_cast<double>(std::stoi(tscn_field(rec.scn, "vertex_count"))))));
+    const int kStride = (kN > 1) ? 128 / (kN - 1) : 0;
+    report(kN > 1 && 128 % (kN - 1) == 0 && kStride * (kN - 1) == 128,
+           "derived the render stride from the emitted vertex count (stride " +
+               std::to_string(kStride) + ", " + std::to_string(kN) + "x" +
+               std::to_string(kN) + " verts)",
+           "vertex_count=" + tscn_field(rec.scn, "vertex_count"));
+    const std::string stride_s = std::to_string(kStride);
     bool on_lattice = true;
     float max_dev = 0.0f;
     if (vd.size() >= static_cast<std::size_t>(kN) * kN * 12) {
@@ -953,14 +965,130 @@ void test_meadow_surface_style() {
             }
         }
     }
-    report(on_lattice, "every retained stride-2 vertex still sits exactly on its "
+    report(on_lattice, "every retained stride-" + stride_s + " vertex still sits exactly on its "
                        "heightfield sample (decimation drops samples, never moves them)");
     // The measured worst case across the grid is ~7 mm; 5 cm is a generous ceiling
     // that still fails loudly if someone coarsens the stride without re-deciding.
     report(max_dev < 0.05f,
-           "the drawn stride-2 surface stays within 5 cm of the sampled heightfield "
-           "(imperceptible float/sink; measured ~7 mm)",
+           "the drawn stride-" + stride_s + " surface stays within 5 cm of the sampled "
+           "heightfield (imperceptible float/sink; measured ~7 mm)",
            "max_dev=" + std::to_string(max_dev) + " m");
+}
+
+// ---- #877 QA: the emit is a pure function of its INPUT, not of the toolchain --
+//
+// THE REGRESSION THIS EXISTS FOR: #884 staged 29 chunk files from an arm64 macOS
+// build (Apple clang, -ffp-contract=on by default) and CI's x86-64 GCC declared
+// every one of them stale — ~55% of heightfield samples differed by up to 1.9e-6 m.
+// Nobody had changed the source. The compiler had fused `a*b + c` into a single
+// FMA on one machine and not the other, and BLAKE3 does not grade on magnitude.
+// chunk.fbs: any nondeterminism is a P0.
+//
+// -ffp-contract=off is now pinned in CMakeLists.txt, but A FLAG IS NOT A PROOF —
+// it is scoped to one build system, one set of compilers, one set of arches. This
+// test is the DETECTOR that outlives it: it pins the emitted floats to a golden
+// BLAKE3, so any toolchain that computes them differently — the flag dropped, an
+// -Ofast crept in, a new arch, x87 excess precision, a libm swap, a float/double
+// promotion changed — fails HERE, on the machine that did it, naming the emit as
+// the thing that moved.
+//
+// LAYERING (deliberate): this hashes the FLOAT VALUES, not the serialized files.
+// check-golden.sh gate 8 polices the whole artifact byte-for-byte and would also
+// trip on a FlatBuffers layout or .tscn formatting change. Hashing the values here
+// keeps THIS test's failure message unambiguous: the math moved, not the container.
+//
+// IF THIS FAILS, DO NOT JUST RE-BAKE THE GOLDEN. The staged pack moves with these
+// bytes, so a "harmless" update here silently rewrites shipped terrain. Find out
+// which rule broke (see THE DETERMINISM INVARIANT in chunk_emit.cpp) first.
+//
+// Goldens measured on Apple clang 21 / arm64 AND GCC / x86-64 with contraction
+// pinned off — the two toolchains that disagreed. They must never need updating
+// for a platform reason again; that is the entire point.
+constexpr const char* kGoldenMeadowHeightfields =
+    "7dd87962247780489744828e307b2a25c97b5e0dcd6dc56658f04af9fc34d066";
+constexpr const char* kGoldenMeadowMeshes =
+    "d70e47d73d6e460c634d8b4b22db731c0a406bc19801dd15878a877da1f965e6";
+constexpr const char* kGoldenFixtureHeightfields =
+    "96529cf65862ee8580ca898ee0fceb1bdbcf20c4332a45af945922ef90f0f089";
+
+// Hash a float span by its IEEE-754 BIT PATTERN, serialized explicitly
+// little-endian. Not memcpy of the raw array: that would bake this machine's
+// endianness into the golden, turning a portability test into a portability
+// assumption.
+void hash_floats(mcc::hash::Blake3& h, const std::vector<float>& v) {
+    for (const float f : v) {
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &f, sizeof(bits));
+        const unsigned char le[4] = {
+            static_cast<unsigned char>(bits & 0xFF),
+            static_cast<unsigned char>((bits >> 8) & 0xFF),
+            static_cast<unsigned char>((bits >> 16) & 0xFF),
+            static_cast<unsigned char>((bits >> 24) & 0xFF)};
+        h.update(reinterpret_cast<const char*>(le), 4);
+    }
+}
+
+void test_emit_is_toolchain_independent() {
+    std::cout << "test_emit_is_toolchain_independent (#877 QA: FP contraction / FMA)\n";
+
+    const mcc::stages::ChunkEmitResult meadow = run(meadow_opts());
+    if (!meadow.ok || meadow.chunks.empty()) {
+        report(false, "meadow emit produced chunks");
+        return;
+    }
+
+    // (1) The heightfield the SERVER/client ground-samples. This is the surface
+    // #884 moved: smootherstep's Horner chain + value_noise's bilinear blend are
+    // both `a*b + c`, the exact shape a compiler fuses.
+    mcc::hash::Blake3 hf_h;
+    std::size_t samples = 0;
+    for (const auto& rec : meadow.chunks) {
+        const std::vector<float> hf = heightfield_of(rec.chunk_bin);
+        samples += hf.size();
+        hash_floats(hf_h, hf);
+    }
+    report(samples == 9u * 129u * 129u,
+           "hashed every meadow heightfield sample (9 chunks x 129x129)",
+           "got " + std::to_string(samples));
+    const std::string hf_hex = hf_h.hex();
+    report(hf_hex == kGoldenMeadowHeightfields,
+           "the meadow heightfield floats match their golden BLAKE3 — the emit is "
+           "toolchain-INDEPENDENT (this is the #884 FMA-contraction gate)",
+           "got  " + hf_hex + "\n       want " + kGoldenMeadowHeightfields +
+               "\n       The emitted floats MOVED. Do NOT re-bake this golden until you know\n"
+               "       why: check -ffp-contract=off is still pinned on mcc_stages (CMakeLists.txt),\n"
+               "       that no -ffast-math/-Ofast leaked in, and that no transcendental or\n"
+               "       non-correctly-rounded libm call entered the height path. The staged pack\n"
+               "       under client/project/meridian/chibi/chunks/ moves with these bytes.");
+
+    // (2) The RENDER path too — normals are accumulated and normalized per vertex
+    // (mul+add, then sqrt), so the mesh is contraction-sensitive independently of
+    // the heightfield. The .tscn carries them as base64 vertex_data.
+    mcc::hash::Blake3 mesh_h;
+    for (const auto& rec : meadow.chunks) {
+        mesh_h.update(rec.scn.data(), rec.scn.size());
+        mesh_h.update("\0", 1);
+        mesh_h.update(rec.proxy_scn.data(), rec.proxy_scn.size());
+        mesh_h.update("\0", 1);
+    }
+    const std::string mesh_hex = mesh_h.hex();
+    report(mesh_hex == kGoldenMeadowMeshes,
+           "the meadow render meshes match their golden BLAKE3 — the normal/mesh "
+           "path is toolchain-independent too",
+           "got  " + mesh_hex + "\n       want " + kGoldenMeadowMeshes);
+
+    // (3) The `fixture` profile shares the same float discipline and is emitted by
+    // the same code paths, so gate it identically — it is not staged, so nothing
+    // else would ever catch a drift in it.
+    const mcc::stages::ChunkEmitResult fixture = run({});
+    mcc::hash::Blake3 fx_h;
+    if (fixture.ok) {
+        for (const auto& rec : fixture.chunks) hash_floats(fx_h, heightfield_of(rec.chunk_bin));
+    }
+    const std::string fx_hex = fx_h.hex();
+    report(fixture.ok && fx_hex == kGoldenFixtureHeightfields,
+           "the `fixture` profile's heightfield floats match their golden BLAKE3",
+           "got  " + fx_hex + "\n       want " + kGoldenFixtureHeightfields);
 }
 
 }  // namespace
@@ -977,6 +1105,7 @@ int main() {
     test_meadow_profile_height_budget();
     test_meadow_emit_sprout_meadow();
     test_meadow_surface_style();
+    test_emit_is_toolchain_independent();
 
     std::cout << "\n" << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
     if (g_failures) {

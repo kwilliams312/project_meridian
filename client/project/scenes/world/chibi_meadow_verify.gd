@@ -282,6 +282,12 @@ func _verify_theme_resolution_and_stream() -> void:
 	var probed := 0
 	var vert_dev := 0.0
 	var max_dev := 0.0
+	# The stride is DERIVED from the mesh the emitter actually shipped, never spelled
+	# here: it is a property of the profile's SurfaceStyle (mcc), so hardcoding "2" in
+	# this report would quietly start lying the day a profile re-strides — and a verify
+	# that misreports what it measured is worse than no verify. The heightfield is
+	# 128 quads across, so a drawn grid of n verts/axis means stride = 128 / (n - 1).
+	var drawn_stride := 0
 	if chunk_root != null:
 		for child in chunk_root.get_children():
 			var mi := _first_mesh_instance(child)
@@ -291,6 +297,10 @@ func _verify_theme_resolution_and_stream() -> void:
 			var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 			var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
 			var org: Vector3 = mi.global_transform.origin
+			if drawn_stride == 0:
+				var per_axis := int(round(sqrt(float(verts.size()))))
+				if per_axis > 1 and 128 % (per_axis - 1) == 0:
+					drawn_stride = 128 / (per_axis - 1)
 			# Walk triangle edges, sampling a scattering of them.
 			var step: int = maxi(3, (idx.size() / 3 / 48) * 3)
 			var t := 0
@@ -315,7 +325,10 @@ func _verify_theme_resolution_and_stream() -> void:
 		probed > 0, "probed=%d edge midpoints" % probed)
 	_check("every drawn VERTEX sits exactly on the sampled heightfield (max dev %.4f m)"
 		% vert_dev, vert_dev < 0.001, "vert_dev=%.5f m" % vert_dev)
-	_check("the DRAWN stride-2 surface meets the sampled ground BETWEEN vertices "
+	_check("derived the drawn mesh's stride from the emitted vertex count (stride %d)"
+		% drawn_stride, drawn_stride > 0, "could not derive a stride from the mesh")
+	_check("the DRAWN stride-%d surface meets the sampled ground BETWEEN vertices "
+		% drawn_stride
 		+ "(max dev %.4f m < 5 cm — imperceptible float/sink)" % max_dev,
 		max_dev < 0.05, "max_dev=%.4f m over %d edge midpoints" % [max_dev, probed])
 	_stream_done = true

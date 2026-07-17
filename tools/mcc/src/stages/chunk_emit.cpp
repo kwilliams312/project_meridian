@@ -157,9 +157,46 @@ std::string base64(const std::string& raw) {
 // in RenderingServer's surface packer. Verified byte-for-byte against what Godot
 // 4.7.stable itself writes for a known mesh (see the tests).
 //
-// Only sqrt/fabs are used anywhere in the mesh path — both are IEEE-754
-// correctly-rounded, so unlike the transcendentals (sin/exp) they are
-// bit-identical across platforms and keep the emit deterministic.
+// ---- ⛔ THE DETERMINISM INVARIANT — READ BEFORE TOUCHING THE FLOAT MATH ⛔ ---
+//
+// EVERY float operation in this file (mesh path AND heightfield path) must be a
+// pure function of the INPUT — never of the toolchain, arch, or optimizer. The
+// emitted bytes are staged in git, BLAKE3'd into the IF-6 manifest, and policed
+// byte-for-byte by check-golden.sh gate 8; chunk.fbs states the doctrine plainly:
+// any nondeterminism is a P0. A one-ULP drift is a red CI, not a rounding nit.
+//
+// Two INDEPENDENT things are required. Both are load-bearing:
+//
+// 1. NO LIBRARY FUNCTION WHOSE RESULT IS NOT CORRECTLY ROUNDED. Only sqrt, fabs
+//    and floor appear here; IEEE-754 mandates the exact result for all three, so
+//    every libm agrees to the bit. The transcendentals (sin/cos/exp/pow) are NOT
+//    correctly rounded and legitimately differ between libms — do not introduce
+//    one. This is the rule the original comment stated, and it remains true.
+//
+// 2. NO FP CONTRACTION. This is the rule the original comment MISSED, and it is
+//    what actually broke #884. Correct rounding per-operation buys nothing if the
+//    compiler deletes an operation: given `a*b + c` a compiler may emit a single
+//    fused multiply-add, rounding ONCE instead of twice. That is not a bug —
+//    -ffp-contract permits it, and each compiler defaults differently (clang: on,
+//    gcc: fast), while x86-64's BASELINE ISA has no FMA to fuse into at all. So
+//    the same source emitted three different byte streams across contraction
+//    settings, and CI's x86-64 GCC disagreed with the author's arm64 macOS build
+//    on ~55% of heightfield samples.
+//
+//    `a*b + c` IS THE SHAPE OF NEARLY EVERY LINE BELOW — smootherstep's Horner
+//    chain, value_noise's bilinear blend, meadow_height's octave sum, the normal
+//    accumulation, unorm16's quantise. Assume any new mul-then-add is contractible.
+//
+//    ENFORCED, not hoped for: tools/mcc/CMakeLists.txt compiles mcc_stages with
+//    -ffp-contract=off (MSVC's default /fp:precise already forbids it). Do not
+//    remove that flag, and do not add -ffast-math/-Ofast (which re-enables
+//    contraction AND breaks correct rounding, defeating rule 1 as well).
+//
+// BACKSTOP: test_emit_is_toolchain_independent (tests/test_chunk_emit.cpp) pins
+// the emitted meadow heightfield to a golden BLAKE3. It is the detector for both
+// rules — and for the classes neither rule names (x87 excess precision, a libm
+// swap, a float/double promotion change). If it fails, the emit moved: find out
+// why before regenerating the golden, because the staged pack moves with it.
 void octahedron_encode(float x, float y, float z, float& ox, float& oy) {
     const float s = std::fabs(x) + std::fabs(y) + std::fabs(z);
     // Callers always pass a normalised, non-degenerate vector; guard anyway so a
@@ -257,6 +294,22 @@ constexpr float kMeadowAmpCoarse = 2.0f;    // broad rolling hills
 constexpr float kMeadowAmpFine = 0.6f;      // gentle surface undulation
 // Value noise is a convex blend of lattice values in [-1,1], so |octave| ≤ its
 // amplitude and the sum is bounded ANALYTICALLY — no clamp, no empirical tuning.
+//
+// ⚠️ THE STATIC_ASSERT BELOW CANNOT SEE ITS OWN PREMISE (#883). It checks the
+// AMPLITUDE SUM, and that sum only bounds the surface while BOTH of these hold:
+//
+//   (a) meadow_height is EXACTLY the octaves listed in the sum. Add a third octave
+//       and forget to add its amplitude here and the assert still passes while the
+//       real surface exceeds ±3 m — i.e. players standing on it get their moves
+//       rejected by R5. ANY NEW OCTAVE MUST BE ADDED TO THE SUM.
+//   (b) value_noise stays CONVEX (a weighted average of lattice values in [-1,1],
+//       weights in [0,1] summing to 1). Gradient/Perlin noise does NOT satisfy
+//       |octave| ≤ amplitude — swapping it in silently breaks the bound with this
+//       assert still green. If you change the noise, re-derive the bound.
+//
+// Defense-in-depth, because a compile-time assert cannot check either premise:
+// test_meadow_profile_height_budget asserts the ±3 m bound against the EMITTED
+// samples, with its own independent kBudget mirror. That test is the real gate.
 static_assert(kMeadowAmpCoarse + kMeadowAmpFine <= kMeadowMaxAbsM,
               "meadow amplitude exceeds the +-3 m R5 budget (movement_constants.h kHeightTolerance"
               " = 4.0 m vs worldd's constant ground 0) — players standing on it would be rejected");
