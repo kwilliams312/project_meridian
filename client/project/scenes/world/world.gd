@@ -447,14 +447,22 @@ func _tick_local_player() -> void:
 	# where it moves/looks. Godot forward is -Z; a yaw of 0 faces -Z.
 	var move := MovementBasis.character_relative_move(fwd, strafe, yaw)
 
-	var intent: Dictionary = _mover.predict(move, false, false, yaw, _client_ms)
+	# #905: jump input. The `jump` action (spacebar, project.godot [input]) is only
+	# honoured while the mover reports grounded — MovementBasis.grounded_jump gates
+	# the raw press so pressing jump mid-air neither re-launches (no double-jump) nor
+	# emits a spurious kJump intent. The `walk` arg (2nd) stays false — separate
+	# concern. On the grounded tick this feeds jump=true, so integrate_tick launches
+	# the arc AND state_flags carries kJump (bit 7); the LocomotionDriver call below
+	# then reads is_grounded()==false and drives the body's AnimationTree to 'air'.
+	var jump := MovementBasis.grounded_jump(Input.is_action_pressed("jump"), _mover.is_grounded())
+	var intent: Dictionary = _mover.predict(move, false, jump, yaw, _client_ms)
 
 	# Drive the local body's locomotion animation from THIS tick's predicted state
 	# (CHR-02, #908 W1b): mode from state_flags, planar speed + grounded from the
 	# mover. Runs every tick — independent of the throttled intent emit below — so the
 	# animation tracks movement smoothly, and it is a no-op on the capsule fallback.
-	# (Jump/walk inputs are still hard-false here pending #905; the driver already
-	# reacts correctly to whatever mode/grounded the mover reports.)
+	# (Jump is now wired above (#905) — on a jump tick the mover goes airborne, so the
+	# driver drives 'air'; the walk input is still hard-false, a separate concern.)
 	LocomotionDriverScript.drive(_body, _mover, int(intent.get("state_flags", 0)))
 
 	if _mover.should_emit_intent(_client_ms, int(intent.get("state_flags", 0))):
