@@ -44,6 +44,7 @@ func _initialize() -> void:
 	_verify_event_bus_quest()
 	_verify_event_bus_gossip()
 	_verify_event_bus_quest_markers()
+	_verify_event_bus_marker_aoi_recache()
 	await _verify_gossip_window()
 	await _verify_turn_in_choice_picker()
 	await _verify_quest_log_window()
@@ -52,6 +53,68 @@ func _initialize() -> void:
 
 	print("\n%d failure(s)" % _fails)
 	quit(1 if _fails > 0 else 0)
+
+
+# REGRESSION (#886): the marker diff cache must be PRUNED when the entity leaves AoI, so
+# worldd's re-push on re-enter is NOT swallowed as "unchanged". worldd prunes its own
+# `ctx.last_markers` on leave (world_dispatch.cpp push_quest_markers); the bus must be
+# symmetric, because the leave frees the entity node AND its marker billboard. Before the
+# fix the cache survived the leave, the re-push diffed to a no-op, and the respawned NPC
+# was left with no `!` until relog ("go too far and come back, the `!` is gone forever").
+func _verify_event_bus_marker_aoi_recache() -> void:
+	print("[event_bus/marker_aoi_recache]")
+	var bus = EventBus.new()
+
+	var events: Array = []
+	bus.giver_indicator_changed.connect(func(g, k): events.append([g, k]))
+
+	# Tansy (guid 27) enters AoI and worldd pushes her `!` on sight.
+	bus.publish_entity_enter(27, {"name": "Tansy", "level": 3})
+	bus.publish_quest_marker_update(27, EventBus.MARKER_AVAILABLE)
+	_check("in-AoI push emits once", events.size() == 1)
+	_check("giver_marker(27) == AVAILABLE (cached)", bus.giver_marker(27) == EventBus.MARKER_AVAILABLE)
+
+	# NO SPAM REGRESSION: while she STAYS in AoI the diff must still swallow an unchanged
+	# re-push (#849/#861 depend on this) — the fix must not weaken the diff.
+	bus.publish_quest_marker_update(27, EventBus.MARKER_AVAILABLE)
+	_check("unchanged re-push still suppressed while in AoI (diff intact)", events.size() == 1)
+
+	# Player walks away: EntityLeave frees her node + billboard, so the cache MUST drop her.
+	bus.publish_entity_leave(27)
+	_check("leave prunes the marker cache (giver_marker back to NONE)",
+		bus.giver_marker(27) == EventBus.MARKER_NONE)
+
+	# Player walks back: worldd re-pushes the SAME kind. THIS IS THE BUG — pre-fix the stale
+	# cache made it a no-op and the fresh node never got its `!`. It MUST emit now.
+	bus.publish_entity_enter(27, {"name": "Tansy", "level": 3})
+	bus.publish_quest_marker_update(27, EventBus.MARKER_AVAILABLE)
+	_check("re-push after leave/re-enter DOES emit (the #886 fix)", events.size() == 2)
+	_check("re-emitted marker is Tansy's AVAILABLE '!'",
+		events.size() == 2 and int(events[1][0]) == 27 and int(events[1][1]) == EventBus.MARKER_AVAILABLE)
+
+	# … and the diff is still live on the re-entered entity (no spam after the re-push).
+	bus.publish_quest_marker_update(27, EventBus.MARKER_AVAILABLE)
+	_check("diff still suppresses unchanged re-push after re-enter", events.size() == 2)
+
+	# NO LEAK: the cache must not grow unbounded across many leave/enter cycles. Every guid
+	# is pruned on its way out, so nothing accumulates.
+	for i in range(50):
+		var g := 1000 + i
+		bus.publish_entity_enter(g, {"name": "npc%d" % g, "level": 1})
+		bus.publish_quest_marker_update(g, EventBus.MARKER_AVAILABLE)
+		bus.publish_entity_leave(g)
+	_check("50 leave/enter cycles leave no cached markers behind",
+		bus._giver_markers.size() == 1)  # only the still-present Tansy (27)
+
+	# A leave for a guid the bus never tracked prunes safely (the erase precedes the
+	# `_entities` guard) and cannot strand an entry.
+	bus.publish_entity_leave(4242)
+	_check("leave for an untracked guid is safe + leaks nothing",
+		bus._giver_markers.size() == 1 and bus.giver_marker(4242) == EventBus.MARKER_NONE)
+
+	# Tansy's own entry is still cached (only the departed guids were pruned).
+	_check("still-present entity keeps its cached marker",
+		bus.giver_marker(27) == EventBus.MARKER_AVAILABLE)
 
 
 # A populated two-quest log snapshot (the shape decode_quest_frame produces), including

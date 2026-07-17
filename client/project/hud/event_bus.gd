@@ -130,7 +130,17 @@ func seed_identity(guid: int, name: String, level: int, char_class: int) -> void
 
 ## Publish an EntityLeave — the entity left AoI. Drops its record and, if it was the
 ## current target, clears the target so the target frame hides.
+##
+## Also PRUNES the overhead-marker diff cache for `guid` (#886), mirroring worldd's own
+## leave-pruning of `ctx.last_markers` (`world_dispatch.cpp` push_quest_markers). The two
+## caches MUST stay symmetric: the entity's node — and with it its marker billboard — is
+## destroyed on leave, so a stale `_giver_markers` entry would make the server's re-push on
+## re-enter look "unchanged" and get swallowed by the diff in publish_quest_marker_update,
+## leaving the freshly-spawned node with no `!` until relog. Pruned BEFORE the `_entities`
+## guard below and unconditionally, so the cache can't grow unbounded across leave/enter
+## cycles even for a guid the bus never tracked. The diff itself is untouched (#849/#861).
 func publish_entity_leave(guid: int) -> void:
+	_giver_markers.erase(guid)
 	if not _entities.has(guid):
 		return
 	_entities.erase(guid)
