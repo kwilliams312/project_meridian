@@ -1837,24 +1837,99 @@ def test_restyle_weapon_parse_args_requires_input_and_defaults_out():
 
 
 # ---------------------------------------------------------------------------
-# retarget_clip — pure helpers (importable without bpy). Story #914 (W2a).
+# retarget_clip — pure helpers (importable without bpy). Story #914 (W2a),
+# generalized to an arbitrary source→canonical map in story #918 (W3 Meshy).
 # ---------------------------------------------------------------------------
+# The spike's captured live Meshy rig bone names (story #916, PR #917). 24 bones;
+# 22 reconcile to canonical, the two head tips (head_end/headfront) are dropped.
+_MESHY_LIVE_BONES = [
+    "Hips", "LeftUpLeg", "LeftLeg", "LeftFoot", "LeftToeBase",
+    "RightUpLeg", "RightLeg", "RightFoot", "RightToeBase",
+    "Spine02", "Spine01", "Spine",
+    "LeftShoulder", "LeftArm", "LeftForeArm", "LeftHand",
+    "RightShoulder", "RightArm", "RightForeArm", "RightHand",
+    "neck", "Head", "head_end", "headfront",
+]
+
+
 def test_retarget_source_name_prefixes_mixamorig():
     assert retarget_clip.source_name("LeftUpperArm") == "mixamorig:LeftUpperArm"
 
 
-def test_retarget_canonical_name_strips_prefix():
-    # The name-remap the retarget performs; a no-op path leaves mixamorig: in.
-    assert retarget_clip.canonical_name("mixamorig:LeftUpperArm") == "LeftUpperArm"
-
-
-def test_retarget_canonical_name_passthrough_when_unprefixed():
-    assert retarget_clip.canonical_name("LeftUpperArm") == "LeftUpperArm"
-
-
-def test_retarget_name_roundtrip():
+def test_retarget_fixture_source_map_covers_every_canonical_bone():
+    # The W2a authored fixture is the "mixamorig:" map case: every canonical bone
+    # keyed by its prefixed source name.
+    fixture_map = retarget_clip.fixture_source_map()
     for bone in bones.bone_names():
-        assert retarget_clip.canonical_name(retarget_clip.source_name(bone)) == bone
+        assert fixture_map[retarget_clip.source_name(bone)] == bone
+    assert len(fixture_map) == len(bones.bone_names())
+
+
+def test_retarget_canonical_name_maps_source_via_fixture_map():
+    # The generalized name-remap: consumes a source→canonical map. A no-op path
+    # that skipped it leaves the source name in the output track paths.
+    fixture_map = retarget_clip.fixture_source_map()
+    assert retarget_clip.canonical_name("mixamorig:LeftUpperArm", fixture_map) \
+        == "LeftUpperArm"
+
+
+def test_retarget_canonical_name_unmapped_returns_none():
+    # A source bone with no canonical target (an unmapped tip/helper) yields None
+    # so the caller drops its track rather than keying a non-existent bone.
+    fixture_map = retarget_clip.fixture_source_map()
+    assert retarget_clip.canonical_name("mixamorig:NotABone", fixture_map) is None
+    assert retarget_clip.canonical_name("whatever", {}) is None
+
+
+def test_retarget_name_roundtrip_through_fixture_map():
+    fixture_map = retarget_clip.fixture_source_map()
+    for bone in bones.bone_names():
+        source = retarget_clip.source_name(bone)
+        assert retarget_clip.canonical_name(source, fixture_map) == bone
+
+
+def test_retarget_invert_map_roundtrips():
+    # canonical→source (retarget drives from the target's animated bones) is the
+    # exact inverse of the source→canonical map.
+    fixture_map = retarget_clip.fixture_source_map()
+    inverse = retarget_clip.invert_map(fixture_map)
+    for source, canonical in fixture_map.items():
+        assert inverse[canonical] == source
+
+
+# --- Meshy map path (story #918): the reconciled live names map to canonical ---
+def test_retarget_load_meshy_map_reconciles_the_five_divergent_names():
+    meshy_map = retarget_clip.load_meshy_map("meshy-5")
+    # The 3 divergent names that DO have a canonical target, reconciled to the
+    # live spellings (zero-padded spine, lowercase neck).
+    assert meshy_map["Spine01"] == "Chest"
+    assert meshy_map["Spine02"] == "UpperChest"
+    assert meshy_map["neck"] == "Neck"
+    # The pre-reconciliation (Mixamo-assumed) spellings are gone.
+    assert "Spine1" not in meshy_map
+    assert "Spine2" not in meshy_map
+    assert "Neck" not in meshy_map
+
+
+def test_retarget_canonical_name_maps_all_22_mappable_live_meshy_bones():
+    meshy_map = retarget_clip.load_meshy_map("meshy-5")
+    canonical = set(bones.bone_names())
+    mapped = {
+        b: retarget_clip.canonical_name(b, meshy_map) for b in _MESHY_LIVE_BONES
+    }
+    # 22 of 24 live bones map to a real canonical bone; the two head tips drop.
+    resolved = {b: c for b, c in mapped.items() if c is not None}
+    assert len(resolved) == 22
+    for meshy_bone, target in resolved.items():
+        assert target in canonical, f"{meshy_bone} → {target} not canonical"
+
+
+def test_retarget_meshy_map_drops_the_two_head_tip_bones():
+    meshy_map = retarget_clip.load_meshy_map("meshy-5")
+    # head_end (head tip) + headfront (Meshy-specific extra) have no canonical
+    # equivalent — dropped (unmapped), not merged, per the #918 disposition.
+    assert retarget_clip.canonical_name("head_end", meshy_map) is None
+    assert retarget_clip.canonical_name("headfront", meshy_map) is None
 
 
 def test_retarget_arm_subtree_contains_the_arm_chain_both_sides():

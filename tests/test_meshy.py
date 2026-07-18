@@ -1423,9 +1423,58 @@ def test_seed_map_every_target_is_a_canonical_bone():
 
 
 def test_seed_map_meshy5_is_unverified():
-    # The seed map for the live Meshy rig naming is UNVERIFIED (no live sample
-    # was obtainable) — convert-rig must refuse it without --allow-unverified-map.
+    # `verified` gates convert-rig MESH onboarding (#524), which stays blocked:
+    # the clip-retarget names are now reconciled, but the mesh-side head-tip merge
+    # + geometric re-pose validation are the separate #524 concern. Kept false so
+    # convert-rig still refuses without --allow-unverified-map (story #918).
     assert mapping.load_map("meshy-5").verified is False
+
+
+# The spike's captured live Meshy rig bone names (story #916, PR #917).
+_MESHY_LIVE_BONES = [
+    "Hips", "LeftUpLeg", "LeftLeg", "LeftFoot", "LeftToeBase",
+    "RightUpLeg", "RightLeg", "RightFoot", "RightToeBase",
+    "Spine02", "Spine01", "Spine",
+    "LeftShoulder", "LeftArm", "LeftForeArm", "LeftHand",
+    "RightShoulder", "RightArm", "RightForeArm", "RightHand",
+    "neck", "Head", "head_end", "headfront",
+]
+
+
+def test_seed_map_meshy5_reconciles_the_five_divergent_live_names():
+    # Story #918: reconcile the 5 names that diverge from the Mixamo-assumed seed
+    # against the live Meshy output — 3 have canonical targets (zero-padded spine,
+    # lowercase neck); the 2 head tips are dropped (see the drop test below).
+    bmap = mapping.load_map("meshy-5")
+    assert bmap.bones["Spine01"] == "Chest"
+    assert bmap.bones["Spine02"] == "UpperChest"
+    assert bmap.bones["neck"] == "Neck"
+    # The pre-reconciliation Mixamo-assumed spellings must be gone.
+    for stale in ("Spine1", "Spine2", "Neck"):
+        assert stale not in bmap.bones, f"stale seed key {stale!r} still present"
+
+
+def test_seed_map_meshy5_drops_the_two_head_tip_bones():
+    # head_end (head tip) + headfront (Meshy-specific extra) have no canonical
+    # equivalent (the canonical spine terminates at `Head`). Dropped, not merged:
+    # they are NOT prefix-mergeable into `Head` (lowercase 'head_*' does not
+    # token-match 'Head'), so a map entry → `Head` would collide on the mesh path.
+    bmap = mapping.load_map("meshy-5")
+    assert "head_end" not in bmap.bones
+    assert "headfront" not in bmap.bones
+
+
+def test_seed_map_meshy5_plans_22_of_24_live_bones_two_head_tips_unmapped():
+    # End-to-end against the spike's live 24: 22 rename cleanly, the 2 head tips
+    # land in `unmapped` (a hard, listed error for convert-rig) — never a silent
+    # mis-merge.
+    plan = mapping.plan(_MESHY_LIVE_BONES, "meshy-5")
+    assert len(plan.renames) == 22
+    assert plan.merges == {}
+    assert plan.unmapped == ["head_end", "headfront"]
+    canonical = set(bones.bone_names())
+    for meshy_bone, target in plan.renames.items():
+        assert target in canonical, f"{meshy_bone} → {target} not canonical"
 
 
 # ============================================================================

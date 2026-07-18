@@ -9,31 +9,49 @@
 # listed error.
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# ⚠️  verified: false  —  UNVERIFIED SEED (DONE_WITH_CONCERNS, story #506).
+# RECONCILED against a live Meshy rig (story #916 spike / #918), 2026-07-17.
 #
-# Meshy does NOT publish the exact bone names its rigging emits. Checked
-# 2026-07-10:
-#   • docs.meshy.ai/en/api/rigging — documents the API surface (endpoints,
-#     FBX/GLB output) but NOT the skeleton bone names.
-#   • meshy.ai/tutorials/character-auto-rigging-workflow — says you may "rename
-#     or re-parent joints to match your target engine (Unity Humanoid or UE5)";
-#     does not disclose the native names.
-#   • ComfyUI MeshyRigModelNode + fal.ai meshy/rigging node docs — no bone list.
-# Meshy states its rig uses "industry-standard bone hierarchies" that "transfer
-# cleanly to Unity, Unreal, Godot, or Blender", and auto-generates Walking /
-# Running clips that retarget against standard humanoid skeletons. On that basis
-# this seed assumes the widely-used **Mixamo-style humanoid naming with the
-# `mixamorig:` namespace prefix stripped** (Hips / Spine / Spine1 / Spine2 /
-# LeftArm / LeftForeArm / LeftUpLeg / LeftToeBase / LeftHandThumb1 …). This is a
-# best-effort guess, not a confirmed schema.
+# The seed (story #506) had to GUESS the bone names — Meshy does not publish them
+# and no live sample was then available — assuming Mixamo-style naming with the
+# `mixamorig:` prefix stripped. Story #916 ran one controlled live rig and read
+# the real names back via `mapping.joint_names_from_glb`. Findings (24 bones):
 #
-# BEFORE relying on this in production: run one real Meshy rig through
-# `mapping.joint_names_from_glb`, reconcile the names below against the actual
-# output (fix renames, add/repoint helper merges, handle *_End tip bones), then
-# flip `verified: true`. Until then, `convert-rig` REFUSES to run on this version
-# unless `--allow-unverified-map` is passed (a development-only escape hatch that
-# exists solely so the pipeline can be exercised on hand-built fixtures).
-# Verification + the geometric re-pose it unblocks are tracked in issue #524.
+#   • 19 / 24 matched the guess exactly (Hips, the limb/shoulder/hand chains,
+#     Spine, Head) — no change needed.
+#   • 5 diverged and are now reconciled here:
+#       - Spine1  → **Spine01**  (Meshy zero-pads the numbering)  → Chest
+#       - Spine2  → **Spine02**  (zero-padded)                    → UpperChest
+#       - Neck    → **neck**     (lowercase)                      → Neck
+#       - HeadTop_End → **head_end**  — a head TIP bone with no canonical target
+#       - (extra) → **headfront**     — a Meshy-specific head helper, no target
+#     `head_end`/`headfront` are DROPPED (left out of the table): the canonical
+#     spine terminates at `Head` (no tip bone), so neither has a canonical
+#     destination. Drop, not merge: they are lowercase and do NOT token-match the
+#     mapped `Head` prefix, so the automatic helper-merge cannot reach them, and
+#     an explicit entry → `Head` would collide (multiple sources → one target) on
+#     the mesh vertex-group path. For CLIP retarget they carry no motion (leaf
+#     tips) so dropping is lossless; for MESH onboarding they surface in the
+#     plan's `unmapped` list (a hard, listed error) rather than mis-binding.
+#   • Rest orientation is a **T-pose** (inverse-bind matrices: arms extend
+#     laterally ±X, ~horizontal). This MATCHES the canonical `bones.py` rest
+#     (RightUpperArm head→tail runs along +X at constant Y=1.42), so the
+#     geometric re-pose #524 worried about is identity/minimal — CONFIRMED, not
+#     assumed, against the seed skeleton.
+#
+# The finger entries below remain a BEST-EFFORT GUESS: the spike mesh had mitten
+# hands (no finger bones), so their live names are still unconfirmed. Locomotion
+# clips do not animate fingers, so this does not block clip retarget.
+#
+# CLIP retarget (tools/blender/meridian_rig/retarget_clip.py) consumes this table
+# via `load_meshy_map` and does NOT gate on `verified` — the reconciled names
+# above make Meshy clips retargetable NOW.
+#
+# `verified` stays **false** BY DESIGN. That flag gates convert-rig MESH
+# onboarding (#524), which is a SEPARATE concern this story does not close: the
+# head-tip mesh disposition and the geometric re-pose validation still need the
+# #524 slice. Do not read the clip-retarget reconciliation as mesh-onboarding
+# verification. `convert-rig` therefore still REFUSES this version without
+# `--allow-unverified-map`.
 #
 # `verified:` must be a bare YAML boolean — a quoted "true"/"false" string is
 # refused outright (mapping.load_map raises), never coerced.
@@ -45,12 +63,17 @@ versions:
     verified: false
     bones:
       # --- Spine column ---
+      # Reconciled against the live spike (story #916/#918): Meshy zero-pads the
+      # spine numbering (Spine01/Spine02, NOT the Mixamo Spine1/Spine2) and emits
+      # a lowercase `neck`. Canonical targets are unchanged from the seed.
       Hips: Hips
       Spine: Spine
-      Spine1: Chest
-      Spine2: UpperChest
-      Neck: Neck
+      Spine01: Chest
+      Spine02: UpperChest
+      neck: Neck
       Head: Head
+      # head_end / headfront (Meshy head tip + face-front helper) are DROPPED —
+      # intentionally absent. See the reconciliation note in the header.
 
       # --- Left arm + hand ---
       LeftShoulder: LeftShoulder

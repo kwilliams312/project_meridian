@@ -57,6 +57,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -131,20 +132,66 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def source_name(canonical: str) -> str:
-    """The non-canonical source bone name for a canonical bone (adds the prefix)."""
+    """The W2a fixture's source bone name for a canonical bone (adds the prefix).
+
+    Only the authored ``mixamorig:`` fixture (:func:`build_source_armature`) is
+    named by this rule; a real Meshy source is named by the reconciled
+    :file:`tools/meshy/bone_map.yaml` table instead (see :func:`load_meshy_map`).
+    """
     return SOURCE_PREFIX + canonical
 
 
-def canonical_name(source: str) -> str:
-    """Map a source bone name back to its canonical name (strips the prefix).
+def canonical_name(source: str, name_map: Mapping[str, str]) -> str | None:
+    """Map a source bone name to its canonical name via ``name_map``.
 
-    The retarget's name-remap step. A no-op path that skipped this leaves the
-    ``mixamorig:`` prefix in the output track paths -- exactly what the verify's
+    The retarget's generalized name-remap step (story #918). ``name_map`` is a
+    source→canonical table — either the W2a authored fixture's ``mixamorig:`` map
+    (:func:`fixture_source_map`) or a real Meshy rig's reconciled map
+    (:func:`load_meshy_map`). Returns ``None`` for a source bone with no
+    canonical target (an unmapped tip/helper, e.g. Meshy's ``head_end`` /
+    ``headfront``) so the caller drops its track rather than keying a bone the
+    canonical skeleton does not have. A no-op path that skipped this remap leaves
+    the source names in the output track paths -- exactly what the W2a verify's
     name assertion catches.
     """
-    if source.startswith(SOURCE_PREFIX):
-        return source[len(SOURCE_PREFIX):]
-    return source
+    return name_map.get(source)
+
+
+def fixture_source_map(profile: str = "ardent_male") -> dict[str, str]:
+    """The W2a authored fixture's source→canonical map: ``mixamorig:X`` → ``X``.
+
+    The fixture is the ``mixamorig:`` map CASE of the generalized retarget: every
+    canonical bone keyed by its prefixed source name. Bone NAMES are identical
+    across profiles (only rest transforms differ), so the profile only affects
+    which bones exist, never their names.
+    """
+    return {source_name(bone): bone for bone in bones.bone_names(profile)}
+
+
+def load_meshy_map(version: str = "meshy-5") -> dict[str, str]:
+    """The reconciled Meshy source→canonical map from ``tools/meshy/bone_map.yaml``.
+
+    Lazily adds the repo ``tools/`` dir to ``sys.path`` and reads the table via
+    the pure ``meshy.mapping`` loader (PyYAML-backed) — so the mixamorig fixture
+    path keeps zero extra dependencies while a Meshy retarget gets the real map.
+    """
+    tools_dir = Path(__file__).resolve().parents[2]
+    if str(tools_dir) not in sys.path:
+        sys.path.insert(0, str(tools_dir))
+    from meshy import mapping  # noqa: PLC0415 - lazy: only the Meshy path needs PyYAML
+
+    return dict(mapping.load_map(version).bones)
+
+
+def invert_map(name_map: Mapping[str, str]) -> dict[str, str]:
+    """Invert a source→canonical map to canonical→source.
+
+    The retarget drives from the target's animated CANONICAL bones, so it needs
+    the reverse lookup to read each one's source pose bone. The forward map is
+    injective (each source bone has one canonical target), so the inverse is
+    well-defined over the mapped bones.
+    """
+    return {canonical: source for source, canonical in name_map.items()}
 
 
 def arm_subtree(profile: str = "ardent_male") -> list[str]:
@@ -369,16 +416,18 @@ def author_source_action(  # pragma: no cover - requires bpy
 
 
 def retarget_action(  # pragma: no cover - requires bpy
-    source_obj, target_obj, clip: str
+    source_obj, target_obj, clip: str, source_map: Mapping[str, str]
 ):
     """Bake the source's WORLD poses for ``clip`` onto the canonical target.
 
     For every frame, read each animated source bone's WORLD matrix and assign it
-    to the corresponding canonical target bone (mapped by name). Blender
-    back-solves the target's local rotation from the T-pose rest -- reproducing
-    identical world motion on the differently-rested rig. Bones are processed
-    parent-first so a child's world assignment sees its parent already posed.
-    Returns the target Action.
+    to the corresponding canonical target bone. The source→canonical
+    ``source_map`` (mixamorig fixture OR reconciled Meshy table) is inverted so
+    each canonical animated bone finds its source pose bone -- the SAME map drives
+    both source shapes. Blender back-solves the target's local rotation from the
+    T-pose rest -- reproducing identical world motion on the differently-rested
+    rig. Bones are processed parent-first so a child's world assignment sees its
+    parent already posed. Returns the target Action.
     """
     import bpy  # noqa: PLC0415
 
@@ -403,6 +452,9 @@ def retarget_action(  # pragma: no cover - requires bpy
 
     animated.sort(key=depth)
 
+    # canonical→source so each animated canonical bone reads its source pose bone.
+    canon_to_source = invert_map(source_map)
+
     src_action = source_obj.animation_data.action
     frame_start = int(src_action.frame_range[0])
     frame_end = int(src_action.frame_range[1])
@@ -411,7 +463,7 @@ def retarget_action(  # pragma: no cover - requires bpy
         scene.frame_set(frame)
         bpy.context.view_layer.update()
         world = {
-            name: source_obj.pose.bones[source_name(name)].matrix.copy()
+            name: source_obj.pose.bones[canon_to_source[name]].matrix.copy()
             for name in animated
         }
         for name in animated:
@@ -482,12 +534,16 @@ def main(argv: list[str] | None = None) -> None:  # pragma: no cover - requires 
     source = build_source_armature(args.profile)
     target = build_target_armature(args.profile)
 
+    # The W2a fixture is the mixamorig: map CASE of the generalized retarget; a
+    # real Meshy source would pass load_meshy_map() here instead.
+    source_map = fixture_source_map(args.profile)
+
     for clip in CLIP_NAMES:
         # Author on the source, then bake onto the target. author_source_action
         # assigns a fresh active action each clip; retarget reads that active
         # action, so the two armatures stay independent per clip.
         author_source_action(source, clip)
-        retarget_action(source, target, clip)
+        retarget_action(source, target, clip, source_map)
 
     # Drop the source armature AND its scratch actions so ONLY the canonical
     # target + its 4 baked actions export (ACTIONS mode would otherwise emit

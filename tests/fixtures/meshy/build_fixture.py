@@ -6,9 +6,9 @@ Run under Blender::
         --python tests/fixtures/meshy/build_fixture.py -- \
         --out tests/fixtures/meshy/meshy_rig_input.glb
 
-Produces a tiny humanoid-arm rig using **Meshy-style bone names** (the stripped
-Mixamo naming the seed `tools/meshy/bone_map.yaml` assumes) plus one twist helper
-(`LeftForeArmTwist`) that is NOT in the map — so `convert_rig.py` exercises both
+Produces a tiny humanoid-arm rig using **Meshy-style bone names** (the reconciled
+live naming `tools/meshy/bone_map.yaml` carries, e.g. `Spine01`) plus one twist
+helper (`LeftForeArmTwist`) that is NOT in the map — so `convert_rig.py` exercises both
 the rename path and the merge-into-nearest-mapped-ancestor path. Bones are placed
 at the canonical rest positions (from `meridian_rig.bones`) so binding the
 converted mesh to the canonical armature is geometrically correct without a
@@ -42,12 +42,15 @@ def _seg(meshy_name: str, canonical: str, parent: str | None):
     return (meshy_name, b.head_m, b.tail_m, parent)
 
 
-# A left-arm chain + spine stub in Meshy naming, plus a twist helper.
+# A left-arm chain + spine stub in Meshy naming, plus a twist helper. Spine01 is
+# the RECONCILED live Meshy spine name (story #918; the seed had assumed the
+# Mixamo 'Spine1') — the fixture tracks the real map so convert_rig exercises the
+# actual rename.
 _RIG = [
     _seg("Hips", "Hips", None),
     _seg("Spine", "Spine", "Hips"),
-    _seg("Spine1", "Chest", "Spine"),
-    _seg("LeftArm", "LeftUpperArm", "Spine1"),
+    _seg("Spine01", "Chest", "Spine"),
+    _seg("LeftArm", "LeftUpperArm", "Spine01"),
     _seg("LeftForeArm", "LeftLowerArm", "LeftArm"),
     _seg("LeftHand", "LeftHand", "LeftForeArm"),
 ]
