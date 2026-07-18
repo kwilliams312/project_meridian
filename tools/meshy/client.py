@@ -39,6 +39,15 @@ import httpx
 BASE_URL = "https://api.meshy.ai"
 TEXT_TO_3D_PATH = "/openapi/v2/text-to-3d"
 IMAGE_TO_3D_PATH = "/openapi/v1/image-to-3d"
+# Rigging + animation live on v1 (docs.meshy.ai/en/api/rigging + /animation,
+# fetched 2026-07-17). Unlike text/image-to-3d, their SUCCEEDED bodies do NOT
+# carry a top-level ``model_urls`` map: the finished glb URLs are nested under a
+# ``result`` object keyed by asset kind — ``result.rigged_character_glb_url`` /
+# ``result.animation_glb_url`` / ``result.basic_animations.<clip>_glb_url``.
+# download() (which keys off model_urls["glb"]) therefore does NOT work for these
+# tasks; use download_url() with a URL pulled from TaskStatus.result instead.
+RIGGING_PATH = "/openapi/v1/rigging"
+ANIMATION_PATH = "/openapi/v1/animations"
 
 # Pinned model version — recorded verbatim into sidecar `provenance.ai.tool`
 # as `meshy@<model-ver>` (spec §7.2). Pin a specific release, never "latest":
@@ -87,9 +96,7 @@ def resolve_http_timeout(timeout: "httpx.Timeout | float | None") -> httpx.Timeo
     if isinstance(timeout, httpx.Timeout):
         return timeout
     seconds = float(timeout)
-    return httpx.Timeout(
-        seconds, connect=min(DEFAULT_HTTP_CONNECT_TIMEOUT_S, seconds)
-    )
+    return httpx.Timeout(seconds, connect=min(DEFAULT_HTTP_CONNECT_TIMEOUT_S, seconds))
 
 
 class MeshyAPIError(RuntimeError):
@@ -129,7 +136,7 @@ class TaskHandle:
     """
 
     task_id: str
-    mode: str  # "text_refine" | "image"
+    mode: str  # "text_refine" | "image" | "rig" | "animate"
     request_payload: dict
     preview_task_id: str | None = None  # set only when mode == "text_refine"
 
@@ -140,6 +147,11 @@ class TaskStatus:
     status: str
     progress: int = 0
     model_urls: dict = field(default_factory=dict)
+    # ``result`` holds the SUCCEEDED body's ``result`` object when it is a dict
+    # (rigging/animation tasks nest their finished-asset URLs here). Text/image
+    # tasks never populate it — their poll bodies carry ``model_urls`` instead
+    # (their *create* response's scalar ``result`` is a task id, not this).
+    result: dict = field(default_factory=dict)
     raw: dict = field(default_factory=dict)
 
     @property
@@ -227,15 +239,17 @@ class MeshyClient:
             sleep=sleep,
             now=now,
             on_status=(
-                lambda status: on_event(
-                    "poll.progress",
-                    task_id=status.task_id,
-                    stage="preview",
-                    status=status.status,
-                    progress=status.progress,
+                lambda status: (
+                    on_event(
+                        "poll.progress",
+                        task_id=status.task_id,
+                        stage="preview",
+                        status=status.status,
+                        progress=status.progress,
+                    )
+                    if on_event
+                    else None
                 )
-                if on_event
-                else None
             ),
         )
         if not preview_status.succeeded:
@@ -269,6 +283,66 @@ class MeshyClient:
         if on_event:
             on_event("generation.submitted", task_id=task_id, stage="image")
         return TaskHandle(task_id=task_id, mode="image", request_payload=payload)
+
+    def rig(
+        self,
+        input_task_id: str | None = None,
+        *,
+        model_url: str | None = None,
+        height_meters: float = 1.7,
+        texture_image_url: str | None = None,
+        on_event: Callable[..., Any] | None = None,
+    ) -> TaskHandle:
+        """Submit an auto-rigging task (``POST /openapi/v1/rigging``).
+
+        Rig either a prior generation task (``input_task_id``) or an external
+        mesh (``model_url`` — a public URL or data URI); exactly one is
+        required. Returns a ``TaskHandle`` whose ``task_id`` is polled at
+        ``endpoint=RIGGING_PATH``; the SUCCEEDED body nests the rigged glb URL
+        (and a ``basic_animations`` walk/run bundle) under ``result`` — pull it
+        with ``rigged_glb_url``/``basic_animation_urls`` and fetch via
+        ``download_url`` (NOT ``download``).
+        """
+        if bool(input_task_id) == bool(model_url):
+            raise ValueError("rig() requires exactly one of input_task_id or model_url")
+        payload: dict[str, Any] = {"height_meters": height_meters}
+        if input_task_id:
+            payload["input_task_id"] = input_task_id
+        else:
+            payload["model_url"] = model_url
+        if texture_image_url:
+            payload["texture_image_url"] = texture_image_url
+        task_id = self._create_task(RIGGING_PATH, payload)
+        if on_event:
+            on_event("rigging.submitted", task_id=task_id, stage="rig")
+        return TaskHandle(task_id=task_id, mode="rig", request_payload=payload)
+
+    def animate(
+        self,
+        rig_task_id: str,
+        action_id: int,
+        *,
+        post_process: dict | None = None,
+        on_event: Callable[..., Any] | None = None,
+    ) -> TaskHandle:
+        """Submit an animation task (``POST /openapi/v1/animations``).
+
+        Retargets a documented library ``action_id`` (see
+        docs.meshy.ai/en/api/animation) onto a completed rigging task. Returns a
+        ``TaskHandle`` polled at ``endpoint=ANIMATION_PATH``; the SUCCEEDED body
+        nests ``result.animation_glb_url`` — pull it with ``animation_glb_url``
+        and fetch via ``download_url``.
+        """
+        payload: dict[str, Any] = {
+            "rig_task_id": rig_task_id,
+            "action_id": action_id,
+        }
+        if post_process is not None:
+            payload["post_process"] = post_process
+        task_id = self._create_task(ANIMATION_PATH, payload)
+        if on_event:
+            on_event("animation.submitted", task_id=task_id, stage="animate")
+        return TaskHandle(task_id=task_id, mode="animate", request_payload=payload)
 
     def _create_task(self, path: str, payload: dict) -> str:
         resp = self._client.post(path, json=payload)
@@ -316,11 +390,13 @@ class MeshyClient:
                     task_id=task_id,
                     status=raw_status,
                 )
+            result = data.get("result")
             status = TaskStatus(
                 task_id=task_id,
                 status=raw_status,
                 progress=data.get("progress", 0),
                 model_urls=data.get("model_urls") or {},
+                result=result if isinstance(result, dict) else {},
                 raw=data,
             )
             if on_status:
@@ -363,6 +439,44 @@ class MeshyClient:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(resp.content)
         return dest
+
+    def download_url(self, url: str, dest: Path) -> Path:
+        """Fetch an arbitrary presigned asset URL to ``dest``.
+
+        The URL-keyed download variant for rigging/animation results, whose
+        finished glbs live at ``result.*_glb_url`` rather than the
+        ``model_urls["glb"]`` slot ``download`` assumes. The caller supplies the
+        URL (e.g. via ``rigged_glb_url``/``animation_glb_url``/
+        ``basic_animation_urls``); this only fetches and writes bytes.
+        """
+        if not url:
+            raise MeshyAPIError("download_url requires a non-empty URL")
+        resp = self._client.get(url)
+        self._raise_for_http_error(resp)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(resp.content)
+        return dest
+
+    # --- Rigging/animation result-URL accessors --------------------------
+    # These key off TaskStatus.result (NOT model_urls) — the shape rigging and
+    # animation SUCCEEDED bodies actually use. Kept as thin, named readers so
+    # the CLI/spike never hard-codes the nested key strings inline.
+
+    @staticmethod
+    def rigged_glb_url(status: TaskStatus) -> str | None:
+        """The rigged-character glb URL from a SUCCEEDED rigging task."""
+        return status.result.get("rigged_character_glb_url")
+
+    @staticmethod
+    def basic_animation_urls(status: TaskStatus) -> dict:
+        """The rigging task's bundled ``basic_animations`` clip URL map (walk/run)."""
+        bundle = status.result.get("basic_animations")
+        return bundle if isinstance(bundle, dict) else {}
+
+    @staticmethod
+    def animation_glb_url(status: TaskStatus) -> str | None:
+        """The animation glb URL from a SUCCEEDED animation task."""
+        return status.result.get("animation_glb_url")
 
     @staticmethod
     def _raise_for_http_error(resp: httpx.Response) -> None:

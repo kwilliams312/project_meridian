@@ -168,6 +168,41 @@ Lands under `content/<ns>/assets/art/<name>/`:
 `hero_landmark`, `creature_model`); the budget ceiling and filename prefix
 come from the shared `budgets.json` table.
 
+## `rig` / `animate` — live Meshy auto-rig + animation (spec ④ Wave 3)
+
+`rig` calls Meshy's auto-rigging endpoint (`POST /openapi/v1/rigging`) on a
+humanoid mesh; `animate` retargets a documented library action onto a completed
+rigging task (`POST /openapi/v1/animations`). Both sit behind the SAME TD-09
+`--terms-verified` + pinned-version gate as `generate`, and their output is **raw
+AI-generated content** — the downloaded `.glb` is TD-09 quarantine
+(`source_tier: ai`, `restyle_status: pending`) and **must not be staged as
+mergeable pack content**; write `--out` OUTSIDE `content/<ns>/assets/`.
+
+```bash
+# Auto-rig a prior Meshy generation task (or --model-url <public URL | data URI>)
+PYTHONPATH=tools uv run python -m meshy rig \
+  --input-task-id <gen-task-id> --height-meters 1.7 \
+  --out /tmp/quarantine/rigged.glb \
+  --basic-animations-dir /tmp/quarantine/clips \
+  --terms-verified
+
+# Retarget a library action_id (e.g. 0 = Idle) onto the rigged task
+PYTHONPATH=tools uv run python -m meshy animate \
+  --rig-task-id <rig-task-id> --action-id 0 \
+  --out /tmp/quarantine/idle.glb --terms-verified
+```
+
+**Response shape (why not `download`).** Unlike text/image-to-3d — whose
+SUCCEEDED body carries a top-level `model_urls["glb"]` — rigging and animation
+nest their finished-asset URLs under a `result` object
+(`result.rigged_character_glb_url`, `result.animation_glb_url`,
+`result.basic_animations.<clip>_glb_url`). `client.download()` keys off
+`model_urls` and does **not** work for these; the URL-keyed
+`client.download_url(url, dest)` variant (fed by the
+`rigged_glb_url` / `animation_glb_url` / `basic_animation_urls` accessors) is used
+instead. Shapes verified against a live spike (story #916) — see
+`docs`/#524 for the reconciled bone-name findings.
+
 ## `convert-rig` — Meshy auto-rig → canonical skeleton (spec ④ §7.3)
 
 Converts a Meshy auto-rigged humanoid `.glb` onto the canonical Meridian rig so
