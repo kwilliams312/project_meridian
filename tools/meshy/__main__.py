@@ -17,6 +17,19 @@ Subcommands:
              refusal gates run first in pure Python (no Blender needed to reject
              a bad request).
 
+  rig        Auto-rig a humanoid `.glb` via Meshy (`POST /openapi/v1/rigging`)
+             and download the rigged glb (optionally its bundled walk/run
+             basic_animations). Same TD-09 `--terms-verified` + pinned-version
+             gate as `generate`.
+
+  animate    Retarget a documented library `--action-id` onto a completed
+             rigging task (`POST /openapi/v1/animations`) and download the
+             animation glb. Same TD-09 gate.
+
+  Output of `rig`/`animate` is RAW AI-generated content (TD-09 quarantine:
+  `source_tier: ai`, `restyle_status: pending`) — write `--out` OUTSIDE the
+  mergeable content tree; never stage it as pack content.
+
 `generate`'s refusal gates (both exit 2, before any network call):
   * `MESHY_API_KEY` is unset.
   * `--terms-verified` was not passed — Meshy's commercial-terms check must be
@@ -190,7 +203,126 @@ def _build_parser() -> argparse.ArgumentParser:
         default=300.0,
         help="hard timeout (seconds) for the headless Blender pass",
     )
+
+    _add_rig_parser(sub)
+    _add_animate_parser(sub)
     return parser
+
+
+def _add_common_meshy_call_args(p: argparse.ArgumentParser) -> None:
+    """Args shared by every LIVE Meshy-calling subcommand (rig/animate).
+
+    The same TD-09 gate (`--terms-verified`) + pinned-version rule the `generate`
+    command enforces, plus the poll/timeout knobs. Output of these commands is
+    RAW Meshy AI output → TD-09 quarantine (`source_tier: ai`,
+    `restyle_status: pending`): it must NOT be staged as mergeable pack content.
+    """
+    p.add_argument(
+        "--out",
+        type=Path,
+        required=True,
+        help=(
+            "destination path for the downloaded result .glb. This is RAW "
+            "AI-generated output (TD-09 quarantine) — write it OUTSIDE the "
+            "mergeable content tree, not into content/<ns>/assets/."
+        ),
+    )
+    p.add_argument(
+        "--terms-verified",
+        action="store_true",
+        help="confirm Meshy's commercial-terms check was verified for this use (TD-09)",
+    )
+    p.add_argument(
+        "--model-version",
+        default=client_mod.DEFAULT_MODEL_VERSION,
+        help=(
+            "explicit pinned Meshy model release (default: "
+            f"{client_mod.DEFAULT_MODEL_VERSION}; 'latest' is refused)"
+        ),
+    )
+    p.add_argument(
+        "--poll-interval", type=float, default=client_mod.DEFAULT_POLL_INTERVAL_S
+    )
+    p.add_argument(
+        "--poll-timeout", type=float, default=client_mod.DEFAULT_POLL_TIMEOUT_S
+    )
+    p.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help=(
+            "per-request HTTP timeout in seconds (NOT the overall poll budget; "
+            "see --poll-timeout). Overrides $MESHY_TIMEOUT."
+        ),
+    )
+
+
+def _add_rig_parser(sub) -> None:
+    rig = sub.add_parser(
+        "rig",
+        help="auto-rig a humanoid mesh via Meshy (POST /openapi/v1/rigging)",
+        epilog=(
+            "Feed a GENERIC humanoid mesh — auto-rigging a stylized/proportioned "
+            "mesh risks skinning artifacts. The rigged .glb plus its bundled "
+            "basic_animations (walk/run) are RAW AI output (TD-09 quarantine)."
+        ),
+    )
+    src = rig.add_mutually_exclusive_group(required=True)
+    src.add_argument(
+        "--input-task-id",
+        help="rig a prior Meshy generation task by its task id",
+    )
+    src.add_argument(
+        "--model-url",
+        help="rig an external mesh by public URL or data URI",
+    )
+    rig.add_argument(
+        "--height-meters",
+        type=float,
+        default=1.7,
+        help="character height in meters (Meshy scales the rig to this; default 1.7)",
+    )
+    rig.add_argument(
+        "--basic-animations-dir",
+        type=Path,
+        default=None,
+        help=(
+            "if set, also download the rigging task's bundled basic_animations "
+            "(walk/run) clips into this directory (also TD-09 quarantine)."
+        ),
+    )
+    _add_common_meshy_call_args(rig)
+
+
+def _add_animate_parser(sub) -> None:
+    anim = sub.add_parser(
+        "animate",
+        help="retarget a library action onto a rigged mesh (POST /openapi/v1/animations)",
+        epilog=(
+            "action_id indexes Meshy's documented animation library "
+            "(docs.meshy.ai/en/api/animation). The animation .glb is RAW AI "
+            "output (TD-09 quarantine)."
+        ),
+    )
+    anim.add_argument(
+        "--rig-task-id",
+        required=True,
+        help="the completed rigging task id to animate",
+    )
+    anim.add_argument(
+        "--action-id",
+        type=int,
+        required=True,
+        help="the library action id to retarget (e.g. 0=Idle; see the API docs)",
+    )
+    anim.add_argument(
+        "--fps",
+        type=int,
+        default=None,
+        choices=(24, 25, 30, 60),
+        help="optional post-process fps for the exported clip",
+    )
+    _add_common_meshy_call_args(anim)
 
 
 def _origin_url(task_id: str, endpoint: str) -> str:
@@ -205,9 +337,7 @@ def _new_client(
     timeout: float | None = None,
 ) -> client_mod.MeshyClient:
     """Client construction seam — tests monkeypatch this to inject a mock transport."""
-    return client_mod.MeshyClient(
-        api_key, model_version=model_version, timeout=timeout
-    )
+    return client_mod.MeshyClient(api_key, model_version=model_version, timeout=timeout)
 
 
 def _post_commit_hook() -> None:
@@ -979,6 +1109,201 @@ def _run_blender_conversion(  # pragma: no cover - spawns Blender (never in CI)
     return 0
 
 
+def _resolve_call_timeout_s(raw: float | None) -> float | None:
+    """CLI --timeout > $MESHY_TIMEOUT > default; raise ValueError on a bad value.
+
+    Shared by rig/animate. Mirrors cmd_generate's precedence so a malformed
+    timeout is rejected before any network call rather than mid-generation.
+    """
+    if raw is None:
+        env_timeout = os.environ.get("MESHY_TIMEOUT")
+        if env_timeout:
+            try:
+                raw = float(env_timeout)
+            except ValueError:
+                raise ValueError(
+                    f"MESHY_TIMEOUT must be a number of seconds, got {env_timeout!r}"
+                )
+    if raw is not None and raw <= 0:
+        raise ValueError(f"--timeout must be a positive number of seconds, got {raw}")
+    return raw
+
+
+def _preflight_live_call(args: argparse.Namespace) -> tuple[str, float | None] | int:
+    """Shared rig/animate TD-09 gate: pinned version, --terms-verified, api key.
+
+    Returns ``(api_key, http_timeout_s)`` on success, or an exit code (2) on
+    refusal. The MESHY_API_KEY value is read from the environment and NEVER
+    printed — only its presence is reported.
+    """
+    if (
+        not args.model_version
+        or args.model_version != args.model_version.strip()
+        or args.model_version.casefold() == "latest"
+    ):
+        print(
+            "refused: --model-version must name an explicit pinned Meshy release; "
+            "'latest' is refused",
+            file=sys.stderr,
+        )
+        return 2
+    if not args.terms_verified:
+        print(
+            "refused: --terms-verified is required — Meshy's commercial-terms "
+            "check must be operator-confirmed before generating (TD-09)",
+            file=sys.stderr,
+        )
+        return 2
+    api_key = os.environ.get("MESHY_API_KEY")
+    if not api_key:
+        print("refused: MESHY_API_KEY is not set", file=sys.stderr)
+        return 2
+    try:
+        http_timeout_s = _resolve_call_timeout_s(args.timeout)
+    except ValueError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
+    return api_key, http_timeout_s
+
+
+def cmd_rig(args: argparse.Namespace) -> int:
+    gate = _preflight_live_call(args)
+    if isinstance(gate, int):
+        return gate
+    api_key, http_timeout_s = gate
+
+    try:
+        client = _new_client(
+            api_key, model_version=args.model_version, timeout=http_timeout_s
+        )
+    except ValueError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        with client:
+            handle = client.rig(
+                input_task_id=args.input_task_id,
+                model_url=args.model_url,
+                height_meters=args.height_meters,
+            )
+            status = client.poll(
+                handle.task_id,
+                endpoint=client_mod.RIGGING_PATH,
+                interval_s=args.poll_interval,
+                timeout_s=args.poll_timeout,
+            )
+            if not status.succeeded:
+                print(
+                    f"error: rigging task {handle.task_id} ended in "
+                    f"{status.status}, expected SUCCEEDED",
+                    file=sys.stderr,
+                )
+                return 1
+            glb_url = client.rigged_glb_url(status)
+            if not glb_url:
+                print(
+                    f"error: rigging task {handle.task_id} SUCCEEDED but no "
+                    "rigged_character_glb_url in result "
+                    f"(result keys: {sorted(status.result)})",
+                    file=sys.stderr,
+                )
+                return 1
+            client.download_url(glb_url, args.out)
+            basic = client.basic_animation_urls(status)
+            downloaded_basic: list[str] = []
+            if args.basic_animations_dir and basic:
+                for clip_key, clip_url in sorted(basic.items()):
+                    if not clip_key.endswith("_glb_url") or not clip_url:
+                        continue
+                    name = clip_key[: -len("_glb_url")]
+                    dest = args.basic_animations_dir / f"{name}.glb"
+                    client.download_url(clip_url, dest)
+                    downloaded_basic.append(str(dest))
+    except (client_mod.MeshyAPIError, client_mod.MeshyPollTimeoutError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    summary = {
+        "task_id": handle.task_id,
+        "status": status.status,
+        "rigged_glb": str(args.out),
+        "result_keys": sorted(status.result),
+        "basic_animations_keys": sorted(basic),
+        "basic_animations_downloaded": downloaded_basic,
+    }
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    print(
+        "note: RAW AI output (TD-09 quarantine) — do NOT stage under "
+        "content/<ns>/assets/ as mergeable pack content.",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def cmd_animate(args: argparse.Namespace) -> int:
+    gate = _preflight_live_call(args)
+    if isinstance(gate, int):
+        return gate
+    api_key, http_timeout_s = gate
+
+    try:
+        client = _new_client(
+            api_key, model_version=args.model_version, timeout=http_timeout_s
+        )
+    except ValueError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
+
+    post_process = {"fps": args.fps} if args.fps is not None else None
+    try:
+        with client:
+            handle = client.animate(
+                args.rig_task_id, args.action_id, post_process=post_process
+            )
+            status = client.poll(
+                handle.task_id,
+                endpoint=client_mod.ANIMATION_PATH,
+                interval_s=args.poll_interval,
+                timeout_s=args.poll_timeout,
+            )
+            if not status.succeeded:
+                print(
+                    f"error: animation task {handle.task_id} ended in "
+                    f"{status.status}, expected SUCCEEDED",
+                    file=sys.stderr,
+                )
+                return 1
+            glb_url = client.animation_glb_url(status)
+            if not glb_url:
+                print(
+                    f"error: animation task {handle.task_id} SUCCEEDED but no "
+                    "animation_glb_url in result "
+                    f"(result keys: {sorted(status.result)})",
+                    file=sys.stderr,
+                )
+                return 1
+            client.download_url(glb_url, args.out)
+    except (client_mod.MeshyAPIError, client_mod.MeshyPollTimeoutError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    summary = {
+        "task_id": handle.task_id,
+        "status": status.status,
+        "action_id": args.action_id,
+        "animation_glb": str(args.out),
+        "result_keys": sorted(status.result),
+    }
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    print(
+        "note: RAW AI output (TD-09 quarantine) — do NOT stage under "
+        "content/<ns>/assets/ as mergeable pack content.",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _check_budget(doc: dict, rel_path: Path) -> list[str]:
     """Delegates to validate_content.check_budget (repo's single budget-lint source).
 
@@ -1027,6 +1352,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_generate(args)
         if args.command == "convert-rig":
             return cmd_convert_rig(args)
+        if args.command == "rig":
+            return cmd_rig(args)
+        if args.command == "animate":
+            return cmd_animate(args)
     except protocol.ProtocolSinkFlushError:
         return _report_json_sink_failure()
     except protocol.ProtocolSinkError:

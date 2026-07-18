@@ -458,8 +458,13 @@ def _patch_client(monkeypatch, handler):
     monkeypatch.setattr(
         meshy_main,
         "_new_client",
-        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None: client_mod.MeshyClient(
-            api_key, model_version=model_version, transport=transport, timeout=timeout
+        lambda api_key, model_version=client_mod.DEFAULT_MODEL_VERSION, *, timeout=None: (
+            client_mod.MeshyClient(
+                api_key,
+                model_version=model_version,
+                transport=transport,
+                timeout=timeout,
+            )
         ),
     )
 
@@ -1884,3 +1889,375 @@ def test_converted_fixture_conserves_weight_mass():
         assert out_mass[bone_name] / out_total == pytest.approx(
             mass / in_total, abs=1e-3
         ), f"weight mass shifted for {bone_name}"
+
+
+# ============================================================================
+# rig() / animate() client + `meshy rig` / `meshy animate` CLI (story #916).
+# HTTP is fully mocked. Response shapes mirror docs.meshy.ai/en/api/rigging and
+# /animation (fetched 2026-07-17): SUCCEEDED bodies nest the finished glb URLs
+# under a `result` object (result.rigged_character_glb_url /
+# result.animation_glb_url / result.basic_animations.<clip>_glb_url), NOT the
+# top-level `model_urls["glb"]` slot text/image-to-3d use.
+# ============================================================================
+
+RIG_GLB_URL = "https://assets.meshy.ai/rigged.glb"
+WALK_GLB_URL = "https://assets.meshy.ai/walk.glb"
+RUN_GLB_URL = "https://assets.meshy.ai/run.glb"
+ANIM_GLB_URL = "https://assets.meshy.ai/anim.glb"
+
+
+def _rig_handler(*, glb_bytes: bytes, status="SUCCEEDED"):
+    """MockTransport handler for the rigging create -> poll -> download flow."""
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        path = request.url.path
+        if request.method == "POST" and path == client_mod.RIGGING_PATH:
+            return httpx.Response(200, json={"result": "task_rig_1"})
+        if request.method == "GET" and path == f"{client_mod.RIGGING_PATH}/task_rig_1":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "task_rig_1",
+                    "type": "rig",
+                    "status": status,
+                    "progress": 100,
+                    "result": {
+                        "rigged_character_glb_url": RIG_GLB_URL,
+                        "rigged_character_fbx_url": "https://assets.meshy.ai/rig.fbx",
+                        "basic_animations": {
+                            "walking_glb_url": WALK_GLB_URL,
+                            "running_glb_url": RUN_GLB_URL,
+                        },
+                    },
+                },
+            )
+        if request.method == "GET" and str(request.url) in (
+            RIG_GLB_URL,
+            WALK_GLB_URL,
+            RUN_GLB_URL,
+        ):
+            return httpx.Response(200, content=glb_bytes)
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    return handler, calls
+
+
+def _animate_handler(*, glb_bytes: bytes, status="SUCCEEDED"):
+    """MockTransport handler for the animation create -> poll -> download flow."""
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        path = request.url.path
+        if request.method == "POST" and path == client_mod.ANIMATION_PATH:
+            return httpx.Response(200, json={"result": "task_anim_1"})
+        if (
+            request.method == "GET"
+            and path == f"{client_mod.ANIMATION_PATH}/task_anim_1"
+        ):
+            return httpx.Response(
+                200,
+                json={
+                    "id": "task_anim_1",
+                    "type": "animate",
+                    "status": status,
+                    "progress": 100,
+                    "result": {
+                        "animation_glb_url": ANIM_GLB_URL,
+                        "animation_fbx_url": "https://assets.meshy.ai/anim.fbx",
+                    },
+                },
+            )
+        if request.method == "GET" and str(request.url) == ANIM_GLB_URL:
+            return httpx.Response(200, content=glb_bytes)
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    return handler, calls
+
+
+# --- client.py: rig() / animate() / download_url() -------------------------
+
+
+def test_rig_submits_model_url_and_returns_rig_handle():
+    handler, calls = _rig_handler(glb_bytes=b"glb")
+    client = client_mod.MeshyClient("fake-key", transport=httpx.MockTransport(handler))
+    handle = client.rig(model_url="https://example.com/mesh.glb", height_meters=1.8)
+    assert handle.task_id == "task_rig_1"
+    assert handle.mode == "rig"
+    post = next(c for c in calls if c.method == "POST")
+    body = json.loads(post.content)
+    assert body["model_url"] == "https://example.com/mesh.glb"
+    assert body["height_meters"] == 1.8
+    assert "input_task_id" not in body
+
+
+def test_rig_submits_input_task_id():
+    handler, calls = _rig_handler(glb_bytes=b"glb")
+    client = client_mod.MeshyClient("fake-key", transport=httpx.MockTransport(handler))
+    client.rig(input_task_id="gen_task_9")
+    body = json.loads(next(c for c in calls if c.method == "POST").content)
+    assert body["input_task_id"] == "gen_task_9"
+    assert "model_url" not in body
+
+
+def test_rig_requires_exactly_one_source():
+    client = client_mod.MeshyClient(
+        "fake-key", transport=httpx.MockTransport(lambda r: httpx.Response(200))
+    )
+    with pytest.raises(ValueError, match="exactly one"):
+        client.rig()
+    with pytest.raises(ValueError, match="exactly one"):
+        client.rig(input_task_id="x", model_url="y")
+
+
+def test_rig_poll_exposes_result_urls_not_model_urls():
+    handler, _calls = _rig_handler(glb_bytes=b"glb")
+    client = client_mod.MeshyClient("fake-key", transport=httpx.MockTransport(handler))
+    status = client.poll(
+        "task_rig_1", endpoint=client_mod.RIGGING_PATH, interval_s=0, timeout_s=5
+    )
+    assert status.succeeded
+    assert status.model_urls == {}  # rigging carries NO top-level model_urls
+    assert client.rigged_glb_url(status) == RIG_GLB_URL
+    assert client.basic_animation_urls(status) == {
+        "walking_glb_url": WALK_GLB_URL,
+        "running_glb_url": RUN_GLB_URL,
+    }
+
+
+def test_animate_submits_rig_task_and_action_id():
+    handler, calls = _animate_handler(glb_bytes=b"glb")
+    client = client_mod.MeshyClient("fake-key", transport=httpx.MockTransport(handler))
+    handle = client.animate("task_rig_1", 466, post_process={"fps": 30})
+    assert handle.task_id == "task_anim_1"
+    assert handle.mode == "animate"
+    body = json.loads(next(c for c in calls if c.method == "POST").content)
+    assert body["rig_task_id"] == "task_rig_1"
+    assert body["action_id"] == 466
+    assert body["post_process"] == {"fps": 30}
+
+
+def test_animate_poll_exposes_animation_glb_url():
+    handler, _calls = _animate_handler(glb_bytes=b"glb")
+    client = client_mod.MeshyClient("fake-key", transport=httpx.MockTransport(handler))
+    status = client.poll(
+        "task_anim_1", endpoint=client_mod.ANIMATION_PATH, interval_s=0, timeout_s=5
+    )
+    assert client.animation_glb_url(status) == ANIM_GLB_URL
+
+
+def test_download_url_writes_bytes_from_arbitrary_url(tmp_path):
+    payload = b"rigged-glb-bytes"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == RIG_GLB_URL
+        return httpx.Response(200, content=payload)
+
+    client = client_mod.MeshyClient("fake-key", transport=httpx.MockTransport(handler))
+    dest = tmp_path / "nested" / "out.glb"
+    result = client.download_url(RIG_GLB_URL, dest)
+    assert result == dest
+    assert dest.read_bytes() == payload
+
+
+def test_download_url_rejects_empty_url(tmp_path):
+    client = client_mod.MeshyClient(
+        "fake-key", transport=httpx.MockTransport(lambda r: httpx.Response(200))
+    )
+    with pytest.raises(client_mod.MeshyAPIError):
+        client.download_url("", tmp_path / "x.glb")
+
+
+# --- CLI: `meshy rig` ------------------------------------------------------
+
+
+def test_rig_cli_happy_path_downloads_glb_and_prints_summary(
+    tmp_path, monkeypatch, capsys
+):
+    handler, _calls = _rig_handler(glb_bytes=b"rigged")
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    out = tmp_path / "quarantine" / "rigged.glb"
+    rc = meshy_main.main(
+        [
+            "rig",
+            "--model-url",
+            "https://example.com/mesh.glb",
+            "--out",
+            str(out),
+            "--terms-verified",
+            "--poll-interval",
+            "0",
+            "--poll-timeout",
+            "5",
+        ]
+    )
+    assert rc == 0
+    assert out.read_bytes() == b"rigged"
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["task_id"] == "task_rig_1"
+    assert summary["status"] == "SUCCEEDED"
+    assert "rigged_character_glb_url" in summary["result_keys"]
+
+
+def test_rig_cli_downloads_basic_animations(tmp_path, monkeypatch):
+    handler, _calls = _rig_handler(glb_bytes=b"rigged")
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    anim_dir = tmp_path / "clips"
+    rc = meshy_main.main(
+        [
+            "rig",
+            "--model-url",
+            "https://example.com/mesh.glb",
+            "--out",
+            str(tmp_path / "rigged.glb"),
+            "--basic-animations-dir",
+            str(anim_dir),
+            "--terms-verified",
+            "--poll-interval",
+            "0",
+            "--poll-timeout",
+            "5",
+        ]
+    )
+    assert rc == 0
+    assert (anim_dir / "walking.glb").read_bytes() == b"rigged"
+    assert (anim_dir / "running.glb").read_bytes() == b"rigged"
+
+
+def test_rig_cli_refuses_without_terms_verified(tmp_path, monkeypatch, capsys):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no HTTP call without --terms-verified")
+
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    rc = meshy_main.main(
+        [
+            "rig",
+            "--model-url",
+            "https://example.com/mesh.glb",
+            "--out",
+            str(tmp_path / "out.glb"),
+        ]
+    )
+    assert rc == 2
+    assert "TD-09" in capsys.readouterr().err
+
+
+def test_rig_cli_refuses_without_api_key(tmp_path, monkeypatch, capsys):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no HTTP call without MESHY_API_KEY")
+
+    _patch_client(monkeypatch, handler)
+    monkeypatch.delenv("MESHY_API_KEY", raising=False)
+    rc = meshy_main.main(
+        [
+            "rig",
+            "--model-url",
+            "https://example.com/mesh.glb",
+            "--out",
+            str(tmp_path / "out.glb"),
+            "--terms-verified",
+        ]
+    )
+    assert rc == 2
+    assert "MESHY_API_KEY" in capsys.readouterr().err
+
+
+def test_rig_cli_refuses_latest_model_version(tmp_path, monkeypatch, capsys):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no HTTP call for a 'latest' pin")
+
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    rc = meshy_main.main(
+        [
+            "rig",
+            "--model-url",
+            "https://example.com/mesh.glb",
+            "--out",
+            str(tmp_path / "out.glb"),
+            "--terms-verified",
+            "--model-version",
+            "latest",
+        ]
+    )
+    assert rc == 2
+    assert "latest" in capsys.readouterr().err
+
+
+def test_rig_cli_nonzero_exit_when_task_fails(tmp_path, monkeypatch):
+    handler, _calls = _rig_handler(glb_bytes=b"x", status="FAILED")
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    rc = meshy_main.main(
+        [
+            "rig",
+            "--model-url",
+            "https://example.com/mesh.glb",
+            "--out",
+            str(tmp_path / "out.glb"),
+            "--terms-verified",
+            "--poll-interval",
+            "0",
+            "--poll-timeout",
+            "5",
+        ]
+    )
+    assert rc == 1
+
+
+# --- CLI: `meshy animate` --------------------------------------------------
+
+
+def test_animate_cli_happy_path_downloads_glb(tmp_path, monkeypatch, capsys):
+    handler, _calls = _animate_handler(glb_bytes=b"anim")
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    out = tmp_path / "quarantine" / "idle.glb"
+    rc = meshy_main.main(
+        [
+            "animate",
+            "--rig-task-id",
+            "task_rig_1",
+            "--action-id",
+            "0",
+            "--out",
+            str(out),
+            "--terms-verified",
+            "--poll-interval",
+            "0",
+            "--poll-timeout",
+            "5",
+        ]
+    )
+    assert rc == 0
+    assert out.read_bytes() == b"anim"
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["task_id"] == "task_anim_1"
+    assert summary["action_id"] == 0
+    assert "animation_glb_url" in summary["result_keys"]
+
+
+def test_animate_cli_refuses_without_terms_verified(tmp_path, monkeypatch, capsys):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no HTTP call without --terms-verified")
+
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setenv("MESHY_API_KEY", "fake-key")
+    rc = meshy_main.main(
+        [
+            "animate",
+            "--rig-task-id",
+            "task_rig_1",
+            "--action-id",
+            "0",
+            "--out",
+            str(tmp_path / "out.glb"),
+        ]
+    )
+    assert rc == 2
+    assert "TD-09" in capsys.readouterr().err
