@@ -1967,6 +1967,69 @@ def test_retarget_parse_args_defaults_to_chibi_and_staged_fixture():
     assert ns.profile == "chibi"
     assert ns.out.endswith("meridian_locomotion_retarget.glb")
     assert ns.allow_unpinned_blender is False
+    # Story #920: the Meshy path is opt-in — the default is still the fixture.
+    assert ns.from_meshy is None
+    assert ns.meshy_version == "meshy-5"
+    assert ns.bone_map_json is None
+
+
+# --- Story #920: real-Meshy retarget helpers ---------------------------------
+
+
+def test_retarget_bones_to_bake_maps_present_meshy_bones_parent_first():
+    meshy_map = retarget_clip.load_meshy_map("meshy-5")
+    src_names = set(_MESHY_LIVE_BONES)          # the live 24-bone Meshy rig
+    tgt_names = set(bones.bone_names("chibi"))  # the canonical 63-bone rig
+    baked = retarget_clip.bones_to_bake(meshy_map, src_names, tgt_names)
+    # The 22 mappable live bones (the two head tips drop, no fingers on the
+    # mitten-handed spike rig) — canonical, present on both ends.
+    assert set(baked) == {
+        retarget_clip.canonical_name(b, meshy_map)
+        for b in _MESHY_LIVE_BONES
+        if retarget_clip.canonical_name(b, meshy_map) is not None
+    }
+    assert len(baked) == 22
+    # Parent-first: Hips precedes every descendant it parents.
+    hierarchy = bones.hierarchy("chibi")
+
+    def depth(name):
+        d, cur = 0, hierarchy.get(name)
+        while cur is not None:
+            d, cur = d + 1, hierarchy.get(cur)
+        return d
+
+    assert [depth(b) for b in baked] == sorted(depth(b) for b in baked)
+
+
+def test_retarget_bones_to_bake_drops_map_entries_absent_on_the_source():
+    meshy_map = retarget_clip.load_meshy_map("meshy-5")
+    tgt_names = set(bones.bone_names("chibi"))
+    # A source rig with ONLY hips + one leg bone present → only those two bake,
+    # even though the map lists fingers/arms/etc. (they aren't on this source).
+    baked = retarget_clip.bones_to_bake(meshy_map, {"Hips", "LeftUpLeg"}, tgt_names)
+    assert set(baked) == {"Hips", "LeftUpperLeg"}
+
+
+def test_retarget_resolve_meshy_map_reads_bone_map_json(tmp_path):
+    import json
+
+    p = tmp_path / "map.json"
+    p.write_text(json.dumps({"Spine01": "Chest", "neck": "Neck"}))
+    assert retarget_clip.resolve_meshy_map(p) == {"Spine01": "Chest", "neck": "Neck"}
+
+
+def test_retarget_resolve_meshy_map_falls_back_to_yaml_when_no_json():
+    # No JSON path → the system-Python (PyYAML) loader, same as load_meshy_map.
+    assert retarget_clip.resolve_meshy_map(None) == retarget_clip.load_meshy_map()
+
+
+def test_retarget_resolve_meshy_map_rejects_non_string_map(tmp_path):
+    import json
+
+    p = tmp_path / "bad.json"
+    p.write_text(json.dumps({"Spine01": ["Chest"]}))  # value not a string
+    with pytest.raises(SystemExit):
+        retarget_clip.resolve_meshy_map(p)
 
 
 def test_retarget_parse_args_reads_profile_and_out():

@@ -74,6 +74,19 @@ DEFAULT_OUT = "client/project/characters/anim/meridian_locomotion_retarget.glb"
 # The source armature's non-canonical bone-name prefix (see module docstring #1).
 SOURCE_PREFIX = "mixamorig:"
 
+# --- Real-Meshy source alignment (story #920) --------------------------------
+# A live Meshy auto-rig (the #916 spike ground truth) rests in a T-pose like the
+# canonical rig, but faces the OPPOSITE way: its character faces world -Y while
+# the canonical rig (bones.py) faces +Y, and consequently its left/right bones
+# sit on the opposite side of world X (measured: Meshy LeftArm head at +X,
+# canonical LeftUpperArm at -X; Meshy toes/headfront point -Y, canonical +Y).
+# A single 180 deg rotation about the vertical (Z) axis reconciles BOTH at once —
+# it is a proper rotation (not a mirror), so "left" stays left: after the spin
+# Meshy's +X left arm lands on -X exactly where the canonical left arm rests, and
+# the facing flips -Y -> +Y. Applied to the imported source armature before the
+# world-matrix bake so a "swing forward" reads as forward on the canonical rig.
+MESHY_FACING_ALIGN_Z_DEG = 180.0
+
 # The four locomotion clips, exported under these exact names so they arrive at
 # runtime as the AnimationLibrary keys the W1a AnimationTree already references
 # ("<LIBRARY_NAME>/<clip>"). Kept in lockstep with locomotion.gd CLIP_* consts.
@@ -119,6 +132,36 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--out",
         default=DEFAULT_OUT,
         help="output animation .glb path (default: the staged locomotion fixture)",
+    )
+    parser.add_argument(
+        "--from-meshy",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help=(
+            "retarget REAL Meshy animation glbs instead of the authored "
+            "mixamorig fixture: DIR must hold {idle,walk,run,jump}_raw.glb, each "
+            "mapped to canonical names via the meshy bone_map (story #920). The "
+            "output is AI-derived — quarantine it (source_tier: ai)."
+        ),
+    )
+    parser.add_argument(
+        "--meshy-version",
+        default="meshy-5",
+        help="bone_map.yaml version key for --from-meshy (default: meshy-5)",
+    )
+    parser.add_argument(
+        "--bone-map-json",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "source→canonical bone map as JSON (a {meshy_bone: canonical_bone} "
+            "object) for --from-meshy. REQUIRED under Blender: its bundled Python "
+            "lacks PyYAML, so the map is resolved from bone_map.yaml in system "
+            "Python (load_meshy_map) and handed here as JSON, mirroring "
+            "tools/meshy/convert_rig.py's rigdata-JSON convention."
+        ),
     )
     parser.add_argument(
         "--allow-unpinned-blender",
@@ -183,6 +226,33 @@ def load_meshy_map(version: str = "meshy-5") -> dict[str, str]:
     return dict(mapping.load_map(version).bones)
 
 
+def resolve_meshy_map(
+    bone_map_json: Path | None, version: str = "meshy-5"
+) -> dict[str, str]:
+    """The Meshy source→canonical map, preferring a pre-resolved JSON file.
+
+    Story #920. Under Blender (no PyYAML) the map is resolved from
+    ``bone_map.yaml`` in system Python via :func:`load_meshy_map` and handed in as
+    JSON (``--bone-map-json``); this reads that stdlib-only. When no JSON is given
+    (system-Python / test use) it falls back to :func:`load_meshy_map` directly.
+    A JSON that is not a flat ``{str: str}`` object is a hard error — a malformed
+    map must fail loudly, not silently retarget nothing.
+    """
+    if bone_map_json is None:
+        return load_meshy_map(version)
+    import json  # noqa: PLC0415
+
+    data = json.loads(Path(bone_map_json).read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in data.items()
+    ):
+        raise SystemExit(
+            f"[retarget_clip] --bone-map-json {bone_map_json} must be a flat "
+            f"JSON object of {{meshy_bone: canonical_bone}} strings"
+        )
+    return dict(data)
+
+
 def invert_map(name_map: Mapping[str, str]) -> dict[str, str]:
     """Invert a source→canonical map to canonical→source.
 
@@ -211,6 +281,41 @@ def arm_subtree(profile: str = "ardent_male") -> list[str]:
                 break
             cur = hierarchy.get(cur)
     return out
+
+
+def bones_to_bake(
+    source_map: Mapping[str, str],
+    src_bone_names: set[str],
+    tgt_bone_names: set[str],
+    profile: str = "chibi",
+) -> list[str]:
+    """Canonical bones to bake for a real-glb retarget, ordered parent-first.
+
+    The generalized (story #920) analog of the fixture's fixed ``animated`` list:
+    a canonical bone is retargetable only if BOTH ends exist — its source bone is
+    present on the imported Meshy armature (``src_bone_names``) AND the bone
+    itself exists on the canonical target (``tgt_bone_names``). Meshy's map lists
+    finger bones the spike's mitten-handed rig never emitted; those (and any
+    unmapped tip like ``head_end``) simply drop out here. Sorted by canonical
+    hierarchy depth so a child's world→local solve always sees its parent already
+    posed. Pure (table-only) so the unit suite covers it with ``bpy`` absent.
+    """
+    hierarchy = bones.hierarchy(profile)
+
+    def depth(name: str) -> int:
+        d, cur = 0, hierarchy.get(name)
+        while cur is not None:
+            d += 1
+            cur = hierarchy.get(cur)
+        return d
+
+    canon = [
+        canonical
+        for source, canonical in source_map.items()
+        if source in src_bone_names and canonical in tgt_bone_names
+    ]
+    canon.sort(key=depth)
+    return canon
 
 
 def yup_to_blender(p: tuple[float, float, float]) -> tuple[float, float, float]:
@@ -476,6 +581,89 @@ def retarget_action(  # pragma: no cover - requires bpy
     return action
 
 
+def import_meshy_source(glb_path):  # pragma: no cover - requires bpy
+    """Import a real Meshy animation .glb; return (armature, new_objects).
+
+    Story #920. The runtime half's synthetic fixture is replaced here by an
+    ACTUAL Meshy clip: import it, grab its armature (24-bone Meshy rig carrying
+    the baked action), and spin the whole armature 180 deg about Z
+    (:data:`MESHY_FACING_ALIGN_Z_DEG`) so its -Y facing / mirrored-X sides land on
+    the canonical +Y frame BEFORE any world-matrix is read. Returns the imported
+    objects too so :func:`main` can delete them (armature + skin mesh) before
+    export, leaving only the canonical target + its baked clips in the scene.
+    """
+    import bpy  # noqa: PLC0415
+    from mathutils import Matrix  # noqa: PLC0415
+
+    before = set(bpy.data.objects)
+    bpy.ops.import_scene.gltf(filepath=str(glb_path))
+    new_objects = [o for o in bpy.data.objects if o not in before]
+    arms = [o for o in new_objects if o.type == "ARMATURE"]
+    if not arms:
+        raise SystemExit(f"[retarget_clip] no armature found in {glb_path}")
+    arm = arms[0]
+    align = Matrix.Rotation(math.radians(MESHY_FACING_ALIGN_Z_DEG), 4, "Z")
+    arm.matrix_world = align @ arm.matrix_world
+    return arm, new_objects
+
+
+def retarget_imported_action(  # pragma: no cover - requires bpy
+    source_obj, target_obj, clip: str, source_map: Mapping[str, str]
+):
+    """Bake an IMPORTED Meshy clip's world poses onto the canonical target.
+
+    The story #920 analog of :func:`retarget_action` for a REAL source. Unlike
+    the fixture path (both armatures built at the origin, so armature-space ==
+    world), the imported Meshy armature carries its own object transform (import
+    scale + the :func:`import_meshy_source` 180 deg align), so each source bone's
+    world pose is read through ``source_obj.matrix_world`` and reduced to a pure
+    rotation (import scale stripped) before assignment. The canonical target is
+    built at the origin, so its world rotation is assigned straight onto each
+    pose bone and Blender back-solves the local rotation from the T-pose rest —
+    reproducing the Meshy MOTION on the differently-rested canonical rig.
+    Rotation-only / in-place (rest translation kept), same contract as the
+    runtime re-key. Returns the target Action.
+    """
+    import bpy  # noqa: PLC0415
+
+    target_obj.animation_data_create()
+    action = bpy.data.actions.new(clip)
+    action.use_fake_user = True
+    target_obj.animation_data.action = action
+    scene = bpy.context.scene
+
+    src_names = {b.name for b in source_obj.data.bones}
+    tgt_names = {b.name for b in target_obj.data.bones}
+    animated = bones_to_bake(source_map, src_names, tgt_names)
+    canon_to_source = invert_map(source_map)
+
+    src_action = source_obj.animation_data.action
+    frame_start = int(src_action.frame_range[0])
+    frame_end = int(src_action.frame_range[1])
+
+    for frame in range(frame_start, frame_end + 1):
+        scene.frame_set(frame)
+        bpy.context.view_layer.update()
+        world = {
+            name: (
+                source_obj.matrix_world
+                @ source_obj.pose.bones[canon_to_source[name]].matrix
+            )
+            for name in animated
+        }
+        for name in animated:
+            tgt = target_obj.pose.bones[name]
+            tgt.rotation_mode = "QUATERNION"
+            # Pure world rotation (import scale stripped), rest translation kept.
+            rot = world[name].to_quaternion().normalized().to_matrix().to_4x4()
+            rot.translation = tgt.matrix.translation
+            tgt.matrix = rot
+            bpy.context.view_layer.update()
+            tgt.keyframe_insert(data_path="rotation_quaternion", frame=frame)
+
+    return action
+
+
 def export_glb(out_path: str):  # pragma: no cover - requires bpy
     """Export every baked target action as a single animation .glb (skeleton + clips).
 
@@ -531,6 +719,10 @@ def main(argv: list[str] | None = None) -> None:  # pragma: no cover - requires 
     enforce_blender_pin(args.allow_unpinned_blender)
     reset_scene()
 
+    if args.from_meshy is not None:
+        _main_from_meshy(args)
+        return
+
     source = build_source_armature(args.profile)
     target = build_target_armature(args.profile)
 
@@ -555,6 +747,42 @@ def main(argv: list[str] | None = None) -> None:  # pragma: no cover - requires 
     export_glb(args.out)
     print(f"[retarget_clip] wrote {args.out} for profile {args.profile!r} "
           f"({len(CLIP_NAMES)} clips: {', '.join(CLIP_NAMES)})")
+
+
+def _main_from_meshy(args) -> None:  # pragma: no cover - requires bpy
+    """Retarget the four REAL Meshy clips (story #920) onto the canonical rig.
+
+    Imports DIR/{idle,walk,run,jump}_raw.glb one at a time, bakes each onto a
+    single canonical target armature as an action named for the clip, deletes the
+    imported Meshy objects, and finally exports the four canonical clips as one
+    glb. Every non-target action is dropped before export so ACTIONS mode emits
+    exactly idle/walk/run/jump (the runtime library keys). AI-DERIVED OUTPUT —
+    the caller stages it under a source_tier: ai quarantine sidecar.
+    """
+    import bpy  # noqa: PLC0415
+
+    source_map = resolve_meshy_map(args.bone_map_json, args.meshy_version)
+    target = build_target_armature(args.profile)
+
+    for clip in CLIP_NAMES:
+        clip_glb = args.from_meshy / f"{clip}_raw.glb"
+        if not clip_glb.is_file():
+            raise SystemExit(f"[retarget_clip] missing Meshy clip: {clip_glb}")
+        source, new_objects = import_meshy_source(clip_glb)
+        retarget_imported_action(source, target, clip, source_map)
+        for obj in new_objects:
+            bpy.data.objects.remove(obj, do_unlink=True)
+
+    # Only the four canonical target actions survive into the export (drop the
+    # imported Meshy actions, which ACTIONS mode would otherwise emit too).
+    keep = set(CLIP_NAMES)
+    for act in list(bpy.data.actions):
+        if act.name not in keep:
+            bpy.data.actions.remove(act)
+    export_glb(args.out)
+    print(f"[retarget_clip] wrote {args.out} from real Meshy clips "
+          f"(profile {args.profile!r}, map {args.meshy_version!r}: "
+          f"{', '.join(CLIP_NAMES)})")
 
 
 if __name__ == "__main__":  # pragma: no cover - Blender-only entry

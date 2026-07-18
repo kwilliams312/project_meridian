@@ -36,11 +36,15 @@
 # absent on the live skeleton are skipped (the safe-fallback contract) — a rig
 # missing a bone is a quiet no-op, never a load error.
 #
-# PROVENANCE. The staged fixture is authored ORIGINAL data (no third-party clip,
-# no Mixamo/Adobe license); the library is stamped source_tier: original, no IF-8
-# sidecar — same reasoning as the W1a placeholder (asset.schema.yaml has no
-# animation-clip class yet; that + the real Mixamo license are the human-gated
-# W3-prov story). Real Mixamo clips are Wave 3, NOT this story.
+# PROVENANCE (story #920, Wave 3). The staged glb now carries the REAL Meshy
+# locomotion clips (idle/walk/run/jump), auto-generated then retargeted onto the
+# canonical rig — AI-DERIVED content under TD-09. The library is honestly stamped
+# source_tier: ai + restyle_status: pending (NOT original), matching the
+# quarantine sidecar at content/chibi/assets/anim/meridian_locomotion/ that
+# validate_content L024 blocks from merging. This PR builds to the E2E stage but
+# is NON-MERGEABLE until the human-gated W3-prov policy story clears (the real
+# animation-clip asset class + clip-license decision). Whether such a clip may
+# ever be `original` is that human decision — the runtime does not pre-judge it.
 #
 # FALLBACK. Any failure (missing glb, load error, absent player/skeleton, a clip
 # missing) returns null so the caller (AssembledCharacter._build_locomotion) can
@@ -52,12 +56,19 @@ class_name MeridianLocomotionClips
 
 const LocomotionScript := preload("res://characters/locomotion.gd")
 
-## Staged animation glb (produced by tools/blender/meridian_rig/retarget_clip.py).
-## Lives in a .gdignore'd dir so Godot's editor importer never runs on it — the
-## raw bytes are read at runtime via FileAccess + GLTFDocument, exactly like the
-## chibi body glb (no committed .import artifact; the whole content pipeline is
-## staged-source + runtime-load).
-const GLB_PATH: String = "res://characters/anim/meridian_locomotion_retarget.glb"
+## Staged animation glb — the REAL Meshy locomotion clips retargeted onto the
+## canonical rig (story #920), produced by
+## `retarget_clip.py --from-meshy .../meshy_clips`. Lives in a .gdignore'd dir so
+## Godot's editor importer never runs on it — the raw bytes are read at runtime
+## via FileAccess + GLTFDocument, exactly like the chibi body glb (no committed
+## .import artifact; the whole content pipeline is staged-source + runtime-load).
+const GLB_PATH: String = "res://characters/anim/meridian_locomotion_meshy.glb"
+
+## Provenance stamped on the retargeted library (see header / TD-09). The Meshy
+## clips are AI-derived and NOT yet restyled → the quarantine tier + status the
+## content/ sidecar carries and validate_content L024 blocks. NOT `original`.
+const SOURCE_TIER: String = "ai"
+const RESTYLE_STATUS: String = "pending"
 
 ## The clip keys the retargeted library must provide — the SAME idle/walk/run/jump
 ## keys the W1a AnimationTree references. Mirrors MeridianLocomotion.CLIP_*.
@@ -68,8 +79,9 @@ const CLIP_KEYS: Array = ["idle", "walk", "run", "jump"]
 ## is the NodePath (from the owning AnimationPlayer's root_node) to the skeleton;
 ## it prefixes every re-keyed track path ("<skel_path>:<bone>"). Returns a library
 ## carrying the four clips under LocomotionScript.LIBRARY_NAME, stamped
-## source_tier: original — or `null` on ANY failure (caller falls back to the W1a
-## placeholder). `glb_path` is injectable for tests.
+## source_tier: ai + restyle_status: pending (story #920 quarantine) — or `null`
+## on ANY failure (caller falls back to the W1a placeholder). `glb_path` is
+## injectable for tests.
 static func build_library_from_glb(skeleton: Skeleton3D, skel_path: NodePath,
 		glb_path: String = GLB_PATH) -> AnimationLibrary:
 	if skeleton == null:
@@ -103,7 +115,10 @@ static func build_library_from_glb(skeleton: Skeleton3D, skel_path: NodePath,
 
 	var lib := AnimationLibrary.new()
 	lib.resource_name = LocomotionScript.LIBRARY_NAME
-	lib.set_meta("source_tier", LocomotionScript.SOURCE_TIER)
+	# Honest AI provenance (story #920) — NOT LocomotionScript.SOURCE_TIER
+	# ("original", which stamps only the W1a authored placeholder fallback).
+	lib.set_meta("source_tier", SOURCE_TIER)
+	lib.set_meta("restyle_status", RESTYLE_STATUS)
 	# A marker the verify uses to prove the RETARGETED path loaded (vs. the W1a
 	# placeholder fallback) — the two libraries are otherwise interchangeable.
 	lib.set_meta("retargeted", true)

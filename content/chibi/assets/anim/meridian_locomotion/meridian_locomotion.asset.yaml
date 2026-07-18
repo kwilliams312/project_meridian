@@ -1,0 +1,42 @@
+# ⛔ QUARANTINE SIDECAR — NON-MERGEABLE BY DESIGN (story #920, Wave 3 of #906).
+#
+# AI-derived locomotion clips (idle/walk/run/jump) generated with Meshy and
+# retargeted onto the canonical chibi rig. This is RAW AI-provenance content
+# under TD-09: source_tier: ai + restyle_status: pending. validate_content.py
+# L024 BLOCKS this from merging — that is CORRECT and INTENDED. The clips build
+# to the E2E stage but CANNOT merge until the human-gated W3-prov policy story
+# clears (epic #906): W3-prov adds the real animation-clip asset CLASS to
+# asset.schema.yaml and decides the source_tier / restyle_status semantics +
+# clip-license clearance. Whether a retargeted-Meshy clip may ever be stamped
+# `original` is precisely that human decision — this story does NOT pre-empt it.
+#
+# ⚠ PLACEHOLDER `class`: asset.schema.yaml has no animation-clip class yet (that
+# is W3-prov's deliverable). `character_model` is used ONLY to satisfy the schema
+# enum so the sidecar reaches the L024 quarantine lint; it does NOT assert the
+# clips are a character model. W3-prov replaces this with the real clip class.
+# The asset is non-mergeable regardless (L024), so this placeholder never ships.
+#
+# The retargeted clip glb ships to the runtime at
+# client/project/characters/anim/meridian_locomotion_meshy.glb (loaded by
+# characters/locomotion_clips.gd). The copy under this sidecar is the
+# provenance-tracked master; the generation chain is in the prompts sibling.
+schema: meridian/asset@1
+id: chibi:art.meridian_locomotion
+class: character_model  # PLACEHOLDER — see header (real clip class is W3-prov)
+source: assets/anim/meridian_locomotion/sk_meridian_locomotion.glb
+license: CC-BY-4.0
+provenance:
+  source_tier: ai
+  authors: [meridian-contributors]
+  origin_url: https://api.meshy.ai/openapi/v1/rigging/019f732a-5318-7356-8a30-302df760fac4
+  ai:
+    tool: meshy@meshy-5
+    prompts_file: meridian_locomotion.prompts.yaml
+  transform_notes: >-
+    Offline retarget of four Meshy library/basic clips (idle action_id 0, jump
+    action_id 466, walk+run from rig basic_animations) onto the canonical
+    SkeletonProfileHumanoid chibi rig via retarget_clip.py --from-meshy using the
+    reconciled meshy-5 bone_map, with a 180° facing alignment (Meshy -Y → chibi
+    +Y). Rotation-only / in-place. A human restyle/authoring pass is NOT yet
+    done — restyle_status stays pending (L024 quarantine).
+restyle_status: pending
