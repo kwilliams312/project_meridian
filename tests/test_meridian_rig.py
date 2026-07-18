@@ -13,6 +13,7 @@ sys.path.insert(0, str(REPO / "tools" / "blender" / "meridian_rig"))
 import blender_pin  # noqa: E402
 import bones  # noqa: E402
 import generate_rig  # noqa: E402
+import retarget_clip  # noqa: E402
 import restyle_armor  # noqa: E402
 import restyle_body  # noqa: E402
 import restyle_hair  # noqa: E402
@@ -1833,3 +1834,79 @@ def test_restyle_weapon_parse_args_requires_input_and_defaults_out():
     assert args.mesh_name == restyle_weapon.DEFAULT_MESH_NAME
     with pytest.raises(SystemExit):
         restyle_weapon.parse_args([])
+
+
+# ---------------------------------------------------------------------------
+# retarget_clip — pure helpers (importable without bpy). Story #914 (W2a).
+# ---------------------------------------------------------------------------
+def test_retarget_source_name_prefixes_mixamorig():
+    assert retarget_clip.source_name("LeftUpperArm") == "mixamorig:LeftUpperArm"
+
+
+def test_retarget_canonical_name_strips_prefix():
+    # The name-remap the retarget performs; a no-op path leaves mixamorig: in.
+    assert retarget_clip.canonical_name("mixamorig:LeftUpperArm") == "LeftUpperArm"
+
+
+def test_retarget_canonical_name_passthrough_when_unprefixed():
+    assert retarget_clip.canonical_name("LeftUpperArm") == "LeftUpperArm"
+
+
+def test_retarget_name_roundtrip():
+    for bone in bones.bone_names():
+        assert retarget_clip.canonical_name(retarget_clip.source_name(bone)) == bone
+
+
+def test_retarget_arm_subtree_contains_the_arm_chain_both_sides():
+    sub = set(retarget_clip.arm_subtree())
+    # Both upper arms and their descendants; never a leg or the spine.
+    assert {"LeftUpperArm", "RightUpperArm", "LeftLowerArm", "RightLowerArm"} <= sub
+    assert "LeftHand" in sub and "RightHand" in sub
+    assert "LeftUpperLeg" not in sub
+    assert "Spine" not in sub
+
+
+def test_retarget_arm_subtree_every_member_descends_from_an_upper_arm():
+    hierarchy = bones.hierarchy()
+    for name in retarget_clip.arm_subtree():
+        cur = name
+        roots = set()
+        while cur is not None:
+            roots.add(cur)
+            cur = hierarchy.get(cur)
+        assert roots & {"LeftUpperArm", "RightUpperArm"}, name
+
+
+def test_retarget_yup_to_blender_matches_generate_rig():
+    # Same Y-up -> Z-up mapping as the skeleton exporter, so the retarget bakes
+    # onto a rest byte-identical to the chibi rig.
+    assert retarget_clip.yup_to_blender((1.0, 2.0, 3.0)) == (1.0, -3.0, 2.0)
+
+
+def test_retarget_clip_names_are_the_four_locomotion_keys():
+    assert retarget_clip.CLIP_NAMES == ("idle", "walk", "run", "jump")
+
+
+def test_retarget_parse_args_defaults_to_chibi_and_staged_fixture():
+    ns = retarget_clip.parse_args([])
+    assert ns.profile == "chibi"
+    assert ns.out.endswith("meridian_locomotion_retarget.glb")
+    assert ns.allow_unpinned_blender is False
+
+
+def test_retarget_parse_args_reads_profile_and_out():
+    ns = retarget_clip.parse_args(["--profile", "ardent_male", "--out", "/tmp/a.glb"])
+    assert ns.profile == "ardent_male"
+    assert ns.out == "/tmp/a.glb"
+
+
+def test_retarget_parse_args_rejects_unknown_profile():
+    with pytest.raises(SystemExit):
+        retarget_clip.parse_args(["--profile", "dwarf_female"])
+
+
+def test_retarget_argv_after_ddash_extracts_args():
+    argv = ["blender", "--background", "--python", "retarget_clip.py", "--",
+            "--profile", "chibi", "--out", "x.glb"]
+    assert retarget_clip.argv_after_ddash(argv) == [
+        "--profile", "chibi", "--out", "x.glb"]

@@ -61,6 +61,7 @@ const DyeShader := preload("res://characters/dye_tint.gdshader")
 # bare MeridianLocomotion class name) — same stale-class-cache guard the rest of
 # this file uses for content_db.gd.
 const LocomotionScript := preload("res://characters/locomotion.gd")
+const LocomotionClipsScript := preload("res://characters/locomotion_clips.gd")
 
 # MoveMode mirror (movement_constants.h:76 — the C++ enum is not bound to
 # GDScript, so the values are duplicated here as the wire contract). set_locomotion
@@ -377,7 +378,15 @@ func _build_locomotion() -> void:
 	# root_node = self, so a bone track path is "<self→skeleton>:<bone>".
 	player.root_node = player.get_path_to(self)
 	var skel_path: NodePath = get_path_to(_skeleton)
-	var lib: AnimationLibrary = LocomotionScript.build_library(_skeleton, skel_path)
+	# Prefer the RETARGETED clips (W2a, #914): load the staged animation glb and
+	# re-key it onto the live skeleton. On ANY failure (missing/broken glb, absent
+	# clip) fall back to the code-authored W1a placeholder library — locomotion
+	# never breaks just because the staged clip is unavailable. Both libraries key
+	# the SAME idle/walk/run/jump clips under LIBRARY_NAME, so the AnimationTree
+	# built below drives whichever one loads, unchanged.
+	var lib: AnimationLibrary = LocomotionClipsScript.build_library_from_glb(_skeleton, skel_path)
+	if lib == null:
+		lib = LocomotionScript.build_library(_skeleton, skel_path)
 	player.add_animation_library(LocomotionScript.LIBRARY_NAME, lib)
 
 	var tree: AnimationTree = LocomotionScript.build_tree()
