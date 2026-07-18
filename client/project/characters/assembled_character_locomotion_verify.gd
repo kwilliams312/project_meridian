@@ -23,6 +23,7 @@ extends SceneTree
 const ContentDbScript := preload("res://content/content_db.gd")
 const AssembledCharacterScript := preload("res://characters/assembled_character.gd")
 const LocomotionScript := preload("res://characters/locomotion.gd")
+const LocomotionClipsScript := preload("res://characters/locomotion_clips.gd")
 
 # The MoveMode ints (movement_constants.h:76), mirrored by AssembledCharacter.
 const MODE_IDLE: int = 0
@@ -34,8 +35,11 @@ const WALK_SPEED: float = 2.5
 const RUN_SPEED: float = 6.0
 
 # Floor on the number of checks that MUST run — a hard guard against a load
-# failure silently reducing the suite to zero assertions (false green).
-const MIN_CHECKS: int = 22
+# failure (or a phase silently early-returning) reducing the suite to a
+# false green. Raised for W2a (#914): the retarget phase adds ~8 checks, so the
+# floor now also guarantees that phase actually ran (37 run today; a missing
+# retarget phase would drop well below this).
+const MIN_CHECKS: int = 34
 
 var _fails: int = 0
 var _ran: int = 0
@@ -74,6 +78,7 @@ func _run() -> void:
 	_verify_state_transitions(ac)
 	_verify_walk_run_blend(ac)
 	_verify_clip_poses_skeleton(ac)
+	_verify_retarget_clips(ac)
 	_verify_capsule_noop(ac)
 
 	root.remove_child(ac)
@@ -281,6 +286,92 @@ func _peak_swing(tree: AnimationTree, skel: Skeleton3D, bone_idx: int,
 		elapsed += dt
 		peak = max(peak, rest.angle_to(skel.get_bone_pose_rotation(bone_idx)))
 	return peak
+
+
+# --- D2. the RETARGETED clips (W2a #914) — the NON-VACUOUS retarget proof ------
+# The strongest guards against a false-green retarget. A fixture authored on a
+# DELIBERATELY non-canonical source (mixamorig:-prefixed names + an A-pose rest)
+# is loaded, retargeted, and re-keyed onto the live rig; a no-op / no-retarget
+# path fails LOUDLY here:
+#   (a) POST-retarget track paths carry CANONICAL SkeletonProfileHumanoid names —
+#       every source "mixamorig:" name is GONE. (Fails if the name remap skipped.)
+#   (b) GOLDEN POSE per clip — the fixture holds LeftUpperArm STRAIGHT UP at t=0.
+#       On the canonical rig the left upper arm RESTS horizontal, so "up" is only
+#       reachable when the A-pose→T-pose rest was actually reconciled. We sample
+#       the upper-arm WORLD direction (LeftLowerArm origin − LeftUpperArm origin);
+#       a no-op that copied the source's A-pose-relative local rotations onto the
+#       T-pose rig would point the arm elsewhere and miss the landmark. (Fails if
+#       the rest reconciliation was skipped.)
+func _verify_retarget_clips(ac) -> void:
+	print(" the RETARGETED fixture clips (W2a #914) load, carry canonical names, hit the golden pose:")
+	var players: Array = ac.find_children("*", "AnimationPlayer", true, false)
+	if players.size() != 1:
+		_check("locomotion player present for retarget checks", false)
+		return
+	var player: AnimationPlayer = players[0]
+	var skel: Skeleton3D = ac.body_skeleton()
+	var lib_name: String = LocomotionScript.LIBRARY_NAME
+	if not player.has_animation_library(lib_name) or skel == null:
+		_check("retargeted library + skeleton present", false)
+		return
+	var lib: AnimationLibrary = player.get_animation_library(lib_name)
+
+	# The staged glb actually loaded + retargeted (not the W1a placeholder
+	# fallback). If this fails the fixture/pipeline is broken — the whole point of
+	# W2a — so the rest of the phase is meaningless; report and bail.
+	var retargeted: bool = bool(lib.get_meta("retargeted", false))
+	_check("the RETARGETED library loaded (staged glb, not the placeholder fallback)",
+		retargeted)
+	if not retargeted:
+		return
+
+	# (a) Every clip's every rotation track keys to a CANONICAL bone; no source
+	# "mixamorig:" name survives anywhere.
+	var all_canonical: bool = true
+	var mixamo_seen: bool = false
+	for clip in LocomotionClipsScript.CLIP_KEYS:
+		if not lib.has_animation(clip):
+			all_canonical = false
+			continue
+		var anim: Animation = lib.get_animation(clip)
+		for t in range(anim.get_track_count()):
+			var p: String = String(anim.track_get_path(t))
+			if p.contains("mixamorig"):
+				mixamo_seen = true
+			var bone: String = p.get_slice(":", p.get_slice_count(":") - 1)
+			if skel.find_bone(bone) < 0:
+				all_canonical = false
+	_check("no source 'mixamorig:' bone name survives the retarget", not mixamo_seen)
+	_check("every retargeted track keys to a canonical bone on the live skeleton",
+		all_canonical)
+
+	# (b) Golden pose per clip. Seek each clip to t=0 on the player and read the
+	# LEFT UPPER ARM world direction. Isolate the player by silencing the tree so
+	# only the seeked clip poses the skeleton.
+	var tree: AnimationTree = ac.locomotion_tree()
+	var was_active: bool = tree != null and tree.active
+	if tree != null:
+		tree.active = false
+	var upper: int = skel.find_bone("LeftUpperArm")
+	var lower: int = skel.find_bone("LeftLowerArm")
+	_check("LeftUpperArm + LeftLowerArm exist (golden-landmark bones)",
+		upper >= 0 and lower >= 0)
+	if upper >= 0 and lower >= 0:
+		for clip in LocomotionClipsScript.CLIP_KEYS:
+			if not lib.has_animation(clip):
+				_check("golden pose — clip '%s' present" % clip, false)
+				continue
+			player.play("%s/%s" % [lib_name, clip])
+			player.seek(0.0, true)
+			var up_o: Vector3 = skel.get_bone_global_pose(upper).origin
+			var lo_o: Vector3 = skel.get_bone_global_pose(lower).origin
+			var dir: Vector3 = (lo_o - up_o).normalized()
+			var dot: float = dir.dot(Vector3.UP)
+			_check("golden pose — clip '%s': LeftUpperArm points UP at t=0 (dot %.3f > 0.8)"
+				% [clip, dot], dot > 0.8)
+		player.stop()
+	if tree != null:
+		tree.active = was_active
 
 
 # --- E. capsule fallback / unassembled → safe no-op ---------------------------

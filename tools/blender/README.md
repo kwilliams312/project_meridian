@@ -25,6 +25,17 @@ meridian_rig/
                    influences. Region→bone mapping / bbox sizing / naming are
                    pure module-level functions (pytest covers them without
                    Blender); bpy is only touched inside main().
+  retarget_clip.py Offline CLIP retarget (story #914, W2a of epic #906). Bakes a
+                   humanoid clip authored on a DELIBERATELY non-canonical source
+                   armature (mixamorig:-prefixed names + an A-pose rest) onto the
+                   canonical bones.py rig, exporting a runtime-loadable animation
+                   .glb (idle/walk/run/jump). The ONLY exporter here that sets
+                   `export_animations=True` — the mesh/skeleton exporters above
+                   keep it False on purpose, so no existing exporter is touched.
+                   The runtime half (load + re-key onto the live skeleton) is
+                   `client/project/characters/locomotion_clips.gd`. Name-remap /
+                   arm-subtree / arg helpers are pure (pytest covers them without
+                   Blender); bpy is only touched inside main().
 ```
 
 **Blender version pin (spec ④ §9):** `tools/blender/meridian_rig/blender_pin.py`
@@ -68,6 +79,27 @@ Git LFS, same version pin and determinism guarantee) regenerates with:
 Its structural tests (same file) assert the 8 `geo_<region>_lod0` geoset meshes,
 the exact canonical 63-joint skin binding, ≤4 influences/vertex, and normalized
 weights — all read back with pygltflib, no Blender needed in CI.
+
+The retargeted locomotion fixture
+(`client/project/characters/anim/meridian_locomotion_retarget.glb`, Git LFS,
+same version pin and determinism guarantee) regenerates with:
+
+```bash
+/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup -noaudio \
+  --python tools/blender/meridian_rig/retarget_clip.py -- \
+  --profile chibi --out client/project/characters/anim/meridian_locomotion_retarget.glb
+```
+
+It is authored ORIGINAL data (no third-party clip, no Mixamo/Adobe license):
+the source armature is procedurally built from the canonical bone table, renamed
+`mixamorig:*`, and A-posed purely so the retarget's name-remap + A-pose→T-pose
+rest reconciliation are provable — a no-op retarget leaves `mixamorig:` names in
+the tracks and mis-poses the golden landmark. It is validated at RUNTIME (not
+with pygltflib) by `client/project/characters/assembled_character_locomotion_verify.gd`,
+which loads it through `GLTFDocument`, re-keys it onto the live chibi skeleton,
+and asserts canonical track names + a per-clip golden pose (LeftUpperArm straight
+up at t=0). Real Mixamo clips + their license are the human-gated Wave 3 story
+(W3-prov), NOT this fixture.
 
 ## `meridian_export` — Blender art pipeline addon
 
