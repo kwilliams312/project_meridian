@@ -1,0 +1,33 @@
+# Meshy generation record for the AI-derived locomotion clips (story #920,
+# Wave 3 of the character-animation epic #906). Referenced from the sidecar's
+# provenance.ai.prompts_file (Art PRD §3.2 prompt hygiene) — the auditable
+# record of exactly what was generated. Reproduced from the #916 live spike
+# (the four clips the spike confirmed retarget cleanly); no NEW generation was
+# run for #920 (the spike's rig + clips were reused to avoid burning credits).
+#
+# Pipeline: text-to-3D generic humanoid -> Meshy auto-rig -> library actions +
+# bundled basic_animations -> offline retarget onto the canonical chibi rig
+# (tools/blender/meridian_rig/retarget_clip.py --from-meshy, meshy-5 bone_map).
+model_version: meshy-5
+source_mesh:
+  # A GENERIC humanoid (NOT the stylized chibi pill) — auto-rigging a stylized
+  # mesh risks skinning artifacts; a clean humanoid retargets better (#916).
+  task_id: 019f7329-6ea7-7333-8a84-3e0afc86bc6b
+  mode: text-to-3d refine
+  prompt: >-
+    a generic humanoid game character, full body, standing in a neutral T-pose
+    with arms straight out to the sides, bald, plain fitted clothing, no props
+rig:
+  # Auto-rig of the source mesh (POST /openapi/v1/rigging), height 1.7m.
+  task_id: 019f732a-5318-7356-8a30-302df760fac4
+clips:
+  # idle + jump: library actions (POST /openapi/v1/animations).
+  # walk + run: the rig task's bundled basic_animations (walking/running).
+  idle: { source: animation_library, action_id: 0, task_id: 019f732a-be32-7367-a5df-6a9870d51f21 }
+  jump: { source: animation_library, action_id: 466, task_id: 019f732a-eb27-7a99-9609-f26556c2940d }
+  walk: { source: rig_basic_animations, key: walking_glb_url, rig_task_id: 019f732a-5318-7356-8a30-302df760fac4 }
+  run:  { source: rig_basic_animations, key: running_glb_url, rig_task_id: 019f732a-5318-7356-8a30-302df760fac4 }
+retarget:
+  tool: tools/blender/meridian_rig/retarget_clip.py --from-meshy
+  bone_map: tools/meshy/bone_map.yaml (meshy-5)
+  facing_alignment_deg: 180  # Meshy faces -Y, canonical faces +Y (about Z)

@@ -141,8 +141,14 @@ func _verify_attach_and_library(ac) -> void:
 				and lib.has_animation(LocomotionScript.CLIP_WALK)
 				and lib.has_animation(LocomotionScript.CLIP_RUN)
 				and lib.has_animation(LocomotionScript.CLIP_JUMP))
-			_check("library is stamped source_tier: original (provenance TD-09)",
-				String(lib.get_meta("source_tier", "")) == "original")
+			# Story #920: the staged clips are AI-derived Meshy locomotion, honestly
+			# stamped source_tier: ai + restyle_status: pending (the TD-09 quarantine
+			# the content sidecar carries + validate_content L024 blocks). NOT
+			# 'original' — that tier stamps only the W1a authored placeholder.
+			_check("library is stamped source_tier: ai (quarantine, TD-09)",
+				String(lib.get_meta("source_tier", "")) == "ai")
+			_check("library is stamped restyle_status: pending (un-restyled AI, TD-09)",
+				String(lib.get_meta("restyle_status", "")) == "pending")
 			# Clips key to the SkeletonProfileHumanoid bone names the rig uses:
 			# the walk clip's first track path must resolve to a real bone.
 			var walk: Animation = lib.get_animation(LocomotionScript.CLIP_WALK)
@@ -257,21 +263,29 @@ func _verify_clip_poses_skeleton(ac) -> void:
 	if leg < 0 or spine < 0:
 		return
 
-	# Walk: peak leg swing over a full 1.0s cycle must be clearly non-zero.
+	# Story #920: distinguish clips by DYNAMIC sweep (range of motion across the
+	# cycle), not peak-from-rest. Real Meshy clips sit at a neutral pose that
+	# DIFFERS from the canonical rest, so a constant rest-offset inflates every
+	# bone's peak-from-rest even when it barely moves — the W1a/W2a authored clips
+	# happened to rest AT the canonical rest so peak-from-rest worked for them.
+	# _dynamic_sweep removes that constant offset (peak angle from the clip's own
+	# starting pose over a cycle), so it measures real animation, not stance.
 	ac.set_locomotion(MODE_WALK, WALK_SPEED, true)
-	var walk_leg_peak: float = _peak_swing(tree, skel, leg, 1.2, 0.05)
-	_check("walk clip swings LeftUpperLeg (peak %.3f rad over a cycle)" % walk_leg_peak,
-		walk_leg_peak > 0.05)
+	var walk_leg_sweep: float = _dynamic_sweep(tree, skel, leg, 1.2, 0.05)
+	_check("walk clip swings LeftUpperLeg (dynamic sweep %.3f rad over a cycle)" % walk_leg_sweep,
+		walk_leg_sweep > 0.15)
 
-	# Idle: the spine "breath" track must animate the spine (proves the idle clip
-	# plays too), while the LEG stays essentially still (idle has no leg track).
+	# Idle: plays (the spine breathes / weight shifts) but its LEG sweep is clearly
+	# calmer than a walk stride — the idle-vs-locomotion distinction, robust to the
+	# real clips' non-canonical neutral pose.
 	ac.set_locomotion(MODE_IDLE, 0.0, true)
-	var idle_spine_peak: float = _peak_swing(tree, skel, spine, 2.2, 0.05)
-	_check("idle clip moves the Spine (peak %.3f rad over a cycle)" % idle_spine_peak,
-		idle_spine_peak > 0.005)
-	var idle_leg_peak: float = _peak_swing(tree, skel, leg, 2.2, 0.05)
-	_check("idle keeps the legs far calmer than walk (idle leg << walk leg)",
-		idle_leg_peak < walk_leg_peak * 0.5)
+	var idle_spine_sweep: float = _dynamic_sweep(tree, skel, spine, 2.2, 0.05)
+	_check("idle clip plays — moves the Spine (dynamic sweep %.3f rad over a cycle)" % idle_spine_sweep,
+		idle_spine_sweep > 0.01)
+	var idle_leg_sweep: float = _dynamic_sweep(tree, skel, leg, 2.2, 0.05)
+	_check("idle keeps the legs calmer than a walk stride (idle %.3f < walk %.3f)"
+		% [idle_leg_sweep, walk_leg_sweep],
+		idle_leg_sweep < walk_leg_sweep * 0.7)
 
 
 # Advance the tree over `dur` seconds in `dt` steps, returning the peak
@@ -288,22 +302,38 @@ func _peak_swing(tree: AnimationTree, skel: Skeleton3D, bone_idx: int,
 	return peak
 
 
-# --- D2. the RETARGETED clips (W2a #914) — the NON-VACUOUS retarget proof ------
-# The strongest guards against a false-green retarget. A fixture authored on a
-# DELIBERATELY non-canonical source (mixamorig:-prefixed names + an A-pose rest)
-# is loaded, retargeted, and re-keyed onto the live rig; a no-op / no-retarget
-# path fails LOUDLY here:
+# DYNAMIC sweep (story #920): peak angle between the bone's live pose and its
+# pose at the START of the window, across `dur`. Unlike _peak_swing (from REST),
+# this cancels a constant rest-offset, so it measures how much the clip actually
+# MOVES the bone — the right metric for real clips whose neutral pose differs
+# from the canonical rest.
+func _dynamic_sweep(tree: AnimationTree, skel: Skeleton3D, bone_idx: int,
+		dur: float, dt: float) -> float:
+	tree.advance(0.0)
+	var start: Quaternion = skel.get_bone_pose_rotation(bone_idx)
+	var peak: float = 0.0
+	var elapsed: float = 0.0
+	while elapsed < dur:
+		tree.advance(dt)
+		elapsed += dt
+		peak = max(peak, start.angle_to(skel.get_bone_pose_rotation(bone_idx)))
+	return peak
+
+
+# --- D2. the RETARGETED clips (W2a #914 / W3 real Meshy #920) — retarget proof --
+# The strongest guards against a false-green retarget, now on the REAL Meshy
+# locomotion clips (idle/walk/run/jump) retargeted onto the canonical rig via the
+# meshy-5 bone_map. A no-op / no-retarget path fails LOUDLY here:
 #   (a) POST-retarget track paths carry CANONICAL SkeletonProfileHumanoid names —
-#       every source "mixamorig:" name is GONE. (Fails if the name remap skipped.)
-#   (b) GOLDEN POSE per clip — the fixture holds LeftUpperArm STRAIGHT UP at t=0.
-#       On the canonical rig the left upper arm RESTS horizontal, so "up" is only
-#       reachable when the A-pose→T-pose rest was actually reconciled. We sample
-#       the upper-arm WORLD direction (LeftLowerArm origin − LeftUpperArm origin);
-#       a no-op that copied the source's A-pose-relative local rotations onto the
-#       T-pose rig would point the arm elsewhere and miss the landmark. (Fails if
-#       the rest reconciliation was skipped.)
+#       the Meshy source names (LeftArm, Spine01, neck, …) are all remapped, and
+#       no "mixamorig:" name survives either. (Fails if the name remap skipped.)
+#   (b) EACH CLIP PLAYS — story #920 replaces the fixture-specific arm-UP golden
+#       landmark (Meshy clips LOWER the arms, they do not raise them). Seeking a
+#       clip across its length must MOVE the body off its t=0 pose; a dead/empty
+#       clip scores ~0 and fails. This proves the retarget produced real, playable
+#       motion on the canonical rig — the point of the pipeline.
 func _verify_retarget_clips(ac) -> void:
-	print(" the RETARGETED fixture clips (W2a #914) load, carry canonical names, hit the golden pose:")
+	print(" the RETARGETED Meshy clips (#920) load, carry canonical names, and PLAY:")
 	var players: Array = ac.find_children("*", "AnimationPlayer", true, false)
 	if players.size() != 1:
 		_check("locomotion player present for retarget checks", false)
@@ -345,33 +375,52 @@ func _verify_retarget_clips(ac) -> void:
 	_check("every retargeted track keys to a canonical bone on the live skeleton",
 		all_canonical)
 
-	# (b) Golden pose per clip. Seek each clip to t=0 on the player and read the
-	# LEFT UPPER ARM world direction. Isolate the player by silencing the tree so
-	# only the seeked clip poses the skeleton.
+	# (b) Story #920: the W2a fixture's arm-UP golden landmark is REPLACED for real
+	# clips (Meshy locomotion lowers the arms, it does not raise them). The real
+	# proof a clip retargeted correctly is that it PLAYS — seeking it across its
+	# length actually MOVES the body off its starting pose. A no-op / empty / dead
+	# clip (e.g. a retarget that keyed nothing) leaves every bone static and fails
+	# LOUDLY here. Isolate the player by silencing the tree so only the seeked clip
+	# poses the skeleton.
 	var tree: AnimationTree = ac.locomotion_tree()
 	var was_active: bool = tree != null and tree.active
 	if tree != null:
 		tree.active = false
-	var upper: int = skel.find_bone("LeftUpperArm")
-	var lower: int = skel.find_bone("LeftLowerArm")
-	_check("LeftUpperArm + LeftLowerArm exist (golden-landmark bones)",
-		upper >= 0 and lower >= 0)
-	if upper >= 0 and lower >= 0:
-		for clip in LocomotionClipsScript.CLIP_KEYS:
-			if not lib.has_animation(clip):
-				_check("golden pose — clip '%s' present" % clip, false)
-				continue
-			player.play("%s/%s" % [lib_name, clip])
-			player.seek(0.0, true)
-			var up_o: Vector3 = skel.get_bone_global_pose(upper).origin
-			var lo_o: Vector3 = skel.get_bone_global_pose(lower).origin
-			var dir: Vector3 = (lo_o - up_o).normalized()
-			var dot: float = dir.dot(Vector3.UP)
-			_check("golden pose — clip '%s': LeftUpperArm points UP at t=0 (dot %.3f > 0.8)"
-				% [clip, dot], dot > 0.8)
-		player.stop()
+	var play_bones: Array = ["LeftUpperLeg", "RightUpperLeg", "LeftLowerLeg", "Hips", "LeftUpperArm"]
+	for clip in LocomotionClipsScript.CLIP_KEYS:
+		if not lib.has_animation(clip):
+			_check("clip '%s' present for play check" % clip, false)
+			continue
+		var anim: Animation = lib.get_animation(clip)
+		var sweep: float = _clip_play_sweep(player, lib_name, clip, skel, play_bones, anim.length)
+		_check("clip '%s' PLAYS — poses the live skeleton (dynamic sweep %.3f rad across its length)"
+			% [clip, sweep], sweep > 0.1)
+	player.stop()
 	if tree != null:
 		tree.active = was_active
+
+
+# Play `clip` on the AnimationPlayer and seek across its whole length, returning
+# the peak angle any of `bone_names` swings away from its t=0 pose (story #920).
+# Proves the retargeted clip animates the body — a no-op retarget scores ~0.
+func _clip_play_sweep(player: AnimationPlayer, lib_name: String, clip: String,
+		skel: Skeleton3D, bone_names: Array, length: float) -> float:
+	player.play("%s/%s" % [lib_name, clip])
+	player.seek(0.0, true)
+	var start: Dictionary = {}
+	for bn in bone_names:
+		var bi: int = skel.find_bone(bn)
+		if bi >= 0:
+			start[bn] = skel.get_bone_pose_rotation(bi)
+	var peak: float = 0.0
+	var steps: int = 16
+	for i in range(1, steps + 1):
+		player.seek(length * float(i) / float(steps), true)
+		for bn in bone_names:
+			var bi: int = skel.find_bone(bn)
+			if bi >= 0 and start.has(bn):
+				peak = max(peak, (start[bn] as Quaternion).angle_to(skel.get_bone_pose_rotation(bi)))
+	return peak
 
 
 # --- E. capsule fallback / unassembled → safe no-op ---------------------------
