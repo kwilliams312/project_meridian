@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Shardloom's CI runner scale set. The Application POINTER lives here because
+# this tree is the cluster's app-of-apps source; the runner VALUES live in the
+# Shardloom repository (deploy/gitops/runners/), because each project owns its
+# own runner definition. Scale sets are repo-scoped, so this shares nothing
+# with meridian-amd64 except the controller, the nodes, and the GitHub App
+# credentials (arc-github-app, installed with access to all repositories).
+#
+# Shardloom is a private repository: ArgoCD reads it through the repository
+# credential secret argocd/repo-shardloom, built from the same GitHub App.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: arc-runner-shardloom-amd64
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://github.com/kwilliams312/Shardloom.git
+      targetRevision: main
+      ref: values
+    - repoURL: ghcr.io/actions/actions-runner-controller-charts
+      chart: gha-runner-scale-set
+      targetRevision: 0.14.2
+      helm:
+        valueFiles:
+          - $values/deploy/gitops/runners/amd64-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: arc-runners
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    managedNamespaceMetadata:
+      labels:
+        pod-security.kubernetes.io/enforce: privileged
